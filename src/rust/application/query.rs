@@ -1,29 +1,40 @@
 //! Query use-case boundary for finding repository analogues.
 
-use crate::application::family::{
-    classify_unknown_family_effect, FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
+use crate::application::conformance::{
+    compute_alignment, AlignmentComputation, TargetFeatureProfile,
 };
+use crate::application::family::{
+    classify_unknown_family_effect, extract_target_unit_features,
+    FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
+};
+use crate::application::providers::{provider_recovery_code, ProviderSlotStatus};
+use crate::application::query_terms::{normalize_query, score_family_candidates, MatchedSignals};
 use crate::application::recovery::{
-    classify_recovery, recovery_guidance, RecoveryAction, RecoveryAgentState,
+    classify_recovery, recovery_command, recovery_guidance, RecoveryAction, RecoveryAgentState,
     RecoveryAutosyncState, RecoveryContext, RecoveryEvidenceState, RecoveryFreshness,
-    RecoveryHealth, RecoveryLockState, RecoveryRecommendation,
+    RecoveryHealth, RecoveryLockState, RecoveryReason, RecoveryRecommendation,
 };
 use crate::application::repository::{
-    repository_recovery_for_report, RepositoryImplementationStatus, RepositoryStatusReport,
+    repository_recovery_for_report, RepositoryAutosyncReadiness, RepositoryImplementationStatus,
+    RepositoryManifestStatus, RepositoryStatus, RepositoryStatusReport,
 };
 use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
 use crate::core::model::{
-    ClaimImpact, EstimatedPotentialTokenSavings, FactCertainty, ResolutionClass, SemanticFactKind,
-    SemanticObligation, UnknownClass, UnknownReasonCode,
+    ClaimImpact, CodeUnitId, ContentHash, EstimatedPotentialTokenSavings, Evidence, FactCertainty,
+    FactOrigin, FamilyConstraintProfile, FamilyPrevalence, FamilyPrevalenceClass, Provenance,
+    RepositoryRevision, ResolutionClass, SemanticFact, SemanticFactKind, SemanticObligation,
+    SourceRange, SymbolId, UnknownClass, UnknownReasonCode,
 };
+use crate::core::policy::alignment::{AlignmentStatus, TargetRelationship};
 use crate::core::policy::freshness::{
     content_hash_freshness, semantic_fact_claim_input_readiness, ClaimInputReadiness,
 };
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
-    ActiveFamily, ActiveFamilyCandidates, FamilyStore, IndexedFamilyCandidateRecord,
+    ActiveFamily, ActiveFamilyCandidates, FamilyConstraintProfileStore, FamilyStore,
+    IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
     IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
@@ -31,12 +42,60 @@ use crate::ports::index_store::{
     IndexedSemanticFactRecord, RepoShapeLanguageStats,
 };
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_QUERY_TARGET_BYTES: usize = 8 * 1024;
 pub const MAX_QUERY_TOKEN_BUDGET: usize = 200_000;
 pub const MAX_RENDERED_SOURCE_SPAN_BYTES: usize = 16 * 1024;
 const FUZZY_FAMILY_CANDIDATE_LIMIT: usize = 5;
+
+// ---------------------------------------------------------------------------
+// Term-retrieval abstention calibration.
+//
+// These constants gate the deterministic metadata-retrieval fallback that runs
+// only after the exact authority layers (exact family id, `unit:` member id,
+// exact role, exact `//`-suffix evidence path) and the existing role/evidence
+// fuzzy layer have produced no candidate at all for a non-path-locator target.
+// They enforce exactly two conditions for a selection: the top candidate clears
+// the absolute floor `MIN_RETRIEVAL_SCORE`, and it carries a pattern-concept
+// signal. The score is additive over framework(6)/concept(4)/language(2)/
+// residue(3-per-hit): with the floor at 10, the common resolving shape is a
+// framework filter plus a pattern concept (6 + 4), but a concept plus enough
+// residue hits can also clear the floor — the gates do not structurally require
+// a framework signal. The winner must also clear `MIN_RETRIEVAL_MARGIN` over any
+// competing family that itself clears the floor. Every other case abstains.
+// Calibrated against the v1 product-eval corpus (73 queries). See
+// `docs/specifications/query-resolution.md`.
+// ---------------------------------------------------------------------------
+
+/// Minimum absolute retrieval score for a candidate to be selectable. Equal to
+/// `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` (6 + 4). The score is additive, so
+/// this is an absolute floor, not a structural framework+concept requirement: a
+/// bare concept (4), bare framework filter (6), or bare language filter (2)
+/// abstains, while framework+concept, or concept plus residue hits, can clear it.
+const MIN_RETRIEVAL_SCORE: i64 = 10;
+
+/// Minimum score gap between the top candidate and a competing family that
+/// itself clears `MIN_RETRIEVAL_SCORE` for the top candidate to be selected. A
+/// tie (gap 0) or a sub-margin gap against such a competitor abstains with
+/// `margin_too_close` rather than guessing between two families. A runner-up
+/// below the floor is not a competitor and never forces abstention.
+const MIN_RETRIEVAL_MARGIN: i64 = 1;
+
+/// Upper bound on top-tier candidates hydrated through the freshness gate.
+/// Matches `FUZZY_FAMILY_CANDIDATE_LIMIT`. In practice the margin gate reduces
+/// the winning score tier to a single family before hydration, so this bound is
+/// a defensive ceiling rather than an operative multi-hydration limit.
+const MAX_RETRIEVAL_HYDRATIONS: usize = FUZZY_FAMILY_CANDIDATE_LIMIT;
+
+/// Retrieval pipeline stage count reported when abstaining before hydration
+/// with no ranked candidate (normalize, retrieve summaries, score).
+const TERM_STAGE_SCORE: usize = 3;
+/// Stage count when abstaining at a score/margin/support gate (adds gating).
+const TERM_STAGE_GATE: usize = 4;
+/// Stage count when hydration ran (adds bounded hydration + freshness).
+const TERM_STAGE_HYDRATE: usize = 5;
 
 pub fn validate_query_target(value: &str) -> Result<(), &'static str> {
     if value.trim().is_empty() {
@@ -225,30 +284,82 @@ pub struct IndexedSemanticFactsReport {
     pub facts: Vec<IndexedSemanticFactRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Per-family evidence-freshness verdict for the families listing. Derived from
+/// hash-checked reads of the family's distinct evidence paths at query time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FamilyFreshness {
+    /// Every evidence path verified with a matching content hash.
+    Fresh,
+    /// At least one evidence path is missing or its content hash changed, so the
+    /// claim no longer reflects the working tree.
+    Stale,
+    /// No stale path, but at least one path could not be verified for a
+    /// non-content reason (too large, non-UTF-8, or otherwise unreadable). A
+    /// family with zero evidence rows is also `CannotVerify`.
+    CannotVerify,
+}
+
+impl FamilyFreshness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::CannotVerify => "cannot_verify",
+        }
+    }
+}
+
+/// Freshness rollup for the families listing: one deterministic count per state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FamilyFreshnessCounts {
+    pub fresh_count: usize,
+    pub stale_count: usize,
+    pub cannot_verify_count: usize,
+}
+
+// Carries `FamilyPrevalence` (floating-point coverage ratio), so these reports
+// derive `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilySummary {
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
+    /// `Some` only for the freshness-verified listing; `None` for the
+    /// freshness-free `list_families` variant, which does not evaluate evidence.
+    pub freshness: Option<FamilyFreshness>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyListReport {
     pub active_generation: String,
     pub families: Vec<FamilySummary>,
+    /// `Some` only for the freshness-verified listing; carries the per-state
+    /// rollup. `None` for the freshness-free `list_families` variant.
+    pub freshness_counts: Option<FamilyFreshnessCounts>,
     pub unknowns: Vec<FamilyQueryUnknown>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyDetailReport {
     pub active_generation: String,
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
     pub members: Vec<IndexedFamilyMemberRecord>,
     pub variation_slots: Vec<IndexedVariationSlotRecord>,
     pub evidence: Vec<IndexedFamilyEvidenceRecord>,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// The family's source-backed constraint profile, hydrated from storage when
+    /// the active generation persisted one. `None` for a family indexed before
+    /// profiles were persisted (or a fixture that recorded none); representative
+    /// selection then falls back to the variation-slot signal. Boxed so the
+    /// (large) profile does not inflate every `FamilyLookupReport` variant.
+    pub constraint_profile: Option<Box<FamilyConstraintProfile>>,
+    /// Present only when the deterministic term-retrieval fallback selected this
+    /// family; carries its source-free route metadata for the query response.
+    pub term_retrieval: Option<TermRetrievalRoute>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +367,9 @@ pub struct FamilyUnknownReport {
     pub active_generation: String,
     pub candidate_family_ids: Vec<String>,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Present only when the deterministic term-retrieval fallback abstained;
+    /// carries its source-free route metadata (including the abstention reason).
+    pub term_retrieval: Option<TermRetrievalRoute>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,13 +396,71 @@ pub struct FamilyPartialContextReport {
     pub resolved_target: ResolvedQueryTarget,
     pub read_plan: ReadPlan,
     pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Stored full-file size (bytes) of the resolved target file, taken from the
+    /// index inventory (never a filesystem read). Carried so the all-scope
+    /// potential-token-savings estimator can compute the whole-file baseline a
+    /// PARTIAL_CONTEXT read plan displaces. `None` when the size was unavailable;
+    /// the accounting then records no event rather than guessing.
+    pub resolved_file_size_bytes: Option<u64>,
+    /// Raw indexed language of the resolved target file (e.g. `python`,
+    /// `typescript`), normalized to a low-cardinality scope token when the
+    /// savings event is attributed. Empty when unknown.
+    pub resolved_file_language: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A source-backed static-alignment certificate for the `check` operation.
+///
+/// It reports how a resolved target code unit statically aligns with a selected
+/// pattern family's constraint profile. It is deliberately never a
+/// runtime-conformance verdict: `runtime_equivalence` is always `UNKNOWN` and the
+/// family's runtime obligation is carried verbatim in the computation. Every
+/// value is source-free.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlignmentCertificateReport {
+    pub active_generation: String,
+    /// The top-level static-alignment outcome (may be an abstaining status when
+    /// no family could be selected).
+    pub alignment_status: AlignmentStatus,
+    /// How the target relates to the comparison family, when one was selected.
+    pub target_relationship: Option<TargetRelationship>,
+    /// The comparison family, when one was confidently selected. `None` for every
+    /// abstaining outcome, so an abstention never surfaces a chosen family.
+    pub selected_family_id: Option<String>,
+    /// Bounded candidate family ids (e.g. the competing families that made a
+    /// selection ambiguous, or the single selected family).
+    pub candidate_family_ids: Vec<String>,
+    /// The resolved target locator (code unit id, path, byte range).
+    pub resolved_target: ResolvedQueryTarget,
+    /// The alignment computation, present only when a family was selected and
+    /// compared. Boxed so the (large) computation does not inflate every variant.
+    pub computation: Option<Box<AlignmentComputation>>,
+    /// Evidence read plan for the comparison family or the resolved target,
+    /// including the contrast witness when a family was selected.
+    pub read_plan: ReadPlan,
+    /// Typed reasons carried for an abstaining or partial certificate.
+    pub unknowns: Vec<FamilyQueryUnknown>,
+    /// Stored full-file size (bytes) of the resolved target file, from the index
+    /// inventory (never a filesystem read). Feeds the target-file component of
+    /// the alignment potential-token-savings baseline. `None` for an abstaining
+    /// certificate or when the size was unavailable (no savings event then).
+    pub resolved_target_file_size_bytes: Option<u64>,
+    /// Raw indexed language of the resolved target, for savings attribution.
+    /// Empty for an abstaining certificate or when unknown.
+    pub resolved_target_language: String,
+    /// The comparison family's evidence-record baseline in estimated tokens
+    /// (the same all-evidence sum the found-family baseline uses). Carried so the
+    /// alignment savings estimator does not re-hydrate the family. `0` when no
+    /// family was compared.
+    pub family_evidence_baseline_tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum FamilyLookupReport {
     Found(FamilyDetailReport),
     PartialContext(Box<FamilyPartialContextReport>),
     Unknown(FamilyUnknownReport),
+    /// A static-alignment certificate produced by `FamilyLookupMode::Conformance`.
+    Alignment(Box<AlignmentCertificateReport>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +474,97 @@ pub struct FamilyQueryRouteReport {
     pub candidate_family_ids: Vec<String>,
     pub follow_up_family_ids: Vec<String>,
     pub why_selected: &'static str,
+    /// Source-free metadata for the deterministic term-retrieval fallback, when
+    /// that fallback produced this report. `None` for exact/role/path routes.
+    pub term_retrieval: Option<TermRetrievalRoute>,
+}
+
+/// Low-cardinality reason a term-retrieval query abstained. Every value is a
+/// stable enum token safe for telemetry; none carries raw target text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermRetrievalAbstention {
+    /// No family scored a positive retrieval signal.
+    NoCandidate,
+    /// The top candidate scored below the absolute floor `MIN_RETRIEVAL_SCORE`
+    /// (e.g. a bare concept at 4, a bare framework filter at 6, or a bare
+    /// language filter at 2).
+    BelowMinScore,
+    /// The top candidate cleared the floor on filters/residue alone, with no
+    /// pattern-concept signal (e.g. a framework filter plus residue that
+    /// substring-matches role tokens — a typo such as `framework:fastapi.rout`).
+    UnsupportedTarget,
+    /// A competing family that itself clears the floor was within
+    /// `MIN_RETRIEVAL_MARGIN` of the top.
+    MarginTooClose,
+    /// The ranking was truncated at K with a competitor tied at the top score.
+    TruncatedTie,
+    /// Every hydrated candidate failed the evidence-freshness gate.
+    StaleCandidates,
+    /// Defensive backstop: more than one hydrated candidate survived the
+    /// single-fresh-family gate. The margin gate normally reduces the winning
+    /// score tier to one family before hydration, so this is not reached in
+    /// practice, but it keeps the single-fresh-family invariant explicit.
+    HydrationAmbiguous,
+}
+
+impl TermRetrievalAbstention {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoCandidate => "no_candidate",
+            Self::BelowMinScore => "below_min_score",
+            Self::UnsupportedTarget => "unsupported_target",
+            Self::MarginTooClose => "margin_too_close",
+            Self::TruncatedTie => "truncated_tie",
+            Self::StaleCandidates => "stale_candidates",
+            Self::HydrationAmbiguous => "hydration_ambiguous",
+        }
+    }
+
+    /// The full low-cardinality vocabulary. A telemetry test asserts element-wise
+    /// equality with `telemetry::FAMILY_QUERY_ABSTENTION_REASON_KEYS`, so a drift
+    /// between the two lists fails the build rather than silently dropping records.
+    pub const ALL: &'static [TermRetrievalAbstention] = &[
+        Self::NoCandidate,
+        Self::BelowMinScore,
+        Self::UnsupportedTarget,
+        Self::MarginTooClose,
+        Self::TruncatedTie,
+        Self::StaleCandidates,
+        Self::HydrationAmbiguous,
+    ];
+}
+
+/// Source-free route metadata describing one deterministic term-retrieval run.
+/// It never carries the raw query text: identity is limited to already-public
+/// family ids, typed signal booleans, and small integer counts/scores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermRetrievalRoute {
+    /// `term_retrieval_hydrate` when a single fresh family was selected,
+    /// `term_retrieval_unknown` when the run abstained.
+    pub route: &'static str,
+    /// Active-generation family search-summary rows scored.
+    pub retrieved_summary_count: usize,
+    /// Candidates that scored a positive signal (bounded by the K cap).
+    pub ranked_candidate_count: usize,
+    /// Top-tier candidates hydrated through the freshness gate (0 when a
+    /// score/margin gate abstained before hydration).
+    pub hydrated_candidate_count: usize,
+    /// Number of retrieval pipeline stages executed.
+    pub retrieval_stage_count: usize,
+    /// Raw integer score of the top candidate, if any.
+    pub top_score: Option<i64>,
+    /// Raw integer gap between the top two candidates, if a runner-up exists.
+    pub margin: Option<i64>,
+    /// Low-cardinality band for `top_score` (telemetry-safe).
+    pub top_score_bucket: &'static str,
+    /// Low-cardinality band for `margin` (telemetry-safe).
+    pub margin_bucket: &'static str,
+    /// Typed signal breakdown for the selected candidate (only when found).
+    pub matched_signals: Option<MatchedSignals>,
+    /// Whether the ranking was truncated at the K cap.
+    pub truncated: bool,
+    /// Abstention reason, or `None` when a family was selected.
+    pub abstention_reason: Option<TermRetrievalAbstention>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -491,12 +754,89 @@ impl FamilyEvidenceMode {
     }
 }
 
+/// Response verbosity requested by the caller.
+///
+/// `verbosity` is orthogonal to [`FamilyEvidenceMode`]: `mode` selects how much
+/// *evidence detail* the resolver gathers and budgets, whereas `verbosity`
+/// selects how many *response fields* the serializers emit. The two never
+/// interact.
+///
+/// Under `product-schemas.v1` every tier is additive and byte-identical to the
+/// pre-precision response shape: `Standard` is the current default, `Minimal`
+/// is the opt-in lean shape, and `Full` retains every diagnostic field. The
+/// per-field demotions that make the tiers diverge land in later precision
+/// slices; this foundation only threads the request parameter and exposes the
+/// [`Verbosity::renders`] gate those slices consume.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Verbosity {
+    /// Opt-in lean shape. Currently equivalent to [`Verbosity::Standard`];
+    /// later precision slices suppress demoted fields at this tier.
+    Minimal,
+    /// Current default shape, byte-identical to the pre-precision response.
+    #[default]
+    Standard,
+    /// Superset shape that retains every field, including those later slices
+    /// demote out of `Standard` and `Minimal`.
+    Full,
+}
+
+impl Verbosity {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "minimal" => Some(Self::Minimal),
+            "standard" => Some(Self::Standard),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Standard => "standard",
+            Self::Full => "full",
+        }
+    }
+
+    /// Gate consumed by precision slices: does this verbosity render a field
+    /// classified at `tier`? A field is emitted when the requested verbosity is
+    /// at least as detailed as the field's tier. Under `product-schemas.v1` no
+    /// field is demoted yet, so serializers still emit their full field set
+    /// regardless of this gate.
+    pub fn renders(self, tier: VerbosityTier) -> bool {
+        match tier {
+            VerbosityTier::Minimal => true,
+            VerbosityTier::Standard => matches!(self, Self::Standard | Self::Full),
+            VerbosityTier::Full => matches!(self, Self::Full),
+        }
+    }
+}
+
+/// Field-visibility tier a serializer assigns to an individual response field.
+///
+/// Precision slices tag each demotable field with the lowest verbosity that
+/// still renders it; [`Verbosity::renders`] evaluates the gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerbosityTier {
+    /// Core field rendered at every verbosity, including `minimal`.
+    Minimal,
+    /// Field rendered at `standard` and `full`; suppressed at `minimal`.
+    Standard,
+    /// Diagnostic field rendered only at `full`.
+    Full,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FamilyOutputOptions {
     pub evidence_mode: FamilyEvidenceMode,
     pub token_budget: Option<usize>,
     pub include_variations: bool,
     pub include_exceptions: bool,
+    /// Requested response verbosity. Defaults to [`Verbosity::Standard`], the
+    /// byte-stable pre-precision shape. Serializers gate demotable fields on
+    /// this via [`Verbosity::renders`] in later slices; the current shape is
+    /// identical across all tiers.
+    pub verbosity: Verbosity,
 }
 
 impl Default for FamilyOutputOptions {
@@ -506,6 +846,7 @@ impl Default for FamilyOutputOptions {
             token_budget: None,
             include_variations: false,
             include_exceptions: false,
+            verbosity: Verbosity::Standard,
         }
     }
 }
@@ -590,6 +931,13 @@ pub struct ReadPlan {
     pub requires_source_before_edit: bool,
     pub selection_strategy: &'static str,
     pub budget_satisfied: bool,
+    /// Whether budget selection dropped one or more candidate spans from
+    /// [`ReadPlan::items`]. Serializers surface this as the honest
+    /// `read_plan.truncated` flag (mirroring the member cap's
+    /// `members_truncated`) so a trimmed plan never silently hides that the
+    /// consumer's decision set was capped. Always `false` for the unbudgeted
+    /// local-context and conformance plans.
+    pub truncated: bool,
     pub line_range_omissions: Vec<ReadPlanLineRangeOmission>,
 }
 
@@ -646,16 +994,24 @@ pub enum FamilyLookupMode {
     ExactFamilyId,
     ExactMemberId,
     FuzzyQuery,
+    /// Static-alignment check. Resolves the target to a specific code unit,
+    /// selects a comparison family, and returns a `FamilyLookupReport::Alignment`
+    /// certificate. Never emits a runtime-conformance verdict.
+    Conformance,
 }
 
 pub fn family_query_route_report(
     report: &FamilyLookupReport,
     mode: FamilyLookupMode,
 ) -> FamilyQueryRouteReport {
+    if let FamilyLookupReport::Alignment(certificate) = report {
+        return alignment_query_route_report(certificate);
+    }
     let selected_family_id = match report {
         FamilyLookupReport::Found(family) => Some(family.family_id.clone()),
         FamilyLookupReport::PartialContext(report) => report.resolved_target.family_id.clone(),
         FamilyLookupReport::Unknown(_) => None,
+        FamilyLookupReport::Alignment(_) => unreachable!("handled above"),
     };
     let candidate_family_ids = report_candidate_family_ids(report);
     let follow_up_family_ids =
@@ -671,6 +1027,54 @@ pub fn family_query_route_report(
         candidate_family_ids,
         follow_up_family_ids,
         why_selected: query_route_why(report, mode),
+        term_retrieval: report_term_retrieval(report).cloned(),
+    }
+}
+
+/// The source-free term-retrieval abstention reason token for this report, when
+/// it abstained through the term-retrieval fallback. Used by telemetry rollups.
+pub fn family_query_abstention_reason(report: &FamilyLookupReport) -> Option<&'static str> {
+    report_term_retrieval(report)
+        .and_then(|term| term.abstention_reason)
+        .map(TermRetrievalAbstention::as_str)
+}
+
+/// The term-retrieval route metadata embedded in a lookup report, if the
+/// term-retrieval fallback produced it. Exact/role/path routes carry `None`.
+fn report_term_retrieval(report: &FamilyLookupReport) -> Option<&TermRetrievalRoute> {
+    match report {
+        FamilyLookupReport::Found(family) => family.term_retrieval.as_ref(),
+        FamilyLookupReport::Unknown(unknown) => unknown.term_retrieval.as_ref(),
+        FamilyLookupReport::PartialContext(_) | FamilyLookupReport::Alignment(_) => None,
+    }
+}
+
+/// Build the query route for a static-alignment certificate directly from the
+/// certificate's own selection metadata. `check` never routes through the fuzzy
+/// term-retrieval layers, so the route names the conformance pipeline.
+fn alignment_query_route_report(
+    certificate: &AlignmentCertificateReport,
+) -> FamilyQueryRouteReport {
+    let candidate_family_ids = normalized_family_ids(certificate.candidate_family_ids.clone());
+    let follow_up_family_ids = family_id_handles(
+        &candidate_family_ids,
+        certificate.selected_family_id.as_ref(),
+    );
+    FamilyQueryRouteReport {
+        route: "conformance_static_alignment",
+        input_kind: "conformance_target_code_unit",
+        pipeline: vec![
+            "resolve_target_code_unit",
+            "select_comparison_family",
+            "compute_static_alignment",
+        ],
+        family_id_policy: "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+        candidate_limit: Some(FUZZY_FAMILY_CANDIDATE_LIMIT),
+        selected_family_id: certificate.selected_family_id.clone(),
+        candidate_family_ids,
+        follow_up_family_ids,
+        why_selected: "check resolved the target to a code unit and statically compared it against the selected family's constraint profile; runtime equivalence remains UNKNOWN",
+        term_retrieval: None,
     }
 }
 
@@ -682,6 +1086,10 @@ fn query_route_name(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'st
         (FamilyLookupReport::PartialContext(_), _) => "partial_context_read_plan",
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => "discovery_unknown",
         (FamilyLookupReport::Unknown(_), _) => "exact_lookup_unknown",
+        // The alignment route is built directly by `alignment_query_route_report`;
+        // these arms only satisfy exhaustiveness for the conformance mode.
+        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Alignment(_), _) => "conformance_static_alignment",
     }
 }
 
@@ -690,12 +1098,13 @@ fn query_route_input_kind(mode: FamilyLookupMode) -> &'static str {
         FamilyLookupMode::FuzzyQuery => "path_symbol_role_or_pattern_target",
         FamilyLookupMode::ExactFamilyId => "family_id_follow_up_handle",
         FamilyLookupMode::ExactMemberId => "member_or_code_unit_follow_up_handle",
+        FamilyLookupMode::Conformance => "conformance_target_code_unit",
     }
 }
 
 fn query_route_family_id_policy(mode: FamilyLookupMode) -> &'static str {
     match mode {
-        FamilyLookupMode::FuzzyQuery => {
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
             "family_ids_are_returned_follow_up_handles_not_required_initial_inputs"
         }
         FamilyLookupMode::ExactFamilyId => "show_family_requires_exact_family_id",
@@ -733,6 +1142,13 @@ fn query_route_pipeline(report: &FamilyLookupReport, mode: FamilyLookupMode) -> 
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::ExactMemberId) => {
             vec!["resolve_exact_member", "abstain"]
         }
+        (FamilyLookupReport::Unknown(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Alignment(_), _) => vec![
+            "resolve_target_code_unit",
+            "select_comparison_family",
+            "compute_static_alignment",
+        ],
     }
 }
 
@@ -753,6 +1169,10 @@ fn query_route_why(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'sta
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => {
             "candidate discovery or local target resolution could not produce a single supported family without overclaiming"
         }
+        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        | (FamilyLookupReport::Alignment(_), _) => {
+            "check resolved the target to a code unit and statically compared it against the selected family's constraint profile; runtime equivalence remains UNKNOWN"
+        }
         (FamilyLookupReport::Unknown(_), _) => {
             "exact follow-up handle did not resolve to a supported fresh family"
         }
@@ -771,6 +1191,9 @@ fn report_candidate_family_ids(report: &FamilyLookupReport) -> Vec<String> {
         }
         FamilyLookupReport::Unknown(report) => {
             normalized_family_ids(report.candidate_family_ids.clone())
+        }
+        FamilyLookupReport::Alignment(certificate) => {
+            normalized_family_ids(certificate.candidate_family_ids.clone())
         }
     }
 }
@@ -1321,7 +1744,7 @@ fn classify_unknown_disposition(context: UnknownPolicyContext<'_>) -> UnknownDis
         context.framework_role,
         context.assumptions,
     );
-    let registered_mechanism = registered_recovery_mechanism(&required_mechanism, context);
+    let registered_mechanism = registered_recovery_mechanism(&required_mechanism);
     let resolution_class = classify_resolution_class(context, registered_mechanism);
     let recovery_code = unknown_recovery_code(
         resolution_class,
@@ -1798,10 +2221,7 @@ fn tsjs_import_resolution_mechanism(assumptions: &[String]) -> Option<&'static s
     }
 }
 
-fn registered_recovery_mechanism(
-    mechanism: &str,
-    context: UnknownPolicyContext<'_>,
-) -> Option<RegisteredRecoveryMechanism> {
+fn registered_recovery_mechanism(mechanism: &str) -> Option<RegisteredRecoveryMechanism> {
     let recoverable = |recovery_code| RegisteredRecoveryMechanism {
         resolution_class: ResolutionClass::Recoverable,
         recovery_code,
@@ -1810,59 +2230,27 @@ fn registered_recovery_mechanism(
         resolution_class: ResolutionClass::Irreducible,
         recovery_code,
     };
+    // Provider-resolvable mechanisms are decided by the single cross-check
+    // authority against the optional-provider registry so recovery guidance never
+    // names a provider that is not integrated. This runs before the arms below so
+    // a registry-bucket or future-provider mechanism (e.g. typescript_module_
+    // resolver, python_import_graph, framework_semantic_provider, spring_di_model)
+    // can never fall through to a hard-coded provider code. Provider mechanisms
+    // remain recoverable: they are resolvable in principle, just not by an
+    // integrated provider in this version.
+    if let Some(recovery_code) = provider_recovery_code(mechanism) {
+        return Some(recoverable(recovery_code));
+    }
     match mechanism {
         "source_refresh" => Some(recoverable("run_sync")),
         "project_config_reader" => Some(recoverable("add_project_config")),
-        "resolve_dependency_metadata" => Some(recoverable("resolve_dependency_metadata")),
         "pytest_fixture_graph" => Some(recoverable("resolve_fixture_graph")),
-        "python_import_graph"
-        | "typescript_paths_resolver"
-        | "typescript_rootdirs_model"
-        | "typescript_module_resolver"
-        | "typescript_export_graph"
-        | "typescript_package_entry_model"
+        "typescript_rootdirs_model"
         | "typescript_commonjs_alias_model"
-        | "rust_module_graph"
         | "java_project_graph"
         | "csharp_project_model" => Some(recoverable("resolve_import_graph")),
-        "fastapi_dependency_graph"
-        | "sqlalchemy_session_model"
-        | "sqlalchemy_model_graph"
-        | "pydantic_validator_model"
-        | "django_project_model"
-        | "django_settings_model"
-        | "flask_app_model"
-        | "fastify_receiver_model"
-        | "prisma_client_model"
-        | "drizzle_db_model"
-        | "nestjs_di_model"
-        | "hono_receiver_model"
-        | "rust_trait_dispatch_model"
-        | "axum_route_model"
-        | "java_spring_route_literal_model"
-        | "spring_component_scan_model"
-        | "spring_di_model"
-        | "spring_data_repository_model"
-        | "java_test_annotation_model"
-        | "jpa_entity_model"
-        | "jaxrs_resource_model"
-        | "csharp_di_model"
-        | "aspnet_route_literal_model"
-        | "cpp_test_framework_model"
-        | "cpp_compile_commands_model" => Some(recoverable("enable_provider")),
         "rust_macro_boundary" | "cpp_macro_boundary" => Some(recoverable("manual_review_required")),
-        "framework_semantic_provider"
-            if context.language == "python"
-                && matches!(
-                    context.affected_claim,
-                    "python_call_target" | "python_framework_identity"
-                ) =>
-        {
-            Some(recoverable("manual_review_required"))
-        }
-        "dependency_injection_model" => Some(recoverable("enable_provider")),
-        "cargo_feature_cfg_model"
-        | "csharp_build_variant_model"
+        "csharp_build_variant_model"
         | "cpp_build_variant_model"
         | "build_variant_model"
         | "conflict_resolution"
@@ -2078,6 +2466,10 @@ pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoG
             family_id: family.family_id,
             classification: family.classification,
             support: family.support,
+            prevalence: family.prevalence,
+            // The freshness-free variant does not read source; leave the
+            // per-family verdict unevaluated rather than asserting freshness.
+            freshness: None,
         })
         .collect::<Vec<_>>();
     families.sort_by(|left, right| left.family_id.cmp(&right.family_id));
@@ -2089,20 +2481,132 @@ pub fn list_families(store: &impl FamilyStore) -> Result<FamilyListReport, RepoG
     Ok(FamilyListReport {
         active_generation: active.generation_id,
         families,
+        freshness_counts: None,
         unknowns,
     })
 }
 
+/// Deterministic, generic claim label for the report-level stale signal. Kept
+/// low-cardinality: one stale-evidence unknown covers the whole listing rather
+/// than one per stale family.
+const FAMILY_LIST_FRESHNESS_CLAIM: &str = "repository pattern families:evidence_freshness";
+
 pub fn list_families_with_freshness(
-    _request: FamilyEvidenceFreshnessRequest,
+    request: FamilyEvidenceFreshnessRequest,
     store: &impl FamilyStore,
-    _source_store: &impl SourceStore,
+    source_store: &impl SourceStore,
 ) -> Result<FamilyListReport, RepoGrammarError> {
-    list_families(store)
+    let base = list_families(store)?;
+    // Empty listings already carry the insufficient-support unknown and render
+    // through the existing empty path; there is nothing to verify.
+    if base.families.is_empty() {
+        return Ok(base);
+    }
+
+    // One bounded projection read of the active generation's family evidence.
+    let projection = store
+        .list_active_family_evidence_projection()
+        .map_err(family_store_error)?;
+    // The summaries and the evidence projection are two separate reads. If the
+    // active generation switched between them, the projected evidence could
+    // describe a different generation than the listed families.
+    if projection.generation_id != base.active_generation {
+        return Err(RepoGrammarError::InvalidInput(
+            "active inventory generation changed during family freshness read".to_string(),
+        ));
+    }
+
+    // Group evidence by family, preserving projection order per family.
+    let mut evidence_by_family: BTreeMap<String, Vec<IndexedFamilyEvidenceProjectionRecord>> =
+        BTreeMap::new();
+    for row in projection.rows {
+        evidence_by_family
+            .entry(row.family_id.clone())
+            .or_default()
+            .push(row);
+    }
+
+    // Verify each distinct (path, expected hash) at most once. Within a single
+    // generation every evidence row for a path carries that path's indexed hash,
+    // so the distinct pairs equal the distinct evidence paths: the number of
+    // source reads is bounded by the distinct paths, never the sum over families.
+    let mut path_verdicts: BTreeMap<(String, String), EvidencePathVerdict> = BTreeMap::new();
+    for rows in evidence_by_family.values() {
+        for row in rows {
+            let key = (row.path.clone(), row.content_hash.as_str().to_string());
+            if path_verdicts.contains_key(&key) {
+                continue;
+            }
+            let verdict =
+                verify_evidence_path(&request, source_store, &row.path, &row.content_hash)?;
+            path_verdicts.insert(key, verdict);
+        }
+    }
+
+    let mut counts = FamilyFreshnessCounts::default();
+    let families = base
+        .families
+        .into_iter()
+        .map(|summary| {
+            let freshness =
+                derive_family_freshness(evidence_by_family.get(&summary.family_id), &path_verdicts);
+            match freshness {
+                FamilyFreshness::Fresh => counts.fresh_count += 1,
+                FamilyFreshness::Stale => counts.stale_count += 1,
+                FamilyFreshness::CannotVerify => counts.cannot_verify_count += 1,
+            }
+            FamilySummary {
+                freshness: Some(freshness),
+                ..summary
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut unknowns = base.unknowns;
+    if counts.stale_count > 0 {
+        // Non-fatal, low-cardinality signal: the listing stays served, but a
+        // typed stale-evidence unknown with a resync recovery marks that at
+        // least one family's evidence no longer reflects the working tree.
+        unknowns.push(stale_evidence_unknown(FAMILY_LIST_FRESHNESS_CLAIM));
+    }
+
+    Ok(FamilyListReport {
+        active_generation: base.active_generation,
+        families,
+        freshness_counts: Some(counts),
+        unknowns,
+    })
+}
+
+/// Derives a family's freshness from the shared per-path verdicts. Stale takes
+/// precedence over cannot-verify, which takes precedence over fresh. A family
+/// with no evidence rows abstains as `CannotVerify`, matching the single-family
+/// evidence-less abstention in `family_evidence_is_fresh`.
+fn derive_family_freshness(
+    evidence: Option<&Vec<IndexedFamilyEvidenceProjectionRecord>>,
+    path_verdicts: &BTreeMap<(String, String), EvidencePathVerdict>,
+) -> FamilyFreshness {
+    let Some(evidence) = evidence.filter(|rows| !rows.is_empty()) else {
+        return FamilyFreshness::CannotVerify;
+    };
+    let mut cannot_verify = false;
+    for row in evidence {
+        let key = (row.path.clone(), row.content_hash.as_str().to_string());
+        match path_verdicts.get(&key) {
+            Some(EvidencePathVerdict::Stale) => return FamilyFreshness::Stale,
+            Some(EvidencePathVerdict::CannotVerify) | None => cannot_verify = true,
+            Some(EvidencePathVerdict::Fresh) => {}
+        }
+    }
+    if cannot_verify {
+        FamilyFreshness::CannotVerify
+    } else {
+        FamilyFreshness::Fresh
+    }
 }
 
 pub fn lookup_family(
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
@@ -2114,6 +2618,7 @@ pub fn lookup_family(
             active_generation: active.generation_id,
             candidate_family_ids: Vec::new(),
             unknowns: vec![insufficient_support_unknown("query target")],
+            term_retrieval: None,
         }));
     };
     let FamilyMatchSet {
@@ -2127,6 +2632,7 @@ pub fn lookup_family(
             active_generation,
             candidate_family_ids,
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(unknown) = ambiguous_target_unknown(&matches) {
@@ -2134,16 +2640,33 @@ pub fn lookup_family(
             active_generation,
             candidate_family_ids: candidate_family_ids_from_matches(&matches),
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(matched) = matches.into_iter().next() {
-        return Ok(FamilyLookupReport::Found(family_detail(matched.family)));
+        let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
+        return Ok(FamilyLookupReport::Found(family_detail(
+            matched.family,
+            profile,
+        )));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
         candidate_family_ids,
         unknowns: vec![insufficient_support_unknown("query target")],
+        term_retrieval: None,
     }))
+}
+
+/// Hydrate one family's stored constraint profile, mapping store failures to the
+/// query error type. Returns `None` when no profile was persisted for the family.
+fn hydrated_constraint_profile(
+    store: &impl FamilyConstraintProfileStore,
+    family_id: &str,
+) -> Result<Option<FamilyConstraintProfile>, RepoGrammarError> {
+    store
+        .show_family_constraint_profile(family_id)
+        .map_err(family_store_error)
 }
 
 struct FamilyMatchSet {
@@ -2161,7 +2684,11 @@ fn bounded_family_matches(
     match mode {
         FamilyLookupMode::ExactFamilyId => exact_family_match_set(store, target),
         FamilyLookupMode::ExactMemberId => exact_member_match_set(store, target),
-        FamilyLookupMode::FuzzyQuery => fuzzy_family_match_set(store, target),
+        // Conformance resolves through the shared fuzzy pipeline before the
+        // alignment layer runs, so it shares the fuzzy match set here.
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            fuzzy_family_match_set(store, target)
+        }
     }
 }
 
@@ -2439,7 +2966,7 @@ fn candidate_ambiguity_unknown(
 
 pub fn lookup_family_with_local_context(
     index_store: &impl IndexStore,
-    family_store: &impl FamilyStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
@@ -2449,7 +2976,7 @@ pub fn lookup_family_with_local_context(
 
 pub fn lookup_family_with_freshness(
     request: FamilyEvidenceFreshnessRequest,
-    store: &impl FamilyStore,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
     mode: FamilyLookupMode,
@@ -2462,6 +2989,7 @@ pub fn lookup_family_with_freshness(
             active_generation: active.generation_id,
             candidate_family_ids: Vec::new(),
             unknowns: vec![insufficient_support_unknown("query target")],
+            term_retrieval: None,
         }));
     };
     let FamilyMatchSet {
@@ -2475,6 +3003,7 @@ pub fn lookup_family_with_freshness(
             active_generation,
             candidate_family_ids,
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(unknown) = ambiguous_target_unknown(&matches) {
@@ -2482,11 +3011,16 @@ pub fn lookup_family_with_freshness(
             active_generation,
             candidate_family_ids: candidate_family_ids_from_matches(&matches),
             unknowns: vec![unknown],
+            term_retrieval: None,
         }));
     }
     if let Some(matched) = matches.into_iter().next() {
         if family_evidence_is_fresh(&request, source_store, &matched.family)? {
-            return Ok(FamilyLookupReport::Found(family_detail(matched.family)));
+            let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
+            return Ok(FamilyLookupReport::Found(family_detail(
+                matched.family,
+                profile,
+            )));
         }
         let family_id = matched.family.family.family_id;
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
@@ -2496,25 +3030,1157 @@ pub fn lookup_family_with_freshness(
                 "{}:evidence_freshness",
                 family_id
             ))],
+            term_retrieval: None,
         }));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
         candidate_family_ids,
         unknowns: vec![insufficient_support_unknown("query target")],
+        term_retrieval: None,
     }))
 }
 
 pub fn lookup_family_with_freshness_and_local_context(
     request: FamilyEvidenceFreshnessRequest,
     index_store: &impl IndexStore,
-    family_store: &impl FamilyStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
-    let report = lookup_family_with_freshness(request, family_store, source_store, target, mode)?;
+    // The conformance check resolves the target and comparison family through the
+    // same shared pipeline, then layers the static-alignment certificate on top.
+    if mode == FamilyLookupMode::Conformance {
+        return check_static_alignment(request, index_store, family_store, source_store, target);
+    }
+    // Exact authority + role/evidence fuzzy layers run first and unchanged.
+    let report =
+        lookup_family_with_freshness(request.clone(), family_store, source_store, target, mode)?;
+    // Only when those layers produced no candidate for a non-path-locator target
+    // does deterministic term retrieval run, through the same freshness gate.
+    let report =
+        term_retrieval_fallback(&request, family_store, source_store, report, target, mode)?;
+    // The existing local-context read-plan fallback still applies where its
+    // preconditions hold (path-shaped targets, or term retrieval that abstained).
     add_local_context_fallback(index_store, report, target, mode)
+}
+
+// ---------------------------------------------------------------------------
+// Static-alignment check (`check` operation).
+//
+// `check` upgrades the advisory no-op into a source-backed static-alignment
+// certificate. It reuses the shared lookup pipeline to resolve the TARGET to a
+// specific code unit and select a comparison family, extracts the target's
+// feature profile with the SAME authority family induction uses, and delegates
+// the alignment decision to `conformance::compute_alignment`. It NEVER claims
+// runtime equivalence: `runtime_equivalence` stays `UNKNOWN` in every certificate
+// and the family's runtime obligation is carried verbatim.
+// ---------------------------------------------------------------------------
+
+/// Resolve a target to a static-alignment certificate.
+///
+/// This is deliberately NOT the fuzzy family lookup: it resolves the target to
+/// exactly one code unit honoring any `path:line` / `path:byte-range` locator or
+/// `unit:` member id, verifies that unit's file is fresh, then decides membership
+/// directly (`find_active_families_by_member`) or, for a non-member, selects the
+/// single fresh ready family of the unit's key. There is no canonical-member
+/// fallback: a target that does not pin exactly one unit abstains.
+fn check_static_alignment(
+    request: FamilyEvidenceFreshnessRequest,
+    index_store: &impl IndexStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    target: Option<&str>,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let snapshot = index_store
+        .load_active_claim_input_snapshot()
+        .map_err(index_store_error)?;
+    let active_generation = snapshot.generation_id.clone();
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::Unknown,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown("check target")],
+            empty_resolved_target(""),
+        ));
+    };
+
+    // (1) Resolve the target to exactly one code unit, honoring its locator.
+    let unit = match resolve_conformance_target_unit(
+        &request,
+        source_store,
+        target,
+        &snapshot.files,
+        &snapshot.units,
+    )? {
+        ConformanceUnitResolution::Resolved(unit) => unit,
+        ConformanceUnitResolution::Stale { path } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::InsufficientEvidence,
+                empty_alignment_read_plan(),
+                vec![stale_evidence_unknown(format!("{path}:evidence_freshness"))],
+                conformance_locator_target(target, "code_unit", &path, Vec::new(), Vec::new()),
+            ));
+        }
+        ConformanceUnitResolution::AmbiguousUnits {
+            path,
+            candidate_unit_ids,
+        } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::InsufficientEvidence,
+                empty_alignment_read_plan(),
+                vec![candidate_unit_ambiguity_unknown(
+                    "check target code unit ambiguity",
+                    &candidate_unit_ids,
+                )],
+                conformance_locator_target(target, "path", &path, Vec::new(), candidate_unit_ids),
+            ));
+        }
+        ConformanceUnitResolution::AmbiguousFiles { candidate_paths } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::InsufficientEvidence,
+                empty_alignment_read_plan(),
+                vec![candidate_unit_ambiguity_unknown(
+                    "check target path ambiguity",
+                    &candidate_paths,
+                )],
+                conformance_locator_target(target, "path", "", candidate_paths, Vec::new()),
+            ));
+        }
+        ConformanceUnitResolution::Unresolved { reason } => {
+            return Ok(alignment_abstain(
+                active_generation,
+                AlignmentStatus::Unknown,
+                empty_alignment_read_plan(),
+                vec![FamilyQueryUnknown {
+                    class: UnknownClass::Blocking,
+                    reason: UnknownReasonCode::InsufficientSupport,
+                    affected_claim: "check target resolution".to_string(),
+                    recovery: Some(format!("{reason}; use an exact repo-relative path, path:line, path:byte-range, or unit: member id")),
+                }],
+                empty_resolved_target(target),
+            ));
+        }
+    };
+
+    let facts = snapshot_semantic_facts(&snapshot)?;
+    let units = &snapshot.units;
+
+    // (2) Extract the target's feature profile with the family-induction authority.
+    let Some(target_features) = extract_target_unit_features(units, &facts, &unit.id) else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown("check target features")],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    };
+
+    // A target with no single framework role, or a non-eligible kind, is out of
+    // family scope: there is no key to select a comparison family from.
+    if target_features.framework_role_key.is_none()
+        || !crate::application::family::family_eligible_kind(&unit.kind)
+    {
+        return Ok(alignment_out_of_scope(
+            active_generation,
+            local_context_read_plan_for_unit(unit),
+            resolved_target_for_unit(target, unit, None),
+        ));
+    }
+
+    // (3) Membership: the unit's own family, else the single ready family of key.
+    let member_candidates = family_store
+        .find_active_families_by_member(&unit.id)
+        .map_err(family_store_error)?;
+    let mut member_family_ids: Vec<String> = member_candidates
+        .candidates
+        .iter()
+        .map(|candidate| candidate.family_id.clone())
+        .collect();
+    member_family_ids.sort();
+    member_family_ids.dedup();
+
+    let (family_id, is_member) = if member_family_ids.len() == 1 {
+        (
+            member_family_ids.into_iter().next().expect("one family"),
+            true,
+        )
+    } else if member_family_ids.is_empty() {
+        match select_comparison_family_by_key(family_store, &target_features)? {
+            KeyFamilySelection::One(family_id) => (family_id, false),
+            KeyFamilySelection::None => {
+                return Ok(alignment_out_of_scope(
+                    active_generation,
+                    local_context_read_plan_for_unit(unit),
+                    resolved_target_for_unit(target, unit, None),
+                ));
+            }
+            KeyFamilySelection::Ambiguous(candidates) => {
+                let mut resolved = resolved_target_for_unit(target, unit, None);
+                resolved.candidate_family_ids = candidates.clone();
+                return Ok(alignment_abstain(
+                    active_generation,
+                    AlignmentStatus::InsufficientEvidence,
+                    empty_alignment_read_plan(),
+                    vec![candidate_ambiguity_unknown(
+                        "check comparison family ambiguity",
+                        &candidates,
+                    )],
+                    resolved,
+                ));
+            }
+        }
+    } else {
+        let mut resolved = resolved_target_for_unit(target, unit, None);
+        resolved.candidate_family_ids = member_family_ids.clone();
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![candidate_ambiguity_unknown(
+                "check target family ambiguity",
+                &member_family_ids,
+            )],
+            resolved,
+        ));
+    };
+
+    // (4) Hydrate the comparison family, verify its evidence freshness, compare.
+    let Some(active_family) = family_store
+        .show_family(&family_id)
+        .map_err(family_store_error)?
+    else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown(
+                "check comparison family hydration",
+            )],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    };
+    if !family_evidence_is_fresh(&request, source_store, &active_family)? {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![stale_evidence_unknown(format!(
+                "{family_id}:evidence_freshness"
+            ))],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    }
+    let profile = hydrated_constraint_profile(family_store, &family_id)?;
+    let family = family_detail(active_family, profile);
+    let Some(profile) = family.constraint_profile.as_deref() else {
+        return Ok(alignment_abstain(
+            active_generation,
+            AlignmentStatus::InsufficientEvidence,
+            empty_alignment_read_plan(),
+            vec![insufficient_support_unknown(format!(
+                "{family_id}:constraint_profile"
+            ))],
+            resolved_target_for_unit(target, unit, None),
+        ));
+    };
+
+    let computation = compute_alignment(profile, &target_features);
+    // A `compute_alignment` that finds nothing comparable abstains with an
+    // `UNKNOWN` status. An abstaining status must never surface the selected
+    // family or the computation body (the `is_abstaining` contract), so route it
+    // through the abstaining constructor: "an abstention never leaks a family" is
+    // guaranteed here by construction, not by downstream serializer discipline.
+    if computation.status.is_abstaining() {
+        let mut unknowns = family.unknowns.clone();
+        unknowns.extend(alignment_blocking_query_unknowns(&computation, &family_id));
+        return Ok(alignment_abstain(
+            active_generation,
+            computation.status,
+            empty_alignment_read_plan(),
+            unknowns,
+            resolved_target_for_unit(target, unit, None),
+        ));
+    }
+    let relationship = if is_member {
+        TargetRelationship::Member
+    } else {
+        classify_nonmember_relationship(&computation, &target_features)
+    };
+    let read_plan = build_read_plan(
+        &family,
+        Some(target),
+        FamilyLookupMode::FuzzyQuery,
+        alignment_output_options(),
+    );
+    let mut unknowns = family.unknowns.clone();
+    unknowns.extend(alignment_blocking_query_unknowns(&computation, &family_id));
+
+    // Stored full-file size of the resolved target file (never a filesystem
+    // read), plus the comparison family's evidence baseline, feed the all-scope
+    // potential-token-savings accounting for this certificate.
+    let resolved_target_file_size_bytes = snapshot
+        .files
+        .iter()
+        .find(|file| file.path == unit.path)
+        .map(|file| file.size_bytes);
+    let family_evidence_baseline_tokens =
+        usize_to_u64_saturating(all_family_evidence_tokens(&family));
+
+    // A committed certificate carries the selected family and the computation, so
+    // its status must be non-abstaining. The guard above routes every abstaining
+    // status away, so this construction is only ever reached committed/partial.
+    debug_assert!(
+        !computation.status.is_abstaining(),
+        "committed alignment certificate must carry a non-abstaining status"
+    );
+    Ok(FamilyLookupReport::Alignment(Box::new(
+        AlignmentCertificateReport {
+            active_generation,
+            alignment_status: computation.status,
+            target_relationship: Some(relationship),
+            selected_family_id: Some(family_id.clone()),
+            candidate_family_ids: vec![family_id.clone()],
+            resolved_target: resolved_target_for_unit(target, unit, Some(family_id)),
+            computation: Some(Box::new(computation)),
+            read_plan,
+            unknowns,
+            resolved_target_file_size_bytes,
+            resolved_target_language: unit.language.clone(),
+            family_evidence_baseline_tokens,
+        },
+    )))
+}
+
+/// The result of resolving a `check` target to exactly one indexed code unit.
+#[derive(Debug)]
+enum ConformanceUnitResolution<'a> {
+    /// Exactly one code unit was pinned and its file is fresh.
+    Resolved(&'a IndexedCodeUnitRecord),
+    /// The target file is stale; abstain rather than certify from stale facts.
+    Stale { path: String },
+    /// A path-only target names a file with more than one family-eligible unit and
+    /// no locator to disambiguate.
+    AmbiguousUnits {
+        path: String,
+        candidate_unit_ids: Vec<String>,
+    },
+    /// The target matched more than one indexed file.
+    AmbiguousFiles { candidate_paths: Vec<String> },
+    /// No indexed file/unit matched, or no unit contains the locator.
+    Unresolved { reason: &'static str },
+}
+
+/// Maximum candidate ids surfaced on an ambiguous conformance resolution.
+const CONFORMANCE_AMBIGUITY_CANDIDATE_CAP: usize = 8;
+
+/// Resolve a `check` target to exactly one indexed code unit, honoring the
+/// locator. Never falls back to a canonical member: an under-specified target
+/// resolves to an ambiguity or an unresolved verdict, not an arbitrary unit.
+fn resolve_conformance_target_unit<'a>(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    target: &str,
+    files: &[IndexedFileRecord],
+    units: &'a [IndexedCodeUnitRecord],
+) -> Result<ConformanceUnitResolution<'a>, RepoGrammarError> {
+    // (1) An exact `unit:` member id pins one unit directly.
+    if let Some(unit) = units.iter().find(|unit| unit.id == target) {
+        return Ok(
+            if verify_evidence_path(request, source_store, &unit.path, &unit.content_hash)?
+                == EvidencePathVerdict::Fresh
+            {
+                ConformanceUnitResolution::Resolved(unit)
+            } else {
+                ConformanceUnitResolution::Stale {
+                    path: unit.path.clone(),
+                }
+            },
+        );
+    }
+
+    // (2) Resolve the target file and any path locator.
+    let mut file_matches: Vec<(&IndexedFileRecord, TargetPathMatch)> = files
+        .iter()
+        .filter_map(|file| target_path_match(target, &file.path).map(|matched| (file, matched)))
+        .collect();
+    file_matches.sort_by(|(left_file, left), (right_file, right)| {
+        (left.rank, left_file.path.as_str()).cmp(&(right.rank, right_file.path.as_str()))
+    });
+    file_matches.dedup_by(|(left, _), (right, _)| left.path == right.path);
+    if file_matches.is_empty() {
+        return Ok(ConformanceUnitResolution::Unresolved {
+            reason: "check target matched no indexed file",
+        });
+    }
+    let best_rank = file_matches[0].1.rank;
+    let best_paths: Vec<String> = file_matches
+        .iter()
+        .filter(|(_, matched)| matched.rank == best_rank)
+        .map(|(file, _)| file.path.clone())
+        .collect();
+    if best_paths.len() > 1 {
+        return Ok(ConformanceUnitResolution::AmbiguousFiles {
+            candidate_paths: best_paths
+                .into_iter()
+                .take(CONFORMANCE_AMBIGUITY_CANDIDATE_CAP)
+                .collect(),
+        });
+    }
+    let (file, path_match) = file_matches[0];
+
+    // (3) The target file must be fresh before any certificate is considered.
+    if verify_evidence_path(request, source_store, &file.path, &file.content_hash)?
+        != EvidencePathVerdict::Fresh
+    {
+        return Ok(ConformanceUnitResolution::Stale {
+            path: file.path.clone(),
+        });
+    }
+
+    // (4) The locator's byte anchor, mapping a line locator through source.
+    let anchor: Option<(usize, usize)> = if let Some(range) = path_match.byte_range {
+        Some(range)
+    } else if let Some(line) = path_match.line {
+        conformance_source_text(request, source_store, file)?
+            .and_then(|text| line_start_byte(&text, line))
+            .map(|byte| (byte, byte))
+    } else {
+        None
+    };
+
+    let mut units_in_file: Vec<&IndexedCodeUnitRecord> =
+        units.iter().filter(|unit| unit.path == file.path).collect();
+    if units_in_file.is_empty() {
+        return Ok(ConformanceUnitResolution::Unresolved {
+            reason: "check target file has no indexed code unit",
+        });
+    }
+
+    // (5a) A locator pins the innermost code unit containing it.
+    if let Some((start, end)) = anchor {
+        let mut containing: Vec<&IndexedCodeUnitRecord> = units_in_file
+            .iter()
+            .copied()
+            .filter(|unit| unit.start_byte <= start && end <= unit.end_byte)
+            .collect();
+        if containing.is_empty() {
+            return Ok(ConformanceUnitResolution::Unresolved {
+                reason: "no indexed code unit contains the target locator",
+            });
+        }
+        containing.sort_by(|left, right| {
+            (
+                left.end_byte - left.start_byte,
+                left.start_byte,
+                left.id.as_str(),
+            )
+                .cmp(&(
+                    right.end_byte - right.start_byte,
+                    right.start_byte,
+                    right.id.as_str(),
+                ))
+        });
+        return Ok(ConformanceUnitResolution::Resolved(containing[0]));
+    }
+
+    // (5b) A path-only target pins the single family-eligible unit; more than one
+    // is ambiguous, and zero surfaces the widest unit for an out-of-scope verdict.
+    let mut eligible: Vec<&IndexedCodeUnitRecord> = units_in_file
+        .iter()
+        .copied()
+        .filter(|unit| crate::application::family::family_eligible_kind(&unit.kind))
+        .collect();
+    match eligible.len() {
+        1 => Ok(ConformanceUnitResolution::Resolved(eligible[0])),
+        0 => {
+            units_in_file.sort_by(|left, right| {
+                (
+                    right.end_byte - right.start_byte,
+                    left.start_byte,
+                    left.id.as_str(),
+                )
+                    .cmp(&(
+                        left.end_byte - left.start_byte,
+                        right.start_byte,
+                        right.id.as_str(),
+                    ))
+            });
+            Ok(ConformanceUnitResolution::Resolved(units_in_file[0]))
+        }
+        _ => {
+            eligible.sort_by(|left, right| {
+                (left.start_byte, left.id.as_str()).cmp(&(right.start_byte, right.id.as_str()))
+            });
+            Ok(ConformanceUnitResolution::AmbiguousUnits {
+                path: file.path.clone(),
+                candidate_unit_ids: eligible
+                    .iter()
+                    .map(|unit| unit.id.clone())
+                    .take(CONFORMANCE_AMBIGUITY_CANDIDATE_CAP)
+                    .collect(),
+            })
+        }
+    }
+}
+
+/// The comparison family selected by a non-member target's `(language, kind,
+/// role)` key.
+enum KeyFamilySelection {
+    One(String),
+    None,
+    Ambiguous(Vec<String>),
+}
+
+fn select_comparison_family_by_key(
+    family_store: &impl FamilyStore,
+    target_features: &TargetFeatureProfile,
+) -> Result<KeyFamilySelection, RepoGrammarError> {
+    let Some(role_key) = target_features.framework_role_key.as_deref() else {
+        return Ok(KeyFamilySelection::None);
+    };
+    let summaries = family_store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    let mut key_candidates: Vec<String> = summaries
+        .families
+        .iter()
+        .filter(|summary| {
+            summary.language == target_features.language
+                && summary.code_unit_kind == target_features.code_unit_kind
+                && summary.framework_role == role_key
+        })
+        .map(|summary| summary.family_id.clone())
+        .collect();
+    key_candidates.sort();
+    key_candidates.dedup();
+    Ok(match key_candidates.len() {
+        0 => KeyFamilySelection::None,
+        1 => KeyFamilySelection::One(key_candidates.into_iter().next().expect("one candidate")),
+        _ => KeyFamilySelection::Ambiguous(key_candidates),
+    })
+}
+
+/// 1-based line number to the byte offset of that line's start, or `None` when
+/// the line is out of range.
+fn line_start_byte(text: &str, line: usize) -> Option<usize> {
+    if line == 0 {
+        return None;
+    }
+    if line == 1 {
+        return Some(0);
+    }
+    let mut seen = 1usize;
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            seen += 1;
+            if seen == line {
+                return Some(index + 1);
+            }
+        }
+    }
+    None
+}
+
+/// Read the target file's source text for line-to-byte mapping, or `None` when it
+/// is missing, changed, too large, or non-UTF-8.
+fn conformance_source_text(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    file: &IndexedFileRecord,
+) -> Result<Option<String>, RepoGrammarError> {
+    match source_store.read_source(SourceReadRequest {
+        repository_root: request.repository_root.clone(),
+        path: file.path.clone(),
+        expected_content_hash: file.content_hash.clone(),
+        max_file_bytes: request.max_file_bytes,
+    }) {
+        Ok(source) if source.path == file.path && source.content_hash == file.content_hash => {
+            Ok(Some(source.text))
+        }
+        Ok(_)
+        | Err(SourceStoreError::Missing(_))
+        | Err(SourceStoreError::HashMismatch(_))
+        | Err(SourceStoreError::TooLarge(_))
+        | Err(SourceStoreError::NonUtf8(_))
+        | Err(SourceStoreError::Unavailable(_)) => Ok(None),
+        Err(SourceStoreError::InvalidRequest(_)) => Err(RepoGrammarError::InvalidInput(
+            "check target source request is invalid".to_string(),
+        )),
+    }
+}
+
+/// The non-member relationship classification. Membership is decided upstream (a
+/// member always compares against its own family), so the axis here is: blocked,
+/// a source-backed exception (required violation against the only ready family of
+/// its key), or a near miss. `COMPETING_PATTERN` is intentionally not emitted —
+/// a member's own family is always the comparison family, so it is reserved.
+fn classify_nonmember_relationship(
+    computation: &AlignmentComputation,
+    target: &TargetFeatureProfile,
+) -> TargetRelationship {
+    if !target.blocking_unknowns.is_empty() {
+        TargetRelationship::BlockedUnknown
+    } else if computation.status == AlignmentStatus::StaticDeviation {
+        // Source-backed negative evidence against the only ready family of its key.
+        TargetRelationship::Exception
+    } else {
+        TargetRelationship::NearMiss
+    }
+}
+
+fn alignment_output_options() -> FamilyOutputOptions {
+    FamilyOutputOptions::default()
+}
+
+/// Query-surface blocking unknowns derived from an alignment computation, so the
+/// certificate's `unknowns` list carries the target's blocking obligations.
+fn alignment_blocking_query_unknowns(
+    computation: &AlignmentComputation,
+    family_id: &str,
+) -> Vec<FamilyQueryUnknown> {
+    computation
+        .blocking_unknowns
+        .iter()
+        .map(|unknown| FamilyQueryUnknown {
+            class: unknown.class,
+            reason: unknown.reason,
+            affected_claim: format!("{family_id}:target:{}", unknown.affected_claim),
+            recovery: unknown.recovery.clone(),
+        })
+        .collect()
+}
+
+/// Build an abstaining certificate. An abstention NEVER surfaces a selected
+/// family (the field is structurally `None`), so it can never be telemetered as a
+/// resolved outcome. Candidate family ids are only diagnostic breadcrumbs carried
+/// on the resolved target.
+fn alignment_abstain(
+    active_generation: String,
+    status: AlignmentStatus,
+    read_plan: ReadPlan,
+    unknowns: Vec<FamilyQueryUnknown>,
+    resolved_target: ResolvedQueryTarget,
+) -> FamilyLookupReport {
+    debug_assert!(
+        status.is_abstaining(),
+        "alignment_abstain requires an abstaining status"
+    );
+    let candidate_family_ids = normalized_family_ids(resolved_target.candidate_family_ids.clone());
+    FamilyLookupReport::Alignment(Box::new(AlignmentCertificateReport {
+        active_generation,
+        alignment_status: status,
+        target_relationship: None,
+        selected_family_id: None,
+        candidate_family_ids,
+        resolved_target,
+        computation: None,
+        read_plan,
+        unknowns,
+        // An abstaining certificate never displaces a full read, so it carries
+        // no savings baseline and produces no potential-token-savings event.
+        resolved_target_file_size_bytes: None,
+        resolved_target_language: String::new(),
+        family_evidence_baseline_tokens: 0,
+    }))
+}
+
+/// A blocking `UNKNOWN` naming the ambiguous candidate unit ids or paths that a
+/// conformance target failed to disambiguate. Deterministic and source-free.
+fn candidate_unit_ambiguity_unknown(
+    affected_claim: impl Into<String>,
+    candidates: &[String],
+) -> FamilyQueryUnknown {
+    let mut candidates = candidates.to_vec();
+    candidates.sort();
+    candidates.dedup();
+    let candidate_list = if candidates.is_empty() {
+        "none".to_string()
+    } else {
+        candidates.join(", ")
+    };
+    FamilyQueryUnknown {
+        class: UnknownClass::Blocking,
+        reason: UnknownReasonCode::InsufficientSupport,
+        affected_claim: affected_claim.into(),
+        recovery: Some(format!(
+            "narrow the check target to one code unit with a path:line, path:byte-range, or unit: locator; candidates: {candidate_list}"
+        )),
+    }
+}
+
+/// A resolved-target locator for an abstaining conformance outcome, carrying the
+/// candidate paths/unit ids as diagnostic breadcrumbs (never a selected family).
+fn conformance_locator_target(
+    target: &str,
+    kind: &'static str,
+    path: &str,
+    candidate_paths: Vec<String>,
+    candidate_code_unit_ids: Vec<String>,
+) -> ResolvedQueryTarget {
+    ResolvedQueryTarget {
+        original_target: target.to_string(),
+        kind,
+        path: path.to_string(),
+        line: None,
+        byte_range: None,
+        family_id: None,
+        code_unit_id: None,
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths,
+        candidate_family_ids: Vec::new(),
+        candidate_code_unit_ids,
+        confidence: "none",
+        match_kind: "conformance_target",
+    }
+}
+
+fn alignment_out_of_scope(
+    active_generation: String,
+    read_plan: ReadPlan,
+    resolved_target: ResolvedQueryTarget,
+) -> FamilyLookupReport {
+    FamilyLookupReport::Alignment(Box::new(AlignmentCertificateReport {
+        active_generation,
+        alignment_status: AlignmentStatus::InsufficientEvidence,
+        target_relationship: Some(TargetRelationship::OutOfScope),
+        selected_family_id: None,
+        candidate_family_ids: Vec::new(),
+        resolved_target,
+        computation: None,
+        read_plan,
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "check target family scope".to_string(),
+            recovery: Some(
+                "the target code unit has no supported framework role or family of its key; no static-alignment claim is possible".to_string(),
+            ),
+        }],
+        // Out-of-scope is an abstention: no comparison family, no savings event.
+        resolved_target_file_size_bytes: None,
+        resolved_target_language: String::new(),
+        family_evidence_baseline_tokens: 0,
+    }))
+}
+
+fn resolved_target_for_unit(
+    target: &str,
+    unit: &IndexedCodeUnitRecord,
+    family_id: Option<String>,
+) -> ResolvedQueryTarget {
+    ResolvedQueryTarget {
+        original_target: target.to_string(),
+        kind: "code_unit",
+        path: unit.path.clone(),
+        line: None,
+        byte_range: Some((unit.start_byte, unit.end_byte)),
+        family_id: family_id.clone(),
+        code_unit_id: Some(unit.id.clone()),
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths: vec![unit.path.clone()],
+        candidate_family_ids: family_id.into_iter().collect(),
+        candidate_code_unit_ids: vec![unit.id.clone()],
+        confidence: "high",
+        match_kind: "conformance_target",
+    }
+}
+
+fn empty_resolved_target(target: &str) -> ResolvedQueryTarget {
+    ResolvedQueryTarget {
+        original_target: target.to_string(),
+        kind: "unresolved",
+        path: String::new(),
+        line: None,
+        byte_range: None,
+        family_id: None,
+        code_unit_id: None,
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths: Vec::new(),
+        candidate_family_ids: Vec::new(),
+        candidate_code_unit_ids: Vec::new(),
+        confidence: "none",
+        match_kind: "unresolved",
+    }
+}
+
+fn empty_alignment_read_plan() -> ReadPlan {
+    ReadPlan {
+        items: Vec::new(),
+        estimated_tokens: 0,
+        source_snippets_included: false,
+        requires_source_before_edit: false,
+        selection_strategy: "conformance_no_read_plan",
+        budget_satisfied: true,
+        truncated: false,
+        line_range_omissions: Vec::new(),
+    }
+}
+
+/// Reconstruct the active generation's typed [`SemanticFact`]s from the stored
+/// records, exactly as the incremental indexing path does, so the target feature
+/// extractor sees the same facts family induction saw.
+fn snapshot_semantic_facts(
+    snapshot: &crate::ports::index_store::ActiveClaimInputSnapshot,
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    snapshot
+        .semantic_facts
+        .iter()
+        .map(semantic_fact_from_index_record)
+        .collect()
+}
+
+fn semantic_fact_from_index_record(
+    record: &IndexedSemanticFactRecord,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let kind = SemanticFactKind::parse_protocol_str(&record.kind).map_err(|_| {
+        RepoGrammarError::InvalidInput("stored semantic fact kind is invalid".to_string())
+    })?;
+    let certainty = FactCertainty::parse_protocol_str(&record.certainty).map_err(|_| {
+        RepoGrammarError::InvalidInput("stored semantic fact certainty is invalid".to_string())
+    })?;
+    Ok(SemanticFact {
+        kind,
+        subject: record.subject.clone(),
+        target: record
+            .target
+            .as_ref()
+            .map(SymbolId::new)
+            .transpose()
+            .map_err(RepoGrammarError::InvalidInput)?,
+        origin: FactOrigin {
+            engine: record.origin_engine.clone(),
+            engine_version: record.origin_engine_version.clone(),
+            method: record.origin_method.clone(),
+        },
+        certainty,
+        evidence: Evidence::new(
+            CodeUnitId::new(record.code_unit_id.clone()).map_err(RepoGrammarError::InvalidInput)?,
+            SourceRange::new(record.start_byte, record.end_byte)
+                .map_err(RepoGrammarError::InvalidInput)?,
+            Provenance::new(
+                &record.path,
+                record.content_hash.clone(),
+                RepositoryRevision::new("UNKNOWN").expect("UNKNOWN is a valid revision marker"),
+            )
+            .map_err(RepoGrammarError::InvalidInput)?,
+            &record.note,
+        )
+        .map_err(RepoGrammarError::InvalidInput)?,
+        assumptions: record.assumptions.clone(),
+    })
+}
+
+/// Deterministic, dependency-free term-retrieval fallback. It runs only for a
+/// `FuzzyQuery` whose exact/role/path layers produced **no candidate at all** —
+/// a single `InsufficientSupport` block with claim `query target` and an empty
+/// `candidate_family_ids` — and whose target is not path-locator-shaped. Exact
+/// layers that *did* find candidates (a `unit:` member in more than one family,
+/// a truncated role/evidence candidate set, or an exact-role multi-family
+/// ambiguity) keep their own claim, candidate ids, and narrowing recovery text
+/// verbatim: term retrieval never rewrites them. Natural language, synonym, and
+/// framework targets flow into [`crate::application::query_terms`] scoring, the
+/// calibrated abstention gates, and bounded hydration through the existing
+/// freshness + single-fresh-family gates.
+fn term_retrieval_fallback(
+    request: &FamilyEvidenceFreshnessRequest,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    report: FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    if mode != FamilyLookupMode::FuzzyQuery {
+        return Ok(report);
+    }
+    let FamilyLookupReport::Unknown(ref unknown) = report else {
+        return Ok(report);
+    };
+    if !term_retrieval_eligible(unknown) {
+        // Candidate-set, ambiguity, and stale-evidence blocks keep their own
+        // claim, candidate ids, and recovery guidance verbatim.
+        return Ok(report);
+    }
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(report);
+    };
+    // Path-locator-shaped targets are handled by the exact/suffix/local-context
+    // path; term retrieval only claims non-path natural-language style targets.
+    // A single interior-dotted word (e.g. `fastapi.Depends`, `0.100`, `e.g.`) is
+    // NOT path-shaped, so such prose still reaches retrieval.
+    if target_has_path_locator_shape(target) {
+        return Ok(report);
+    }
+    run_term_retrieval(
+        request,
+        store,
+        source_store,
+        target,
+        &unknown.active_generation,
+    )
+}
+
+/// A fuzzy lookup is eligible for term retrieval only when the exact/role/path
+/// layers produced no candidate at all: exactly one `InsufficientSupport`
+/// blocking unknown with claim `query target` and an empty candidate set. The
+/// candidate-set-too-broad (`query target candidate set`) and ambiguity
+/// (`query target ambiguity`) blocks both carry candidate ids and must pass
+/// through untouched, so they are excluded here.
+fn term_retrieval_eligible(report: &FamilyUnknownReport) -> bool {
+    report.candidate_family_ids.is_empty()
+        && matches!(
+            report.unknowns.as_slice(),
+            [FamilyQueryUnknown {
+                class: UnknownClass::Blocking,
+                reason: UnknownReasonCode::InsufficientSupport,
+                affected_claim,
+                ..
+            }] if affected_claim == "query target"
+        )
+}
+
+/// Known repository source-file extensions that mark a bare (slash-free) token
+/// as a genuine file locator for the retrieval guard. Kept deliberately small
+/// and aligned with the indexed languages; a dotted word whose final segment is
+/// not one of these (e.g. `fastapi.Depends`, `0.100`, `e.g`) is not path-shaped.
+const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
+    "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "java", "cs", "go", "rb", "php",
+    "swift", "kt", "kts", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx",
+];
+
+/// True when the target is genuinely path-locator-shaped for the term-retrieval
+/// guard: some whitespace token contains `/`, or (after stripping a trailing
+/// `:line`/`:start-end` locator) ends in a known source-file extension. Prose
+/// containing a single interior-dotted word is not path-shaped.
+fn target_has_path_locator_shape(target: &str) -> bool {
+    target.split_whitespace().any(|token| {
+        if token.contains('/') {
+            return true;
+        }
+        let (path, _) = split_query_path_locator(token);
+        path.rsplit_once('.')
+            .map(|(_, extension)| {
+                PATH_LOCATOR_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn run_term_retrieval(
+    request: &FamilyEvidenceFreshnessRequest,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    target: &str,
+    expected_generation: &str,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let summaries = store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    // If a resync landed between the exact layers and this projection, the two
+    // reads describe different generations. Rather than score and attribute a
+    // different generation than the exact layers abstained against, return the
+    // exact-layer report unchanged so a re-query resolves consistently.
+    if summaries.generation_id != expected_generation {
+        return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+            active_generation: expected_generation.to_string(),
+            candidate_family_ids: Vec::new(),
+            unknowns: vec![insufficient_support_unknown("query target")],
+            term_retrieval: None,
+        }));
+    }
+    let active_generation = summaries.generation_id.clone();
+    let normalized = normalize_query(target);
+    let ranking = score_family_candidates(&normalized, &summaries.families);
+    let candidate_ids: Vec<String> = ranking
+        .candidates
+        .iter()
+        .map(|candidate| candidate.family_id.clone())
+        .collect();
+
+    let top_score = ranking.candidates.first().map(|candidate| candidate.score);
+    let margin = match (ranking.candidates.first(), ranking.candidates.get(1)) {
+        (Some(top), Some(second)) => Some(top.score - second.score),
+        _ => None,
+    };
+    let mut route = TermRetrievalRoute {
+        route: "term_retrieval_unknown",
+        retrieved_summary_count: summaries.families.len(),
+        ranked_candidate_count: ranking.candidates.len(),
+        hydrated_candidate_count: 0,
+        retrieval_stage_count: TERM_STAGE_SCORE,
+        top_score,
+        margin,
+        top_score_bucket: term_score_bucket(top_score),
+        margin_bucket: term_margin_bucket(margin),
+        matched_signals: None,
+        truncated: ranking.truncated,
+        abstention_reason: None,
+    };
+
+    // Gate 1: nothing scored a positive retrieval signal.
+    let Some(top) = ranking.candidates.first() else {
+        return Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::NoCandidate,
+            candidate_ids,
+        ));
+    };
+    route.retrieval_stage_count = TERM_STAGE_GATE;
+    // The top candidate's typed signal breakdown explains both a selection and an
+    // abstention; it carries no raw target text.
+    route.matched_signals = Some(top.signals);
+
+    // Gate 2: the top candidate did not clear the absolute selection floor. The
+    // score is additive over framework(6)/concept(4)/language(2)/residue(3-per-
+    // hit), so a bare framework (6), bare concept (4), or bare language (2)
+    // always abstains here.
+    if top.score < MIN_RETRIEVAL_SCORE {
+        return Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::BelowMinScore,
+            candidate_ids,
+        ));
+    }
+
+    // Gate 3: the top candidate cleared the floor on filters/residue alone, with
+    // no pattern-concept signal (e.g. a framework filter plus residue typo). A
+    // selection must name a pattern concept; abstain as unsupported.
+    if !top.signals.concept {
+        return Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::UnsupportedTarget,
+            candidate_ids,
+        ));
+    }
+
+    // Gate 4: the K-truncated ranking hides a competitor tied at the top score.
+    if ranking.truncated {
+        if let Some(last) = ranking.candidates.last() {
+            if last.score == top.score {
+                return Ok(term_unknown_report(
+                    active_generation,
+                    route,
+                    TermRetrievalAbstention::TruncatedTie,
+                    candidate_ids,
+                ));
+            }
+        }
+    }
+
+    // Gate 5: a competing family that itself clears the selection floor is
+    // within the confidence margin of the top. The `second.score >=
+    // MIN_RETRIEVAL_SCORE` qualifier is deliberate: a runner-up that could not be
+    // selected on its own is not a real competitor, so it never forces an
+    // abstention. Each summary is one row per family, so `candidates[1]` is
+    // always a different family than the top.
+    if let Some(second) = ranking.candidates.get(1) {
+        if second.score >= MIN_RETRIEVAL_SCORE && (top.score - second.score) < MIN_RETRIEVAL_MARGIN
+        {
+            return Ok(term_unknown_report(
+                active_generation,
+                route,
+                TermRetrievalAbstention::MarginTooClose,
+                candidate_ids,
+            ));
+        }
+    }
+
+    // Hydrate the top-tier (families tied at the winning score, which the margin
+    // gate has already reduced to the single winner), bounded, and verify
+    // freshness through the existing single-fresh-family gate.
+    let top_signals = top.signals;
+    let winning_score = top.score;
+    let hydrate_ids: Vec<String> = ranking
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.score == winning_score)
+        .take(MAX_RETRIEVAL_HYDRATIONS)
+        .map(|candidate| candidate.family_id.clone())
+        .collect();
+    route.hydrated_candidate_count = hydrate_ids.len();
+    route.retrieval_stage_count = TERM_STAGE_HYDRATE;
+
+    let mut fresh_families: Vec<ActiveFamily> = Vec::new();
+    for family_id in &hydrate_ids {
+        let Some(active_family) = store.show_family(family_id).map_err(family_store_error)? else {
+            continue;
+        };
+        if family_evidence_is_fresh(request, source_store, &active_family)? {
+            fresh_families.push(active_family);
+        }
+    }
+
+    match fresh_families.len() {
+        0 => Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::StaleCandidates,
+            candidate_ids,
+        )),
+        1 => {
+            let winner = fresh_families.into_iter().next().expect("one fresh family");
+            route.route = "term_retrieval_hydrate";
+            route.matched_signals = Some(top_signals);
+            let profile = hydrated_constraint_profile(store, &winner.family.family_id)?;
+            let mut detail = family_detail(winner, profile);
+            detail.term_retrieval = Some(route);
+            Ok(FamilyLookupReport::Found(detail))
+        }
+        _ => Ok(term_unknown_report(
+            active_generation,
+            route,
+            TermRetrievalAbstention::HydrationAmbiguous,
+            candidate_ids,
+        )),
+    }
+}
+
+fn term_unknown_report(
+    active_generation: String,
+    mut route: TermRetrievalRoute,
+    reason: TermRetrievalAbstention,
+    candidate_family_ids: Vec<String>,
+) -> FamilyLookupReport {
+    route.route = "term_retrieval_unknown";
+    route.abstention_reason = Some(reason);
+    // Keep the `query target` claim so the downstream local-context fallback
+    // still applies where its preconditions hold.
+    FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation,
+        candidate_family_ids: normalized_family_ids(candidate_family_ids),
+        unknowns: vec![insufficient_support_unknown("query target")],
+        term_retrieval: Some(route),
+    })
+}
+
+fn term_score_bucket(score: Option<i64>) -> &'static str {
+    match score {
+        None => "none",
+        Some(score) if score <= 0 => "zero",
+        Some(score) if score < MIN_RETRIEVAL_SCORE => "below_min",
+        Some(_) => "at_or_above_min",
+    }
+}
+
+fn term_margin_bucket(margin: Option<i64>) -> &'static str {
+    match margin {
+        None => "none",
+        Some(margin) if margin <= 0 => "zero",
+        Some(margin) if margin < MIN_RETRIEVAL_MARGIN => "below_margin",
+        Some(_) => "at_or_above_margin",
+    }
 }
 
 pub fn select_family_evidence(
@@ -2548,7 +4214,9 @@ pub fn build_read_plan(
     options: FamilyOutputOptions,
 ) -> ReadPlan {
     let candidates = read_plan_candidates(family, target, mode, options);
+    let candidate_count = candidates.len();
     let selected = select_budgeted_read_plan(candidates, options.token_budget);
+    let truncated = selected.len() < candidate_count;
     let estimated_tokens = selected.iter().map(|item| item.estimated_tokens).sum();
     ReadPlan {
         requires_source_before_edit: selected.iter().any(|item| item.source_required_before_edit),
@@ -2557,6 +4225,7 @@ pub fn build_read_plan(
             Some(budget) => estimated_tokens <= budget,
             None => true,
         },
+        truncated,
         estimated_tokens,
         selection_strategy: "deterministic_read_plan_v1",
         items: selected,
@@ -2604,6 +4273,7 @@ fn add_local_context_fallback(
                 affected_claim: "query target resolution".to_string(),
                 recovery: Some(recovery_guidance(recovery.action).to_string()),
             }],
+            term_retrieval: None,
         }));
     }
     match resolve_local_context(target, &files.files, &units.units)? {
@@ -2621,6 +4291,8 @@ fn add_local_context_fallback(
                     active_generation: files.generation_id,
                     resolved_target,
                     read_plan: report.read_plan,
+                    resolved_file_size_bytes: report.resolved_file_size_bytes,
+                    resolved_file_language: report.resolved_file_language,
                     unknowns: vec![FamilyQueryUnknown {
                         class: UnknownClass::Blocking,
                         reason: UnknownReasonCode::InsufficientSupport,
@@ -2638,6 +4310,7 @@ fn add_local_context_fallback(
                 active_generation: files.generation_id,
                 candidate_family_ids: unknown_report.candidate_family_ids.clone(),
                 unknowns: vec![unknown],
+                term_retrieval: None,
             }))
         }
         LocalContextResolution::Unresolved => Ok(FamilyLookupReport::Unknown(unknown_report)),
@@ -2674,6 +4347,8 @@ fn family_evidence_insufficient_for_local_context(report: &FamilyUnknownReport) 
 struct LocalContextReport {
     resolved_target: ResolvedQueryTarget,
     read_plan: ReadPlan,
+    resolved_file_size_bytes: Option<u64>,
+    resolved_file_language: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2887,6 +4562,8 @@ fn resolve_local_context(
         LocalContextReport {
             resolved_target,
             read_plan,
+            resolved_file_size_bytes: Some(file.size_bytes),
+            resolved_file_language: file.language.clone(),
         },
     )))
 }
@@ -3166,6 +4843,7 @@ fn local_context_read_plan(item: ReadPlanItem) -> ReadPlan {
         requires_source_before_edit: true,
         selection_strategy: "deterministic_local_context_v1",
         budget_satisfied: true,
+        truncated: false,
         items: vec![item],
         line_range_omissions: Vec::new(),
     }
@@ -3450,16 +5128,9 @@ pub fn estimate_family_output_potential_token_savings(
     read_plan: &ReadPlan,
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> EstimatedPotentialTokenSavings {
-    let all_family_evidence_tokens = family
-        .evidence
-        .iter()
-        .map(estimated_evidence_tokens)
-        .sum::<usize>();
-    let source_span_tokens = source_spans
-        .map(|spans| spans.policy.estimated_tokens)
-        .unwrap_or(0);
+    let source_span_tokens = source_span_estimated_tokens(source_spans);
     let estimated_baseline_tokens =
-        all_family_evidence_tokens.saturating_add(read_plan.estimated_tokens);
+        all_family_evidence_tokens(family).saturating_add(read_plan.estimated_tokens);
     let estimated_returned_tokens = selected_evidence
         .estimated_tokens
         .saturating_add(read_plan.estimated_tokens)
@@ -3470,8 +5141,218 @@ pub fn estimate_family_output_potential_token_savings(
     )
 }
 
+/// Estimated tokens of the family's full evidence set (every evidence record's
+/// metadata), the baseline a found-family or alignment response displaces.
+fn all_family_evidence_tokens(family: &FamilyDetailReport) -> usize {
+    family
+        .evidence
+        .iter()
+        .map(estimated_evidence_tokens)
+        .sum::<usize>()
+}
+
+fn source_span_estimated_tokens(source_spans: Option<&SourceSpanRenderReport>) -> usize {
+    source_spans
+        .map(|spans| spans.policy.estimated_tokens)
+        .unwrap_or(0)
+}
+
 fn usize_to_u64_saturating(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+// ---------------------------------------------------------------------------
+// All-scope potential-token-savings accounting.
+//
+// One authority computes the ESTIMATED POTENTIAL token savings for every
+// context-delivering outcome shape (found family, PARTIAL_CONTEXT read plan, and
+// static-alignment certificate). It never produces a MEASURED claim: every value
+// is an estimate under the fixed bytes/4 heuristic with the standing caveat, and
+// paired-experiment measurement remains the only path to measured savings.
+// Abstentions and missing-size cases record no event (never negative accounting)
+// and are counted only in the query denominator by the outcome telemetry.
+// ---------------------------------------------------------------------------
+
+/// The context-delivering outcome shape a potential-token-savings event belongs
+/// to. This is deliberately narrower than the query-outcome status: it names only
+/// the shapes that displace source reading and therefore carry a savings event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavingsOutcomeShape {
+    Found,
+    PartialContext,
+    Alignment,
+}
+
+impl SavingsOutcomeShape {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Found => "found",
+            Self::PartialContext => "partial_context",
+            Self::Alignment => "alignment",
+        }
+    }
+}
+
+/// A single all-scope potential-token-savings event: the estimate plus the
+/// outcome shape and the low-cardinality language token it is attributed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeTokenSavings {
+    pub shape: SavingsOutcomeShape,
+    pub language: &'static str,
+    pub metric: EstimatedPotentialTokenSavings,
+}
+
+/// Estimated tokens of reading a whole file of `size_bytes`, under the shared
+/// bytes/4 heuristic (minimum one token for a non-empty inventory entry).
+fn estimated_full_file_tokens(size_bytes: u64) -> u64 {
+    size_bytes.div_ceil(4).max(1)
+}
+
+/// Estimated token cost of an alignment certificate body (the source-free
+/// computation the certificate returns), under the shared bytes/4 heuristic.
+fn estimated_alignment_certificate_tokens(computation: &AlignmentComputation) -> usize {
+    let mut bytes = computation.outcome_reason.len() + computation.status.as_token().len();
+    for matched in &computation.required_features_matched {
+        bytes += matched.prefix.len()
+            + matched.expected_summary.len()
+            + matched.satisfied_summary.len()
+            + 16;
+    }
+    for deviation in &computation.static_deviations {
+        bytes += deviation.prefix.len()
+            + deviation.expected_summary.len()
+            + deviation.observed_summary.len()
+            + deviation.semantics_token.len()
+            + 16;
+    }
+    for variation in &computation.legal_observed_variations {
+        bytes += variation.dimension.len() + variation.observed_profile.len() + 8;
+    }
+    bytes += (computation.blocking_unknowns.len()
+        + computation.unresolved_runtime_obligations.len())
+        * 32;
+    bytes.div_ceil(4).max(1)
+}
+
+/// Maximum family members rendered inline in a found-family payload outside
+/// `--mode deep`. A large family (recorded live: 123 members) otherwise inflates
+/// a single response into tens of kilobytes and amplifies compaction truncation;
+/// the identity of the family is metadata-first, so the inline list is bounded
+/// and the true total is always reported alongside a truncation flag.
+pub const MAX_RENDERED_FAMILY_MEMBERS: usize = 20;
+
+/// Bound the rendered member list: the full deterministic list in `Deep` mode,
+/// otherwise the first [`MAX_RENDERED_FAMILY_MEMBERS`] in unchanged order.
+/// Returns the slice to render and whether it was truncated. The caller reports
+/// the true total (`family.members.len()`) so a bounded response never hides the
+/// family's real size.
+pub fn bounded_family_members(
+    family: &FamilyDetailReport,
+    mode: FamilyEvidenceMode,
+) -> (&[IndexedFamilyMemberRecord], bool) {
+    if mode == FamilyEvidenceMode::Deep || family.members.len() <= MAX_RENDERED_FAMILY_MEMBERS {
+        (family.members.as_slice(), false)
+    } else {
+        (&family.members[..MAX_RENDERED_FAMILY_MEMBERS], true)
+    }
+}
+
+/// Wrap a found-family estimate with its outcome shape and language attribution.
+pub fn found_outcome_token_savings(
+    family: &FamilyDetailReport,
+    metric: EstimatedPotentialTokenSavings,
+) -> OutcomeTokenSavings {
+    OutcomeTokenSavings {
+        shape: SavingsOutcomeShape::Found,
+        language: found_family_language_scope(family),
+        metric,
+    }
+}
+
+/// Estimate the potential token savings a PARTIAL_CONTEXT read plan delivers:
+/// the whole-file read it displaces (baseline) against the returned read-plan
+/// metadata plus any rendered source spans. Returns `None` — recording no event
+/// rather than guessing — when the resolved file size was unavailable.
+pub fn estimate_partial_context_potential_token_savings(
+    report: &FamilyPartialContextReport,
+    read_plan: &ReadPlan,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> Option<OutcomeTokenSavings> {
+    let size_bytes = report.resolved_file_size_bytes?;
+    let baseline = estimated_full_file_tokens(size_bytes);
+    let returned = usize_to_u64_saturating(
+        read_plan
+            .estimated_tokens
+            .saturating_add(source_span_estimated_tokens(source_spans)),
+    );
+    Some(OutcomeTokenSavings {
+        shape: SavingsOutcomeShape::PartialContext,
+        language: inventory_language_scope(&report.resolved_file_language),
+        metric: EstimatedPotentialTokenSavings::new(baseline, returned),
+    })
+}
+
+/// Estimate the potential token savings a static-alignment certificate delivers:
+/// the whole target-file read plus the comparison family's evidence (baseline)
+/// against the certificate body, read-plan metadata, and any rendered source
+/// spans (returned). Returns `None` for an abstaining certificate (no family
+/// compared) or when the target file size was unavailable.
+pub fn estimate_alignment_potential_token_savings(
+    certificate: &AlignmentCertificateReport,
+    read_plan: &ReadPlan,
+    source_spans: Option<&SourceSpanRenderReport>,
+) -> Option<OutcomeTokenSavings> {
+    let computation = certificate.computation.as_deref()?;
+    let size_bytes = certificate.resolved_target_file_size_bytes?;
+    let baseline = estimated_full_file_tokens(size_bytes)
+        .saturating_add(certificate.family_evidence_baseline_tokens);
+    let returned = usize_to_u64_saturating(
+        estimated_alignment_certificate_tokens(computation)
+            .saturating_add(read_plan.estimated_tokens)
+            .saturating_add(source_span_estimated_tokens(source_spans)),
+    );
+    Some(OutcomeTokenSavings {
+        shape: SavingsOutcomeShape::Alignment,
+        language: inventory_language_scope(&certificate.resolved_target_language),
+        metric: EstimatedPotentialTokenSavings::new(baseline, returned),
+    })
+}
+
+/// Low-cardinality language scope a found family is attributed to, derived from
+/// its evidence file extensions: one known scope, `mixed` for several, or
+/// `unknown` when no evidence extension maps to a known language.
+fn found_family_language_scope(family: &FamilyDetailReport) -> &'static str {
+    let mut known: Vec<&'static str> = family
+        .evidence
+        .iter()
+        .map(|evidence| inventory_language_scope(raw_language_for_path(&evidence.path)))
+        .filter(|scope| *scope != "unknown")
+        .collect();
+    known.sort_unstable();
+    known.dedup();
+    match known.as_slice() {
+        [] => "unknown",
+        [single] => single,
+        _ => "mixed",
+    }
+}
+
+/// Map a repo-relative path's extension to a raw indexed-language token, or the
+/// empty string when the extension does not map to a known language. Kept small
+/// and deterministic; the raw token is normalized through
+/// [`inventory_language_scope`] to a low-cardinality savings scope.
+fn raw_language_for_path(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("py" | "pyi") => "python",
+        Some("ts" | "tsx" | "mts" | "cts") => "typescript",
+        Some("js" | "jsx" | "mjs" | "cjs") => "javascript",
+        Some("rs") => "rust",
+        Some("java") => "java",
+        Some("cs") => "csharp",
+        Some("c" | "h") => "c",
+        Some("cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx") => "cpp",
+        _ => "",
+    }
 }
 
 fn render_source_span_item(
@@ -3629,11 +5510,18 @@ fn read_plan_candidates(
             false,
         ));
     }
-    if let Some(support) = first_distinct_evidence_for_claim(family, "support", &candidates) {
+    // The support span prefers the labelled contrast witness (the farthest-from-
+    // medoid member); hydration re-sorts evidence by path, so the write-time
+    // ordering is not the carrier — the `contrast` covered-claim label is. Fall
+    // back to the first distinct-path support member when no contrast label
+    // survives (e.g. a family predating the label, or a single-path family).
+    let support = first_distinct_evidence_for_claim(family, "contrast", &candidates)
+        .or_else(|| first_distinct_evidence_for_claim(family, "support", &candidates));
+    if let Some(support) = support {
         candidates.push(read_plan_item(
             support,
             ReadPlanPurpose::SupportEvidence,
-            "additional supporting source span for contrast",
+            "farthest-contrast supporting source span; verify before applying the family blindly",
             false,
         ));
     }
@@ -3680,7 +5568,7 @@ fn read_plan_candidates(
         }
     }
 
-    candidates
+    let mut unique = candidates
         .into_iter()
         .fold(Vec::new(), |mut unique, candidate| {
             if !unique
@@ -3690,7 +5578,15 @@ fn read_plan_candidates(
                 unique.push(candidate);
             }
             unique
-        })
+        });
+    // Order by `ReadPlanPurpose` priority (target/canonical/support first) so
+    // budget selection keeps the most decision-critical prefix and never drops
+    // a canonical span in favour of optional context. Candidates are already
+    // generated in enum order, so this stable sort is currently an identity; it
+    // makes the truncation-prefix guarantee explicit and drift-resistant, and
+    // keeps every verbosity tier byte-identical.
+    unique.sort_by_key(|item| item.purpose);
+    unique
 }
 
 fn select_budgeted_read_plan(
@@ -3724,9 +5620,11 @@ fn target_evidence<'a>(
             .evidence
             .iter()
             .find(|evidence| evidence.code_unit_id == target),
-        FamilyLookupMode::FuzzyQuery => family.evidence.iter().find(|evidence| {
-            evidence.code_unit_id == target || path_matches_target(&evidence.path, target)
-        }),
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            family.evidence.iter().find(|evidence| {
+                evidence.code_unit_id == target || path_matches_target(&evidence.path, target)
+            })
+        }
     }
 }
 
@@ -3918,8 +5816,29 @@ fn required_evidence_coverage(
         required.insert(EvidenceCoverage::Canonical);
         required.insert(EvidenceCoverage::Support);
     }
-    if !family.variation_slots.is_empty() && options.include_variations {
-        required.insert(EvidenceCoverage::Variation);
+    if options.include_variations {
+        match variation_dimension_count(family) {
+            // With a hydrated profile the objective covers every observed
+            // variation dimension: one target per profile dimension, plus one for
+            // the anchor-target dimension when its variation slot exists (the
+            // anchor variation is a slot, not a profile feature-prefix dimension).
+            Some(count) => {
+                for dimension in 0..count {
+                    required.insert(EvidenceCoverage::Variation(dimension));
+                }
+                if has_anchor_target_slot(family) {
+                    required.insert(EvidenceCoverage::Variation(count));
+                }
+            }
+            // Without profile dimensions, a variation slot still asks for a single
+            // variation witness (the pre-profile behavior and the Python
+            // anchor-target case, which is a slot rather than a profile dimension).
+            None => {
+                if !family.variation_slots.is_empty() {
+                    required.insert(EvidenceCoverage::Variation(0));
+                }
+            }
+        }
     }
     if options.include_exceptions {
         required.insert(EvidenceCoverage::Exception);
@@ -3927,29 +5846,116 @@ fn required_evidence_coverage(
     required
 }
 
+/// The number of hydrated profile variation dimensions, or `None` when the family
+/// has none and variation coverage falls back to the single-slot signal. The
+/// anchor-target dimension (a variation slot, not a profile dimension) is counted
+/// separately as ordinal `count` when present.
+fn variation_dimension_count(family: &FamilyDetailReport) -> Option<usize> {
+    family
+        .constraint_profile
+        .as_ref()
+        .map(|profile| profile.allowed_variations.len())
+        .filter(|count| *count > 0)
+}
+
+/// Whether the family exposes the Python framework-anchor-target variation slot,
+/// which is a slot rather than a profile feature-prefix dimension and so is
+/// required and covered separately from `allowed_variations`.
+fn has_anchor_target_slot(family: &FamilyDetailReport) -> bool {
+    family
+        .variation_slots
+        .iter()
+        .any(|slot| slot.slot_id == "slot:python_framework_anchor_target")
+}
+
 fn evidence_coverage(
-    _family: &FamilyDetailReport,
+    family: &FamilyDetailReport,
     _index: usize,
     evidence: &IndexedFamilyEvidenceRecord,
 ) -> BTreeSet<EvidenceCoverage> {
-    evidence
+    let mut coverage = BTreeSet::new();
+    let has_variation_label = evidence
         .covered_claims
         .iter()
-        .filter_map(|claim| match claim.as_str() {
-            "canonical" => Some(EvidenceCoverage::Canonical),
-            "support" => Some(EvidenceCoverage::Support),
-            "variation" => Some(EvidenceCoverage::Variation),
-            "exception" => Some(EvidenceCoverage::Exception),
-            _ => None,
-        })
-        .collect()
+        .any(|claim| claim == "variation");
+    for claim in &evidence.covered_claims {
+        match claim.as_str() {
+            "canonical" => {
+                coverage.insert(EvidenceCoverage::Canonical);
+            }
+            "support" => {
+                coverage.insert(EvidenceCoverage::Support);
+            }
+            "exception" => {
+                coverage.insert(EvidenceCoverage::Exception);
+            }
+            _ => {}
+        }
+    }
+    match variation_dimension_count(family) {
+        Some(count) => {
+            // Safe: `variation_dimension_count` returns `Some` only for a profile.
+            let profile = family.constraint_profile.as_ref().expect("profile present");
+            let canonical_id = family
+                .evidence
+                .first()
+                .map(|first| first.code_unit_id.as_str());
+            if has_variation_label {
+                // A variation witness covers every profile dimension it
+                // represents; if it represents none it witnesses the anchor-target
+                // dimension (ordinal `count`).
+                let mut mapped = false;
+                for (dimension, variation) in profile.allowed_variations.iter().enumerate() {
+                    if variation
+                        .representative_member_ids
+                        .iter()
+                        .any(|id| id == &evidence.code_unit_id)
+                    {
+                        coverage.insert(EvidenceCoverage::Variation(dimension));
+                        mapped = true;
+                    }
+                }
+                if !mapped {
+                    coverage.insert(EvidenceCoverage::Variation(count));
+                }
+            } else if Some(evidence.code_unit_id.as_str()) == canonical_id {
+                // Sole-representative fallback: the canonical medoid legitimately
+                // witnesses a dimension it is the ONLY representative of (a single
+                // observed non-empty profile plus absent members). It never
+                // pre-empts a dimension that also has a non-canonical witness.
+                for (dimension, variation) in profile.allowed_variations.iter().enumerate() {
+                    let is_sole_representative = variation
+                        .representative_member_ids
+                        .iter()
+                        .any(|id| Some(id.as_str()) == canonical_id)
+                        && !variation
+                            .representative_member_ids
+                            .iter()
+                            .any(|id| Some(id.as_str()) != canonical_id);
+                    if is_sole_representative {
+                        coverage.insert(EvidenceCoverage::Variation(dimension));
+                    }
+                }
+            }
+        }
+        None => {
+            if has_variation_label {
+                coverage.insert(EvidenceCoverage::Variation(0));
+            }
+        }
+    }
+    coverage
 }
 
 fn coverage_strings(coverage: &BTreeSet<EvidenceCoverage>) -> Vec<String> {
-    coverage
+    let mut strings: Vec<String> = coverage
         .iter()
         .map(|coverage| coverage.as_str().to_string())
-        .collect()
+        .collect();
+    // Per-dimension variation targets share the `variation` token; the set is
+    // sorted so duplicates are adjacent and collapse to one stable label.
+    strings.dedup();
+    strings
 }
 
 pub fn assess_semantic_fact_readiness(
@@ -4009,6 +6015,10 @@ pub fn assess_semantic_fact_readiness(
 
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
+        IndexStoreError::SchemaVersionOutdated(message) => RepoGrammarError::InvalidInput(format!(
+            "{message}; {}",
+            recovery_guidance(RecoveryAction::Resync)
+        )),
         IndexStoreError::Unavailable(message)
         | IndexStoreError::InvalidState(message)
         | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -4017,13 +6027,20 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 
 fn family_store_error(error: StoreError) -> RepoGrammarError {
     match error {
+        StoreError::SchemaVersionOutdated(message) => RepoGrammarError::InvalidInput(format!(
+            "{message}; {}",
+            recovery_guidance(RecoveryAction::Resync)
+        )),
         StoreError::Unavailable(message)
         | StoreError::InvalidState(message)
         | StoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
     }
 }
 
-fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
+fn family_detail(
+    family: ActiveFamily,
+    constraint_profile: Option<FamilyConstraintProfile>,
+) -> FamilyDetailReport {
     let family_id = family.family.family_id;
     let mut unknowns = vec![FamilyQueryUnknown {
         class: UnknownClass::NonBlocking,
@@ -4055,10 +6072,13 @@ fn family_detail(family: ActiveFamily) -> FamilyDetailReport {
         family_id: family_id.clone(),
         classification: family.family.classification,
         support: family.members.len(),
+        prevalence: family.family.prevalence,
         members: family.members,
         variation_slots: family.variation_slots,
         evidence: family.evidence,
         unknowns,
+        constraint_profile: constraint_profile.map(Box::new),
+        term_retrieval: None,
     }
 }
 
@@ -4110,7 +6130,7 @@ fn family_target_match(
             .iter()
             .any(|member| member.code_unit_id == target)
             .then_some(TargetMatchKind::ExactMemberId),
-        FamilyLookupMode::FuzzyQuery => {
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
             if family.family.family_id == target {
                 Some(TargetMatchKind::ExactFamilyId)
             } else if family
@@ -4271,6 +6291,53 @@ fn token_saving_blocking_reasons(
     reasons
 }
 
+/// Per-evidence-path freshness verdict. `Stale` is content-based (the file is
+/// missing or its hash changed); `CannotVerify` is a non-content read failure
+/// (too large, non-UTF-8, unavailable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvidencePathVerdict {
+    Fresh,
+    Stale,
+    CannotVerify,
+}
+
+/// The single authoritative per-path freshness check. Both the single-family
+/// gate (`family_evidence_is_fresh`) and the list-level rollup route their
+/// per-path decision through here, so the content-vs-read-failure rules live in
+/// exactly one place.
+fn verify_evidence_path(
+    request: &FamilyEvidenceFreshnessRequest,
+    source_store: &impl SourceStore,
+    path: &str,
+    expected_content_hash: &ContentHash,
+) -> Result<EvidencePathVerdict, RepoGrammarError> {
+    let source = source_store.read_source(SourceReadRequest {
+        repository_root: request.repository_root.clone(),
+        path: path.to_string(),
+        expected_content_hash: expected_content_hash.clone(),
+        max_file_bytes: request.max_file_bytes,
+    });
+    match source {
+        Ok(source) if source.path == path && &source.content_hash == expected_content_hash => {
+            Ok(EvidencePathVerdict::Fresh)
+        }
+        Ok(_) => Err(RepoGrammarError::InvalidInput(
+            "source freshness response is invalid".to_string(),
+        )),
+        Err(SourceStoreError::InvalidRequest(_)) => Err(RepoGrammarError::InvalidInput(
+            "stored family evidence path is invalid".to_string(),
+        )),
+        // Missing or changed content means the claim no longer reflects the tree.
+        Err(SourceStoreError::Missing(_)) | Err(SourceStoreError::HashMismatch(_)) => {
+            Ok(EvidencePathVerdict::Stale)
+        }
+        // Non-content read failures cannot confirm staleness or freshness.
+        Err(SourceStoreError::TooLarge(_))
+        | Err(SourceStoreError::NonUtf8(_))
+        | Err(SourceStoreError::Unavailable(_)) => Ok(EvidencePathVerdict::CannotVerify),
+    }
+}
+
 fn family_evidence_is_fresh(
     request: &FamilyEvidenceFreshnessRequest,
     source_store: &impl SourceStore,
@@ -4283,27 +6350,16 @@ fn family_evidence_is_fresh(
         return Ok(false);
     }
     for evidence in &family.evidence {
-        let source = source_store.read_source(SourceReadRequest {
-            repository_root: request.repository_root.clone(),
-            path: evidence.path.clone(),
-            expected_content_hash: evidence.content_hash.clone(),
-            max_file_bytes: request.max_file_bytes,
-        });
-        match source {
-            Ok(source)
-                if source.path == evidence.path && source.content_hash == evidence.content_hash => {
-            }
-            Ok(_) => {
-                return Err(RepoGrammarError::InvalidInput(
-                    "source freshness response is invalid".to_string(),
-                ));
-            }
-            Err(SourceStoreError::InvalidRequest(_)) => {
-                return Err(RepoGrammarError::InvalidInput(
-                    "stored family evidence path is invalid".to_string(),
-                ));
-            }
-            Err(_) => return Ok(false),
+        // The single-family gate treats any non-`Fresh` verdict (stale or
+        // unverifiable) as not fresh, preserving its original behavior.
+        if verify_evidence_path(
+            request,
+            source_store,
+            &evidence.path,
+            &evidence.content_hash,
+        )? != EvidencePathVerdict::Fresh
+        {
+            return Ok(false);
         }
     }
     Ok(true)
@@ -4333,6 +6389,656 @@ fn stale_evidence_unknown(affected_claim: impl Into<String>) -> FamilyQueryUnkno
     }
 }
 
+// ---------------------------------------------------------------------------
+// Product readiness: decomposed capability state.
+//
+// A single application-layer authority that reports RepoGrammar's product
+// capability as several independently truthful dimensions plus one
+// low-cardinality summary token derived deterministically from them. It replaces
+// the earlier single optimistic `query_ready` boolean, which could report `true`
+// while every family claim was stale-blocked. CLI `status`/`doctor` and the MCP
+// `inspect_readiness` operation all render this one report.
+// ---------------------------------------------------------------------------
+
+/// Schema-version token stamped on every primary structured product payload:
+/// CLI `find`/`family`/`families`/`check`/`status`/`doctor`/`stats` JSON, this
+/// readiness report, and the MCP result objects.
+///
+/// Pre-1.0 compatibility policy: fields may be ADDED within a version without a
+/// bump; removing or renaming a field, or changing a field's meaning, requires a
+/// version bump and a CHANGELOG entry. Consumers must ignore unknown fields.
+pub const PRODUCT_SCHEMA_VERSION: &str = "product-schemas.v1";
+
+/// Committed query-retrieval vocabulary version (the small normalized-query
+/// tables in `query_terms`). Reported so consumers can detect a vocabulary change
+/// across index generations.
+const QUERY_RETRIEVAL_VOCABULARY_VERSION: &str = "query-vocabulary.v1";
+
+/// Bounded cap on the top blocking-unknown mechanisms surfaced with the report.
+const READINESS_TOP_UNKNOWN_LIMIT: usize = 5;
+
+/// The deterministic, low-cardinality product readiness summary token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadinessSummary {
+    /// The active index is servable and no truthfulness or maintenance caveat
+    /// applies: the repository query preflight is `Ready` on the same inputs and
+    /// family evidence is fresh.
+    Ready,
+    /// The active index is servable, but at least one caveat applies: stale or
+    /// unverifiable family evidence, a stale repository index (dirty derived
+    /// records), or a recommended-but-not-running autosync. Queries may still run
+    /// but can fall back.
+    Degraded,
+    /// RepoGrammar cannot serve family queries in this checkout right now.
+    NotReady,
+}
+
+impl ReadinessSummary {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::NotReady => "not_ready",
+        }
+    }
+}
+
+/// Repository lifecycle/storage/lock state dimension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryStateReadiness {
+    NotInitialized,
+    StorageUnhealthy,
+    Locked,
+    Initialized,
+}
+
+impl RepositoryStateReadiness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotInitialized => "not_initialized",
+            Self::StorageUnhealthy => "storage_unhealthy",
+            Self::Locked => "locked",
+            Self::Initialized => "initialized",
+        }
+    }
+}
+
+/// Active-index availability dimension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveIndexReadiness {
+    /// True only when an active generation is present and its schema is current.
+    pub available: bool,
+    pub active_generation: Option<String>,
+    pub manifest_schema_version: Option<u32>,
+    pub schema_current: bool,
+}
+
+/// Family-evidence freshness state (from the bounded freshness machinery).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FamilyEvidenceReadinessState {
+    Fresh,
+    Stale,
+    CannotVerify,
+    NotApplicable,
+}
+
+impl FamilyEvidenceReadinessState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::CannotVerify => "cannot_verify",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
+/// Family-evidence dimension: the per-state counts from the shared freshness
+/// projection plus whether the family store was unreadable at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FamilyEvidenceReadiness {
+    pub state: FamilyEvidenceReadinessState,
+    pub fresh_count: usize,
+    pub stale_count: usize,
+    pub cannot_verify_count: usize,
+    /// True when the family evidence could not be read at all (a store error),
+    /// which is distinct from a repository that simply has no families.
+    pub evidence_unreadable: bool,
+}
+
+/// Family-prevalence dimension: family counts by prevalence classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FamilyPrevalenceReadiness {
+    pub dominant_count: usize,
+    pub supported_count: usize,
+    pub minority_count: usize,
+    pub unknown_prevalence_count: usize,
+    pub total_count: usize,
+}
+
+/// Query-retrieval dimension: the always-present retrieval modes and the
+/// committed vocabulary version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryRetrievalReadiness {
+    pub exact_lookup: bool,
+    pub term_retrieval: bool,
+    pub vocabulary_version: &'static str,
+}
+
+/// Static-alignment dimension: whether the active generation carries at least one
+/// fresh, ready (dominant/supported) family that `check_conformance` can align
+/// against. `CannotVerify` is reported when the family store could not be read at
+/// all, so the dimension never asserts a definite `not_applicable` over an
+/// unreadable store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticAlignmentReadiness {
+    Available,
+    Unavailable,
+    NotApplicable,
+    CannotVerify,
+}
+
+impl StaticAlignmentReadiness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+            Self::NotApplicable => "not_applicable",
+            Self::CannotVerify => "cannot_verify",
+        }
+    }
+}
+
+/// Measurement dimension: the NOT_MEASURED token-saving discipline. Token savings
+/// stay `ESTIMATED`/`NOT_MEASURED` until a comparable paired local experiment
+/// exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasurementReadiness {
+    pub token_saving_status: &'static str,
+    pub measurement_kind: &'static str,
+    pub paired_experiment_available: bool,
+}
+
+impl MeasurementReadiness {
+    fn from_paired(paired_experiment_available: bool) -> Self {
+        if paired_experiment_available {
+            Self {
+                token_saving_status: "MEASURED",
+                measurement_kind: "MEASURED",
+                paired_experiment_available,
+            }
+        } else {
+            Self {
+                token_saving_status: "NOT_MEASURED",
+                measurement_kind: "ESTIMATED",
+                paired_experiment_available,
+            }
+        }
+    }
+}
+
+/// The decomposed product readiness report: distinct, independently truthful
+/// dimensions plus one deterministic summary token and one executable recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductReadinessReport {
+    pub summary: ReadinessSummary,
+    pub repository_state: RepositoryStateReadiness,
+    pub active_index: ActiveIndexReadiness,
+    pub family_evidence: FamilyEvidenceReadiness,
+    /// `None` when the family store could not be read (distinct from a repository
+    /// with zero families, which is `Some` of an all-zero count).
+    pub family_prevalence: Option<FamilyPrevalenceReadiness>,
+    pub query_retrieval: QueryRetrievalReadiness,
+    pub static_alignment: StaticAlignmentReadiness,
+    pub providers: Vec<ProviderSlotStatus>,
+    pub autosync: RepositoryAutosyncReadiness,
+    pub measurement: MeasurementReadiness,
+    /// Bounded top blocking-unknown mechanisms (by count), for triage. `None` when
+    /// the unknown inventory could not be read (distinct from genuinely none,
+    /// which is `Some` of an empty vector).
+    pub top_blocking_unknowns: Option<Vec<UnknownInventoryBucket>>,
+    /// The one executable recovery action from the shared recovery classifier.
+    pub recovery: RecoveryRecommendation,
+}
+
+/// Assemble the decomposed readiness report from already-reduced dimension inputs
+/// and derive the summary token deterministically. This is the pure decision
+/// authority: it is unit-tested directly against fixture states (including the
+/// stale-families-while-servable case) with no store access.
+///
+/// `family_freshness`/`family_prevalence` are `None` only when the family store
+/// could not be read; `top_blocking_unknowns` is `None` only when the unknown
+/// inventory could not be read.
+///
+/// The readiness recovery is derived from the *same* authoritative repository
+/// recovery the query preflight consumes (`repository_recovery_for_report`, which
+/// already incorporates the repository dirty-record freshness signal), then
+/// layered with the hash-checked family-evidence freshness. This guarantees the
+/// invariant `summary == ready` ⇒ `query_preflight` is `Ready` on the same
+/// report, so one payload can never carry `readiness.query_ready = false`
+/// alongside `product_readiness.summary = ready`.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_product_readiness(
+    report: &RepositoryStatusReport,
+    family_freshness: Option<FamilyFreshnessCounts>,
+    family_prevalence: Option<FamilyPrevalenceReadiness>,
+    static_alignment: StaticAlignmentReadiness,
+    providers: Vec<ProviderSlotStatus>,
+    paired_experiment_available: bool,
+    top_blocking_unknowns: Option<Vec<UnknownInventoryBucket>>,
+) -> ProductReadinessReport {
+    let measurement = MeasurementReadiness::from_paired(paired_experiment_available);
+    let initialized = matches!(report.status, RepositoryStatus::Initialized { .. });
+    let storage_health = if matches!(report.status, RepositoryStatus::CorruptedManifest)
+        || !report.missing_subdirs.is_empty()
+        || report.storage == RepositoryImplementationStatus::Unhealthy
+    {
+        RecoveryHealth::Unhealthy
+    } else if report.storage == RepositoryImplementationStatus::Available {
+        RecoveryHealth::Healthy
+    } else {
+        RecoveryHealth::Unknown
+    };
+
+    // The authoritative repository-level recovery — exactly what `query_preflight`
+    // consumes. It already folds in the repository dirty-record freshness signal
+    // (`repository_freshness_for_report` over `dirty_record_count`), the lock
+    // state, storage health, initialization, and active-generation availability.
+    let repository_recovery = repository_recovery_for_report(report);
+    let lock_state = if repository_recovery.reason == RecoveryReason::BlockingLock {
+        RecoveryLockState::Blocking
+    } else {
+        RecoveryLockState::Clear
+    };
+    let active_generation_available = report.readiness.active_generation_available;
+    let active_generation = match &report.status {
+        RepositoryStatus::Initialized { active_generation }
+            if active_generation != "none" && active_generation != "not implemented" =>
+        {
+            Some(active_generation.clone())
+        }
+        _ => None,
+    };
+    // Trust the repository's own manifest validation rather than re-deriving a
+    // version comparison from a mirrored constant: a current manifest is one the
+    // repository parsed as valid with a recorded schema version.
+    let schema_current = report.manifest == RepositoryManifestStatus::Valid
+        && report.manifest_schema_version.is_some();
+
+    let family_evidence = family_evidence_readiness(family_freshness);
+    let family_ctx_evidence = if family_evidence.evidence_unreadable {
+        RecoveryEvidenceState::Unknown
+    } else if family_evidence.fresh_count
+        + family_evidence.stale_count
+        + family_evidence.cannot_verify_count
+        == 0
+    {
+        RecoveryEvidenceState::NotApplicable
+    } else {
+        RecoveryEvidenceState::Available
+    };
+    let family_freshness_signal = family_evidence_freshness_signal(&family_evidence);
+
+    // Combined recovery: any repository-level condition (blocker, dirty-index
+    // staleness, or recommended-but-stopped autosync) dominates, because those
+    // gate the whole index in the query path. Only when the repository path is
+    // fully clean and fresh does the family-evidence freshness decide, through the
+    // same evidence classifier the query surfaces use.
+    let recovery = if repository_recovery.action != RecoveryAction::None {
+        repository_recovery
+    } else {
+        classify_query_evidence_recovery(family_freshness_signal, family_ctx_evidence)
+    };
+
+    let repository_state = if !initialized {
+        RepositoryStateReadiness::NotInitialized
+    } else if storage_health == RecoveryHealth::Unhealthy {
+        RepositoryStateReadiness::StorageUnhealthy
+    } else if matches!(
+        lock_state,
+        RecoveryLockState::Blocking | RecoveryLockState::Unknown
+    ) {
+        RepositoryStateReadiness::Locked
+    } else {
+        RepositoryStateReadiness::Initialized
+    };
+
+    // The summary is a pure projection of the one combined recovery reason, so it
+    // can never be more optimistic than that authority. `Ready` requires the
+    // combined recovery to be `None` (repository clean and fresh, autosync not
+    // recommended, and family evidence fresh); a recommended-but-stopped autosync
+    // (`AutosyncRecommended`) is a live maintenance caveat and is `Degraded`.
+    let summary = match recovery.reason {
+        RecoveryReason::RepositoryNotInitialized
+        | RecoveryReason::StorageUnhealthy
+        | RecoveryReason::BlockingLock
+        | RecoveryReason::ActiveIndexMissing => ReadinessSummary::NotReady,
+        RecoveryReason::Ready => ReadinessSummary::Ready,
+        _ => ReadinessSummary::Degraded,
+    };
+
+    ProductReadinessReport {
+        summary,
+        repository_state,
+        active_index: ActiveIndexReadiness {
+            available: active_generation_available && schema_current,
+            active_generation,
+            manifest_schema_version: report.manifest_schema_version,
+            schema_current,
+        },
+        family_evidence,
+        family_prevalence,
+        query_retrieval: QueryRetrievalReadiness {
+            exact_lookup: true,
+            term_retrieval: true,
+            vocabulary_version: QUERY_RETRIEVAL_VOCABULARY_VERSION,
+        },
+        static_alignment,
+        providers,
+        autosync: report.readiness.autosync.clone(),
+        measurement,
+        top_blocking_unknowns,
+        recovery,
+    }
+}
+
+fn family_evidence_readiness(
+    family_freshness: Option<FamilyFreshnessCounts>,
+) -> FamilyEvidenceReadiness {
+    match family_freshness {
+        None => FamilyEvidenceReadiness {
+            state: FamilyEvidenceReadinessState::CannotVerify,
+            fresh_count: 0,
+            stale_count: 0,
+            cannot_verify_count: 0,
+            evidence_unreadable: true,
+        },
+        Some(counts) => {
+            let state = if counts.stale_count > 0 {
+                FamilyEvidenceReadinessState::Stale
+            } else if counts.cannot_verify_count > 0 {
+                FamilyEvidenceReadinessState::CannotVerify
+            } else if counts.fresh_count > 0 {
+                FamilyEvidenceReadinessState::Fresh
+            } else {
+                FamilyEvidenceReadinessState::NotApplicable
+            };
+            FamilyEvidenceReadiness {
+                state,
+                fresh_count: counts.fresh_count,
+                stale_count: counts.stale_count,
+                cannot_verify_count: counts.cannot_verify_count,
+                evidence_unreadable: false,
+            }
+        }
+    }
+}
+
+/// Family-evidence freshness expressed as a recovery-context freshness signal, so
+/// it can be combined with the repository-level freshness and fed to the one
+/// recovery classifier.
+fn family_evidence_freshness_signal(evidence: &FamilyEvidenceReadiness) -> RecoveryFreshness {
+    if evidence.evidence_unreadable {
+        return RecoveryFreshness::CannotVerify;
+    }
+    match evidence.state {
+        FamilyEvidenceReadinessState::Stale => RecoveryFreshness::Stale,
+        FamilyEvidenceReadinessState::CannotVerify => RecoveryFreshness::CannotVerify,
+        FamilyEvidenceReadinessState::Fresh => RecoveryFreshness::Fresh,
+        FamilyEvidenceReadinessState::NotApplicable => RecoveryFreshness::NotApplicable,
+    }
+}
+
+/// Gather the store-derived readiness inputs (tolerating store errors) and call
+/// the pure assembler. `providers` and `paired_experiment_available` are supplied
+/// by the caller, which owns environment and telemetry access.
+pub fn product_readiness_from_stores(
+    report: &RepositoryStatusReport,
+    request: FamilyEvidenceFreshnessRequest,
+    family_store: &impl FamilyStore,
+    index_store: &impl IndexStore,
+    source_store: &impl SourceStore,
+    providers: Vec<ProviderSlotStatus>,
+    paired_experiment_available: bool,
+) -> ProductReadinessReport {
+    // A family-store read error yields no definite dimension tokens: prevalence is
+    // `None` (not an asserted all-zero) and static alignment is `CannotVerify` (not
+    // an asserted `not_applicable`).
+    let (family_freshness, family_prevalence, static_alignment) =
+        match list_families_with_freshness(request, family_store, source_store) {
+            Ok(listing) => {
+                let counts = listing.freshness_counts.unwrap_or_default();
+                let mut prevalence = FamilyPrevalenceReadiness::default();
+                let mut fresh_ready_family = false;
+                for family in &listing.families {
+                    let classification =
+                        accumulate_prevalence_token(&family.classification, &mut prevalence);
+                    if matches!(family.freshness, Some(FamilyFreshness::Fresh))
+                        && matches!(
+                            classification,
+                            Some(
+                                FamilyPrevalenceClass::DominantPattern
+                                    | FamilyPrevalenceClass::SupportedPattern
+                            )
+                        )
+                    {
+                        fresh_ready_family = true;
+                    }
+                }
+                let static_alignment = if listing.families.is_empty() {
+                    StaticAlignmentReadiness::NotApplicable
+                } else if fresh_ready_family {
+                    StaticAlignmentReadiness::Available
+                } else {
+                    StaticAlignmentReadiness::Unavailable
+                };
+                (Some(counts), Some(prevalence), static_alignment)
+            }
+            Err(_) => (None, None, StaticAlignmentReadiness::CannotVerify),
+        };
+
+    // `None` distinguishes an unreadable unknown inventory from a genuinely empty
+    // one (`Some(vec![])`).
+    let top_blocking_unknowns = match unknown_inventory(index_store) {
+        Ok(inventory) => Some(top_blocking_unknown_mechanisms(
+            inventory.by_required_mechanism,
+        )),
+        Err(_) => None,
+    };
+
+    assemble_product_readiness(
+        report,
+        family_freshness,
+        family_prevalence,
+        static_alignment,
+        providers,
+        paired_experiment_available,
+        top_blocking_unknowns,
+    )
+}
+
+/// Route one family's stored prevalence classification token into the readiness
+/// prevalence buckets, incrementing `total_count` and returning the parsed class.
+/// An unparseable token is counted as unknown prevalence rather than silently
+/// dropped, so the four buckets always sum to `total_count`.
+fn accumulate_prevalence_token(
+    token: &str,
+    prevalence: &mut FamilyPrevalenceReadiness,
+) -> Option<FamilyPrevalenceClass> {
+    prevalence.total_count += 1;
+    match FamilyPrevalenceClass::parse_token(token) {
+        Ok(class @ FamilyPrevalenceClass::DominantPattern) => {
+            prevalence.dominant_count += 1;
+            Some(class)
+        }
+        Ok(class @ FamilyPrevalenceClass::SupportedPattern) => {
+            prevalence.supported_count += 1;
+            Some(class)
+        }
+        Ok(class @ FamilyPrevalenceClass::MinorityPattern) => {
+            prevalence.minority_count += 1;
+            Some(class)
+        }
+        Ok(class @ FamilyPrevalenceClass::UnknownPrevalence) => {
+            prevalence.unknown_prevalence_count += 1;
+            Some(class)
+        }
+        Err(_) => {
+            prevalence.unknown_prevalence_count += 1;
+            None
+        }
+    }
+}
+
+/// The top blocking-unknown mechanisms by count (descending, mechanism name
+/// ascending for determinism), bounded to [`READINESS_TOP_UNKNOWN_LIMIT`].
+fn top_blocking_unknown_mechanisms(
+    mut buckets: Vec<UnknownInventoryBucket>,
+) -> Vec<UnknownInventoryBucket> {
+    buckets.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    buckets.truncate(READINESS_TOP_UNKNOWN_LIMIT);
+    buckets
+}
+
+/// Source-free JSON view of the decomposed readiness report. Shared by CLI
+/// `status`/`doctor` and the MCP `inspect_readiness` operation so the readiness
+/// shape has a single serializer authority.
+pub fn product_readiness_value(report: &ProductReadinessReport) -> Value {
+    json!({
+        "summary": report.summary.as_str(),
+        "repository_state": report.repository_state.as_str(),
+        "active_index": {
+            "available": report.active_index.available,
+            "active_generation": report.active_index.active_generation,
+            "manifest_schema_version": report.active_index.manifest_schema_version,
+            "schema_current": report.active_index.schema_current,
+        },
+        "family_evidence": {
+            "state": report.family_evidence.state.as_str(),
+            "fresh_count": report.family_evidence.fresh_count,
+            "stale_count": report.family_evidence.stale_count,
+            "cannot_verify_count": report.family_evidence.cannot_verify_count,
+            "evidence_unreadable": report.family_evidence.evidence_unreadable,
+        },
+        "family_prevalence": report.family_prevalence.map(|prevalence| {
+            json!({
+                "dominant_pattern_count": prevalence.dominant_count,
+                "supported_pattern_count": prevalence.supported_count,
+                "minority_pattern_count": prevalence.minority_count,
+                "unknown_prevalence_count": prevalence.unknown_prevalence_count,
+                "total_count": prevalence.total_count,
+            })
+        }),
+        "query_retrieval": {
+            "exact_lookup": report.query_retrieval.exact_lookup,
+            "term_retrieval": report.query_retrieval.term_retrieval,
+            "vocabulary_version": report.query_retrieval.vocabulary_version,
+        },
+        "static_alignment": {
+            "state": report.static_alignment.as_str(),
+        },
+        "providers": report
+            .providers
+            .iter()
+            .map(|status| {
+                json!({
+                    "id": status.slot.id(),
+                    "language": status.slot.language(),
+                    "integrated": status.slot.is_integrated(),
+                    "availability": status.availability.as_protocol_str(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "autosync": {
+            "configured": report.autosync.configured,
+            "running": report.autosync.running,
+            "recommended": report.autosync.recommended,
+        },
+        "measurement": {
+            "token_saving_status": report.measurement.token_saving_status,
+            "measurement_kind": report.measurement.measurement_kind,
+            "paired_experiment_available": report.measurement.paired_experiment_available,
+        },
+        "top_blocking_unknowns": report.top_blocking_unknowns.as_ref().map(|buckets| {
+            buckets
+                .iter()
+                .map(|bucket| {
+                    json!({
+                        "required_mechanism": bucket.key,
+                        "count": bucket.count,
+                    })
+                })
+                .collect::<Vec<_>>()
+        }),
+        "recovery": product_readiness_recovery_value(report.recovery),
+    })
+}
+
+fn product_readiness_recovery_value(recovery: RecoveryRecommendation) -> Value {
+    let command = readiness_recovery_command(recovery.action);
+    json!({
+        "action": readiness_recovery_action_token(recovery.action),
+        "reason": readiness_recovery_reason_token(recovery.reason),
+        "recommended_command": command,
+        "guidance": recovery_guidance(recovery.action),
+        "executable": command.is_some(),
+    })
+}
+
+/// The executable repogrammar command for a recovery action, or `None` when the
+/// action is not a repogrammar command (source fallback, unsupported target, or
+/// no action). Mirrors the status/doctor `recommended_next_command` contract.
+fn readiness_recovery_command(action: RecoveryAction) -> Option<&'static str> {
+    match action {
+        RecoveryAction::UseSourceFallback | RecoveryAction::Unsupported | RecoveryAction::None => {
+            None
+        }
+        _ => Some(recovery_command(action)),
+    }
+}
+
+fn readiness_recovery_action_token(action: RecoveryAction) -> &'static str {
+    match action {
+        RecoveryAction::Setup => "setup",
+        RecoveryAction::Resync => "resync",
+        RecoveryAction::StartAutosync => "start_autosync",
+        RecoveryAction::UseSourceFallback => "use_source_fallback",
+        RecoveryAction::Unsupported => "unsupported",
+        RecoveryAction::RepairStorage => "repair_storage",
+        RecoveryAction::ResolveLock => "resolve_lock",
+        RecoveryAction::InstallAgent(_) => "install_agent",
+        RecoveryAction::InstallSupportedAgent => "install_supported_agent",
+        RecoveryAction::RepairAgentIntegration(_) => "repair_agent_integration",
+        RecoveryAction::None => "none",
+    }
+}
+
+fn readiness_recovery_reason_token(reason: RecoveryReason) -> &'static str {
+    match reason {
+        RecoveryReason::RepositoryNotInitialized => "repository_not_initialized",
+        RecoveryReason::StorageUnhealthy => "storage_unhealthy",
+        RecoveryReason::BlockingLock => "blocking_lock",
+        RecoveryReason::ActiveIndexMissing => "active_index_missing",
+        RecoveryReason::EvidenceStale => "evidence_stale",
+        RecoveryReason::EvidenceCannotBeVerified => "evidence_cannot_be_verified",
+        RecoveryReason::TargetUnsupported => "target_unsupported",
+        RecoveryReason::FamilyEvidenceUnavailable => "family_evidence_unavailable",
+        RecoveryReason::AutosyncRecommended => "autosync_recommended",
+        RecoveryReason::AgentMissing => "agent_missing",
+        RecoveryReason::NoLiveAgent => "no_live_agent",
+        RecoveryReason::AgentIntegrationForeign => "agent_integration_foreign",
+        RecoveryReason::AgentIntegrationMalformed => "agent_integration_malformed",
+        RecoveryReason::AgentIntegrationFailed => "agent_integration_failed",
+        RecoveryReason::AgentSelfTestFailed => "agent_self_test_failed",
+        RecoveryReason::Ready => "ready",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4343,9 +7049,10 @@ mod tests {
         ContentHash, EstimatedPotentialTokenSavings, UnknownClass, UnknownReasonCode,
     };
     use crate::ports::family_store::{
-        ActiveFamilies, ActiveFamilyCandidates, ActiveFamilySummaries,
-        IndexedFamilyCandidateRecord, IndexedFamilyRecord, IndexedFamilySummaryRecord,
-        IndexedVariationSlotRecord,
+        ActiveFamilies, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
+        ActiveFamilySearchSummaries, ActiveFamilySummaries, IndexedFamilyCandidateRecord,
+        IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
+        IndexedVariationSlotRecord, FAMILY_SEARCH_PATH_COMPONENT_CAP,
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -4353,6 +7060,303 @@ mod tests {
         IndexedIrNodeRecord, RepoShapeLanguageStats, StorageInspection,
     };
     use crate::ports::source_store::SourceText;
+
+    fn nonmember_target(blocking: bool) -> TargetFeatureProfile {
+        TargetFeatureProfile {
+            code_unit_id: "unit:target".to_string(),
+            language: "python".to_string(),
+            code_unit_kind: "function".to_string(),
+            framework_role: Some("framework_fastapi_route".to_string()),
+            framework_role_key: Some("framework:fastapi.route".to_string()),
+            feature_tokens: BTreeSet::new(),
+            variation_profiles: BTreeMap::new(),
+            blocking_unknowns: if blocking {
+                vec![crate::core::model::TypedUnknown::new(
+                    UnknownClass::Blocking,
+                    UnknownReasonCode::DynamicImport,
+                    "unit:target:membership",
+                    None,
+                )
+                .expect("valid unknown")]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    fn computation_with(status: AlignmentStatus) -> AlignmentComputation {
+        AlignmentComputation {
+            status,
+            required_features_matched: Vec::new(),
+            static_deviations: Vec::new(),
+            legal_observed_variations: Vec::new(),
+            blocking_unknowns: Vec::new(),
+            unresolved_runtime_obligations: Vec::new(),
+            outcome_reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn verbosity_parses_defaults_and_gates_field_tiers() {
+        // Values round-trip; unknown or wrong-case values are rejected (no
+        // silent fallback).
+        for tier in [Verbosity::Minimal, Verbosity::Standard, Verbosity::Full] {
+            assert_eq!(Verbosity::parse(tier.as_str()), Some(tier));
+        }
+        assert_eq!(Verbosity::parse("loud"), None);
+        assert_eq!(Verbosity::parse("STANDARD"), None);
+
+        // `standard` is the default, byte-stable shape, threaded through the
+        // shared output options.
+        assert_eq!(Verbosity::default(), Verbosity::Standard);
+        assert_eq!(
+            FamilyOutputOptions::default().verbosity,
+            Verbosity::Standard
+        );
+
+        // The gate every precision slice consumes: a field renders when the
+        // requested verbosity is at least as detailed as the field's tier.
+        // Minimal-tier (core) fields render at every verbosity.
+        for verbosity in [Verbosity::Minimal, Verbosity::Standard, Verbosity::Full] {
+            assert!(verbosity.renders(VerbosityTier::Minimal));
+        }
+        // Standard-tier fields render at standard and full, not minimal.
+        assert!(!Verbosity::Minimal.renders(VerbosityTier::Standard));
+        assert!(Verbosity::Standard.renders(VerbosityTier::Standard));
+        assert!(Verbosity::Full.renders(VerbosityTier::Standard));
+        // Full-tier (diagnostic) fields render only at full.
+        assert!(!Verbosity::Minimal.renders(VerbosityTier::Full));
+        assert!(!Verbosity::Standard.renders(VerbosityTier::Full));
+        assert!(Verbosity::Full.renders(VerbosityTier::Full));
+    }
+
+    #[test]
+    fn nonmember_satisfying_required_is_a_near_miss() {
+        // A non-member that statically aligns but was never admitted (e.g.
+        // sub-support) is a NEAR_MISS, never a member.
+        let relationship = classify_nonmember_relationship(
+            &computation_with(AlignmentStatus::StaticallyAligned),
+            &nonmember_target(false),
+        );
+        assert_eq!(relationship, TargetRelationship::NearMiss);
+    }
+
+    #[test]
+    fn nonmember_with_required_violation_is_a_source_backed_exception() {
+        // A required-feature violation against the only ready family of the key
+        // is source-backed negative evidence: EXCEPTION.
+        let relationship = classify_nonmember_relationship(
+            &computation_with(AlignmentStatus::StaticDeviation),
+            &nonmember_target(false),
+        );
+        assert_eq!(relationship, TargetRelationship::Exception);
+    }
+
+    #[test]
+    fn nonmember_blocked_by_unknown_is_blocked_unknown() {
+        // A blocking unknown that prevented membership dominates the relationship.
+        let relationship = classify_nonmember_relationship(
+            &computation_with(AlignmentStatus::PartialAlignment),
+            &nonmember_target(true),
+        );
+        assert_eq!(relationship, TargetRelationship::BlockedUnknown);
+    }
+
+    // ---- Locator-honoring conformance target resolution -------------------
+
+    struct AlwaysFreshSourceStore;
+    impl SourceStore for AlwaysFreshSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            // Echo the expected hash so the read is always fresh; text has three
+            // lines so a line locator maps deterministically.
+            Ok(SourceText {
+                path: request.path,
+                content_hash: request.expected_content_hash,
+                text: "first\nsecond\nthird\n".to_string(),
+            })
+        }
+    }
+
+    struct StaleSourceStore;
+    impl SourceStore for StaleSourceStore {
+        fn read_source(&self, _request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            Err(SourceStoreError::HashMismatch(
+                "changed on disk".to_string(),
+            ))
+        }
+    }
+
+    fn conformance_hash() -> ContentHash {
+        ContentHash::new(format!("sha256:{}", "a".repeat(64))).expect("valid hash")
+    }
+
+    fn conformance_unit(kind: &str, start: usize, end: usize) -> IndexedCodeUnitRecord {
+        IndexedCodeUnitRecord {
+            id: format!("unit:routes.py#{kind}:{start}-{end}"),
+            path: "routes.py".to_string(),
+            language: "python".to_string(),
+            kind: kind.to_string(),
+            start_byte: start,
+            end_byte: end,
+            content_hash: conformance_hash(),
+        }
+    }
+
+    fn conformance_fixture() -> (
+        FamilyEvidenceFreshnessRequest,
+        Vec<IndexedFileRecord>,
+        Vec<IndexedCodeUnitRecord>,
+    ) {
+        let request = FamilyEvidenceFreshnessRequest {
+            repository_root: "/repo".to_string(),
+            max_file_bytes: 1024,
+        };
+        let files = vec![IndexedFileRecord {
+            path: "routes.py".to_string(),
+            content_hash: conformance_hash(),
+            size_bytes: 200,
+            language: "python".to_string(),
+        }];
+        let units = vec![
+            conformance_unit("module", 0, 200),
+            conformance_unit("fastapi_route", 10, 50),
+            conformance_unit("fastapi_route", 60, 100),
+            conformance_unit("function", 110, 150),
+        ];
+        (request, files, units)
+    }
+
+    fn resolved_unit_id<'a>(resolution: &ConformanceUnitResolution<'a>) -> &'a str {
+        match resolution {
+            ConformanceUnitResolution::Resolved(unit) => unit.id.as_str(),
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conformance_locator_pins_the_containing_member_not_an_arbitrary_one() {
+        let (request, files, units) = conformance_fixture();
+        // A byte-range locator on the first member resolves that member.
+        let first = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:10-50",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&first),
+            "unit:routes.py#fastapi_route:10-50"
+        );
+        // A locator on the SECOND member resolves the second member, never the
+        // first or a canonical fallback.
+        let second = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:60-100",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&second),
+            "unit:routes.py#fastapi_route:60-100"
+        );
+        // An inner byte position pins the innermost containing unit, not the module.
+        let inner = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:65-70",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&inner),
+            "unit:routes.py#fastapi_route:60-100"
+        );
+    }
+
+    #[test]
+    fn conformance_locator_to_non_member_helper_resolves_the_helper_unit() {
+        let (request, files, units) = conformance_fixture();
+        // The helper is not family-eligible, but the locator still pins it (the
+        // caller then reports OUT_OF_SCOPE) — it is never redirected to a member.
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:110-150",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert_eq!(
+            resolved_unit_id(&resolution),
+            "unit:routes.py#function:110-150"
+        );
+    }
+
+    #[test]
+    fn conformance_path_only_multi_member_target_is_ambiguous() {
+        let (request, files, units) = conformance_fixture();
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        match resolution {
+            ConformanceUnitResolution::AmbiguousUnits {
+                candidate_unit_ids, ..
+            } => {
+                assert_eq!(
+                    candidate_unit_ids,
+                    vec![
+                        "unit:routes.py#fastapi_route:10-50".to_string(),
+                        "unit:routes.py#fastapi_route:60-100".to_string(),
+                    ]
+                );
+            }
+            other => panic!("expected AmbiguousUnits, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conformance_stale_target_abstains_before_any_certificate() {
+        let (request, files, units) = conformance_fixture();
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &StaleSourceStore,
+            "routes.py:60-100",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        assert!(matches!(
+            resolution,
+            ConformanceUnitResolution::Stale { .. }
+        ));
+    }
+
+    #[test]
+    fn conformance_locator_with_no_containing_unit_is_unresolved() {
+        let (request, files, units) = conformance_fixture();
+        // A byte range in a gap between units resolves nothing (no canonical fallback).
+        let resolution = resolve_conformance_target_unit(
+            &request,
+            &AlwaysFreshSourceStore,
+            "routes.py:151-199",
+            &files,
+            &units,
+        )
+        .expect("resolve");
+        // The module unit contains 151-199, so it resolves to module (out of scope
+        // downstream), never to a member; a truly out-of-range locator is unresolved.
+        assert_eq!(resolved_unit_id(&resolution), "unit:routes.py#module:0-200");
+    }
 
     struct FakeStore {
         facts: Vec<IndexedSemanticFactRecord>,
@@ -4601,6 +7605,7 @@ mod tests {
                 family: IndexedFamilyRecord {
                     family_id: "family:typescript:express_route:express".to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
+                    prevalence: crate::test_support::sample_family_prevalence(),
                 },
                 members: vec![IndexedFamilyMemberRecord {
                     family_id: "family:typescript:express_route:express".to_string(),
@@ -4695,8 +7700,71 @@ mod tests {
                         family_id: family.family.family_id.clone(),
                         classification: family.family.classification.clone(),
                         support: family.members.len(),
+                        prevalence: family.family.prevalence.clone(),
                     })
                     .collect(),
+            })
+        }
+
+        fn list_active_family_evidence_projection(
+            &self,
+        ) -> Result<ActiveFamilyEvidenceProjection, StoreError> {
+            let mut rows = Vec::new();
+            for family in &self.families {
+                for evidence in &family.evidence {
+                    rows.push(IndexedFamilyEvidenceProjectionRecord {
+                        family_id: family.family.family_id.clone(),
+                        path: evidence.path.clone(),
+                        content_hash: evidence.content_hash.clone(),
+                    });
+                }
+            }
+            Ok(ActiveFamilyEvidenceProjection {
+                generation_id: self.active.generation_id.clone(),
+                rows,
+            })
+        }
+
+        fn list_active_family_search_summaries(
+            &self,
+        ) -> Result<ActiveFamilySearchSummaries, StoreError> {
+            let families = self
+                .families
+                .iter()
+                .map(|family| {
+                    let mut components = BTreeSet::new();
+                    for evidence in &family.evidence {
+                        for segment in evidence.path.split('/') {
+                            if !segment.is_empty() {
+                                components.insert(segment.to_string());
+                            }
+                        }
+                    }
+                    IndexedFamilySearchSummaryRecord {
+                        family_id: family.family.family_id.clone(),
+                        // The read-only query fake carries no code-unit language
+                        // or kind; the search projection derives them from the
+                        // store adapter, so the fake leaves them empty.
+                        language: String::new(),
+                        code_unit_kind: String::new(),
+                        framework_role: family
+                            .members
+                            .first()
+                            .map(|member| member.role.clone())
+                            .unwrap_or_default(),
+                        classification: family.family.classification.clone(),
+                        support: family.members.len(),
+                        prevalence: family.family.prevalence.clone(),
+                        evidence_path_components: components
+                            .into_iter()
+                            .take(FAMILY_SEARCH_PATH_COMPONENT_CAP)
+                            .collect(),
+                    }
+                })
+                .collect();
+            Ok(ActiveFamilySearchSummaries {
+                generation_id: self.active.generation_id.clone(),
+                families,
             })
         }
 
@@ -4783,6 +7851,25 @@ mod tests {
                 .iter()
                 .find(|family| family.family.family_id == family_id)
                 .cloned())
+        }
+    }
+
+    // This fake never persists profiles; hydration always reports `None`, which
+    // exercises the representative-selection fallback path.
+    impl crate::ports::family_store::FamilyConstraintProfileStore for FakeFamilyStore {
+        fn record_family_constraint_profile(
+            &self,
+            _generation: &GenerationHandle,
+            _record: &crate::ports::family_store::IndexedFamilyConstraintProfileRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn show_family_constraint_profile(
+            &self,
+            _family_id: &str,
+        ) -> Result<Option<FamilyConstraintProfile>, StoreError> {
+            Ok(None)
         }
     }
 
@@ -4997,6 +8084,7 @@ mod tests {
             family: IndexedFamilyRecord {
                 family_id: family_id.to_string(),
                 classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
             },
             members: vec![IndexedFamilyMemberRecord {
                 family_id: family_id.to_string(),
@@ -5026,10 +8114,13 @@ mod tests {
             family_id: "family:typescript:express_route:express".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
             support: evidence.len(),
+            prevalence: crate::test_support::sample_family_prevalence(),
             members: Vec::new(),
             variation_slots: Vec::new(),
             evidence,
             unknowns: Vec::new(),
+            constraint_profile: None,
+            term_retrieval: None,
         }
     }
 
@@ -5102,6 +8193,7 @@ mod tests {
             family: IndexedFamilyRecord {
                 family_id: family_id.clone(),
                 classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
             },
             members: Vec::new(),
             variation_slots: vec![
@@ -5119,7 +8211,7 @@ mod tests {
                 },
             ],
             evidence: Vec::new(),
-        });
+        }, None);
 
         assert!(detail.unknowns.iter().any(|unknown| {
             unknown.class == UnknownClass::NonBlocking
@@ -5264,6 +8356,408 @@ mod tests {
             QueryPreflightReport::Fallback(fallback) => fallback,
             QueryPreflightReport::Ready => panic!("expected fallback report"),
         }
+    }
+
+    fn healthy_status_report() -> RepositoryStatusReport {
+        status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+            Vec::new(),
+        )
+    }
+
+    fn freshness_counts(fresh: usize, stale: usize, cannot_verify: usize) -> FamilyFreshnessCounts {
+        FamilyFreshnessCounts {
+            fresh_count: fresh,
+            stale_count: stale,
+            cannot_verify_count: cannot_verify,
+        }
+    }
+
+    fn readiness_for(
+        report: &RepositoryStatusReport,
+        family_freshness: Option<FamilyFreshnessCounts>,
+    ) -> ProductReadinessReport {
+        assemble_product_readiness(
+            report,
+            family_freshness,
+            Some(FamilyPrevalenceReadiness::default()),
+            StaticAlignmentReadiness::NotApplicable,
+            Vec::new(),
+            false,
+            Some(Vec::new()),
+        )
+    }
+
+    /// A servable report whose active generation carries dirty derived records on
+    /// a non-evidence dependency: the repository recovery is stale (query_ready is
+    /// false, next action resync) even though the family-evidence hashes are fresh.
+    fn dirty_index_report() -> RepositoryStatusReport {
+        let mut report = healthy_status_report();
+        report.readiness.query_ready = false;
+        report.readiness.recovery = Some(RecoveryRecommendation {
+            action: RecoveryAction::Resync,
+            reason: RecoveryReason::EvidenceStale,
+        });
+        report
+    }
+
+    #[test]
+    fn product_readiness_is_ready_when_index_and_family_evidence_are_fresh() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(3, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::Ready);
+        assert_eq!(
+            readiness.repository_state,
+            RepositoryStateReadiness::Initialized
+        );
+        assert!(readiness.active_index.available);
+        assert!(readiness.active_index.schema_current);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::Fresh
+        );
+        assert_eq!(readiness.recovery.action, RecoveryAction::None);
+    }
+
+    #[test]
+    fn stale_families_are_degraded_with_count_visible_even_when_repository_reports_query_ready() {
+        let report = healthy_status_report();
+        // The repository-level readiness reports a single optimistic query_ready
+        // boolean of `true` for this healthy checkout...
+        assert!(report.readiness.query_ready);
+        let readiness = readiness_for(&report, Some(freshness_counts(1, 3, 0)));
+        // ...yet the decomposed model must surface the staleness as degraded with
+        // the stale count visible rather than hiding it behind that boolean.
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::Stale
+        );
+        assert_eq!(readiness.family_evidence.stale_count, 3);
+        assert_ne!(readiness.recovery.action, RecoveryAction::None);
+    }
+
+    #[test]
+    fn unverifiable_family_evidence_is_degraded() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(0, 0, 2)));
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::CannotVerify
+        );
+        assert!(!readiness.family_evidence.evidence_unreadable);
+    }
+
+    #[test]
+    fn unreadable_family_store_is_degraded_and_marked_unreadable() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, None);
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert!(readiness.family_evidence.evidence_unreadable);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::CannotVerify
+        );
+    }
+
+    #[test]
+    fn fresh_index_with_no_families_is_ready() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(0, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::Ready);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::NotApplicable
+        );
+    }
+
+    #[test]
+    fn not_initialized_repository_is_not_ready() {
+        let report = status_report(
+            RepositoryStatus::NotInitialized,
+            RepositoryImplementationStatus::NotImplemented,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+        let readiness = readiness_for(&report, None);
+        assert_eq!(readiness.summary, ReadinessSummary::NotReady);
+        assert_eq!(
+            readiness.repository_state,
+            RepositoryStateReadiness::NotInitialized
+        );
+        assert_eq!(readiness.recovery.action, RecoveryAction::Setup);
+    }
+
+    #[test]
+    fn unhealthy_storage_is_not_ready() {
+        let report = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Unhealthy,
+            RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+            Vec::new(),
+        );
+        let readiness = readiness_for(&report, Some(freshness_counts(2, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::NotReady);
+        assert_eq!(
+            readiness.repository_state,
+            RepositoryStateReadiness::StorageUnhealthy
+        );
+    }
+
+    #[test]
+    fn missing_active_index_is_not_ready() {
+        let report = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "none".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+        let readiness = readiness_for(&report, None);
+        assert_eq!(readiness.summary, ReadinessSummary::NotReady);
+        assert!(!readiness.active_index.available);
+    }
+
+    #[test]
+    fn autosync_recommended_but_otherwise_healthy_is_degraded() {
+        // A recommended-but-stopped autosync is a live freshness-maintenance
+        // caveat: queries still serve (query_ready stays true), but the summary
+        // must not claim `ready`. The repository readiness reports both the
+        // autosync state and the StartAutosync/AutosyncRecommended recovery, as the
+        // real status surface computes them together.
+        let mut report = healthy_status_report();
+        report.readiness.autosync = RepositoryAutosyncReadiness {
+            configured: true,
+            running: false,
+            recommended: true,
+        };
+        report.readiness.recovery = Some(RecoveryRecommendation {
+            action: RecoveryAction::StartAutosync,
+            reason: RecoveryReason::AutosyncRecommended,
+        });
+        assert!(report.readiness.query_ready);
+        let readiness = readiness_for(&report, Some(freshness_counts(2, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(readiness.recovery.action, RecoveryAction::StartAutosync);
+        assert!(readiness.autosync.recommended);
+    }
+
+    #[test]
+    fn dirty_index_is_degraded_even_when_family_evidence_is_hash_fresh() {
+        // The reviewer's reachable case: dirty derived records on a non-evidence
+        // dependency make the repository query path fall back, yet the family
+        // evidence hashes are all fresh. The summary MUST NOT be ready, and the
+        // same payload never carries query_ready=false with summary=ready.
+        let report = dirty_index_report();
+        assert!(!report.readiness.query_ready);
+        let readiness = readiness_for(&report, Some(freshness_counts(4, 0, 0)));
+        assert_ne!(readiness.summary, ReadinessSummary::Ready);
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(readiness.recovery.action, RecoveryAction::Resync);
+        // The query path also falls back on the same report.
+        assert!(matches!(
+            query_preflight(QueryPreflightOperation::PatternFamilyQuery, &report),
+            QueryPreflightReport::Fallback(_)
+        ));
+    }
+
+    #[test]
+    fn ready_summary_always_implies_query_preflight_ready() {
+        // Consistency property: wherever the decomposed summary is `ready`, the
+        // repository query preflight must be `Ready` on the same report, and a
+        // report whose query_ready boolean is false can never be summarized ready.
+        let cases: Vec<(RepositoryStatusReport, Option<FamilyFreshnessCounts>)> = vec![
+            (healthy_status_report(), Some(freshness_counts(3, 0, 0))),
+            (healthy_status_report(), Some(freshness_counts(1, 2, 0))),
+            (healthy_status_report(), Some(freshness_counts(0, 0, 2))),
+            (healthy_status_report(), Some(freshness_counts(0, 0, 0))),
+            (healthy_status_report(), None),
+            (dirty_index_report(), Some(freshness_counts(4, 0, 0))),
+            (
+                status_report(
+                    RepositoryStatus::NotInitialized,
+                    RepositoryImplementationStatus::NotImplemented,
+                    RepositoryImplementationStatus::NotImplemented,
+                    Vec::new(),
+                ),
+                None,
+            ),
+            (
+                status_report(
+                    RepositoryStatus::Initialized {
+                        active_generation: "gen-000001".to_string(),
+                    },
+                    RepositoryImplementationStatus::Unhealthy,
+                    RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+                    Vec::new(),
+                ),
+                Some(freshness_counts(2, 0, 0)),
+            ),
+        ];
+        for (report, family_freshness) in cases {
+            let readiness = readiness_for(&report, family_freshness);
+            if readiness.summary == ReadinessSummary::Ready {
+                assert!(
+                    matches!(
+                        query_preflight(QueryPreflightOperation::PatternFamilyQuery, &report),
+                        QueryPreflightReport::Ready
+                    ),
+                    "ready summary must imply query_preflight Ready"
+                );
+            }
+            if !report.readiness.query_ready {
+                assert_ne!(
+                    readiness.summary,
+                    ReadinessSummary::Ready,
+                    "query_ready=false must never coexist with summary=ready"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_family_store_yields_no_definite_dimension_tokens() {
+        // A family-store read error must not assert definite prevalence/alignment
+        // tokens; those dimensions report unknown, not a false zero/not-applicable.
+        let report = healthy_status_report();
+        let readiness = assemble_product_readiness(
+            &report,
+            None,
+            None,
+            StaticAlignmentReadiness::CannotVerify,
+            Vec::new(),
+            false,
+            None,
+        );
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert!(readiness.family_evidence.evidence_unreadable);
+        assert_eq!(readiness.family_prevalence, None);
+        assert_eq!(
+            readiness.static_alignment,
+            StaticAlignmentReadiness::CannotVerify
+        );
+        assert_eq!(readiness.top_blocking_unknowns, None);
+        let value = product_readiness_value(&readiness);
+        assert!(value["family_prevalence"].is_null());
+        assert!(value["top_blocking_unknowns"].is_null());
+        assert_eq!(value["static_alignment"]["state"], "cannot_verify");
+    }
+
+    #[test]
+    fn summary_token_is_low_cardinality() {
+        assert_eq!(ReadinessSummary::Ready.as_str(), "ready");
+        assert_eq!(ReadinessSummary::Degraded.as_str(), "degraded");
+        assert_eq!(ReadinessSummary::NotReady.as_str(), "not_ready");
+    }
+
+    #[test]
+    fn top_blocking_unknown_mechanisms_are_count_ordered_and_bounded() {
+        let buckets = vec![
+            UnknownInventoryBucket {
+                key: "b".to_string(),
+                count: 2,
+            },
+            UnknownInventoryBucket {
+                key: "a".to_string(),
+                count: 5,
+            },
+            UnknownInventoryBucket {
+                key: "c".to_string(),
+                count: 5,
+            },
+            UnknownInventoryBucket {
+                key: "d".to_string(),
+                count: 1,
+            },
+            UnknownInventoryBucket {
+                key: "e".to_string(),
+                count: 1,
+            },
+            UnknownInventoryBucket {
+                key: "f".to_string(),
+                count: 1,
+            },
+        ];
+        let top = top_blocking_unknown_mechanisms(buckets);
+        assert_eq!(top.len(), READINESS_TOP_UNKNOWN_LIMIT);
+        assert_eq!(top[0].key, "a");
+        assert_eq!(top[1].key, "c");
+        assert_eq!(top[2].key, "b");
+    }
+
+    #[test]
+    fn product_readiness_value_is_source_free_and_exposes_stale_count() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(1, 2, 0)));
+        let value = product_readiness_value(&readiness);
+        assert_eq!(value["summary"], "degraded");
+        assert_eq!(value["family_evidence"]["stale_count"], 2);
+        assert_eq!(
+            value["query_retrieval"]["vocabulary_version"],
+            "query-vocabulary.v1"
+        );
+        assert_eq!(value["measurement"]["token_saving_status"], "NOT_MEASURED");
+        assert_eq!(value["recovery"]["executable"], true);
+        // The readiness view carries no repository source paths or evidence text.
+        let serialized = value.to_string();
+        assert!(!serialized.contains("/repo"));
+        assert!(!serialized.contains("content_hash"));
+    }
+
+    #[test]
+    fn product_readiness_value_reports_providers_source_free() {
+        let report = healthy_status_report();
+        let providers =
+            crate::application::providers::optional_provider_report(|_| None, |_| false);
+        let readiness = assemble_product_readiness(
+            &report,
+            Some(freshness_counts(1, 0, 0)),
+            Some(FamilyPrevalenceReadiness::default()),
+            StaticAlignmentReadiness::NotApplicable,
+            providers,
+            false,
+            Some(Vec::new()),
+        );
+        let value = product_readiness_value(&readiness);
+        let provider_array = value["providers"].as_array().expect("providers array");
+        assert!(!provider_array.is_empty());
+        assert!(provider_array
+            .iter()
+            .all(|provider| provider.get("availability").is_some()));
+    }
+
+    #[test]
+    fn family_prevalence_buckets_sum_to_total_including_unparseable_tokens() {
+        // An unparseable stored classification token is routed to the unknown
+        // prevalence bucket, never dropped, so the buckets always sum to total.
+        let mut prevalence = FamilyPrevalenceReadiness::default();
+        for token in [
+            "DOMINANT_PATTERN",
+            "SUPPORTED_PATTERN",
+            "MINORITY_PATTERN",
+            "UNKNOWN_PREVALENCE",
+            "SOME_UNRECOGNIZED_TOKEN",
+        ] {
+            accumulate_prevalence_token(token, &mut prevalence);
+        }
+        assert_eq!(prevalence.total_count, 5);
+        assert_eq!(
+            prevalence.dominant_count
+                + prevalence.supported_count
+                + prevalence.minority_count
+                + prevalence.unknown_prevalence_count,
+            prevalence.total_count
+        );
+        // The unrecognized token lands in the unknown bucket with the real one.
+        assert_eq!(prevalence.unknown_prevalence_count, 2);
     }
 
     #[test]
@@ -5523,11 +9017,21 @@ mod tests {
         assert_eq!(bucket_count(&report.by_role_state, "single"), 2);
         assert_eq!(blocks_support_count(&report.by_blocks_support, true), 1);
         assert_eq!(blocks_support_count(&report.by_blocks_support, false), 1);
+        // Both mechanisms belong to the python provider slot, which is registered
+        // but not integrated, so their recovery is not_implemented_in_current_
+        // version rather than resolve_import_graph or enable_provider.
+        assert_eq!(
+            bucket_count(
+                &report.by_recovery_code,
+                "not_implemented_in_current_version"
+            ),
+            2
+        );
         assert_eq!(
             bucket_count(&report.by_recovery_code, "resolve_import_graph"),
-            1
+            0
         );
-        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 1);
+        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 0);
         let python = language_unknown_summary(&report, "python");
         assert_eq!(python.total_unknowns, 2);
         assert_eq!(python.blocking_unknowns, 1);
@@ -5795,7 +9299,10 @@ mod tests {
         assert_eq!(metric.reason_code, "DynamicImport");
         assert_eq!(metric.required_mechanism, "python_import_graph");
         assert_eq!(metric.obligation, "symbol_binding");
-        assert_eq!(metric.recovery_code, "resolve_import_graph");
+        // python_import_graph is a python-provider-slot bucket mechanism, so the
+        // recoverable legacy projection now recovers via not_implemented rather
+        // than resolve_import_graph.
+        assert_eq!(metric.recovery_code, "not_implemented_in_current_version");
     }
 
     #[test]
@@ -5926,7 +9433,12 @@ mod tests {
             dynamic_import.resolution_class,
             ResolutionClass::Irreducible
         );
-        assert_eq!(static_import.recovery_code, "resolve_import_graph");
+        // python_import_graph is a python-provider-slot bucket mechanism: its
+        // recoverable path now recovers via not_implemented_in_current_version.
+        assert_eq!(
+            static_import.recovery_code,
+            "not_implemented_in_current_version"
+        );
         assert_eq!(dynamic_import.recovery_code, "runtime_trace_required");
         // Public class remains the legacy claim-impact projection for both.
         assert_eq!(static_import.legacy_class, UnknownClass::Blocking);
@@ -6094,9 +9606,15 @@ mod tests {
             "an absent runtime-boundary assumption leaves static provider recovery available"
         );
 
+        // A genuinely unregistered mechanism (import_resolution_provider for an
+        // unknown language) must default to the safe Irreducible/manual_review
+        // outcome, never to an invented provider capability. FrameworkMagic can no
+        // longer be used here: for an unknown language it derives
+        // framework_semantic_provider, which is now a recognized python-provider
+        // slot bucket that recovers via not_implemented_in_current_version.
         let unregistered = disposition(
             "unknown",
-            UnknownReasonCode::FrameworkMagic,
+            UnknownReasonCode::UnresolvedImport,
             "future_unknown_claim",
             "unknown",
             &[],
@@ -6125,15 +9643,143 @@ mod tests {
         let report = unknown_inventory(&store).expect("unknown inventory");
         let recovery_debug = format!("{:?}", report.by_recovery_code);
 
-        assert_eq!(
-            bucket_count(&report.by_recovery_code, "resolve_import_graph"),
-            1
-        );
+        // typescript_module_resolver belongs to the integrated TypeScript compiler
+        // slot, so its recovery moved from resolve_import_graph to enable_provider.
+        assert_eq!(bucket_count(&report.by_recovery_code, "enable_provider"), 1);
         assert!(!recovery_debug.contains("/Users/example"));
         assert!(!recovery_debug.contains("src/app.ts"));
         assert!(!recovery_debug.contains("code_unit_id"));
         assert!(!recovery_debug.contains("fact_id"));
         assert!(!recovery_debug.contains("fn handler"));
+    }
+
+    #[test]
+    fn integrated_typescript_provider_mechanisms_recover_via_enable_provider() {
+        // The integrated TypeScript compiler slot's resolvable mechanisms guide
+        // toward enabling that present provider (executable via doctor), not the
+        // generic resolve_import_graph they used before this alignment.
+        for mechanism in [
+            "typescript_module_resolver",
+            "typescript_paths_resolver",
+            "typescript_package_entry_model",
+            "typescript_export_graph",
+        ] {
+            assert_eq!(
+                registered_recovery_mechanism(mechanism),
+                Some(RegisteredRecoveryMechanism {
+                    resolution_class: ResolutionClass::Recoverable,
+                    recovery_code: "enable_provider",
+                }),
+                "{mechanism} should recover via enable_provider"
+            );
+        }
+    }
+
+    #[test]
+    fn unintegrated_provider_mechanisms_recover_via_not_implemented() {
+        // Registered-but-not-integrated slot buckets (python, rust) and future-
+        // provider framework/DI/build models resolve nothing here, so they recover
+        // via not_implemented_in_current_version instead of promising a provider.
+        for mechanism in [
+            "python_import_graph",
+            "fastapi_dependency_graph",
+            "framework_semantic_provider",
+            "resolve_dependency_metadata",
+            "rust_module_graph",
+            "rust_trait_dispatch_model",
+            "cargo_feature_cfg_model",
+            "spring_di_model",
+            "dependency_injection_model",
+            "sqlalchemy_session_model",
+            "cpp_compile_commands_model",
+        ] {
+            assert_eq!(
+                registered_recovery_mechanism(mechanism),
+                Some(RegisteredRecoveryMechanism {
+                    resolution_class: ResolutionClass::Recoverable,
+                    recovery_code: "not_implemented_in_current_version",
+                }),
+                "{mechanism} should recover via not_implemented_in_current_version"
+            );
+        }
+    }
+
+    #[test]
+    fn non_provider_import_graph_mechanisms_keep_resolve_import_graph() {
+        // Genuine import-graph mechanisms that no provider slot resolves keep the
+        // executable resolve_import_graph recovery.
+        for mechanism in [
+            "typescript_rootdirs_model",
+            "typescript_commonjs_alias_model",
+            "java_project_graph",
+            "csharp_project_model",
+        ] {
+            assert_eq!(
+                registered_recovery_mechanism(mechanism).map(|entry| entry.recovery_code),
+                Some("resolve_import_graph"),
+                "{mechanism} should keep resolve_import_graph"
+            );
+        }
+    }
+
+    #[test]
+    fn registered_recovery_code_vocabulary_is_fixed_and_low_cardinality() {
+        // The complete set of recovery codes registered_recovery_mechanism can emit
+        // across the mechanism vocabulary is this fixed, low-cardinality list.
+        // resolve_dependency_metadata is intentionally absent: its only mechanism
+        // is a python-provider-slot bucket that now recovers via not_implemented.
+        let representative_mechanisms = [
+            "source_refresh",
+            "project_config_reader",
+            "pytest_fixture_graph",
+            "typescript_module_resolver",
+            "typescript_paths_resolver",
+            "typescript_package_entry_model",
+            "typescript_export_graph",
+            "typescript_rootdirs_model",
+            "typescript_commonjs_alias_model",
+            "python_import_graph",
+            "fastapi_dependency_graph",
+            "framework_semantic_provider",
+            "resolve_dependency_metadata",
+            "rust_module_graph",
+            "rust_trait_dispatch_model",
+            "cargo_feature_cfg_model",
+            "java_project_graph",
+            "csharp_project_model",
+            "spring_di_model",
+            "dependency_injection_model",
+            "sqlalchemy_session_model",
+            "rust_macro_boundary",
+            "cpp_macro_boundary",
+            "build_variant_model",
+            "conflict_resolution",
+            "compatible_support_evidence",
+            "runtime_trace_required",
+            "spring_proxy_model",
+            "java_mockito_runtime_mock_model",
+        ];
+        let emitted: BTreeSet<&str> = representative_mechanisms
+            .into_iter()
+            .filter_map(|mechanism| {
+                registered_recovery_mechanism(mechanism).map(|entry| entry.recovery_code)
+            })
+            .collect();
+        assert_eq!(
+            emitted,
+            BTreeSet::from([
+                "run_sync",
+                "add_project_config",
+                "resolve_fixture_graph",
+                "resolve_import_graph",
+                "enable_provider",
+                "not_implemented_in_current_version",
+                "manual_review_required",
+                "runtime_trace_required",
+            ])
+        );
+        // No live mechanism emits resolve_dependency_metadata anymore.
+        assert!(!emitted.contains("resolve_dependency_metadata"));
     }
 
     #[test]
@@ -6489,6 +10135,282 @@ mod tests {
     }
 
     #[test]
+    fn family_evidence_selection_covers_every_variation_dimension() {
+        // A multi-dimension family: two profile variation dimensions, each
+        // witnessed by a distinct member. With the profile hydrated, the objective
+        // requires — and the greedy loop covers — one witness per dimension.
+        let canonical = family_evidence("src/canon.ts", 0, "canonical support evidence");
+        let mut dim_a = family_evidence("src/a.ts", 1, "witness for route_method");
+        dim_a.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut dim_b = family_evidence("src/b.ts", 2, "witness for route_path_shape");
+        dim_b.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut detail =
+            family_detail_with_evidence(vec![canonical.clone(), dim_a.clone(), dim_b.clone()]);
+        detail.variation_slots = vec![
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:tsjs_route_method".to_string(),
+                description: "route method differs".to_string(),
+            },
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:tsjs_route_path_shape".to_string(),
+                description: "route path shape differs".to_string(),
+            },
+        ];
+        detail.constraint_profile = Some(Box::new(FamilyConstraintProfile {
+            required_equal_features: Vec::new(),
+            allowed_variations: vec![
+                crate::core::model::VariationConstraint {
+                    dimension: "tsjs_route_method".to_string(),
+                    observed_profiles: vec!["get".to_string(), "post".to_string()],
+                    observed_profiles_truncated: false,
+                    includes_absent_profile: false,
+                    representative_member_ids: vec![dim_a.code_unit_id.clone()],
+                    observed_only: true,
+                },
+                crate::core::model::VariationConstraint {
+                    dimension: "tsjs_route_path_shape".to_string(),
+                    observed_profiles: vec!["/x".to_string(), "/y".to_string()],
+                    observed_profiles_truncated: false,
+                    includes_absent_profile: false,
+                    representative_member_ids: vec![dim_b.code_unit_id.clone()],
+                    observed_only: true,
+                },
+            ],
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: Vec::new(),
+        }));
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+                verbosity: Verbosity::Standard,
+            },
+        );
+        // Every dimension's witness is selected; the two shared "variation" tokens
+        // collapse to one label in the reported coverage.
+        let selected_ids = selected
+            .evidence
+            .iter()
+            .map(|evidence| evidence.record.evidence_id.clone())
+            .collect::<Vec<_>>();
+        assert!(selected_ids.contains(&canonical.evidence_id));
+        assert!(selected_ids.contains(&dim_a.evidence_id));
+        assert!(selected_ids.contains(&dim_b.evidence_id));
+        assert_eq!(
+            selected.covered_claims,
+            vec!["canonical", "support", "variation"]
+        );
+        assert!(selected.missing_claims.is_empty());
+
+        // Budget-exceeded truncation is unchanged: a budget that fits only the
+        // mandatory canonical seed drops the later witnesses and reports the
+        // shortfall, leaving the variation dimensions uncovered.
+        let tiny = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: Some(1),
+                include_variations: true,
+                include_exceptions: false,
+                verbosity: Verbosity::Standard,
+            },
+        );
+        assert!(!tiny.budget_satisfied);
+        assert!(tiny.covered_claims.contains(&"canonical".to_string()));
+        assert_eq!(tiny.missing_claims, vec!["variation".to_string()]);
+    }
+
+    fn variation_dimension(
+        dimension: &str,
+        representative: &str,
+    ) -> crate::core::model::VariationConstraint {
+        crate::core::model::VariationConstraint {
+            dimension: dimension.to_string(),
+            observed_profiles: vec!["observed".to_string()],
+            observed_profiles_truncated: false,
+            includes_absent_profile: true,
+            representative_member_ids: vec![representative.to_string()],
+            observed_only: true,
+        }
+    }
+
+    #[test]
+    fn evidence_selection_picks_an_anchor_witness_alongside_a_profile_dimension() {
+        // A fastapi family that varies in BOTH a profile dimension (import_context)
+        // and framework anchor targets. The anchor variation is a slot, not a
+        // profile dimension, so its witness must still be required and selectable.
+        let canonical = family_evidence("src/canon.ts", 0, "canonical support evidence");
+        let mut import_witness = family_evidence("src/import.ts", 1, "import_context witness");
+        import_witness.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut anchor_witness = family_evidence("src/anchor.ts", 2, "anchor-target witness");
+        anchor_witness.covered_claims = vec!["support".to_string(), "variation".to_string()];
+        let mut detail = family_detail_with_evidence(vec![
+            canonical.clone(),
+            import_witness.clone(),
+            anchor_witness.clone(),
+        ]);
+        detail.variation_slots = vec![
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:python_import_context".to_string(),
+                description: "import context differs".to_string(),
+            },
+            IndexedVariationSlotRecord {
+                family_id: detail.family_id.clone(),
+                slot_id: "slot:python_framework_anchor_target".to_string(),
+                description: "variation:python_framework_anchor_target:exact compatible framework anchors differ".to_string(),
+            },
+        ];
+        // Only the import witness is a profile-dimension representative; the anchor
+        // witness maps to no profile dimension.
+        detail.constraint_profile = Some(Box::new(FamilyConstraintProfile {
+            required_equal_features: Vec::new(),
+            allowed_variations: vec![variation_dimension(
+                "python_import_context",
+                &import_witness.code_unit_id,
+            )],
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: Vec::new(),
+        }));
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+                verbosity: Verbosity::Standard,
+            },
+        );
+        let ids = selected
+            .evidence
+            .iter()
+            .map(|evidence| evidence.record.evidence_id.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            ids.contains(&anchor_witness.evidence_id),
+            "the anchor-target witness must be selected, not dropped: {ids:?}"
+        );
+        assert!(ids.contains(&import_witness.evidence_id));
+        assert!(selected.missing_claims.is_empty());
+    }
+
+    #[test]
+    fn canonical_medoid_satisfies_a_dimension_it_solely_represents() {
+        // A dimension with one observed non-empty profile plus absent members has a
+        // single representative. After the medoid-first reorder that representative
+        // is the canonical, and it is excluded from the variation witness set — so
+        // no stored row carries a "variation" label for the dimension. The
+        // canonical must still satisfy the dimension (it exhibits the profile),
+        // reaching full coverage rather than reporting permanent missing coverage.
+        let canonical = family_evidence("src/canon.ts", 0, "canonical support evidence");
+        let other = family_evidence("src/other.ts", 1, "plain support member");
+        let mut detail = family_detail_with_evidence(vec![canonical.clone(), other.clone()]);
+        detail.variation_slots = vec![IndexedVariationSlotRecord {
+            family_id: detail.family_id.clone(),
+            slot_id: "slot:python_effect_marker".to_string(),
+            description: "effect marker present on some members".to_string(),
+        }];
+        detail.constraint_profile = Some(Box::new(FamilyConstraintProfile {
+            required_equal_features: Vec::new(),
+            // Sole representative is the canonical medoid.
+            allowed_variations: vec![variation_dimension(
+                "python_effect_marker",
+                &canonical.code_unit_id,
+            )],
+            prohibited_or_blocking_features: Vec::new(),
+            unresolved_obligations: Vec::new(),
+        }));
+
+        let selected = select_family_evidence(
+            &detail,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: true,
+                include_exceptions: false,
+                verbosity: Verbosity::Standard,
+            },
+        );
+        assert!(
+            selected.missing_claims.is_empty(),
+            "the canonical must satisfy the dimension it solely represents: {:?}",
+            selected.missing_claims
+        );
+        assert_eq!(
+            selected.covered_claims,
+            vec!["canonical", "support", "variation"]
+        );
+    }
+
+    #[test]
+    fn read_plan_support_span_prefers_the_contrast_labelled_witness() {
+        // Hydration re-sorts evidence by path, so the read plan must recover the
+        // contrast witness by its label, not by storage order. The path-earliest
+        // support member (`b_plain`) precedes the contrast member (`c_contrast`),
+        // yet support_evidence must name the contrast member.
+        let canonical = family_evidence("src/a_canon.ts", 0, "canonical support evidence");
+        let plain = family_evidence("src/b_plain.ts", 1, "plain support member");
+        let mut contrast = family_evidence("src/c_contrast.ts", 2, "farthest contrast witness");
+        contrast.covered_claims = vec!["support".to_string(), "contrast".to_string()];
+        let detail = family_detail_with_evidence(vec![canonical, plain.clone(), contrast.clone()]);
+
+        let read_plan = build_read_plan(
+            &detail,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: false,
+                include_exceptions: false,
+                verbosity: Verbosity::Standard,
+            },
+        );
+        let support = read_plan
+            .items
+            .iter()
+            .find(|item| item.purpose == ReadPlanPurpose::SupportEvidence)
+            .expect("a support-evidence read-plan item");
+        assert_eq!(
+            support.path, "src/c_contrast.ts",
+            "support_evidence must name the contrast witness, not the path-first member"
+        );
+
+        // Fallback: with no contrast label, support_evidence names the first
+        // distinct-path support member (the pre-label behavior).
+        let detail_no_contrast = family_detail_with_evidence(vec![
+            family_evidence("src/a_canon.ts", 0, "canonical support evidence"),
+            plain.clone(),
+        ]);
+        let fallback = build_read_plan(
+            &detail_no_contrast,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions {
+                evidence_mode: FamilyEvidenceMode::Evidence,
+                token_budget: None,
+                include_variations: false,
+                include_exceptions: false,
+                verbosity: Verbosity::Standard,
+            },
+        );
+        let fallback_support = fallback
+            .items
+            .iter()
+            .find(|item| item.purpose == ReadPlanPurpose::SupportEvidence)
+            .expect("a support-evidence read-plan item");
+        assert_eq!(fallback_support.path, "src/b_plain.ts");
+    }
+
+    #[test]
     fn family_evidence_selection_defaults_to_compact_metadata_free_output() {
         let detail = family_detail_with_evidence(vec![family_evidence(
             "src/routes/a.ts",
@@ -6525,6 +10447,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
         assert_eq!(
@@ -6564,6 +10487,7 @@ mod tests {
                 token_budget: None,
                 include_variations: true,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
 
@@ -6600,6 +10524,7 @@ mod tests {
                 token_budget: Some(1),
                 include_variations: true,
                 include_exceptions: true,
+                verbosity: Verbosity::Standard,
             },
         );
         assert_eq!(tiny_budget.evidence[0].record, first);
@@ -6625,6 +10550,7 @@ mod tests {
                 token_budget: None,
                 include_variations: false,
                 include_exceptions: false,
+                verbosity: Verbosity::Standard,
             },
         );
 
@@ -6719,6 +10645,261 @@ mod tests {
         assert_eq!(saturated.estimated_potential_token_savings, 0);
     }
 
+    fn partial_context_report_for(
+        size_bytes: Option<u64>,
+        language: &str,
+        read_plan_estimated_tokens: usize,
+    ) -> FamilyPartialContextReport {
+        let read_plan = ReadPlan {
+            items: Vec::new(),
+            estimated_tokens: read_plan_estimated_tokens,
+            source_snippets_included: false,
+            requires_source_before_edit: true,
+            selection_strategy: "deterministic_local_context_v1",
+            budget_satisfied: true,
+            truncated: false,
+            line_range_omissions: Vec::new(),
+        };
+        FamilyPartialContextReport {
+            active_generation: "gen-000001".to_string(),
+            resolved_target: empty_resolved_target("src/routes/a.ts"),
+            read_plan,
+            resolved_file_size_bytes: size_bytes,
+            resolved_file_language: language.to_string(),
+            unknowns: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn partial_context_savings_estimate_uses_whole_file_baseline() {
+        // A 4 KiB TypeScript file (baseline 1024 tokens) resolved to a 30-token
+        // read plan yields a nonzero PARTIAL_CONTEXT savings event: exactly the
+        // v0.2.2 field case that previously recorded zero.
+        let report = partial_context_report_for(Some(4096), "typescript", 30);
+        let savings =
+            estimate_partial_context_potential_token_savings(&report, &report.read_plan, None)
+                .expect("partial context savings event");
+        assert_eq!(savings.shape, SavingsOutcomeShape::PartialContext);
+        assert_eq!(savings.language, "typescript/javascript");
+        assert_eq!(savings.metric.estimated_baseline_tokens, 1024);
+        assert_eq!(savings.metric.estimated_returned_tokens, 30);
+        assert_eq!(savings.metric.estimated_potential_token_savings, 994);
+        assert!(savings.metric.caveat.contains("not measured token savings"));
+    }
+
+    #[test]
+    fn partial_context_savings_none_when_size_unavailable() {
+        // No stored size means no event rather than a guessed baseline.
+        let report = partial_context_report_for(None, "python", 30);
+        assert!(
+            estimate_partial_context_potential_token_savings(&report, &report.read_plan, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn partial_context_savings_floors_at_zero() {
+        // A read plan larger than the whole-file baseline never reports negative
+        // savings; the estimate saturates to zero.
+        let report = partial_context_report_for(Some(8), "python", 10_000);
+        let savings =
+            estimate_partial_context_potential_token_savings(&report, &report.read_plan, None)
+                .expect("event recorded");
+        assert_eq!(savings.metric.estimated_potential_token_savings, 0);
+    }
+
+    fn alignment_certificate_for(
+        computation: Option<AlignmentComputation>,
+        size_bytes: Option<u64>,
+        family_evidence_baseline_tokens: u64,
+    ) -> AlignmentCertificateReport {
+        let read_plan = ReadPlan {
+            items: Vec::new(),
+            estimated_tokens: 40,
+            source_snippets_included: false,
+            requires_source_before_edit: true,
+            selection_strategy: "deterministic_local_context_v1",
+            budget_satisfied: true,
+            truncated: false,
+            line_range_omissions: Vec::new(),
+        };
+        AlignmentCertificateReport {
+            active_generation: "gen-000001".to_string(),
+            alignment_status: AlignmentStatus::StaticallyAligned,
+            target_relationship: None,
+            selected_family_id: Some("family:python:fastapi_route:fastapi".to_string()),
+            candidate_family_ids: Vec::new(),
+            resolved_target: empty_resolved_target("app/routes.py"),
+            computation: computation.map(Box::new),
+            read_plan,
+            unknowns: Vec::new(),
+            resolved_target_file_size_bytes: size_bytes,
+            resolved_target_language: "python".to_string(),
+            family_evidence_baseline_tokens,
+        }
+    }
+
+    fn sample_alignment_computation() -> AlignmentComputation {
+        AlignmentComputation {
+            status: AlignmentStatus::StaticallyAligned,
+            required_features_matched: Vec::new(),
+            static_deviations: Vec::new(),
+            legal_observed_variations: Vec::new(),
+            blocking_unknowns: Vec::new(),
+            unresolved_runtime_obligations: Vec::new(),
+            outcome_reason: "every required constraint matched".to_string(),
+        }
+    }
+
+    #[test]
+    fn alignment_savings_estimated_for_committed_certificate() {
+        // baseline = whole target file (4 KiB → 1024 tokens) + family evidence
+        // baseline (200); returned = certificate body + read plan.
+        let certificate =
+            alignment_certificate_for(Some(sample_alignment_computation()), Some(4096), 200);
+        let savings =
+            estimate_alignment_potential_token_savings(&certificate, &certificate.read_plan, None)
+                .expect("alignment savings event");
+        assert_eq!(savings.shape, SavingsOutcomeShape::Alignment);
+        assert_eq!(savings.language, "python");
+        assert_eq!(savings.metric.estimated_baseline_tokens, 1024 + 200);
+        assert!(savings.metric.estimated_potential_token_savings > 0);
+    }
+
+    #[test]
+    fn alignment_savings_none_for_abstaining_certificate() {
+        // No computation (an abstention) and no target size both suppress the
+        // event: an abstention displaces no full read.
+        let no_computation = alignment_certificate_for(None, Some(4096), 200);
+        assert!(estimate_alignment_potential_token_savings(
+            &no_computation,
+            &no_computation.read_plan,
+            None
+        )
+        .is_none());
+        let no_size = alignment_certificate_for(Some(sample_alignment_computation()), None, 200);
+        assert!(
+            estimate_alignment_potential_token_savings(&no_size, &no_size.read_plan, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn alignment_abstain_never_carries_selected_family_or_computation() {
+        // The `is_abstaining` contract, pinned by construction: an abstaining
+        // certificate NEVER surfaces a selected family or an alignment computation,
+        // so an abstention can neither leak family detail nor be telemetered as a
+        // resolved outcome. Holds for every abstaining status.
+        for status in [
+            AlignmentStatus::Unknown,
+            AlignmentStatus::InsufficientEvidence,
+        ] {
+            let report = alignment_abstain(
+                "gen-000001".to_string(),
+                status,
+                empty_alignment_read_plan(),
+                Vec::new(),
+                empty_resolved_target("app/routes.py"),
+            );
+            let FamilyLookupReport::Alignment(certificate) = report else {
+                panic!("alignment_abstain must build an alignment certificate");
+            };
+            assert_eq!(certificate.alignment_status, status);
+            assert!(certificate.selected_family_id.is_none());
+            assert!(certificate.computation.is_none());
+            assert!(certificate.target_relationship.is_none());
+        }
+    }
+
+    #[test]
+    fn found_outcome_savings_attributes_language_scope() {
+        let python =
+            family_detail_with_evidence(vec![family_evidence("app/routes.py", 0, "canonical")]);
+        assert_eq!(
+            found_outcome_token_savings(&python, EstimatedPotentialTokenSavings::new(100, 40))
+                .language,
+            "python"
+        );
+        let tsjs = family_detail_with_evidence(vec![
+            family_evidence("src/a.ts", 0, "canonical"),
+            family_evidence("src/b.jsx", 1, "support"),
+        ]);
+        assert_eq!(
+            found_outcome_token_savings(&tsjs, EstimatedPotentialTokenSavings::new(100, 40))
+                .language,
+            "typescript/javascript"
+        );
+        let mixed = family_detail_with_evidence(vec![
+            family_evidence("app/routes.py", 0, "canonical"),
+            family_evidence("src/a.ts", 1, "support"),
+        ]);
+        assert_eq!(
+            found_outcome_token_savings(&mixed, EstimatedPotentialTokenSavings::new(100, 40))
+                .language,
+            "mixed"
+        );
+    }
+
+    #[test]
+    fn savings_language_producers_stay_in_vocab() {
+        // The savings language producers (`inventory_language_scope` for found
+        // evidence paths, partial-context files, and alignment targets, plus the
+        // found-family `mixed` marker) and the telemetry allowlist
+        // `SAVINGS_LANGUAGE_KEYS` must stay a single vocabulary. This test pins
+        // them same-source so a scope added to one without the other fails CI
+        // rather than silently degrading events to `unknown` at runtime.
+        use crate::application::telemetry::SAVINGS_LANGUAGE_KEYS;
+        let raw_languages = [
+            "python",
+            "typescript",
+            "typescript-react",
+            "tsx",
+            "javascript",
+            "javascript-react",
+            "jsx",
+            "c",
+            "cpp",
+            "cpp-config",
+            "rust",
+            "java",
+            "csharp",
+            "totally-unindexed-language",
+        ];
+        let mut produced: BTreeSet<&'static str> = raw_languages
+            .iter()
+            .map(|raw| inventory_language_scope(raw))
+            .collect();
+        // Found families spanning several languages attribute to `mixed`.
+        produced.insert("mixed");
+        let vocab: BTreeSet<&str> = SAVINGS_LANGUAGE_KEYS.iter().copied().collect();
+        let produced_str: BTreeSet<&str> = produced.iter().copied().collect();
+        assert_eq!(
+            vocab, produced_str,
+            "savings language vocabulary and its producers diverged",
+        );
+    }
+
+    #[test]
+    fn bounded_family_members_caps_outside_deep_mode() {
+        let mut detail =
+            family_detail_with_evidence(vec![family_evidence("app/routes.py", 0, "canonical")]);
+        detail.members = (0..MAX_RENDERED_FAMILY_MEMBERS + 3)
+            .map(|index| IndexedFamilyMemberRecord {
+                family_id: detail.family_id.clone(),
+                code_unit_id: format!("unit:app/routes.py#handler:{index}"),
+                role: "framework:fastapi.route_handler".to_string(),
+            })
+            .collect();
+
+        let (compact, truncated) = bounded_family_members(&detail, FamilyEvidenceMode::Compact);
+        assert_eq!(compact.len(), MAX_RENDERED_FAMILY_MEMBERS);
+        assert!(truncated);
+
+        let (deep, deep_truncated) = bounded_family_members(&detail, FamilyEvidenceMode::Deep);
+        assert_eq!(deep.len(), MAX_RENDERED_FAMILY_MEMBERS + 3);
+        assert!(!deep_truncated);
+    }
+
     #[test]
     fn read_plan_selection_is_deterministic_and_budget_bounded() {
         let first = family_evidence("src/routes/a.ts", 0, "canonical support evidence");
@@ -6736,6 +10917,7 @@ mod tests {
             token_budget: Some(1),
             include_variations: true,
             include_exceptions: false,
+            verbosity: Verbosity::Standard,
         };
 
         let first_plan = build_read_plan(&detail, None, FamilyLookupMode::ExactFamilyId, options);
@@ -6773,8 +10955,75 @@ mod tests {
             requires_source_before_edit: false,
             selection_strategy: "deterministic_read_plan_v1",
             budget_satisfied: true,
+            truncated: false,
             line_range_omissions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn read_plan_purpose_priority_orders_decision_critical_first() {
+        // `read_plan_candidates` sorts by this order so budget truncation keeps
+        // the target/canonical/contrast prefix and never drops a canonical span
+        // in favour of optional context.
+        let ordered = [
+            ReadPlanPurpose::TargetBodyRequiredForEdit,
+            ReadPlanPurpose::CanonicalEvidence,
+            ReadPlanPurpose::SupportEvidence,
+            ReadPlanPurpose::VariationGuard,
+            ReadPlanPurpose::ExceptionGuard,
+            ReadPlanPurpose::UnknownBlocker,
+            ReadPlanPurpose::StaleEvidenceCheck,
+            ReadPlanPurpose::OptionalContext,
+        ];
+        for pair in ordered.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "{:?} must sort before {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn build_read_plan_truncated_flag_reflects_dropped_candidates() {
+        let canonical = family_evidence("src/a_canon.ts", 0, "canonical support evidence");
+        let plain = family_evidence("src/b_plain.ts", 1, "plain support member");
+        let mut contrast = family_evidence("src/c_contrast.ts", 2, "farthest contrast witness");
+        contrast.covered_claims = vec!["support".to_string(), "contrast".to_string()];
+        let detail = family_detail_with_evidence(vec![canonical, plain, contrast]);
+
+        let unbudgeted = FamilyOutputOptions {
+            evidence_mode: FamilyEvidenceMode::Evidence,
+            token_budget: None,
+            include_variations: false,
+            include_exceptions: false,
+            verbosity: Verbosity::Standard,
+        };
+        // No budget: every candidate is retained, so the plan is not truncated.
+        let full = build_read_plan(&detail, None, FamilyLookupMode::ExactFamilyId, unbudgeted);
+        assert!(full.items.len() >= 2);
+        assert!(!full.truncated);
+
+        // A one-token budget drops all but the highest-priority prefix and sets
+        // the honest truncated flag rather than silently hiding the cap.
+        let capped = build_read_plan(
+            &detail,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions {
+                token_budget: Some(1),
+                ..unbudgeted
+            },
+        );
+        assert!(
+            capped.truncated,
+            "dropping candidates must set the honest truncated flag"
+        );
+        assert!(capped.items.len() < full.items.len());
+        // The retained prefix keeps the most decision-critical span (canonical),
+        // never an optional-context item at its expense.
+        assert_eq!(capped.items[0].purpose, ReadPlanPurpose::CanonicalEvidence);
     }
 
     #[test]
@@ -7591,11 +11840,276 @@ mod tests {
         };
         assert_eq!(report.unknowns[0].reason, UnknownReasonCode::StaleEvidence);
 
+        // The families listing keeps the stale family visible but qualifies it:
+        // the entry carries a `Stale` verdict, the rollup counts it, and a
+        // low-cardinality stale-evidence unknown recovers via resync.
         let families =
             list_families_with_freshness(family_freshness_request(), &store, &source_store)
                 .expect("list families with freshness");
         assert_eq!(families.families.len(), 1);
-        assert!(families.unknowns.is_empty());
+        assert_eq!(families.families[0].freshness, Some(FamilyFreshness::Stale));
+        assert_eq!(
+            families.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 0,
+                stale_count: 1,
+                cannot_verify_count: 0,
+            })
+        );
+        assert_eq!(families.unknowns.len(), 1);
+        assert_eq!(
+            families.unknowns[0].reason,
+            UnknownReasonCode::StaleEvidence
+        );
+        assert_eq!(
+            families.unknowns[0].recovery.as_deref(),
+            Some("run repogrammar resync")
+        );
+    }
+
+    fn freshness_hash(nibble: char) -> ContentHash {
+        ContentHash::new(format!("sha256:{}", nibble.to_string().repeat(64)))
+            .expect("valid content hash")
+    }
+
+    fn family_with_evidence(family_id: &str, evidence: &[(&str, ContentHash)]) -> ActiveFamily {
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: format!("unit:{family_id}#member:0-1"),
+                role: "framework:fastapi.route".to_string(),
+            }],
+            variation_slots: Vec::new(),
+            evidence: evidence
+                .iter()
+                .enumerate()
+                .map(|(index, (path, hash))| IndexedFamilyEvidenceRecord {
+                    evidence_id: format!("family-evidence:{index:06}"),
+                    family_id: family_id.to_string(),
+                    code_unit_id: format!("unit:{path}#member:0-1"),
+                    covered_claims: vec!["canonical".to_string()],
+                    path: (*path).to_string(),
+                    content_hash: hash.clone(),
+                    start_byte: 0,
+                    end_byte: 1,
+                    note: "support evidence".to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Source-store double that records every read and resolves each path to an
+    /// on-disk hash or an explicit read failure, mirroring the filesystem store's
+    /// contract (missing path, hash mismatch, and non-content read errors).
+    struct CountingSourceStore {
+        results: BTreeMap<String, Result<ContentHash, SourceStoreError>>,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl CountingSourceStore {
+        fn new(results: &[(&str, Result<ContentHash, SourceStoreError>)]) -> Self {
+            Self {
+                results: results
+                    .iter()
+                    .map(|(path, result)| ((*path).to_string(), result.clone()))
+                    .collect(),
+                reads: std::cell::Cell::new(0),
+            }
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.get()
+        }
+    }
+
+    impl SourceStore for CountingSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            self.reads.set(self.reads.get() + 1);
+            match self.results.get(&request.path) {
+                None => Err(SourceStoreError::Missing(format!(
+                    "source is missing: {}",
+                    request.path
+                ))),
+                Some(Err(error)) => Err(error.clone()),
+                Some(Ok(actual)) if actual == &request.expected_content_hash => Ok(SourceText {
+                    path: request.path,
+                    content_hash: actual.clone(),
+                    text: "source".to_string(),
+                }),
+                Some(Ok(_)) => Err(SourceStoreError::HashMismatch(format!(
+                    "source content changed after discovery: {}",
+                    request.path
+                ))),
+            }
+        }
+    }
+
+    #[test]
+    fn families_listing_marks_missing_evidence_family_stale() {
+        let store = FakeFamilyStore::with_families(vec![
+            family_with_evidence(
+                "family:python:fastapi_route:a",
+                &[("src/a.py", freshness_hash('a'))],
+            ),
+            family_with_evidence(
+                "family:python:fastapi_route:b",
+                &[("src/b.py", freshness_hash('a'))],
+            ),
+        ]);
+        // src/a.py is gone from the tree; src/b.py still matches its indexed hash.
+        let source_store = CountingSourceStore::new(&[("src/b.py", Ok(freshness_hash('a')))]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert_eq!(report.families.len(), 2);
+        assert_eq!(
+            report.families[0].family_id,
+            "family:python:fastapi_route:a"
+        );
+        assert_eq!(report.families[0].freshness, Some(FamilyFreshness::Stale));
+        assert_eq!(report.families[1].freshness, Some(FamilyFreshness::Fresh));
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 1,
+                stale_count: 1,
+                cannot_verify_count: 0,
+            })
+        );
+        assert_eq!(report.unknowns.len(), 1);
+        assert_eq!(report.unknowns[0].reason, UnknownReasonCode::StaleEvidence);
+    }
+
+    #[test]
+    fn families_listing_marks_unreadable_evidence_cannot_verify() {
+        let store = FakeFamilyStore::with_families(vec![family_with_evidence(
+            "family:python:fastapi_route:big",
+            &[("src/big.py", freshness_hash('a'))],
+        )]);
+        // A non-content read failure cannot decide freshness or staleness.
+        let source_store = CountingSourceStore::new(&[(
+            "src/big.py",
+            Err(SourceStoreError::TooLarge("too large".to_string())),
+        )]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert_eq!(
+            report.families[0].freshness,
+            Some(FamilyFreshness::CannotVerify)
+        );
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 0,
+                stale_count: 0,
+                cannot_verify_count: 1,
+            })
+        );
+        // Cannot-verify is not stale, so no report-level stale signal is raised.
+        assert!(report.unknowns.is_empty());
+    }
+
+    #[test]
+    fn families_listing_abstains_for_evidence_less_family() {
+        let store = FakeFamilyStore::with_families(vec![family_with_evidence(
+            "family:python:fastapi_route:bare",
+            &[],
+        )]);
+        let source_store = CountingSourceStore::new(&[]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert_eq!(
+            report.families[0].freshness,
+            Some(FamilyFreshness::CannotVerify)
+        );
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 0,
+                stale_count: 0,
+                cannot_verify_count: 1,
+            })
+        );
+        // No evidence rows means no source reads.
+        assert_eq!(source_store.reads(), 0);
+    }
+
+    #[test]
+    fn families_listing_verifies_each_distinct_path_once() {
+        let hash = freshness_hash('a');
+        let store = FakeFamilyStore::with_families(vec![
+            family_with_evidence(
+                "family:python:fastapi_route:a",
+                &[("src/shared.py", hash.clone()), ("src/a.py", hash.clone())],
+            ),
+            family_with_evidence(
+                "family:python:fastapi_route:b",
+                &[("src/shared.py", hash.clone()), ("src/b.py", hash.clone())],
+            ),
+            family_with_evidence(
+                "family:python:fastapi_route:c",
+                &[("src/c.py", hash.clone())],
+            ),
+        ]);
+        // Every path resolves fresh. Distinct evidence paths: shared, a, b, c = 4.
+        // Sum over families would be 5; a bounded check must read exactly 4.
+        let source_store = CountingSourceStore::new(&[
+            ("src/shared.py", Ok(hash.clone())),
+            ("src/a.py", Ok(hash.clone())),
+            ("src/b.py", Ok(hash.clone())),
+            ("src/c.py", Ok(hash.clone())),
+        ]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert!(report
+            .families
+            .iter()
+            .all(|family| family.freshness == Some(FamilyFreshness::Fresh)));
+        assert_eq!(
+            report.freshness_counts,
+            Some(FamilyFreshnessCounts {
+                fresh_count: 3,
+                stale_count: 0,
+                cannot_verify_count: 0,
+            })
+        );
+        assert_eq!(source_store.reads(), 4);
+    }
+
+    #[test]
+    fn families_listing_stays_empty_without_source_reads() {
+        let store = FakeFamilyStore::empty();
+        let source_store = CountingSourceStore::new(&[]);
+
+        let report =
+            list_families_with_freshness(family_freshness_request(), &store, &source_store)
+                .expect("list families with freshness");
+
+        assert!(report.families.is_empty());
+        assert!(report.freshness_counts.is_none());
+        assert_eq!(report.unknowns.len(), 1);
+        assert_eq!(
+            report.unknowns[0].reason,
+            UnknownReasonCode::InsufficientSupport
+        );
+        assert_eq!(source_store.reads(), 0);
     }
 
     #[test]
@@ -7771,5 +12285,530 @@ mod tests {
         };
         assert_eq!(unknown.class, UnknownClass::Blocking);
         assert_eq!(unknown.reason, UnknownReasonCode::InsufficientSupport);
+    }
+
+    // ---- Term-retrieval fallback ----
+
+    struct TermRetrievalSourceStore {
+        fresh: bool,
+    }
+
+    impl SourceStore for TermRetrievalSourceStore {
+        fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+            if self.fresh {
+                Ok(SourceText {
+                    path: request.path.clone(),
+                    content_hash: request.expected_content_hash.clone(),
+                    text: String::new(),
+                })
+            } else {
+                Err(SourceStoreError::Missing("stale evidence".to_string()))
+            }
+        }
+    }
+
+    fn term_family(family_id: &str, role: &str, classification: &str, path: &str) -> ActiveFamily {
+        let code_unit_id = format!("unit:{path}#member:0-1:1");
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: classification.to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: code_unit_id.clone(),
+                role: role.to_string(),
+            }],
+            variation_slots: Vec::new(),
+            evidence: vec![IndexedFamilyEvidenceRecord {
+                evidence_id: "family-evidence:000000".to_string(),
+                family_id: family_id.to_string(),
+                code_unit_id,
+                covered_claims: vec!["canonical".to_string()],
+                path: path.to_string(),
+                content_hash: semantic_fact().content_hash,
+                start_byte: 0,
+                end_byte: 1,
+                note: "term retrieval evidence".to_string(),
+            }],
+        }
+    }
+
+    fn term_route(report: &FamilyLookupReport) -> TermRetrievalRoute {
+        match report {
+            FamilyLookupReport::Found(family) => {
+                family.term_retrieval.clone().expect("found term route")
+            }
+            FamilyLookupReport::Unknown(unknown) => {
+                unknown.term_retrieval.clone().expect("unknown term route")
+            }
+            FamilyLookupReport::PartialContext(_) => panic!("unexpected partial context"),
+            FamilyLookupReport::Alignment(_) => panic!("unexpected alignment certificate"),
+        }
+    }
+
+    #[test]
+    fn term_retrieval_resolves_single_framework_concept_family() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes/users.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        let route = term_route(&report);
+        assert_eq!(route.route, "term_retrieval_hydrate");
+        assert_eq!(route.abstention_reason, None);
+        assert_eq!(route.top_score, Some(MIN_RETRIEVAL_SCORE));
+        // Hydration is bounded and the single fresh family is selected.
+        assert_eq!(route.hydrated_candidate_count, 1);
+        assert!(route.hydrated_candidate_count <= MAX_RETRIEVAL_HYDRATIONS);
+        let signals = route.matched_signals.expect("matched signals");
+        assert!(signals.framework_filter && signals.concept);
+    }
+
+    #[test]
+    fn term_retrieval_abstains_on_margin_tie() {
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:javascript:express_route:framework_express_route_handler",
+                "framework:express.route_handler",
+                "DOMINANT_PATTERN",
+                "js/routes/app.js",
+            ),
+            term_family(
+                "family:typescript:express_route:framework_express_route_handler",
+                "framework:express.route_handler",
+                "UNKNOWN_PREVALENCE",
+                "ts/routes/app.ts",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are Express routes registered?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        assert!(matches!(report, FamilyLookupReport::Unknown(_)));
+        let route = term_route(&report);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::MarginTooClose)
+        );
+        // The score/margin gate abstains before any hydration.
+        assert_eq!(route.hydrated_candidate_count, 0);
+    }
+
+    #[test]
+    fn term_retrieval_abstains_below_min_score_and_on_no_candidate() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        // A bare concept ("endpoint" -> route concept, score 4) is below the
+        // framework+concept floor.
+        let bare_concept = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "endpoint",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        assert_eq!(
+            term_route(&bare_concept).abstention_reason,
+            Some(TermRetrievalAbstention::BelowMinScore)
+        );
+        // Residue that matches no family yields no candidate at all.
+        let junk = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are Kubernetes manifests structured?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        assert_eq!(
+            term_route(&junk).abstention_reason,
+            Some(TermRetrievalAbstention::NoCandidate)
+        );
+    }
+
+    #[test]
+    fn term_retrieval_abstains_unsupported_target_without_concept() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        // A framework filter plus residue typo (`framework` + `rout`) clears the
+        // absolute floor but carries no pattern concept.
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "framework:fastapi.rout",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let route = term_route(&report);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::UnsupportedTarget)
+        );
+        assert!(route.top_score.unwrap() >= MIN_RETRIEVAL_SCORE);
+        assert!(!route.matched_signals.expect("signals").concept);
+    }
+
+    #[test]
+    fn term_retrieval_abstains_on_truncated_tie() {
+        let families: Vec<ActiveFamily> = (0
+            ..(crate::application::query_terms::MAX_RANKED_CANDIDATES + 2))
+            .map(|index| {
+                term_family(
+                    &format!("family:python:fastapi_route:framework_fastapi_route:v{index:04}"),
+                    "framework:fastapi.route",
+                    "DOMINANT_PATTERN",
+                    &format!("app/api/routes_{index}.py"),
+                )
+            })
+            .collect();
+        let store = FakeFamilyStore::with_families(families);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let route = term_route(&report);
+        assert!(route.truncated);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::TruncatedTie)
+        );
+    }
+
+    #[test]
+    fn term_retrieval_abstains_when_selected_family_is_stale() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: false };
+        let report = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let route = term_route(&report);
+        assert_eq!(
+            route.abstention_reason,
+            Some(TermRetrievalAbstention::StaleCandidates)
+        );
+        // Hydration ran (the freshness gate rejected the candidate), within bound.
+        assert_eq!(route.hydrated_candidate_count, 1);
+        assert!(route.hydrated_candidate_count <= MAX_RETRIEVAL_HYDRATIONS);
+    }
+
+    #[test]
+    fn term_retrieval_does_not_override_exact_family_id_and_is_deterministic() {
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        // An exact family id resolves through the exact authority layer; term
+        // retrieval must not run and must not attach its metadata.
+        let exact = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("family:python:fastapi_route:framework_fastapi_route"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("exact lookup");
+        let FamilyLookupReport::Found(exact_family) = &exact else {
+            panic!("expected exact Found");
+        };
+        assert!(
+            exact_family.term_retrieval.is_none(),
+            "exact family id must not route through term retrieval"
+        );
+
+        // Determinism: the same natural-language query twice is identical.
+        let first = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("How are FastAPI routes implemented?"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("first");
+        let second = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("How are FastAPI routes implemented?"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("second");
+        assert_eq!(first, second, "term retrieval must be deterministic");
+    }
+
+    fn term_member_family(family_id: &str, code_unit_id: &str, role: &str) -> ActiveFamily {
+        ActiveFamily {
+            generation_id: "gen-000001".to_string(),
+            family: IndexedFamilyRecord {
+                family_id: family_id.to_string(),
+                classification: "DOMINANT_PATTERN".to_string(),
+                prevalence: crate::test_support::sample_family_prevalence(),
+            },
+            members: vec![IndexedFamilyMemberRecord {
+                family_id: family_id.to_string(),
+                code_unit_id: code_unit_id.to_string(),
+                role: role.to_string(),
+            }],
+            variation_slots: Vec::new(),
+            evidence: vec![IndexedFamilyEvidenceRecord {
+                evidence_id: "family-evidence:000000".to_string(),
+                family_id: family_id.to_string(),
+                code_unit_id: code_unit_id.to_string(),
+                covered_claims: vec!["canonical".to_string()],
+                path: "app/routes.py".to_string(),
+                content_hash: semantic_fact().content_hash,
+                start_byte: 0,
+                end_byte: 1,
+                note: "member evidence".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn term_retrieval_does_not_rewrite_ambiguous_member_abstention() {
+        // An exact `unit:` member shared by two families is an ambiguity block:
+        // term retrieval must not run and must not rewrite the candidate ids or
+        // the narrowing recovery text.
+        let shared_member = "unit:pkg/mod.py#fastapi_route:handler:0-1:1";
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![
+            term_member_family(
+                "family:python:fastapi_route:framework_fastapi_route:va",
+                shared_member,
+                "framework:fastapi.route",
+            ),
+            term_member_family(
+                "family:python:fastapi_route:framework_fastapi_route:vb",
+                shared_member,
+                "framework:fastapi.route",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some(shared_member),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected Unknown, got {report:?}");
+        };
+        assert!(
+            unknown.term_retrieval.is_none(),
+            "ambiguity block must not be rewritten by term retrieval"
+        );
+        assert_eq!(unknown.unknowns.len(), 1);
+        assert_eq!(unknown.unknowns[0].affected_claim, "query target ambiguity");
+        assert_eq!(
+            unknown.candidate_family_ids,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route:va".to_string(),
+                "family:python:fastapi_route:framework_fastapi_route:vb".to_string(),
+            ]
+        );
+        // The narrowing recovery text lists the exact candidate families.
+        let recovery = unknown.unknowns[0].recovery.as_deref().unwrap_or_default();
+        assert!(recovery.contains(":va") && recovery.contains(":vb"));
+    }
+
+    #[test]
+    fn term_retrieval_does_not_rewrite_truncated_candidate_set_abstention() {
+        // A role shared by more than FUZZY_FAMILY_CANDIDATE_LIMIT families is a
+        // candidate-set-too-broad block; term retrieval must pass it through.
+        let families: Vec<ActiveFamily> = (0..(FUZZY_FAMILY_CANDIDATE_LIMIT + 2))
+            .map(|index| {
+                term_member_family(
+                    &format!("family:python:fastapi_route:framework_fastapi_route:v{index:02}"),
+                    &format!("unit:pkg/mod{index}.py#fastapi_route:h:0-1:1"),
+                    "framework:fastapi.route",
+                )
+            })
+            .collect();
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(families);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("framework:fastapi.route"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected Unknown, got {report:?}");
+        };
+        assert!(
+            unknown.term_retrieval.is_none(),
+            "candidate-set block must not be rewritten by term retrieval"
+        );
+        assert_eq!(unknown.unknowns.len(), 1);
+        assert_eq!(
+            unknown.unknowns[0].affected_claim,
+            "query target candidate set"
+        );
+        assert!(!unknown.candidate_family_ids.is_empty());
+    }
+
+    #[test]
+    fn term_retrieval_runs_for_prose_with_interior_dotted_word() {
+        // A single interior-dotted word in prose is not path-shaped; term
+        // retrieval must still run (and here resolve the fastapi route family).
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("How does fastapi.Depends injection work in fastapi routes?"),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert!(family.term_retrieval.is_some());
+
+        // A genuinely path-shaped target (known source extension) keeps the
+        // exact/local-context path and never attaches term-retrieval metadata.
+        assert!(target_has_path_locator_shape("app/api/routes.py"));
+        assert!(target_has_path_locator_shape("routes.py"));
+        assert!(target_has_path_locator_shape("src/models.ts:12"));
+        assert!(!target_has_path_locator_shape(
+            "How does fastapi.Depends injection work?"
+        ));
+        assert!(!target_has_path_locator_shape(
+            "FastAPI 0.100 routing e.g. here"
+        ));
+    }
+
+    #[test]
+    fn term_retrieval_margin_boundary_selects_clear_winner_and_abstains_on_tie() {
+        // Two fastapi route families both clear the floor (framework 6 + concept
+        // 4 = 10). A residue hit on the winner's evidence path lifts it to 13,
+        // giving a margin of 3 >= MIN_RETRIEVAL_MARGIN over the competitor, so the
+        // winner is selected outright.
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route:users",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api/users.py",
+            ),
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route:orders",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api/orders.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let winner = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes for users implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let FamilyLookupReport::Found(family) = &winner else {
+            panic!("expected Found, got {winner:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route:users"
+        );
+        let route = term_route(&winner);
+        assert_eq!(route.top_score, Some(13));
+        assert_eq!(route.margin, Some(3));
+
+        // With no residue disambiguator both tie at 10 (margin 0 < 1) and abstain.
+        let tie = run_term_retrieval(
+            &family_freshness_request(),
+            &store,
+            &source,
+            "How are FastAPI routes implemented?",
+            "gen-000001",
+        )
+        .expect("term retrieval");
+        let tie_route = term_route(&tie);
+        assert_eq!(tie_route.margin, Some(0));
+        assert_eq!(
+            tie_route.abstention_reason,
+            Some(TermRetrievalAbstention::MarginTooClose)
+        );
     }
 }

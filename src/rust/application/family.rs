@@ -14,14 +14,19 @@ use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
 };
 use crate::core::model::{
-    ClaimImpact, FactCertainty, SemanticFact, SemanticFactKind, UnknownClass, UnknownReasonCode,
+    assess_family_prevalence, coverage_ratio, ClaimImpact, FactCertainty, FamilyConstraintProfile,
+    FamilyPrevalence, FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics,
+    PrevalenceInputs, SemanticFact, SemanticFactKind, UnknownClass, UnknownObligation,
+    UnknownReasonCode, VariationConstraint, CONSTRAINT_OBSERVED_PROFILE_CAP,
+    CONSTRAINT_REPRESENTATIVE_MEMBER_CAP,
 };
 use crate::core::policy::rust_self_dogfood::rust_family_eligible_kind;
 use crate::ports::family_store::{
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedVariationSlotRecord,
+    IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedFamilyRecord, IndexedVariationSlotRecord,
 };
 use crate::ports::index_store::IndexedCodeUnitRecord;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_MIN_FAMILY_SUPPORT: usize = 2;
@@ -55,11 +60,14 @@ pub struct FamilyCandidate {
     pub members: Vec<FamilyEvidence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// Carries `FamilyPrevalence`, whose coverage ratio is floating point, so this
+// derives `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyClaim {
     pub family_id: String,
     pub classification: String,
     pub support: usize,
+    pub prevalence: FamilyPrevalence,
     pub language: String,
     pub code_unit_kind: String,
     pub framework_role: String,
@@ -69,6 +77,9 @@ pub struct FamilyClaim {
     pub exceptions: Vec<FamilyException>,
     pub unknowns: Vec<ClaimUnknown>,
     pub readiness: ClaimReadiness,
+    /// Source-backed implementation specification derived from the same
+    /// family-membership authorities that produced this claim.
+    pub constraint_profile: FamilyConstraintProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +142,7 @@ pub enum ClaimReadiness {
     Unknown(ClaimUnknown),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyBuildReport {
     pub claims: Vec<FamilyClaim>,
     pub unknowns: Vec<ClaimUnknown>,
@@ -146,7 +157,7 @@ pub struct FamilyClaimInput<'a> {
     pub unknown_facts: Vec<SemanticFact>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FamilyStorageRecords {
     pub family: IndexedFamilyRecord,
     pub members: Vec<IndexedFamilyMemberRecord>,
@@ -162,6 +173,40 @@ struct FamilyKey {
     code_unit_kind: String,
     framework_role: String,
     normalized_shape: String,
+}
+
+/// Per-key peers excluded from the prevalence denominator but tracked for
+/// reliability. Blocked peers had their support emptied by a blocking `UNKNOWN`;
+/// unsupported peers never had any role-compatible support facts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct KeyPeerCounters {
+    blocked: usize,
+    unsupported: usize,
+}
+
+/// The stable suffix pre-assigned to one cluster of a key. `token` is the
+/// cluster-suffix token (a characteristic-profile hash) or `None` when the key
+/// has at most one ready cluster and keeps the bare base id. `positional_ordinal`
+/// is set only when two ready clusters are genuinely indistinguishable and a
+/// deterministic positional discriminator was required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClusterSuffix {
+    token: Option<String>,
+    positional_ordinal: Option<usize>,
+}
+
+/// A fully clustered key held between suffix assignment and claim emission so
+/// cross-key base-id collisions can be resolved before any id is minted.
+struct KeyEmissionPlan {
+    key: FamilyKey,
+    clusters: Vec<Vec<FamilyEvidence>>,
+    cluster_sizes: Vec<usize>,
+    ready_flags: Vec<bool>,
+    ready_cluster_count: usize,
+    min_support: usize,
+    eligible_peer_count: usize,
+    peers: KeyPeerCounters,
+    suffixes: Vec<ClusterSuffix>,
 }
 
 impl<'a> FamilyClaimInput<'a> {
@@ -231,6 +276,7 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
         &support_targets_by_unit,
     );
     let mut groups: BTreeMap<FamilyKey, Vec<FamilyEvidence>> = BTreeMap::new();
+    let mut peer_counters: BTreeMap<FamilyKey, KeyPeerCounters> = BTreeMap::new();
     let mut unknowns = blocking_unknowns
         .values()
         .flat_map(|unknowns| unknowns.iter().cloned())
@@ -258,26 +304,41 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             framework_role: framework_role.to_string(),
             normalized_shape: normalized_shape(&unit.kind, framework_role),
         };
+        // A blocking unknown empties this unit's support even if it had support
+        // facts; such units are recorded as blocked, never as unsupported.
+        let is_blocked = blocking_unknowns.contains_key(&unit.id)
+            || (unit.language == "rust" && has_rust_repository_blocking_unknown);
+        let support_targets: Vec<String> = if is_blocked {
+            Vec::new()
+        } else {
+            support_targets_by_unit
+                .get(&unit.id)
+                .map(|targets| targets.iter().cloned().collect())
+                .unwrap_or_default()
+        };
+        let counters = peer_counters.entry(key.clone()).or_default();
+        if is_blocked {
+            counters.blocked += 1;
+        } else if support_targets.is_empty() {
+            counters.unsupported += 1;
+        }
+        // Eligible peers (non-blocked with support facts) are counted through the
+        // supported-evidence denominator below.
         groups.entry(key).or_default().push(FamilyEvidence {
             code_unit_id: unit.id.clone(),
             path: unit.path.clone(),
             content_hash: unit.content_hash.clone(),
             start_byte: unit.start_byte,
             end_byte: unit.end_byte,
-            support_targets: if blocking_unknowns.contains_key(&unit.id)
-                || (unit.language == "rust" && has_rust_repository_blocking_unknown)
-            {
-                Vec::new()
-            } else {
-                support_targets_by_unit
-                    .get(&unit.id)
-                    .map(|targets| targets.iter().cloned().collect())
-                    .unwrap_or_default()
-            },
+            support_targets,
         });
     }
 
-    let mut claims = Vec::new();
+    // Phase 1: cluster every key and pre-assign each cluster's stable suffix
+    // (a characteristic-profile hash) before any id is minted. Suffixes depend
+    // only on a cluster's own identity profile, never on emission order, so
+    // adding a member or an unrelated file cannot re-point an id.
+    let mut plans: Vec<KeyEmissionPlan> = Vec::new();
     for (key, mut evidence) in groups {
         evidence.sort_by(|left, right| {
             (
@@ -303,39 +364,130 @@ pub fn build_family_claims_from_input(input: &FamilyClaimInput<'_>) -> FamilyBui
             )));
             continue;
         }
+        // Units of this key whose supported evidence survived the blocking
+        // filter form the prevalence denominator: they sit in this cluster, a
+        // competing cluster, or a sub-support cluster.
+        let eligible_peer_count = supported_evidence.len();
+        let peers = peer_counters.get(&key).copied().unwrap_or_default();
+        let min_support = min_family_support_for_key(&key);
         let clusters = complete_link_family_clusters(&key, supported_evidence, &features_by_unit);
-        let ready_cluster_count = clusters
+        let cluster_sizes: Vec<usize> = clusters.iter().map(Vec::len).collect();
+        let ready_flags: Vec<bool> = cluster_sizes
             .iter()
-            .filter(|cluster| cluster.len() >= min_family_support_for_key(&key))
-            .count();
-        let mut emitted_ready_clusters = 0usize;
-        for cluster in clusters {
-            let cluster_suffix = (ready_cluster_count > 1)
-                .then(|| family_cluster_signature(&key, &cluster, &features_by_unit));
-            if cluster.len() < min_family_support_for_key(&key) {
+            .map(|size| *size >= min_support)
+            .collect();
+        let ready_cluster_count = ready_flags.iter().filter(|ready| **ready).count();
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features_by_unit);
+        plans.push(KeyEmissionPlan {
+            key,
+            clusters,
+            cluster_sizes,
+            ready_flags,
+            ready_cluster_count,
+            min_support,
+            eligible_peer_count,
+            peers,
+            suffixes,
+        });
+    }
+
+    // Phase 2: a lossy `stable_token` can map two distinct keys onto the same
+    // bare base id. Only keys with exactly one ready cluster ever mint a bare
+    // base id, so collisions are decided among those and disambiguated with a
+    // deterministic key hash rather than failing the build.
+    let disambiguators = bare_base_id_disambiguators(
+        &plans
+            .iter()
+            .filter(|plan| plan.ready_cluster_count == 1)
+            .map(|plan| &plan.key)
+            .collect::<Vec<_>>(),
+    );
+
+    // Phase 3: mint claims and sub-support unknowns from the finalized suffixes.
+    let mut claims = Vec::new();
+    for plan in plans {
+        let KeyEmissionPlan {
+            key,
+            clusters,
+            cluster_sizes,
+            ready_flags,
+            ready_cluster_count,
+            min_support,
+            eligible_peer_count,
+            peers,
+            suffixes,
+        } = plan;
+        let base_disambiguator = disambiguators.get(&key).cloned();
+        for (index, cluster) in clusters.into_iter().enumerate() {
+            let suffix_meta = &suffixes[index];
+            // A bare base id is disambiguated only when a stable_token collision
+            // demands it; the common single-ready-cluster case stays unsuffixed.
+            let suffix_token = match suffix_meta.token.clone() {
+                Some(token) => Some(token),
+                None => base_disambiguator.clone(),
+            };
+            let cluster_suffix = suffix_token.as_deref();
+            if cluster.len() < min_support {
                 unknowns.push(insufficient_support_unknown(family_affected_claim(
                     &key,
-                    cluster_suffix.as_deref(),
+                    cluster_suffix,
                 )));
                 continue;
             }
-            let suffix = if emitted_ready_clusters == 0 {
-                None
-            } else {
-                cluster_suffix.as_deref()
+            let normalized_shape = cluster_normalized_shape(&key, cluster_suffix);
+            // Competitors are the *other* ready clusters of the same key.
+            let largest_competing_support = cluster_sizes
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index && ready_flags[*other])
+                .map(|(_, size)| *size)
+                .max()
+                .unwrap_or(0);
+            let prevalence_inputs = PrevalenceInputs {
+                eligible_peer_count,
+                supported_member_count: cluster.len(),
+                competing_ready_family_count: ready_cluster_count - 1,
+                largest_competing_support,
+                blocked_peer_count: peers.blocked,
+                unsupported_peer_count: peers.unsupported,
             };
-            let normalized_shape = cluster_normalized_shape(&key, suffix);
-            claims.push(family_claim_from_supported_evidence(
+            let mut claim = family_claim_from_supported_evidence(
                 &key,
-                suffix,
+                cluster_suffix,
                 normalized_shape,
                 cluster,
                 &features_by_unit,
                 &non_blocking_unknowns,
-            ));
-            emitted_ready_clusters += 1;
+                &prevalence_inputs,
+            );
+            // Record the positional discriminator (used only when two clusters
+            // are genuinely indistinguishable) as classification-independent
+            // metadata so its use is observable, never silent.
+            if let Some(ordinal) = suffix_meta.positional_ordinal {
+                claim.variation_slots.push(VariationSlot {
+                    slot_id: "slot:family_positional_discriminator".to_string(),
+                    description: format!(
+                        "metadata:family_positional_discriminator:ordinal={ordinal} indistinguishable ready clusters share an identical characteristic and support-family profile"
+                    ),
+                });
+            }
+            claims.push(claim);
         }
     }
+
+    debug_assert!(
+        {
+            let mut ids = claims
+                .iter()
+                .map(|claim| claim.family_id.as_str())
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            let before = ids.len();
+            ids.dedup();
+            ids.len() == before
+        },
+        "family ids must be unique after collision disambiguation"
+    );
 
     claims.sort_by(|left, right| left.family_id.cmp(&right.family_id));
     unknowns.sort_by(|left, right| {
@@ -361,7 +513,16 @@ fn family_claim_from_supported_evidence(
     supported_evidence: Vec<FamilyEvidence>,
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
     non_blocking_unknowns_by_unit: &BTreeMap<String, Vec<ClaimUnknown>>,
+    prevalence_inputs: &PrevalenceInputs,
 ) -> FamilyClaim {
+    // Representative selection is coverage-oriented, not storage-order-based:
+    // reorder the members so the cluster medoid leads (the canonical member) and
+    // the farthest-contrast member follows (the support witness). Every later
+    // artifact — the constraint profile's representatives, the stored evidence
+    // order, and the covered-claims labels — is derived from this order, so
+    // canonical identity tracks the members' features, not their path sort.
+    let supported_evidence =
+        order_evidence_by_representative_selection(supported_evidence, features_by_unit);
     let family_id = family_id(key, cluster_suffix);
     let runtime_unknown = ClaimUnknown {
         class: ClaimImpact::NonBlocking.as_legacy_unknown_class(),
@@ -420,10 +581,31 @@ fn family_claim_from_supported_evidence(
         features_by_unit,
     ));
     variation_slots.extend(non_blocking_unknown_variation_slots(&claim_unknowns));
+    let assessment = assess_family_prevalence(prevalence_inputs);
+    let prevalence = FamilyPrevalence {
+        eligible_peer_count: prevalence_inputs.eligible_peer_count,
+        supported_member_count: prevalence_inputs.supported_member_count,
+        coverage_ratio: coverage_ratio(
+            prevalence_inputs.eligible_peer_count,
+            prevalence_inputs.supported_member_count,
+        ),
+        competing_ready_family_count: prevalence_inputs.competing_ready_family_count,
+        largest_competing_support: prevalence_inputs.largest_competing_support,
+        blocked_peer_count: prevalence_inputs.blocked_peer_count,
+        unsupported_peer_count: prevalence_inputs.unsupported_peer_count,
+        classification_reason: assessment.reason,
+    };
+    let constraint_profile = derive_family_constraint_profile(
+        key,
+        &supported_evidence,
+        features_by_unit,
+        &claim_unknowns,
+    );
     FamilyClaim {
         family_id,
-        classification: "DOMINANT_PATTERN".to_string(),
+        classification: assessment.class.as_token().to_string(),
         support: supported_evidence.len(),
+        prevalence,
         language: key.language.clone(),
         code_unit_kind: key.code_unit_kind.clone(),
         framework_role: key.framework_role.clone(),
@@ -433,7 +615,431 @@ fn family_claim_from_supported_evidence(
         exceptions: Vec::new(),
         unknowns: claim_unknowns,
         readiness: ClaimReadiness::Ready,
+        constraint_profile,
     }
+}
+
+/// Derive the source-backed [`FamilyConstraintProfile`] for a supported cluster.
+///
+/// Every field is read from the same family-membership decision authorities that
+/// admitted the cluster — never from notes, storage order, or free text:
+/// `required_equal_features` from the universal preconditions plus the role's
+/// `characteristic_profile_prefixes`; `allowed_variations` from the per-language
+/// variation-slot prefix tables; `prohibited_or_blocking_features` from the
+/// per-language `unknown_blocker:` incompatibility rule; and
+/// `unresolved_obligations` from the claim's own typed unknowns (the
+/// runtime-equivalence obligation and any non-blocking unknowns, in claim order).
+fn derive_family_constraint_profile(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    claim_unknowns: &[ClaimUnknown],
+) -> FamilyConstraintProfile {
+    FamilyConstraintProfile {
+        required_equal_features: required_equal_feature_constraints(
+            key,
+            evidence,
+            features_by_unit,
+        ),
+        allowed_variations: allowed_variation_constraints(key, evidence, features_by_unit),
+        prohibited_or_blocking_features: prohibited_feature_constraints(key),
+        unresolved_obligations: claim_unknowns
+            .iter()
+            .map(|unknown| UnknownObligation {
+                class: unknown.class,
+                reason: unknown.reason,
+                affected_claim: unknown.affected_claim.clone(),
+                recovery: unknown.recovery.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Features every member of the cluster is bound to by construction: the
+/// framework-role identity (`Equal`), the role's characteristic-profile prefixes
+/// (`Equal`, or `EqualEmpty` when the shared value is the empty set), and the
+/// shared support-family core (`MustContain`, a subset rule). Values are read from
+/// a deterministic representative member; characteristic and role values are equal
+/// across all members, and the support-family core is the cluster intersection.
+fn required_equal_feature_constraints(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<FeatureConstraint> {
+    let Some(representative) = evidence.first() else {
+        return Vec::new();
+    };
+    let role_feature = prefixed_features(representative, features_by_unit, "framework_role:")
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let mut constraints = Vec::new();
+    let role_values = sorted_vec(prefixed_features(
+        representative,
+        features_by_unit,
+        "framework_role:",
+    ));
+    if !role_values.is_empty() {
+        constraints.push(FeatureConstraint {
+            prefix: "framework_role:".to_string(),
+            values: role_values,
+            origin: FeatureConstraintOrigin::FrameworkRoleIdentity,
+            semantics: FeatureConstraintSemantics::Equal,
+        });
+    }
+    // The support-family core is a set intersection: membership requires only
+    // pairwise overlap, so members may carry additional support families and the
+    // core is a MustContain (subset) rule, not equality. Complete-link clustering
+    // can even yield an empty global core, in which case there is no shared core
+    // to record. When the role's characteristic prefixes already bind
+    // `support_family:` by equality, that stronger equality constraint takes
+    // precedence and the redundant intersection entry is dropped.
+    let support_family_is_characteristic =
+        characteristic_profile_prefixes(&key.language, &role_feature).contains(&"support_family:");
+    if !support_family_is_characteristic {
+        let support_core = sorted_vec(cluster_support_family_core(evidence, features_by_unit));
+        if !support_core.is_empty() {
+            constraints.push(FeatureConstraint {
+                prefix: "support_family:".to_string(),
+                values: support_core,
+                origin: FeatureConstraintOrigin::SupportFamilyIntersection,
+                semantics: FeatureConstraintSemantics::MustContain,
+            });
+        }
+    }
+    constraints.extend(characteristic_feature_constraints(
+        key,
+        representative,
+        &role_feature,
+        features_by_unit,
+    ));
+    constraints
+}
+
+/// The role's characteristic (identity-defining) prefixes as per-prefix required
+/// constraints, read from a representative member. Mirrors
+/// [`cluster_characteristic_profile`] (which flattens the same values for id
+/// hashing), including its pytest fixture-context special case; keep the two in
+/// sync. Characteristic prefixes are equality-enforced, so a prefix whose shared
+/// value is the empty set is a real "must be empty" constraint
+/// (`EqualEmpty`) — a candidate carrying any value there is rejected — and must be
+/// emitted, not dropped.
+fn characteristic_feature_constraints(
+    key: &FamilyKey,
+    representative: &FamilyEvidence,
+    role_feature: &str,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<FeatureConstraint> {
+    if key.language == "python"
+        && (role_feature == "framework_pytest_test" || role_feature == "framework_pytest_fixture")
+    {
+        // pytest membership turns on the non-builtin fixture context; an empty
+        // shared context is itself a binding "must be empty" constraint.
+        let values = sorted_vec(non_builtin_pytest_fixture_context(
+            representative,
+            features_by_unit,
+        ));
+        return vec![equality_feature_constraint(
+            "fixture_context_nonbuiltin:",
+            values,
+        )];
+    }
+    characteristic_profile_prefixes(key.language.as_str(), role_feature)
+        .iter()
+        .map(|prefix| {
+            let values = sorted_vec(prefixed_features(representative, features_by_unit, prefix));
+            equality_feature_constraint(prefix, values)
+        })
+        .collect()
+}
+
+/// A characteristic (equality-enforced) constraint. Non-empty shared values bind
+/// by [`FeatureConstraintSemantics::Equal`]; an empty shared value set binds by
+/// [`FeatureConstraintSemantics::EqualEmpty`] (members must carry no value there).
+fn equality_feature_constraint(prefix: &str, values: Vec<String>) -> FeatureConstraint {
+    let semantics = if values.is_empty() {
+        FeatureConstraintSemantics::EqualEmpty
+    } else {
+        FeatureConstraintSemantics::Equal
+    };
+    FeatureConstraint {
+        prefix: prefix.to_string(),
+        values,
+        origin: FeatureConstraintOrigin::CharacteristicProfile,
+        semantics,
+    }
+}
+
+/// Dimensions along which members legally differ, derived from the same
+/// per-language variation-slot prefix tables the emitted [`VariationSlot`]s use.
+/// A dimension is recorded only when the members actually exhibit more than one
+/// non-empty profile; observed profiles are enumerated observed-only and capped.
+fn allowed_variation_constraints(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationConstraint> {
+    variation_feature_prefixes(&key.language, key.framework_role.as_str())
+        .iter()
+        .filter_map(|(dimension, prefixes)| {
+            variation_constraint_for_dimension(dimension, prefixes, evidence, features_by_unit)
+        })
+        .collect()
+}
+
+/// Build one [`VariationConstraint`] for a dimension, or `None` when the members
+/// do not legally differ along it. The variation decision matches the variation
+/// slot rule exactly (the slot varies when the set of per-member profiles —
+/// including the empty profile — has more than one element and at least one is
+/// non-empty), so the two co-persisted artifacts agree on which dimensions vary.
+/// Each non-empty member profile is the same `prefixed_feature_profile` the slot
+/// detector uses, rendered as a deterministic, source-free string; a member with
+/// no value under the dimension is recorded via `includes_absent_profile`.
+fn variation_constraint_for_dimension(
+    dimension: &str,
+    prefixes: &[&str],
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<VariationConstraint> {
+    // Rendered non-empty profile -> first member id exhibiting it, in sorted
+    // evidence order. `includes_absent_profile` tracks the empty profile, which
+    // is one of the distinct profiles the slot rule counts.
+    let mut representative_by_profile: BTreeMap<String, String> = BTreeMap::new();
+    let mut includes_absent_profile = false;
+    for item in evidence {
+        let profile = prefixed_feature_profile(item, features_by_unit, prefixes);
+        if profile.is_empty() {
+            includes_absent_profile = true;
+            continue;
+        }
+        let rendered = profile.into_iter().collect::<Vec<_>>().join(",");
+        representative_by_profile
+            .entry(rendered)
+            .or_insert_with(|| item.code_unit_id.clone());
+    }
+    // has_context requires at least one non-empty profile; the dimension varies
+    // when the distinct profiles (non-empty ones plus the absent profile, if any)
+    // number more than one. This is exactly the variation-slot detection rule.
+    let non_empty_distinct = representative_by_profile.len();
+    let distinct = non_empty_distinct + usize::from(includes_absent_profile);
+    if non_empty_distinct == 0 || distinct <= 1 {
+        return None;
+    }
+    let observed_profiles_truncated = non_empty_distinct > CONSTRAINT_OBSERVED_PROFILE_CAP;
+    let observed_profiles: Vec<String> = representative_by_profile
+        .keys()
+        .take(CONSTRAINT_OBSERVED_PROFILE_CAP)
+        .cloned()
+        .collect();
+    let representative_member_ids: Vec<String> = representative_by_profile
+        .values()
+        .take(CONSTRAINT_REPRESENTATIVE_MEMBER_CAP)
+        .cloned()
+        .collect();
+    Some(VariationConstraint {
+        dimension: dimension.to_string(),
+        observed_profiles,
+        observed_profiles_truncated,
+        includes_absent_profile,
+        representative_member_ids,
+        observed_only: true,
+    })
+}
+
+/// Feature values whose presence excludes membership for this key. The only such
+/// rule the per-language compatibility functions apply is the `unknown_blocker:`
+/// rejection, and only for the languages whose rule checks it; the constraint is
+/// a `ProhibitedPresence` wildcard (empty `values`), meaning *any* value under the
+/// prefix excludes membership.
+fn prohibited_feature_constraints(key: &FamilyKey) -> Vec<FeatureConstraint> {
+    if language_excludes_on_unknown_blocker(&key.language) {
+        vec![FeatureConstraint {
+            prefix: "unknown_blocker:".to_string(),
+            values: Vec::new(),
+            origin: FeatureConstraintOrigin::IncompatibilityBlocker,
+            semantics: FeatureConstraintSemantics::ProhibitedPresence,
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Whether the language's `evidence_pair_is_compatible` refinement rejects a
+/// member that carries any `unknown_blocker:` feature. Mirrors the guard inlined
+/// at the top of the tsjs/java/csharp/cpp/rust compatibility functions; Python's
+/// refinement has no such guard.
+fn language_excludes_on_unknown_blocker(language: &str) -> bool {
+    is_tsjs_language_name(language)
+        || language == "java"
+        || language == "csharp"
+        || is_c_cpp_language(language)
+        || language == "rust"
+}
+
+/// The per-language variation-slot prefix table for a role: the single authority
+/// the emitted variation slots and the allowed-variation constraints both read.
+fn variation_feature_prefixes(
+    language: &str,
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    if language == "python" {
+        return python_variation_feature_prefixes(framework_role);
+    }
+    if is_tsjs_language_name(language) {
+        return tsjs_variation_feature_prefixes(framework_role);
+    }
+    if language == "java" {
+        return java_variation_feature_prefixes(framework_role);
+    }
+    if language == "csharp" {
+        return csharp_variation_feature_prefixes(framework_role);
+    }
+    if is_c_cpp_language(language) {
+        return cpp_variation_feature_prefixes(framework_role);
+    }
+    &[]
+}
+
+fn sorted_vec(values: BTreeSet<String>) -> Vec<String> {
+    values.into_iter().collect()
+}
+
+/// Build the storage record for a claim's constraint profile. Deferred write:
+/// the production indexing pipeline persists this alongside the other family
+/// storage records in a later slice; the derivation and record shape are stable.
+pub fn family_constraint_profile_record(
+    claim: &FamilyClaim,
+) -> IndexedFamilyConstraintProfileRecord {
+    IndexedFamilyConstraintProfileRecord {
+        family_id: claim.family_id.clone(),
+        profile: claim.constraint_profile.clone(),
+    }
+}
+
+/// Extract the indexed feature profile of one code unit for static-alignment
+/// checking, reusing the SAME authorities that build a family's constraint
+/// profile: the per-unit feature map ([`family_features_by_unit`]), the
+/// per-language variation-prefix tables, the pytest fixture-context special case,
+/// and the typed blocking-unknown vocabulary. This never re-parses source; it
+/// projects the already-indexed facts of the active generation exactly as family
+/// induction did, so a member's profile matches its family's constraints by
+/// construction.
+///
+/// Returns `None` only when the unit id is absent from the generation. A unit
+/// that is present but not family-eligible (or carries no framework role) still
+/// yields a profile whose `framework_role` is `None`, so the caller can classify
+/// it as out of scope rather than silently dropping it.
+pub fn extract_target_unit_features(
+    units: &[IndexedCodeUnitRecord],
+    facts: &[SemanticFact],
+    target_unit_id: &str,
+) -> Option<crate::application::conformance::TargetFeatureProfile> {
+    let unit = units.iter().find(|unit| unit.id == target_unit_id)?;
+    // Every helper filters the fact kinds it needs internally, so passing the
+    // full fact list reproduces exactly what `build_family_claims_from_input`
+    // computed for this generation.
+    let role_by_unit = framework_roles_by_unit(facts);
+    let support_targets_by_unit = eligible_support_by_unit(units, facts, &role_by_unit);
+    let features_by_unit =
+        family_features_by_unit(units, facts, &role_by_unit, &support_targets_by_unit);
+    let blocking_by_unit = family_blocking_unknowns_by_unit(units, facts, &role_by_unit);
+
+    let evidence = FamilyEvidence {
+        code_unit_id: unit.id.clone(),
+        path: unit.path.clone(),
+        content_hash: unit.content_hash.clone(),
+        start_byte: unit.start_byte,
+        end_byte: unit.end_byte,
+        support_targets: support_targets_by_unit
+            .get(&unit.id)
+            .map(|targets| targets.iter().cloned().collect())
+            .unwrap_or_default(),
+    };
+
+    let mut feature_tokens: BTreeSet<String> =
+        features_by_unit.get(&unit.id).cloned().unwrap_or_default();
+
+    let original_role = role_by_unit
+        .get(&unit.id)
+        .and_then(single_framework_role)
+        .map(str::to_string);
+    let stable_role = prefixed_features(&evidence, &features_by_unit, "framework_role:")
+        .into_iter()
+        .next();
+
+    // Mirror the pytest characteristic special case: family induction binds
+    // `fixture_context_nonbuiltin:` from the non-builtin fixture context, a
+    // synthetic prefix that is not otherwise a stored feature token. Inject it so
+    // the alignment comparator can strip it uniformly like any other prefix.
+    if unit.language == "python"
+        && matches!(
+            stable_role.as_deref(),
+            Some("framework_pytest_test") | Some("framework_pytest_fixture")
+        )
+    {
+        for value in non_builtin_pytest_fixture_context(&evidence, &features_by_unit) {
+            feature_tokens.insert(format!("fixture_context_nonbuiltin:{value}"));
+        }
+    }
+
+    // Render the target's profile for every variation dimension of its role,
+    // using the same prefix tables and rendering the family uses, so the strings
+    // compare directly against the family's observed profiles.
+    let mut variation_profiles: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(role) = original_role.as_deref() {
+        for (dimension, prefixes) in variation_feature_prefixes(&unit.language, role) {
+            let rendered = prefixed_feature_profile(&evidence, &features_by_unit, prefixes)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(",");
+            variation_profiles.insert((*dimension).to_string(), rendered);
+        }
+    }
+
+    // Mirror induction's `is_blocked` rule: a per-unit blocking unknown, plus the
+    // repository-level rust build-variant ambiguity that blocks every rust unit.
+    let mut claim_blockers: Vec<ClaimUnknown> =
+        blocking_by_unit.get(&unit.id).cloned().unwrap_or_default();
+    if unit.language == "rust" {
+        claim_blockers.extend(rust_repository_blocking_unknowns(facts));
+    }
+    // Never drop a blocking signal: if a reconstructed unknown fails revalidation
+    // (only possible on an empty affected claim, which induction never emits) fall
+    // back to a conservative valid blocker so the target stays classified as
+    // blocked rather than being silently upgraded toward alignment.
+    let blocking_unknowns = claim_blockers
+        .into_iter()
+        .map(|unknown| {
+            let class = unknown.class;
+            let reason = unknown.reason;
+            crate::core::model::TypedUnknown::new(
+                class,
+                reason,
+                unknown.affected_claim,
+                unknown.recovery,
+            )
+            .unwrap_or_else(|_| {
+                crate::core::model::TypedUnknown::new(
+                    class,
+                    reason,
+                    "unit:blocking_membership",
+                    None,
+                )
+                .expect("sentinel affected claim is non-empty")
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Some(crate::application::conformance::TargetFeatureProfile {
+        code_unit_id: unit.id.clone(),
+        language: unit.language.clone(),
+        code_unit_kind: unit.kind.clone(),
+        framework_role: stable_role,
+        framework_role_key: original_role,
+        feature_tokens,
+        variation_profiles,
+        blocking_unknowns,
+    })
 }
 
 fn family_non_blocking_unknowns_for_evidence(
@@ -876,7 +1482,14 @@ fn cpp_variation_feature_prefixes(
 }
 
 pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
-    let variation_evidence_indexes = framework_anchor_variation_evidence_indexes(claim);
+    let variation_witness_ids = variation_witness_code_unit_ids(claim);
+    // The support witness is the second member after the medoid-first reorder
+    // (see `order_evidence_by_representative_selection`); it is labelled so the
+    // read path can recover it once hydration re-sorts evidence by path.
+    let contrast_witness_id = claim
+        .evidence
+        .get(1)
+        .map(|evidence| evidence.code_unit_id.clone());
     let members = claim
         .evidence
         .iter()
@@ -906,7 +1519,12 @@ pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
             ),
             family_id: claim.family_id.clone(),
             code_unit_id: evidence.code_unit_id.clone(),
-            covered_claims: family_evidence_covered_claims(index, &variation_evidence_indexes),
+            covered_claims: family_evidence_covered_claims(
+                index,
+                &evidence.code_unit_id,
+                &variation_witness_ids,
+                contrast_witness_id.as_deref(),
+            ),
             path: evidence.path.clone(),
             content_hash: evidence.content_hash.clone(),
             start_byte: evidence.start_byte,
@@ -919,6 +1537,7 @@ pub fn family_storage_records(claim: &FamilyClaim) -> FamilyStorageRecords {
         family: IndexedFamilyRecord {
             family_id: claim.family_id.clone(),
             classification: claim.classification.clone(),
+            prevalence: claim.prevalence.clone(),
         },
         members,
         variation_slots,
@@ -2787,236 +3406,398 @@ fn non_builtin_pytest_fixture_context(
         .collect()
 }
 
-fn family_cluster_signature(
+/// Pre-assign each cluster of a key its stable suffix before any family id is
+/// minted. A key with at most one ready cluster keeps the bare base id (every
+/// suffix is `None`). A key with two or more ready clusters gives EVERY cluster a
+/// characteristic-profile suffix, so no cluster holds the bare base id and adding
+/// a member (or an unrelated, path-earlier file) can never re-point an id.
+fn assign_cluster_suffixes(
     key: &FamilyKey,
-    cluster: &[FamilyEvidence],
+    clusters: &[Vec<FamilyEvidence>],
+    ready_flags: &[bool],
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    if key.language == "python" {
-        return python_cluster_signature(cluster, features_by_unit);
+) -> Vec<ClusterSuffix> {
+    let ready_cluster_count = ready_flags.iter().filter(|ready| **ready).count();
+    if ready_cluster_count <= 1 {
+        return clusters
+            .iter()
+            .map(|_| ClusterSuffix {
+                token: None,
+                positional_ordinal: None,
+            })
+            .collect();
     }
-    if is_tsjs_language_name(&key.language) {
-        return tsjs_cluster_signature(cluster, features_by_unit);
+    // Characteristic profile and support-family core per cluster. Clusters are
+    // non-empty by construction (`complete_link_family_clusters` seeds each with
+    // one member), so `first` always resolves for a real cluster.
+    let profiles: Vec<BTreeSet<String>> = clusters
+        .iter()
+        .map(|cluster| {
+            cluster
+                .first()
+                .map(|representative| {
+                    cluster_characteristic_profile(key, representative, features_by_unit)
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    let cores: Vec<BTreeSet<String>> = clusters
+        .iter()
+        .map(|cluster| cluster_support_family_core(cluster, features_by_unit))
+        .collect();
+    let mut suffixes = Vec::with_capacity(clusters.len());
+    for index in 0..clusters.len() {
+        let profile_matches = profiles
+            .iter()
+            .filter(|profile| **profile == profiles[index])
+            .count();
+        if profile_matches == 1 {
+            // Unique characteristic profile: hash it directly.
+            suffixes.push(ClusterSuffix {
+                token: Some(cluster_suffix_token(key, &profiles[index], None, None)),
+                positional_ordinal: None,
+            });
+            continue;
+        }
+        // Tie on characteristic profile: extend the hashed input with the
+        // support-family core (the values shared by every cluster member).
+        let core_matches = (0..clusters.len())
+            .filter(|other| profiles[*other] == profiles[index] && cores[*other] == cores[index])
+            .count();
+        if core_matches == 1 {
+            suffixes.push(ClusterSuffix {
+                token: Some(cluster_suffix_token(
+                    key,
+                    &profiles[index],
+                    Some(&cores[index]),
+                    None,
+                )),
+                positional_ordinal: None,
+            });
+            continue;
+        }
+        // Genuinely indistinguishable clusters: an identical characteristic
+        // profile AND an identical support-family core. Two distinct clusters can
+        // only share a core when that shared core is empty (any common support
+        // family would make every cross-member pair compatible and merge them),
+        // so this positional fallback fires only for truly ambiguous clusters.
+        let ordinal = (0..index)
+            .filter(|other| profiles[*other] == profiles[index] && cores[*other] == cores[index])
+            .count();
+        suffixes.push(ClusterSuffix {
+            token: Some(cluster_suffix_token(
+                key,
+                &profiles[index],
+                Some(&cores[index]),
+                Some(ordinal),
+            )),
+            positional_ordinal: Some(ordinal),
+        });
     }
-    if key.language == "rust" {
-        return rust_cluster_signature(cluster, features_by_unit);
-    }
-    if key.language == "java" {
-        return java_cluster_signature(cluster, features_by_unit);
-    }
-    if key.language == "csharp" {
-        return csharp_cluster_signature(cluster, features_by_unit);
-    }
-    if is_c_cpp_language(&key.language) {
-        return cpp_cluster_signature(cluster, features_by_unit);
-    }
-    "family_cluster".to_string()
+    suffixes
 }
 
-fn python_cluster_signature(
-    cluster: &[FamilyEvidence],
+/// The cluster's characteristic profile: the full `prefix:value` feature strings
+/// that the role's compatibility rule forces to be equal across every member,
+/// read from a representative member. These values are identical across all
+/// members by construction, so the derived suffix is stable under member
+/// addition or removal as long as the profile itself is unchanged.
+fn cluster_characteristic_profile(
+    key: &FamilyKey,
+    representative: &FamilyEvidence,
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "decorator_shape:",
-                "effect_shape:",
-                "call_shape_kind:",
-                "fixture_shape:",
-                "model_shape:",
-                "effect_marker:",
-                "call_shape:",
-                "fixture_context:",
-                "model_context:",
-                "class_base:",
-                "route_path_shape:",
-                "http_method:",
-                "django_field_count_shape:",
-                "django_meta_shape:",
-                "test_method_count_shape:",
-                "unittest_fixture_shape:",
-                "cli_param_count_shape:",
-                "celery_task_shape:",
-            ]
+) -> BTreeSet<String> {
+    let role_feature = prefixed_features(representative, features_by_unit, "framework_role:")
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    // pytest membership turns on the non-builtin fixture context rather than a
+    // raw feature prefix, so mirror that custom compatibility check here.
+    if key.language == "python"
+        && (role_feature == "framework_pytest_test" || role_feature == "framework_pytest_fixture")
+    {
+        return non_builtin_pytest_fixture_context(representative, features_by_unit)
             .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "python_family_cluster".to_string();
+            .map(|value| format!("fixture_context_nonbuiltin:{value}"))
+            .collect();
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
+    characteristic_profile_prefixes(&key.language, &role_feature)
+        .iter()
+        .flat_map(|prefix| {
+            prefixed_features(representative, features_by_unit, prefix)
+                .into_iter()
+                .map(move |value| format!("{prefix}{value}"))
+        })
+        .collect()
 }
 
-fn tsjs_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "framework_api_anchor:",
-                "route_method:",
-                "route_path_shape:",
-                "http_method:",
-                "handler_shape:",
-                "runner_kind:",
-                "test_shape:",
-                "async_shape:",
-                "zod_builder:",
-                "path_context:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "tsjs_family_cluster".to_string();
+/// The characteristic (identity-defining) feature prefixes for a framework role:
+/// exactly the prefixes whose values `evidence_pair_is_compatible` and its
+/// per-language refinements require to be equal across every member of a cluster
+/// (both the `equal_feature_profiles` and `required_equal_feature_profiles`
+/// prefixes). `framework_role` is the `framework_role:` feature value (the
+/// underscore form matched by those functions). This dispatch mirrors
+/// `evidence_pair_is_compatible`; keep the two in sync.
+fn characteristic_profile_prefixes(
+    language: &str,
+    framework_role: &str,
+) -> &'static [&'static str] {
+    if language == "python" {
+        return python_characteristic_prefixes(framework_role);
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
+    if is_tsjs_language_name(language) {
+        return tsjs_characteristic_prefixes(framework_role);
+    }
+    if language == "java" {
+        return java_characteristic_prefixes(framework_role);
+    }
+    if language == "csharp" {
+        return csharp_characteristic_prefixes(framework_role);
+    }
+    if is_c_cpp_language(language) {
+        return cpp_characteristic_prefixes(framework_role);
+    }
+    if language == "rust" {
+        return rust_characteristic_prefixes(framework_role);
+    }
+    &[]
 }
 
-fn rust_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "signature_shape:",
-                "visibility_shape:",
-                "arity_shape:",
-                "return_shape:",
-                "attribute_shape:",
-                "error_shape:",
-                "call_shape:",
-                "control_shape:",
-                "test_shape:",
-                "path_context:",
-                "framework_api_anchor:",
-                "serde_attr_shape:",
-                "error_message_shape:",
-                "clap_attr_shape:",
-                "http_method:",
-                "route_path_shape:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "rust_family_cluster".to_string();
+fn python_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_fastapi_route" => &["decorator_shape:"],
+        "framework_pydantic_model" => &["class_base:"],
+        "framework_django_url_pattern" => &["route_path_shape:"],
+        "framework_flask_route" => &["http_method:", "route_path_shape:"],
+        // pytest is handled by `cluster_characteristic_profile` directly; the
+        // remaining roles (sqlalchemy, django/unittest models and tests, click,
+        // typer, celery) constrain only the universal preconditions, so they have
+        // no characteristic prefixes and lean on the support-family core tie-break.
+        _ => &[],
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
 }
 
-fn java_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "spring_annotation:",
-                "http_method:",
-                "route_path_shape:",
-                "class_route_path_shape:",
-                "class_shape:",
-                "test_annotation:",
-                "test_data_shape:",
-                "jpa_namespace_root:",
-                "path_context:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "java_family_cluster".to_string();
+fn tsjs_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_express_route_handler" | "framework_fastify_route_handler" => {
+            &["handler_shape:"]
+        }
+        "framework_jest_vitest_suite" | "framework_jest_vitest_test" => {
+            &["runner_kind:", "test_shape:", "async_shape:"]
+        }
+        "framework_next_app_page" | "framework_next_app_layout" | "framework_next_pages_page" => {
+            &["component_shape:"]
+        }
+        "framework_next_route_handler" | "framework_next_pages_api_route" => &["response_shape:"],
+        "framework_prisma_query"
+        | "framework_prisma_transaction"
+        | "framework_drizzle_schema_table"
+        | "framework_drizzle_query"
+        | "framework_drizzle_transaction" => &["operation:"],
+        "framework_zod_schema" => &["zod_builder:"],
+        "framework_nestjs_route" | "framework_hono_route" => &["http_method:", "route_path_shape:"],
+        "framework_nestjs_controller"
+        | "framework_nestjs_injectable"
+        | "framework_nestjs_module" => &["support_family:"],
+        _ => &[],
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
 }
 
-fn csharp_cluster_signature(
-    cluster: &[FamilyEvidence],
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "aspnet_attribute:",
-                "http_method:",
-                "route_template_shape:",
-                "test_attribute:",
-                "test_data_shape:",
-                "class_shape:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "csharp_family_cluster".to_string();
+fn java_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_spring_mvc_route" => &[
+            "anchor_kind:",
+            "spring_annotation:",
+            "http_method:",
+            "route_path_shape:",
+        ],
+        "framework_spring_component" => &["spring_annotation:", "class_shape:"],
+        "framework_spring_boot_application" | "framework_spring_data_repository" => {
+            &["support_family:"]
+        }
+        "framework_junit5_test" | "framework_junit4_test" | "framework_testng_test" => {
+            &["anchor_kind:", "test_annotation:"]
+        }
+        "framework_jpa_entity" | "framework_jpa_mapped_superclass" | "framework_jpa_embeddable" => {
+            &["support_family:", "jpa_namespace_root:"]
+        }
+        "framework_jaxrs_resource" => &["support_family:", "class_route_path_shape:"],
+        "framework_jaxrs_resource_method" => &["anchor_kind:", "http_method:", "route_path_shape:"],
+        _ => &[],
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
 }
 
-fn cpp_cluster_signature(
+fn csharp_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_aspnetcore_controller_action" => &[
+            "anchor_kind:",
+            "aspnet_attribute:",
+            "http_method:",
+            "route_template_shape:",
+        ],
+        "framework_aspnetcore_minimal_route" => &["http_method:", "route_template_shape:"],
+        "framework_aspnetcore_controller" => &["aspnet_attribute:", "class_shape:"],
+        "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
+            &["test_attribute:"]
+        }
+        "framework_efcore_db_context" | "framework_efcore_entity_set" => &["support_family:"],
+        _ => &[],
+    }
+}
+
+fn cpp_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_gtest_test"
+        | "framework_catch2_test"
+        | "framework_doctest_test"
+        | "framework_boost_test_test" => &["support_family:", "test_framework:", "test_macro:"],
+        "framework_gtest_fixture" | "framework_boost_test_suite" => &["support_family:"],
+        _ => &[],
+    }
+}
+
+fn rust_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
+    match framework_role {
+        "framework_serde_model" => &["support_family:", "framework_api_anchor:"],
+        "framework_axum_route" => &["support_family:", "http_method:", "route_path_shape:"],
+        "framework_thiserror_error"
+        | "framework_clap_parser"
+        | "framework_tokio_entry"
+        | "framework_tokio_test" => &["support_family:"],
+        // Self-dogfood roles keep their structural-shape profile equality.
+        _ => &[
+            "anchor_kind:",
+            "signature_shape:",
+            "visibility_shape:",
+            "arity_shape:",
+            "return_shape:",
+            "attribute_shape:",
+            "error_shape:",
+            "test_shape:",
+        ],
+    }
+}
+
+/// The support-family values shared by every member of the cluster (the
+/// intersection of their `support_family:` features). Used only as a tie
+/// discriminator between sibling ready clusters that share an identical
+/// characteristic profile.
+fn cluster_support_family_core(
     cluster: &[FamilyEvidence],
     features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> String {
-    let signature_features = cluster
-        .iter()
-        .flat_map(|evidence| {
-            [
-                "support_family:",
-                "anchor_kind:",
-                "test_framework:",
-                "test_macro:",
-                "test_name_shape:",
-                "fixture_shape:",
-            ]
-            .into_iter()
-            .flat_map(move |prefix| prefixed_features(evidence, features_by_unit, prefix))
-        })
-        .collect::<BTreeSet<_>>();
-    if signature_features.is_empty() {
-        return "cpp_family_cluster".to_string();
+) -> BTreeSet<String> {
+    let mut members = cluster.iter();
+    let Some(first) = members.next() else {
+        return BTreeSet::new();
+    };
+    let mut core = prefixed_features(first, features_by_unit, "support_family:");
+    for member in members {
+        if core.is_empty() {
+            break;
+        }
+        let member_families = prefixed_features(member, features_by_unit, "support_family:");
+        core = core.intersection(&member_families).cloned().collect();
     }
-    format!(
-        "cluster:{}",
-        signature_features.into_iter().collect::<Vec<_>>().join("+")
-    )
+    core
+}
+
+/// Deterministic cluster-suffix token, shaped `v<12 hex>` so it can never
+/// collide with the legacy `cluster_...` suffix space. The hashed input is a
+/// canonical serialization of the FamilyKey identity plus the cluster's
+/// characteristic profile, optionally extended with the support-family core and
+/// then a positional ordinal to break genuine ties. See
+/// `docs/specifications/domain-model.md` for the grammar.
+fn cluster_suffix_token(
+    key: &FamilyKey,
+    profile: &BTreeSet<String>,
+    support_family_core: Option<&BTreeSet<String>>,
+    positional_ordinal: Option<usize>,
+) -> String {
+    let mut input = String::new();
+    input.push_str("repogrammar.family-suffix.v1\n");
+    input.push_str("key=");
+    input.push_str(&key.language);
+    input.push(':');
+    input.push_str(&key.code_unit_kind);
+    input.push(':');
+    input.push_str(&key.framework_role);
+    input.push('\n');
+    for feature in profile {
+        input.push_str("profile=");
+        input.push_str(feature);
+        input.push('\n');
+    }
+    if let Some(core) = support_family_core {
+        for value in core {
+            input.push_str("support-family-core=");
+            input.push_str(value);
+            input.push('\n');
+        }
+    }
+    if let Some(ordinal) = positional_ordinal {
+        input.push_str("ordinal=");
+        input.push_str(&ordinal.to_string());
+        input.push('\n');
+    }
+    format!("v{}", short_hex_digest(&input))
+}
+
+/// A lossy `stable_token` can map two distinct keys onto the same bare base id.
+/// Only keys with exactly one ready cluster mint a bare base id, so collisions
+/// are resolved among those: every key inside a colliding group gets a
+/// deterministic key-profile suffix and non-colliding keys keep the bare base id.
+fn bare_base_id_disambiguators(keys: &[&FamilyKey]) -> BTreeMap<FamilyKey, String> {
+    let mut keys_by_base_id: BTreeMap<String, Vec<&FamilyKey>> = BTreeMap::new();
+    for key in keys {
+        keys_by_base_id
+            .entry(family_id(key, None))
+            .or_default()
+            .push(key);
+    }
+    let mut disambiguators = BTreeMap::new();
+    for group in keys_by_base_id.into_values() {
+        if group.len() < 2 {
+            continue;
+        }
+        for key in group {
+            disambiguators.insert((*key).clone(), family_key_disambiguator_token(key));
+        }
+    }
+    disambiguators
+}
+
+/// Deterministic `v<12 hex>` token derived from the full raw FamilyKey. Keys that
+/// only collide under `stable_token` still differ in their raw fields, so their
+/// tokens differ. A distinct domain tag keeps these tokens out of the
+/// characteristic-profile suffix space.
+fn family_key_disambiguator_token(key: &FamilyKey) -> String {
+    let mut input = String::new();
+    input.push_str("repogrammar.family-key.v1\n");
+    input.push_str("language=");
+    input.push_str(&key.language);
+    input.push('\n');
+    input.push_str("code_unit_kind=");
+    input.push_str(&key.code_unit_kind);
+    input.push('\n');
+    input.push_str("framework_role=");
+    input.push_str(&key.framework_role);
+    input.push('\n');
+    input.push_str("normalized_shape=");
+    input.push_str(&key.normalized_shape);
+    input.push('\n');
+    format!("v{}", short_hex_digest(&input))
+}
+
+/// First 12 lowercase hex characters (six bytes) of the SHA-256 digest of
+/// `input`. Family-id suffixes truncate the digest to keep ids short while
+/// preserving deterministic, collision-resistant identity.
+fn short_hex_digest(input: &str) -> String {
+    let digest = Sha256::digest(input.as_bytes());
+    let mut hex = String::with_capacity(12);
+    for &byte in digest.iter().take(6) {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
 }
 
 fn support_target_family(target: &str, framework_role: &str) -> String {
@@ -3132,48 +3913,203 @@ fn distinct_support_targets(evidence: &[FamilyEvidence]) -> BTreeSet<String> {
         .collect()
 }
 
-fn framework_anchor_variation_evidence_indexes(claim: &FamilyClaim) -> BTreeSet<usize> {
+/// Symmetric-difference cardinality between two members' full family feature
+/// sets: the number of features present on exactly one of them. This is the
+/// deterministic distance representative selection minimizes (for the medoid) and
+/// maximizes (for the support witness).
+fn feature_symmetric_difference(
+    left: &FamilyEvidence,
+    right: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> usize {
+    let empty = BTreeSet::new();
+    let left_features = features_by_unit.get(&left.code_unit_id).unwrap_or(&empty);
+    let right_features = features_by_unit.get(&right.code_unit_id).unwrap_or(&empty);
+    left_features.symmetric_difference(right_features).count()
+}
+
+/// A path-free deterministic fingerprint of a member's full feature set, used as
+/// the medoid/support-witness tie-break key. It is a stable hash of the member's
+/// features in sorted order; it does not read the member's path, byte range, or
+/// slice index. Two members with identical feature sets share a fingerprint, in
+/// which case the final index resort applies.
+fn feature_fingerprint(
+    evidence: &FamilyEvidence,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> String {
+    let empty = BTreeSet::new();
+    let features = features_by_unit
+        .get(&evidence.code_unit_id)
+        .unwrap_or(&empty);
+    stable_token(&features.iter().cloned().collect::<Vec<_>>().join("\n"))
+}
+
+/// The cluster medoid index: the member minimizing the sum of feature
+/// symmetric-difference distances to every other member.
+///
+/// Determinism and rename behavior: the decision key is `(cost,
+/// feature_fingerprint, index)`, so ties on cost are broken by the path-free
+/// feature fingerprint before the index resort. The medoid therefore tracks the
+/// members' features, not their path sort order — a path rename that only
+/// reorders members leaves the canonical member unchanged. The one exception is
+/// deliberate: the feature set includes a `path_context:` bucket feature
+/// (`family_features_by_unit`), so a rename that crosses that bucket boundary is
+/// a genuine feature change and may change distances and the medoid.
+/// `evidence` must be non-empty.
+fn cluster_medoid_index(
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> usize {
+    (0..evidence.len())
+        .min_by_key(|&index| {
+            let cost = evidence
+                .iter()
+                .map(|other| {
+                    feature_symmetric_difference(&evidence[index], other, features_by_unit)
+                })
+                .sum::<usize>();
+            (
+                cost,
+                feature_fingerprint(&evidence[index], features_by_unit),
+                index,
+            )
+        })
+        .unwrap_or(0)
+}
+
+/// The support-witness index: the member farthest (by feature symmetric
+/// difference) from the medoid, maximizing contrast. Every member shares the
+/// required-equal feature profile by construction, so no separate profile filter
+/// is needed. Ties resolve deterministically by the path-free feature
+/// fingerprint, then by lowest index. Returns `None` when the medoid is the only
+/// member.
+fn support_witness_index(
+    evidence: &[FamilyEvidence],
+    medoid: usize,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<usize> {
+    // Maximize distance, then break ties toward the lowest fingerprint and lowest
+    // index. `max_by_key` returns the last maximum, so `Reverse` on the
+    // fingerprint and index makes the smallest of each the key-maximum.
+    (0..evidence.len())
+        .filter(|&index| index != medoid)
+        .max_by_key(|&index| {
+            (
+                feature_symmetric_difference(&evidence[medoid], &evidence[index], features_by_unit),
+                std::cmp::Reverse(feature_fingerprint(&evidence[index], features_by_unit)),
+                std::cmp::Reverse(index),
+            )
+        })
+}
+
+/// Reorder a cluster's members so the medoid leads and the support witness
+/// follows, with the remaining members left in their original `(path, start,
+/// end, id)` order. Callers derive the constraint profile, stored evidence order,
+/// and covered-claims labels from this order.
+fn order_evidence_by_representative_selection(
+    evidence: Vec<FamilyEvidence>,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<FamilyEvidence> {
+    if evidence.len() <= 1 {
+        return evidence;
+    }
+    let medoid = cluster_medoid_index(&evidence, features_by_unit);
+    let support = support_witness_index(&evidence, medoid, features_by_unit);
+    let mut ordered = Vec::with_capacity(evidence.len());
+    ordered.push(evidence[medoid].clone());
+    if let Some(support) = support {
+        ordered.push(evidence[support].clone());
+    }
+    for (index, item) in evidence.iter().enumerate() {
+        if index == medoid || Some(index) == support {
+            continue;
+        }
+        ordered.push(item.clone());
+    }
+    ordered
+}
+
+/// The set of member `code_unit_id`s that witness a variation dimension. This is
+/// the profile-driven general rule that replaces the former Python-only
+/// anchor-target special case: one representative per observed profile for every
+/// dimension the claim's [`FamilyConstraintProfile`] enumerates, plus the Python
+/// framework-anchor-target dimension (which is carried as a variation slot rather
+/// than a profile feature-prefix dimension). The canonical medoid (evidence[0])
+/// is excluded: it already shows one observed profile, so the witnesses cover the
+/// *other* observed profiles for contrast.
+fn variation_witness_code_unit_ids(claim: &FamilyClaim) -> BTreeSet<String> {
+    let mut ids: BTreeSet<String> = claim
+        .constraint_profile
+        .allowed_variations
+        .iter()
+        .flat_map(|variation| variation.representative_member_ids.iter().cloned())
+        .collect();
+    ids.extend(python_anchor_target_witness_code_unit_ids(claim));
+    if let Some(canonical) = claim.evidence.first() {
+        ids.remove(&canonical.code_unit_id);
+    }
+    ids
+}
+
+/// One representative member per distinct observed support-target profile. The
+/// per-profile representative is the first member exhibiting that profile in
+/// evidence order; when the distinct profiles exceed
+/// [`CONSTRAINT_REPRESENTATIVE_MEMBER_CAP`], the retained set is bounded in
+/// `BTreeMap` key order — lexicographic by rendered target-profile string, not
+/// evidence order. This covers the Python `slot:python_framework_anchor_target`
+/// variation, which is derived from members' exact support targets rather than a
+/// feature prefix, so it does not appear in the constraint profile's
+/// `allowed_variations`.
+fn python_anchor_target_witness_code_unit_ids(claim: &FamilyClaim) -> BTreeSet<String> {
     if claim.language != "python" || distinct_support_targets(&claim.evidence).len() <= 1 {
         return BTreeSet::new();
     }
-    let canonical_targets = claim
-        .evidence
-        .first()
-        .map(|evidence| {
-            evidence
-                .support_targets
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let index = claim
-        .evidence
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, evidence)| {
-            evidence
-                .support_targets
-                .iter()
-                .any(|target| !canonical_targets.contains(target))
-        })
-        .map(|(index, _)| index)
-        .or_else(|| (claim.evidence.len() > 1).then_some(1))
-        .unwrap_or(0);
-    [index].into_iter().collect()
+    let mut representative_by_profile: BTreeMap<String, String> = BTreeMap::new();
+    for evidence in &claim.evidence {
+        if evidence.support_targets.is_empty() {
+            continue;
+        }
+        let profile = evidence
+            .support_targets
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(",");
+        representative_by_profile
+            .entry(profile)
+            .or_insert_with(|| evidence.code_unit_id.clone());
+    }
+    representative_by_profile
+        .into_values()
+        .take(CONSTRAINT_REPRESENTATIVE_MEMBER_CAP)
+        .collect()
 }
 
+/// The covered-claim labels for one stored member. The canonical medoid
+/// (`index == 0`) carries `canonical` and `support`; every other member carries
+/// `support` (so no evidence row is claim-less, which storage forbids). The
+/// support witness (the farthest-from-medoid member) additionally carries
+/// `contrast`, so the read path can recover it after hydration re-sorts the
+/// evidence by path — the medoid-first storage order is not the carrier. A
+/// variation witness additionally carries `variation`; the medoid never carries
+/// `contrast` or `variation`.
 fn family_evidence_covered_claims(
     index: usize,
-    variation_evidence_indexes: &BTreeSet<usize>,
+    code_unit_id: &str,
+    variation_witness_ids: &BTreeSet<String>,
+    contrast_witness_id: Option<&str>,
 ) -> Vec<String> {
     let mut claims = if index == 0 {
         vec!["canonical".to_string(), "support".to_string()]
     } else {
         vec!["support".to_string()]
     };
-    if variation_evidence_indexes.contains(&index) {
+    if index != 0 && contrast_witness_id == Some(code_unit_id) {
+        claims.push("contrast".to_string());
+    }
+    if index != 0 && variation_witness_ids.contains(code_unit_id) {
         claims.push("variation".to_string());
     }
     claims
@@ -5788,6 +6724,8 @@ mod tests {
                     == "variation:python_framework_anchor_target:exact compatible framework anchors differ"));
 
         let records = family_storage_records(claim);
+        // The canonical medoid leads the stored evidence and carries exactly
+        // canonical+support (never a variation label).
         assert_eq!(
             records.evidence[0].covered_claims,
             vec!["canonical".to_string(), "support".to_string()]
@@ -5802,10 +6740,15 @@ mod tests {
                     .any(|claim| claim == "variation")
             })
             .collect::<Vec<_>>();
-        assert_eq!(variation_records.len(), 1);
-        assert!(variation_records[0]
-            .covered_claims
-            .contains(&"support".to_string()));
+        // Three members carry three distinct anchor targets, so the anchor-target
+        // dimension has three observed profiles. The canonical medoid shows one of
+        // them and is excluded from the witness set, leaving one witness per each
+        // of the other two observed profiles — the profile-driven general rule
+        // that replaced the former single-witness Python special case.
+        assert_eq!(variation_records.len(), 2);
+        assert!(variation_records
+            .iter()
+            .all(|record| record.covered_claims.contains(&"support".to_string())));
         assert!(records.evidence.iter().all(|evidence| {
             !evidence
                 .covered_claims
@@ -5881,18 +6824,70 @@ mod tests {
 
         assert_eq!(report.claims.len(), 2);
         assert!(report.claims.iter().all(|claim| claim.support == 3));
+        // Two competing ready families of equal size split a six-peer key, so
+        // minimum support must not be reported as dominance: each covers only
+        // half its eligible peers and neither outnumbers the other.
+        for claim in &report.claims {
+            assert_eq!(
+                claim.classification, "SUPPORTED_PATTERN",
+                "a competing equal-size ready family must not be dominant"
+            );
+            assert_eq!(claim.prevalence.eligible_peer_count, 6);
+            assert_eq!(claim.prevalence.supported_member_count, 3);
+            assert_eq!(claim.prevalence.competing_ready_family_count, 1);
+            assert_eq!(claim.prevalence.largest_competing_support, 3);
+            assert_eq!(claim.prevalence.blocked_peer_count, 0);
+            assert_eq!(claim.prevalence.unsupported_peer_count, 0);
+            assert_eq!(claim.prevalence.coverage_ratio, Some(0.5));
+        }
         let ids = report
             .claims
             .iter()
             .map(|claim| claim.family_id.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(ids.len(), 2);
-        assert!(ids.contains(
-            "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method"
-        ));
-        assert!(ids.contains(
-            "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:cluster_sqlalchemy_transaction_boundary"
-        ));
+        // Two ready clusters share a key, so neither holds the bare base id: each
+        // takes a support-family-core-derived suffix (the role has an empty
+        // characteristic profile), computed deterministically from its own
+        // profile rather than emission order.
+        let key = FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "sqlalchemy_repository_method".to_string(),
+            framework_role: "framework:sqlalchemy.repository_method".to_string(),
+            normalized_shape: normalized_shape(
+                "sqlalchemy_repository_method",
+                "framework:sqlalchemy.repository_method",
+            ),
+        };
+        // Support-family feature values are `stable_token`-normalized, so the
+        // characteristic core uses the underscore form.
+        let empty_profile = BTreeSet::new();
+        let query_core: BTreeSet<String> =
+            ["sqlalchemy_query_call".to_string()].into_iter().collect();
+        let transaction_core: BTreeSet<String> = ["sqlalchemy_transaction_boundary".to_string()]
+            .into_iter()
+            .collect();
+        let query_id = family_id(
+            &key,
+            Some(&cluster_suffix_token(
+                &key,
+                &empty_profile,
+                Some(&query_core),
+                None,
+            )),
+        );
+        let transaction_id = family_id(
+            &key,
+            Some(&cluster_suffix_token(
+                &key,
+                &empty_profile,
+                Some(&transaction_core),
+                None,
+            )),
+        );
+        assert!(!ids.contains(family_id(&key, None).as_str()));
+        assert!(ids.contains(query_id.as_str()));
+        assert!(ids.contains(transaction_id.as_str()));
     }
 
     #[test]
@@ -6104,6 +7099,60 @@ mod tests {
         assert!(report.claims.is_empty());
         assert_unknown_reason(&report, UnknownReasonCode::DynamicImport);
         assert_unknown_reason(&report, UnknownReasonCode::InsufficientSupport);
+    }
+
+    #[test]
+    fn family_prevalence_counts_eligible_blocked_and_unsupported_peers() {
+        // Three eligible peers form the ready cluster; a blocking unknown empties
+        // one peer's support, and one peer never had support facts. Blocked and
+        // unsupported peers are excluded from the denominator but recorded.
+        let first = python_unit("app/a.py", "fastapi_route", 0);
+        let second = python_unit("app/b.py", "fastapi_route", 1);
+        let third = python_unit("app/c.py", "fastapi_route", 2);
+        let blocked = python_unit("app/d.py", "fastapi_route", 3);
+        let unsupported = python_unit("app/e.py", "fastapi_route", 4);
+        let report = build_family_claims(
+            &[
+                first.clone(),
+                second.clone(),
+                third.clone(),
+                blocked.clone(),
+                unsupported.clone(),
+            ],
+            &[
+                role_fact(&first, "framework:fastapi.route"),
+                role_fact(&second, "framework:fastapi.route"),
+                role_fact(&third, "framework:fastapi.route"),
+                role_fact(&blocked, "framework:fastapi.route"),
+                role_fact(&unsupported, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&first, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&second, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&third, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&blocked, "fastapi.APIRouter.get"),
+                python_unknown_fact(
+                    &blocked,
+                    UnknownReasonCode::DynamicImport,
+                    "python_import_resolution",
+                ),
+            ],
+        );
+
+        assert_eq!(report.claims.len(), 1);
+        let prevalence = &report.claims[0].prevalence;
+        assert_eq!(prevalence.eligible_peer_count, 3);
+        assert_eq!(prevalence.supported_member_count, 3);
+        assert_eq!(prevalence.blocked_peer_count, 1);
+        assert_eq!(prevalence.unsupported_peer_count, 1);
+        assert_eq!(prevalence.competing_ready_family_count, 0);
+        assert_eq!(prevalence.largest_competing_support, 0);
+        assert_eq!(prevalence.coverage_ratio, Some(1.0));
+        // A reliable denominator (blocked <= eligible) at full coverage with no
+        // competitor is dominant.
+        assert_eq!(report.claims[0].classification, "DOMINANT_PATTERN");
+        assert_eq!(
+            prevalence.classification_reason,
+            "coverage 3/3 with no competing ready family"
+        );
     }
 
     #[test]
@@ -7173,5 +8222,1211 @@ mod tests {
             ],
         );
         assert_insufficient_support(&substring_report);
+    }
+
+    fn repository_method_key() -> FamilyKey {
+        FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "sqlalchemy_repository_method".to_string(),
+            framework_role: "framework:sqlalchemy.repository_method".to_string(),
+            normalized_shape: normalized_shape(
+                "sqlalchemy_repository_method",
+                "framework:sqlalchemy.repository_method",
+            ),
+        }
+    }
+
+    /// A synthetic cluster member with the given support families, registering
+    /// its role and support-family features into `features`. The role has an
+    /// empty characteristic profile, so suffix assignment exercises the
+    /// support-family-core and positional tie-break paths.
+    fn suffix_test_member(
+        id: &str,
+        support_families: &[&str],
+        features: &mut BTreeMap<String, BTreeSet<String>>,
+    ) -> FamilyEvidence {
+        let mut member_features: BTreeSet<String> = support_families
+            .iter()
+            .map(|family| format!("support_family:{family}"))
+            .collect();
+        member_features.insert("framework_role:framework_sqlalchemy_repository_method".to_string());
+        features.insert(id.to_string(), member_features);
+        FamilyEvidence {
+            code_unit_id: id.to_string(),
+            path: format!("src/{id}.py"),
+            content_hash: hash(),
+            start_byte: 0,
+            end_byte: 1,
+            support_targets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn assign_cluster_suffixes_keeps_single_ready_cluster_bare() {
+        let key = repository_method_key();
+        let mut features = BTreeMap::new();
+        let clusters = vec![
+            vec![
+                suffix_test_member("a", &["query"], &mut features),
+                suffix_test_member("b", &["query"], &mut features),
+                suffix_test_member("c", &["query"], &mut features),
+            ],
+            vec![suffix_test_member("d", &["txn"], &mut features)],
+        ];
+        let ready_flags = vec![true, false];
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features);
+        // At most one ready cluster: nobody is suffixed and the ready cluster
+        // keeps the bare base id.
+        assert!(suffixes
+            .iter()
+            .all(|suffix| suffix.token.is_none() && suffix.positional_ordinal.is_none()));
+    }
+
+    #[test]
+    fn assign_cluster_suffixes_distinguishes_ready_clusters_by_support_family_core() {
+        let key = repository_method_key();
+        let mut features = BTreeMap::new();
+        let clusters = vec![
+            vec![
+                suffix_test_member("a", &["query"], &mut features),
+                suffix_test_member("b", &["query"], &mut features),
+                suffix_test_member("c", &["query"], &mut features),
+            ],
+            vec![
+                suffix_test_member("d", &["txn"], &mut features),
+                suffix_test_member("e", &["txn"], &mut features),
+                suffix_test_member("f", &["txn"], &mut features),
+            ],
+        ];
+        let ready_flags = vec![true, true];
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features);
+        // Two ready clusters: both are suffixed (nobody holds the bare base id),
+        // distinguished by their support-family core, not a positional ordinal.
+        assert!(suffixes.iter().all(|suffix| suffix.token.is_some()));
+        assert!(suffixes
+            .iter()
+            .all(|suffix| suffix.positional_ordinal.is_none()));
+        let tokens: BTreeSet<&String> = suffixes
+            .iter()
+            .filter_map(|suffix| suffix.token.as_ref())
+            .collect();
+        assert_eq!(tokens.len(), 2);
+        // The suffix is the deterministic hash of the empty profile plus the
+        // cluster's support-family core.
+        let empty_profile = BTreeSet::new();
+        let query_core: BTreeSet<String> = ["query".to_string()].into_iter().collect();
+        assert_eq!(
+            suffixes[0].token.as_deref(),
+            Some(cluster_suffix_token(&key, &empty_profile, Some(&query_core), None).as_str())
+        );
+    }
+
+    #[test]
+    fn assign_cluster_suffixes_positional_ordinal_only_for_indistinguishable_clusters() {
+        let key = repository_method_key();
+        let mut features = BTreeMap::new();
+        // Clusters 0 and 1 are 3-cycles: members pairwise share a support family
+        // but the global intersection is empty, so both have an empty core and an
+        // empty characteristic profile (genuinely indistinguishable). Cluster 2
+        // has a distinct non-empty core and must NOT take a positional ordinal.
+        let clusters = vec![
+            vec![
+                suffix_test_member("a", &["x", "y"], &mut features),
+                suffix_test_member("b", &["y", "z"], &mut features),
+                suffix_test_member("c", &["x", "z"], &mut features),
+            ],
+            vec![
+                suffix_test_member("d", &["p", "q"], &mut features),
+                suffix_test_member("e", &["q", "r"], &mut features),
+                suffix_test_member("f", &["p", "r"], &mut features),
+            ],
+            vec![
+                suffix_test_member("g", &["w"], &mut features),
+                suffix_test_member("h", &["w"], &mut features),
+                suffix_test_member("i", &["w"], &mut features),
+            ],
+        ];
+        let ready_flags = vec![true, true, true];
+        let suffixes = assign_cluster_suffixes(&key, &clusters, &ready_flags, &features);
+        // The tied clusters have empty cores, confirming they are genuinely
+        // indistinguishable, and only they receive positional ordinals.
+        assert!(cluster_support_family_core(&clusters[0], &features).is_empty());
+        assert!(cluster_support_family_core(&clusters[1], &features).is_empty());
+        assert_eq!(suffixes[0].positional_ordinal, Some(0));
+        assert_eq!(suffixes[1].positional_ordinal, Some(1));
+        assert_eq!(suffixes[2].positional_ordinal, None);
+        let tokens: BTreeSet<&String> = suffixes
+            .iter()
+            .filter_map(|suffix| suffix.token.as_ref())
+            .collect();
+        assert_eq!(
+            tokens.len(),
+            3,
+            "every ready cluster must keep a distinct id"
+        );
+    }
+
+    #[test]
+    fn bare_base_id_disambiguators_resolves_stable_token_collisions() {
+        // `framework:a.b` and `framework:a_b` are distinct roles that collide onto
+        // the same bare base id under the lossy `stable_token`.
+        let dotted = FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "route".to_string(),
+            framework_role: "framework:a.b".to_string(),
+            normalized_shape: normalized_shape("route", "framework:a.b"),
+        };
+        let underscored = FamilyKey {
+            framework_role: "framework:a_b".to_string(),
+            normalized_shape: normalized_shape("route", "framework:a_b"),
+            ..dotted.clone()
+        };
+        let lone = FamilyKey {
+            framework_role: "framework:distinct".to_string(),
+            normalized_shape: normalized_shape("route", "framework:distinct"),
+            ..dotted.clone()
+        };
+        assert_eq!(family_id(&dotted, None), family_id(&underscored, None));
+        let disambiguators = bare_base_id_disambiguators(&[&dotted, &underscored, &lone]);
+        // Both colliding keys are disambiguated; the lone key keeps the bare id.
+        assert!(disambiguators.contains_key(&dotted));
+        assert!(disambiguators.contains_key(&underscored));
+        assert!(!disambiguators.contains_key(&lone));
+        // The disambiguated ids are distinct.
+        let dotted_id = family_id(&dotted, Some(&disambiguators[&dotted]));
+        let underscored_id = family_id(&underscored, Some(&disambiguators[&underscored]));
+        assert_ne!(dotted_id, underscored_id);
+    }
+
+    fn repository_method_units_and_facts(
+        query_paths: &[&str],
+        transaction_paths: &[&str],
+    ) -> (Vec<IndexedCodeUnitRecord>, Vec<SemanticFact>) {
+        let mut units = Vec::new();
+        let mut facts = Vec::new();
+        let mut index = 0;
+        for path in query_paths {
+            let unit = python_unit(path, "sqlalchemy_repository_method", index);
+            facts.push(role_fact(&unit, "framework:sqlalchemy.repository_method"));
+            facts.push(semantic_support_fact_with_target(
+                &unit,
+                "sqlalchemy.orm.Session.execute",
+            ));
+            units.push(unit);
+            index += 1;
+        }
+        for path in transaction_paths {
+            let unit = python_unit(path, "sqlalchemy_repository_method", index);
+            facts.push(role_fact(&unit, "framework:sqlalchemy.repository_method"));
+            facts.push(semantic_support_fact_with_target(
+                &unit,
+                "sqlalchemy.orm.Session.commit",
+            ));
+            units.push(unit);
+            index += 1;
+        }
+        (units, facts)
+    }
+
+    #[test]
+    fn family_id_split_and_merge_round_trip() {
+        let key = repository_method_key();
+        let base_id = family_id(&key, None);
+        // Support-family feature values are `stable_token`-normalized.
+        let empty_profile = BTreeSet::new();
+        let query_core: BTreeSet<String> =
+            ["sqlalchemy_query_call".to_string()].into_iter().collect();
+        let query_id = family_id(
+            &key,
+            Some(&cluster_suffix_token(
+                &key,
+                &empty_profile,
+                Some(&query_core),
+                None,
+            )),
+        );
+
+        // One ready cluster: the bare base id is used.
+        let (single_units, single_facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &[],
+        );
+        let single = build_family_claims(&single_units, &single_facts);
+        assert_eq!(single.claims.len(), 1);
+        assert_eq!(single.claims[0].family_id, base_id);
+
+        // Split: adding a competing transaction cluster removes the bare base id
+        // and gives the surviving query cluster its characteristic-profile suffix.
+        let (split_units, split_facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &["app/txn_0.py", "app/txn_1.py", "app/txn_2.py"],
+        );
+        let split = build_family_claims(&split_units, &split_facts);
+        let split_ids: BTreeSet<String> = split
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.clone())
+            .collect();
+        assert_eq!(split_ids.len(), 2);
+        assert!(!split_ids.contains(&base_id));
+        assert!(split_ids.contains(&query_id));
+
+        // Merge: removing the competitor collapses the suffix back to the base id.
+        let (merged_units, merged_facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &[],
+        );
+        let merged = build_family_claims(&merged_units, &merged_facts);
+        assert_eq!(merged.claims.len(), 1);
+        assert_eq!(merged.claims[0].family_id, base_id);
+    }
+
+    #[test]
+    fn family_id_add_file_does_not_rebind_existing_clusters() {
+        let (units, facts) = repository_method_units_and_facts(
+            &["app/query_0.py", "app/query_1.py", "app/query_2.py"],
+            &["app/txn_0.py", "app/txn_1.py", "app/txn_2.py"],
+        );
+        let before = build_family_claims(&units, &facts);
+        let before_ids: BTreeSet<String> = before
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.clone())
+            .collect();
+        assert_eq!(before_ids.len(), 2);
+
+        // Add a query member whose path sorts before every existing file. Under
+        // the old first-ready-cluster scheme this could re-point the bare base id;
+        // under the profile-hash scheme both existing ids must persist unchanged.
+        let mut units = units;
+        let mut facts = facts;
+        let early = python_unit("app/aaa_query.py", "sqlalchemy_repository_method", 99);
+        facts.push(role_fact(&early, "framework:sqlalchemy.repository_method"));
+        facts.push(semantic_support_fact_with_target(
+            &early,
+            "sqlalchemy.orm.Session.execute",
+        ));
+        units.push(early);
+        let after = build_family_claims(&units, &facts);
+        let after_ids: BTreeSet<String> = after
+            .claims
+            .iter()
+            .map(|claim| claim.family_id.clone())
+            .collect();
+        for id in &before_ids {
+            assert!(
+                after_ids.contains(id),
+                "family id {id} was re-pointed by an unrelated file insert"
+            );
+        }
+    }
+
+    fn required_constraint<'a>(
+        profile: &'a FamilyConstraintProfile,
+        prefix: &str,
+    ) -> Option<&'a FeatureConstraint> {
+        profile
+            .required_equal_features
+            .iter()
+            .find(|constraint| constraint.prefix == prefix)
+    }
+
+    fn variation_constraint<'a>(
+        profile: &'a FamilyConstraintProfile,
+        dimension: &str,
+    ) -> Option<&'a VariationConstraint> {
+        profile
+            .allowed_variations
+            .iter()
+            .find(|variation| variation.dimension == dimension)
+    }
+
+    #[test]
+    fn constraint_profile_for_fastapi_route_requires_decorator_shape_and_observes_variation() {
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let import_targets = ["app.models.user", "app.models.user", "app.models.item"];
+        let mut facts = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+            facts.push(python_context_fact(
+                unit,
+                "fastapi_route_decorator",
+                Some("fastapi.APIRouter.get"),
+            ));
+            facts.push(python_context_fact(
+                unit,
+                "import_binding",
+                Some(import_targets[index]),
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+
+        // Framework-role identity and the non-empty support-family intersection
+        // are universal required-equal features.
+        assert_eq!(
+            required_constraint(profile, "framework_role:").map(|c| c.origin),
+            Some(FeatureConstraintOrigin::FrameworkRoleIdentity)
+        );
+        assert_eq!(
+            required_constraint(profile, "support_family:").map(|c| c.origin),
+            Some(FeatureConstraintOrigin::SupportFamilyIntersection)
+        );
+        // fastapi's characteristic prefix (decorator_shape) is required-equal.
+        let decorator = required_constraint(profile, "decorator_shape:")
+            .expect("decorator_shape is a fastapi characteristic constraint");
+        assert_eq!(
+            decorator.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(
+            decorator.values,
+            vec![stable_token("fastapi_route_decorator")]
+        );
+
+        // import_context legally varies: two distinct profiles were observed.
+        let variation = variation_constraint(profile, "python_import_context")
+            .expect("import context is an observed variation dimension");
+        assert!(variation.observed_only);
+        assert_eq!(variation.observed_profiles.len(), 2);
+        assert!(!variation.observed_profiles_truncated);
+
+        // The always-present runtime-equivalence obligation is recorded, unblocked.
+        assert!(profile.unresolved_obligations.iter().any(|obligation| {
+            obligation.affected_claim.ends_with(":runtime_equivalence")
+                && obligation.class == UnknownClass::NonBlocking
+        }));
+        // Python's compatibility rule has no unknown_blocker guard.
+        assert!(profile.prohibited_or_blocking_features.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_for_flask_route_requires_method_and_path_shape() {
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "flask_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:flask.route"));
+            let mut support = semantic_support_fact_with_target(unit, "flask.route");
+            support
+                .assumptions
+                .push("framework_role=framework:flask.route".to_string());
+            facts.push(support);
+            facts.push(python_context_fact(unit, "flask_route_decorator", None));
+            facts.push(python_context_fact(
+                unit,
+                "flask_route_method",
+                Some("flask.http_method.get"),
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+
+        let method = required_constraint(profile, "http_method:")
+            .expect("http_method is a flask characteristic constraint");
+        assert_eq!(
+            method.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(method.values, vec![stable_token("get")]);
+        let path_shape = required_constraint(profile, "route_path_shape:")
+            .expect("route_path_shape is a flask characteristic constraint");
+        assert_eq!(path_shape.values, vec!["literal".to_string()]);
+    }
+
+    #[test]
+    fn constraint_profile_records_unknown_blocker_prohibition_for_tsjs_family() {
+        let units: Vec<_> = ["src/a.ts", "src/b.ts", "src/c.ts"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| unit(path, "express_route", index))
+            .collect();
+        let targets = [
+            "express.route.get",
+            "express.route.post",
+            "express.route.delete",
+        ];
+        let mut facts = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            facts.push(role_fact(unit, "framework:express.route_handler"));
+            facts.push(tsjs_derived_fact_with_assumptions(
+                unit,
+                targets[index],
+                "framework:express.route_handler",
+                vec!["handler_shape=inline_json"],
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+
+        // TS/JS compatibility rejects any member carrying an unknown_blocker
+        // feature; the prohibition is recorded as a wildcard (empty values).
+        let blocker = profile
+            .prohibited_or_blocking_features
+            .iter()
+            .find(|constraint| constraint.prefix == "unknown_blocker:")
+            .expect("tsjs families record the unknown_blocker prohibition");
+        assert_eq!(
+            blocker.origin,
+            FeatureConstraintOrigin::IncompatibilityBlocker
+        );
+        assert!(blocker.values.is_empty());
+        // Universal required-equal features still hold, and the characteristic
+        // handler_shape is required-equal for express routes.
+        assert!(required_constraint(profile, "framework_role:").is_some());
+        assert!(required_constraint(profile, "support_family:").is_some());
+        assert!(required_constraint(profile, "handler_shape:").is_some());
+    }
+
+    #[test]
+    fn constraint_profile_storage_record_mirrors_the_claim_profile() {
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+        }
+        let report = build_family_claims(&units, &facts);
+        let claim = &report.claims[0];
+
+        let record = family_constraint_profile_record(claim);
+        assert_eq!(record.family_id, claim.family_id);
+        assert_eq!(record.profile, claim.constraint_profile);
+    }
+
+    #[test]
+    fn constraint_profile_variation_enumeration_is_capped_and_flags_truncation() {
+        // Nine fastapi routes with nine distinct import contexts cluster into one
+        // family (import context is not a membership key) whose import-context
+        // variation exceeds the observed-profile cap.
+        let member_count = CONSTRAINT_OBSERVED_PROFILE_CAP + 1;
+        let units: Vec<_> = (0..member_count)
+            .map(|index| python_unit(&format!("app/route{index}.py"), "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+            facts.push(python_context_fact(
+                unit,
+                "import_binding",
+                Some(&format!("app.models.model{index}")),
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let variation = variation_constraint(
+            &report.claims[0].constraint_profile,
+            "python_import_context",
+        )
+        .expect("import context varies across the members");
+        assert!(variation.observed_profiles_truncated);
+        assert_eq!(
+            variation.observed_profiles.len(),
+            CONSTRAINT_OBSERVED_PROFILE_CAP
+        );
+        assert!(variation.representative_member_ids.len() <= CONSTRAINT_REPRESENTATIVE_MEMBER_CAP);
+    }
+
+    #[test]
+    fn constraint_profile_support_family_core_is_must_contain_not_equal() {
+        // Members legally carry overlapping-but-unequal support families
+        // (membership needs only pairwise overlap), so the shared core is a
+        // MustContain subset rule and a member may carry a strict superset.
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "sqlalchemy_repository_method", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:sqlalchemy.repository_method"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "sqlalchemy.orm.Session.execute",
+            ));
+        }
+        // The third member also commits: its support family is a strict superset
+        // of the {query_call} core shared by every member.
+        facts.push(semantic_support_fact_with_target(
+            &units[2],
+            "sqlalchemy.orm.Session.commit",
+        ));
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].support, 3);
+        let support = required_constraint(&report.claims[0].constraint_profile, "support_family:")
+            .expect("the shared support-family core is recorded");
+        assert_eq!(
+            support.origin,
+            FeatureConstraintOrigin::SupportFamilyIntersection
+        );
+        assert_eq!(support.semantics, FeatureConstraintSemantics::MustContain);
+        assert_eq!(support.values, vec![stable_token("sqlalchemy.query_call")]);
+    }
+
+    #[test]
+    fn constraint_profile_dedupes_support_family_when_it_is_characteristic() {
+        // gtest binds support_family by equality (it is a characteristic prefix),
+        // so it is recorded once with Equal semantics, never duplicated as a
+        // weaker MustContain intersection entry.
+        let units = (0..3)
+            .map(|index| cpp_unit(&format!("tests/{index}_test.cc"), "gtest_test_case", index))
+            .collect::<Vec<_>>();
+        let facts = units
+            .iter()
+            .flat_map(|unit| {
+                [
+                    role_fact(unit, "framework:gtest.test"),
+                    cpp_test_derived_fact(unit, "gtest.TEST", "gtest", "TEST", "identifier_pair"),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+        let support = required_constraint(profile, "support_family:")
+            .expect("gtest binds support_family by equality");
+        assert_eq!(
+            support.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(support.semantics, FeatureConstraintSemantics::Equal);
+        assert!(!profile
+            .required_equal_features
+            .iter()
+            .any(|constraint| constraint.origin
+                == FeatureConstraintOrigin::SupportFamilyIntersection));
+    }
+
+    #[test]
+    fn constraint_profile_emits_equal_empty_for_absent_pytest_fixture_context() {
+        // Every member shares the empty non-builtin fixture context; equality
+        // against the empty set is itself a binding "must be empty" constraint.
+        let units: Vec<_> = ["tests/a.py", "tests/b.py", "tests/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "pytest_test", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:pytest.test"));
+            facts.push(semantic_support_fact_with_target(unit, "pytest.test"));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let fixture = required_constraint(
+            &report.claims[0].constraint_profile,
+            "fixture_context_nonbuiltin:",
+        )
+        .expect("an empty non-builtin fixture context is a binding must-be-empty constraint");
+        assert_eq!(
+            fixture.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(fixture.semantics, FeatureConstraintSemantics::EqualEmpty);
+        assert!(fixture.values.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_variations_agree_with_variation_slots() {
+        // Mixed presence: two members share one import context, the third has
+        // none. The variation slot marks the dimension as varying (empty vs
+        // non-empty), and the constraint profile must agree via the recorded
+        // absent profile — the two co-persisted artifacts must not contradict.
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+        }
+        facts.push(python_context_fact(
+            &units[0],
+            "import_binding",
+            Some("app.models.user"),
+        ));
+        facts.push(python_context_fact(
+            &units[1],
+            "import_binding",
+            Some("app.models.user"),
+        ));
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+
+        let import = variation_constraint(&claim.constraint_profile, "python_import_context")
+            .expect("import context varies (present on two members, absent on one)");
+        assert!(import.includes_absent_profile);
+        assert_eq!(import.observed_profiles.len(), 1);
+        assert!(claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:python_import_context"));
+
+        // General agreement: for every dimension the per-language table can emit,
+        // the variation slot and the constraint profile agree on whether it varies.
+        for entry in variation_feature_prefixes(&claim.language, claim.framework_role.as_str()) {
+            let dimension = entry.0;
+            let slot_present = claim
+                .variation_slots
+                .iter()
+                .any(|slot| slot.slot_id == format!("slot:{dimension}"));
+            let constraint_present =
+                variation_constraint(&claim.constraint_profile, dimension).is_some();
+            assert_eq!(
+                slot_present, constraint_present,
+                "variation slot and constraint disagree for dimension {dimension}"
+            );
+        }
+    }
+
+    fn drift_evidence(code_unit_id: &str) -> FamilyEvidence {
+        FamilyEvidence {
+            code_unit_id: code_unit_id.to_string(),
+            path: "src/x".to_string(),
+            content_hash: hash(),
+            start_byte: 0,
+            end_byte: 1,
+            support_targets: Vec::new(),
+        }
+    }
+
+    fn medoid_evidence(code_unit_id: &str, path: &str) -> FamilyEvidence {
+        FamilyEvidence {
+            code_unit_id: code_unit_id.to_string(),
+            path: path.to_string(),
+            content_hash: hash(),
+            start_byte: 0,
+            end_byte: 1,
+            support_targets: Vec::new(),
+        }
+    }
+
+    fn feature_map(entries: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<String>> {
+        entries
+            .iter()
+            .map(|(id, feats)| {
+                (
+                    id.to_string(),
+                    feats.iter().map(|f| f.to_string()).collect::<BTreeSet<_>>(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn medoid_canonical_tracks_features_not_path_sort_order() {
+        // Member `b` is the cluster center: it shares `alpha` with `a` and `gamma`
+        // with `c`, so it is the closest member to both. The former storage-order
+        // rule would make the path-first member `a` canonical; the medoid rule
+        // makes the feature-central `b` canonical instead.
+        let features = feature_map(&[
+            ("unit:a", &["core", "alpha"]),
+            ("unit:b", &["core", "alpha", "gamma"]),
+            ("unit:c", &["core", "gamma"]),
+        ]);
+        let path_sorted = vec![
+            medoid_evidence("unit:a", "app/a.py"),
+            medoid_evidence("unit:b", "app/b.py"),
+            medoid_evidence("unit:c", "app/c.py"),
+        ];
+        assert_eq!(cluster_medoid_index(&path_sorted, &features), 1);
+        let ordered = order_evidence_by_representative_selection(path_sorted.clone(), &features);
+        assert_eq!(
+            ordered[0].code_unit_id, "unit:b",
+            "the feature-central member is canonical, not the path-first member"
+        );
+        // The support witness is the farthest-from-medoid member; `a` and `c` are
+        // both distance one, so the deterministic tie-break is the path-free
+        // feature fingerprint (lowest wins).
+        let fp = |id: &str| feature_fingerprint(&medoid_evidence(id, ""), &features);
+        let expected_support = if fp("unit:a") <= fp("unit:c") {
+            "unit:a"
+        } else {
+            "unit:c"
+        };
+        assert_eq!(ordered[1].code_unit_id, expected_support);
+
+        // Insertion-order independence: a different input order yields the same
+        // canonical member (the medoid is a property of the features, not order).
+        let shuffled = vec![
+            path_sorted[2].clone(),
+            path_sorted[0].clone(),
+            path_sorted[1].clone(),
+        ];
+        let ordered_shuffled = order_evidence_by_representative_selection(shuffled, &features);
+        assert_eq!(ordered_shuffled[0].code_unit_id, "unit:b");
+
+        // Path-rename invariance: renaming paths only changes the upstream sort
+        // order fed to selection. With identical features but a flipped order, the
+        // canonical member is unchanged — the core improvement over storage order.
+        let renamed = vec![
+            medoid_evidence("unit:c", "app/aa.py"),
+            medoid_evidence("unit:a", "app/mm.py"),
+            medoid_evidence("unit:b", "app/zz.py"),
+        ];
+        let ordered_renamed = order_evidence_by_representative_selection(renamed, &features);
+        assert_eq!(
+            ordered_renamed[0].code_unit_id, "unit:b",
+            "a path rename must not change the canonical member"
+        );
+
+        // Feature-sensitivity: move the shared features onto `a`; now `a` is the
+        // center and the canonical member changes accordingly.
+        let features_moved = feature_map(&[
+            ("unit:a", &["core", "alpha", "gamma"]),
+            ("unit:b", &["core", "alpha"]),
+            ("unit:c", &["core", "gamma"]),
+        ]);
+        let ordered_moved =
+            order_evidence_by_representative_selection(path_sorted, &features_moved);
+        assert_eq!(
+            ordered_moved[0].code_unit_id, "unit:a",
+            "changing a member's features changes the medoid"
+        );
+    }
+
+    #[test]
+    fn two_member_medoid_is_fingerprint_stable_across_same_bucket_renames() {
+        // A 2-member family always ties on cost (the distance is symmetric), so the
+        // canonical is decided entirely by the path-free feature fingerprint — not
+        // by which member sorts first. `path_context:` is a real feature, held
+        // constant here so a rename within the bucket changes nothing observable.
+        let features = feature_map(&[
+            ("unit:p", &["core", "shape:one", "path_context:pkg_x"]),
+            ("unit:q", &["core", "shape:two", "path_context:pkg_x"]),
+        ]);
+        let fp = |id: &str| feature_fingerprint(&medoid_evidence(id, ""), &features);
+        let expected = if fp("unit:p") <= fp("unit:q") {
+            "unit:p"
+        } else {
+            "unit:q"
+        };
+        let ordered = order_evidence_by_representative_selection(
+            vec![
+                medoid_evidence("unit:p", "pkg_x/a.py"),
+                medoid_evidence("unit:q", "pkg_x/b.py"),
+            ],
+            &features,
+        );
+        assert_eq!(ordered[0].code_unit_id, expected);
+
+        // A cross-directory rename that stays in the same path_context bucket flips
+        // the path sort order but leaves features — and the canonical — unchanged.
+        let renamed = order_evidence_by_representative_selection(
+            vec![
+                medoid_evidence("unit:q", "pkg_x/aaa.py"),
+                medoid_evidence("unit:p", "pkg_x/zzz.py"),
+            ],
+            &features,
+        );
+        assert_eq!(
+            renamed[0].code_unit_id, expected,
+            "a same-bucket rename must not flip the 2-member canonical"
+        );
+
+        // A rename that crosses the path_context bucket boundary IS a feature
+        // change: `unit:p` moves to `pkg_y`, so the fingerprints are recomputed and
+        // the canonical follows the new features, deterministically.
+        let moved_features = feature_map(&[
+            ("unit:p", &["core", "shape:one", "path_context:pkg_y"]),
+            ("unit:q", &["core", "shape:two", "path_context:pkg_x"]),
+        ]);
+        let fp_moved = |id: &str| feature_fingerprint(&medoid_evidence(id, ""), &moved_features);
+        let expected_moved = if fp_moved("unit:p") <= fp_moved("unit:q") {
+            "unit:p"
+        } else {
+            "unit:q"
+        };
+        let moved = order_evidence_by_representative_selection(
+            vec![
+                medoid_evidence("unit:p", "pkg_y/a.py"),
+                medoid_evidence("unit:q", "pkg_x/b.py"),
+            ],
+            &moved_features,
+        );
+        assert_eq!(moved[0].code_unit_id, expected_moved);
+    }
+
+    #[test]
+    fn variation_witnesses_cover_every_observed_profile_per_dimension() {
+        // Non-Python (TS/JS express): route_method and route_path_shape both vary
+        // across three members, so each is a profile variation dimension.
+        let first = unit("src/a.ts", "express_route", 0);
+        let second = unit("src/b.ts", "express_route", 1);
+        let third = unit("src/c.ts", "express_route", 2);
+        let report = build_family_claims(
+            &[first.clone(), second.clone(), third.clone()],
+            &[
+                role_fact(&first, "framework:express.route_handler"),
+                role_fact(&second, "framework:express.route_handler"),
+                role_fact(&third, "framework:express.route_handler"),
+                tsjs_derived_fact_with_assumptions(
+                    &first,
+                    "express.route.get",
+                    "framework:express.route_handler",
+                    vec!["route_method=get", "route_path_shape=/users"],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &second,
+                    "express.route.post",
+                    "framework:express.route_handler",
+                    vec!["route_method=post", "route_path_shape=/orders"],
+                ),
+                tsjs_derived_fact_with_assumptions(
+                    &third,
+                    "express.route.delete",
+                    "framework:express.route_handler",
+                    vec!["route_method=delete", "route_path_shape=/items"],
+                ),
+            ],
+        );
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert!(
+            !claim.constraint_profile.allowed_variations.is_empty(),
+            "the express family must expose profile variation dimensions"
+        );
+        assert_witnesses_cover_every_profile(claim);
+
+        // Python anchor-target: three distinct fastapi anchors form three observed
+        // support-target profiles (a slot-based dimension, not a feature prefix).
+        let pa = python_unit("app/a.py", "fastapi_route", 0);
+        let pb = python_unit("app/b.py", "fastapi_route", 1);
+        let pc = python_unit("app/c.py", "fastapi_route", 2);
+        let py = build_family_claims(
+            &[pa.clone(), pb.clone(), pc.clone()],
+            &[
+                role_fact(&pa, "framework:fastapi.route"),
+                role_fact(&pb, "framework:fastapi.route"),
+                role_fact(&pc, "framework:fastapi.route"),
+                semantic_support_fact_with_target(&pa, "fastapi.APIRouter.get"),
+                semantic_support_fact_with_target(&pb, "fastapi.FastAPI.post"),
+                semantic_support_fact_with_target(&pc, "fastapi.APIRouter.delete"),
+            ],
+        );
+        assert_eq!(py.claims.len(), 1);
+        let py_claim = &py.claims[0];
+        let py_records = family_storage_records(py_claim);
+        let py_witnesses = variation_witness_code_unit_set(&py_records);
+        // Three observed target profiles minus the canonical medoid leaves two
+        // witnesses — one per each of the other observed profiles.
+        assert_eq!(py_witnesses.len(), 2);
+        assert!(!py_witnesses.contains(&py_records.evidence[0].code_unit_id));
+    }
+
+    fn variation_witness_code_unit_set(records: &FamilyStorageRecords) -> BTreeSet<String> {
+        records
+            .evidence
+            .iter()
+            .filter(|evidence| {
+                evidence
+                    .covered_claims
+                    .iter()
+                    .any(|claim| claim == "variation")
+            })
+            .map(|evidence| evidence.code_unit_id.clone())
+            .collect()
+    }
+
+    fn assert_witnesses_cover_every_profile(claim: &FamilyClaim) {
+        let records = family_storage_records(claim);
+        let witnesses = variation_witness_code_unit_set(&records);
+        let canonical = records.evidence[0].code_unit_id.clone();
+        // The canonical medoid is never a variation witness.
+        assert!(!witnesses.contains(&canonical));
+        for dimension in &claim.constraint_profile.allowed_variations {
+            for representative in &dimension.representative_member_ids {
+                if *representative != canonical {
+                    assert!(
+                        witnesses.contains(representative),
+                        "dimension {} profile representative {} must witness a variation",
+                        dimension.dimension,
+                        representative
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_blocker_prohibition_mirrors_the_compatibility_authority() {
+        // The prohibited-feature derivation reuses language_excludes_on_unknown_blocker,
+        // a hand-maintained mirror of the guard inlined in each per-language
+        // compatibility function. Assert the mirror matches the authority's actual
+        // accept/reject behavior for the unknown_blocker dimension in every language.
+        let cases: [(&str, &[&str]); 6] = [
+            (
+                "typescript",
+                &[
+                    "framework_role:framework_express_route_handler",
+                    "support_family:svc",
+                    "handler_shape:h",
+                ],
+            ),
+            (
+                "java",
+                &[
+                    "framework_role:framework_junit5_test",
+                    "support_family:svc",
+                    "anchor_kind:a",
+                    "test_annotation:t",
+                ],
+            ),
+            (
+                "csharp",
+                &[
+                    "framework_role:framework_xunit_test",
+                    "support_family:svc",
+                    "test_attribute:x",
+                ],
+            ),
+            (
+                "cpp",
+                &[
+                    "framework_role:framework_gtest_test",
+                    "support_family:svc",
+                    "test_framework:gtest",
+                    "test_macro:test",
+                ],
+            ),
+            (
+                "rust",
+                &[
+                    "framework_role:framework_serde_model",
+                    "support_family:svc",
+                    "framework_api_anchor:a",
+                ],
+            ),
+            (
+                "python",
+                &[
+                    "framework_role:framework_fastapi_route",
+                    "support_family:svc",
+                    "decorator_shape:d",
+                ],
+            ),
+        ];
+        for (language, feature_list) in cases {
+            let base: BTreeSet<String> = feature_list.iter().map(|f| f.to_string()).collect();
+            let key = FamilyKey {
+                language: language.to_string(),
+                code_unit_kind: "unit".to_string(),
+                framework_role: "role".to_string(),
+                normalized_shape: "shape".to_string(),
+            };
+            let left = drift_evidence("left");
+            let right = drift_evidence("right");
+
+            let mut features_by_unit: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            features_by_unit.insert("left".to_string(), base.clone());
+            features_by_unit.insert("right".to_string(), base.clone());
+            // Identical members are compatible in every language.
+            assert!(
+                evidence_pair_is_compatible(&key, &left, &right, &features_by_unit),
+                "{language} baseline pair must be compatible"
+            );
+
+            // Inject an unknown_blocker feature on the right member.
+            let mut blocked = base.clone();
+            blocked.insert("unknown_blocker:dynamic".to_string());
+            features_by_unit.insert("right".to_string(), blocked);
+            let rejected = !evidence_pair_is_compatible(&key, &left, &right, &features_by_unit);
+            assert_eq!(
+                rejected,
+                language_excludes_on_unknown_blocker(language),
+                "{language} prohibition mirror disagrees with the compatibility authority"
+            );
+        }
+    }
+
+    #[test]
+    fn pytest_fixture_context_constraint_mirrors_the_compatibility_authority() {
+        // The pytest branch of characteristic_feature_constraints is a mirror of
+        // the pytest branch of python_evidence_pair_is_compatible (non-builtin
+        // fixture-context equality). Assert both gate on the same dimension for
+        // the same synthetic evidence.
+        let key = FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "pytest_test".to_string(),
+            framework_role: "framework:pytest.test".to_string(),
+            normalized_shape: "shape".to_string(),
+        };
+        let features_for = |context: &[&str]| -> BTreeSet<String> {
+            let mut features: BTreeSet<String> = [
+                "framework_role:framework_pytest_test".to_string(),
+                "support_family:pytest_test_anchor".to_string(),
+            ]
+            .into_iter()
+            .collect();
+            for value in context {
+                features.insert(format!("fixture_context:{value}"));
+            }
+            features
+        };
+        let left = drift_evidence("left");
+        let right = drift_evidence("right");
+
+        // Shared non-builtin fixture context: compatible, and the constraint
+        // records exactly that context by equality.
+        let mut features: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        features.insert("left".to_string(), features_for(&["conftest_db"]));
+        features.insert("right".to_string(), features_for(&["conftest_db"]));
+        assert!(evidence_pair_is_compatible(&key, &left, &right, &features));
+        let shared =
+            characteristic_feature_constraints(&key, &left, "framework_pytest_test", &features);
+        let fixture = shared
+            .iter()
+            .find(|constraint| constraint.prefix == "fixture_context_nonbuiltin:")
+            .expect("pytest records the non-builtin fixture context");
+        assert_eq!(fixture.values, vec!["conftest_db".to_string()]);
+        assert_eq!(fixture.semantics, FeatureConstraintSemantics::Equal);
+
+        // Differing non-builtin fixture context: incompatible. The compat gate is
+        // exactly the dimension the constraint records.
+        features.insert("right".to_string(), features_for(&["conftest_other"]));
+        assert!(!evidence_pair_is_compatible(&key, &left, &right, &features));
+
+        // Shared empty non-builtin fixture context: compatible, and the constraint
+        // binds must-be-empty.
+        let mut empty: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        empty.insert("left".to_string(), features_for(&[]));
+        empty.insert("right".to_string(), features_for(&[]));
+        assert!(evidence_pair_is_compatible(&key, &left, &right, &empty));
+        let empty_constraints =
+            characteristic_feature_constraints(&key, &left, "framework_pytest_test", &empty);
+        let empty_fixture = empty_constraints
+            .iter()
+            .find(|constraint| constraint.prefix == "fixture_context_nonbuiltin:")
+            .expect("an empty non-builtin fixture context is recorded");
+        assert_eq!(
+            empty_fixture.semantics,
+            FeatureConstraintSemantics::EqualEmpty
+        );
+        assert!(empty_fixture.values.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_emits_equal_empty_for_absent_general_characteristic() {
+        // A fastapi family with no decorator anchor facts shares the empty
+        // decorator_shape; equality against empty is a binding must-be-empty
+        // constraint on the general (non-pytest) path.
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let decorator =
+            required_constraint(&report.claims[0].constraint_profile, "decorator_shape:")
+                .expect("empty decorator_shape is a binding must-be-empty constraint");
+        assert_eq!(
+            decorator.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(decorator.semantics, FeatureConstraintSemantics::EqualEmpty);
+        assert!(decorator.values.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_variations_agree_with_variation_slots_tsjs() {
+        // Non-Python coverage: express routes share a handler shape (so they
+        // cluster) but differ on HTTP method, which both the variation slot and
+        // the constraint profile must mark as varying.
+        let units: Vec<_> = ["src/a.ts", "src/b.ts", "src/c.ts"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| unit(path, "express_route", index))
+            .collect();
+        let methods = ["get", "get", "post"];
+        let targets = [
+            "express.route.get",
+            "express.route.get",
+            "express.route.post",
+        ];
+        let mut facts = Vec::new();
+        for (index, member) in units.iter().enumerate() {
+            facts.push(role_fact(member, "framework:express.route_handler"));
+            let route_method = format!("route_method={}", methods[index]);
+            facts.push(tsjs_derived_fact_with_assumptions(
+                member,
+                targets[index],
+                "framework:express.route_handler",
+                vec!["handler_shape=inline_json", route_method.as_str()],
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert_eq!(claim.language, "typescript");
+
+        let method = variation_constraint(&claim.constraint_profile, "tsjs_route_method")
+            .expect("route method varies across the express members");
+        assert!(!method.includes_absent_profile);
+        assert_eq!(method.observed_profiles.len(), 2);
+
+        for entry in variation_feature_prefixes(&claim.language, claim.framework_role.as_str()) {
+            let dimension = entry.0;
+            let slot_present = claim
+                .variation_slots
+                .iter()
+                .any(|slot| slot.slot_id == format!("slot:{dimension}"));
+            let constraint_present =
+                variation_constraint(&claim.constraint_profile, dimension).is_some();
+            assert_eq!(
+                slot_present, constraint_present,
+                "variation slot and constraint disagree for dimension {dimension}"
+            );
+        }
     }
 }

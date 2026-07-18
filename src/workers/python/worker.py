@@ -285,6 +285,17 @@ def emit_parse_document_contract_mismatch() -> None:
     )
 
 
+def emit_extract_interface_contract_mismatch() -> None:
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "extract_interface",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+        }
+    )
+
+
 def byte_line_starts(source: str) -> list[int]:
     starts = [0]
     total = 0
@@ -530,6 +541,53 @@ def infer_source_roots(paths: list[str]) -> list[str]:
         if root and is_safe_repo_relative_path(root):
             roots.add(root)
     return sorted(roots)
+
+
+def module_interface_projection(source: str, path: str) -> dict[str, Any]:
+    """The file-local interface projection that decides whether a Python content
+    edit can change any *other* module's parse.
+
+    It captures exactly the inputs `build_module_symbol_index` exposes to other
+    files: the top-level symbol surface, the literal `__all__` set (or its
+    absence/non-literal marker), and — for package `__init__` modules — the raw
+    re-export `ImportFrom` items in source order (source order is load-bearing
+    because the re-export closure resolves name collisions first-wins). A module
+    the symbol indexer cannot parse contributes nothing to the index, so it
+    projects to a distinct unparseable marker. Two files with an equal
+    projection are interchangeable to every other module's parse, so a content
+    edit that leaves the projection stable is provably file-local."""
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError:
+        return {"parseable": False}
+    literal_all = module_literal_all(tree)
+    projection: dict[str, Any] = {
+        "parseable": True,
+        "symbols": [[name, kind] for name, kind in sorted(module_direct_symbols(tree).items())],
+        "all": sorted(literal_all) if literal_all is not None else None,
+    }
+    if path == "__init__.py" or path.endswith("/__init__.py"):
+        reexports: list[dict[str, Any]] = []
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            reexports.append(
+                {
+                    "level": node.level,
+                    "module": node.module,
+                    "names": [[alias.name, alias.asname] for alias in node.names],
+                }
+            )
+        projection["reexports"] = reexports
+    return projection
+
+
+def interface_hash(source: str, path: str) -> str:
+    """Deterministic hash of `module_interface_projection`. `hashlib` (not the
+    salted builtin `hash`) is required so build-time and preflight probes agree
+    across processes."""
+    canonical = json.dumps(module_interface_projection(source, path), separators=(",", ":"), sort_keys=True)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def safe_path_list(value: Any, *, require_python: bool = False) -> list[str] | None:
@@ -5268,6 +5326,45 @@ def parse_document(payload: dict[str, Any]) -> int:
     return 0
 
 
+def extract_interface(payload: dict[str, Any]) -> int:
+    """Single-file interface probe used by the Rust incremental-sync preflight.
+
+    Unlike `parse_document` it needs no whole-project context: the interface
+    projection (top-level symbols, literal `__all__`, `__init__` re-exports) is a
+    pure function of the target file's own text. It returns exactly one bounded,
+    source-free envelope carrying the deterministic `interface_hash`. A host that
+    predates this mode never sends it; a mismatched contract revision receives
+    the same low-cardinality rejection as `parse_document` so the Rust caller can
+    treat the probe as unverified and fall back to a full rebuild."""
+    if (
+        not isinstance(payload, dict)
+        or payload.get("protocol_version") != PROTOCOL_VERSION
+        or payload.get("contract_revision") != PARSE_DOCUMENT_CONTRACT_REVISION
+    ):
+        emit_extract_interface_contract_mismatch()
+        return 0
+    required_fields = {"protocol_version", "contract_revision", "mode", "path", "text"}
+    if not required_fields.issubset(payload) or set(payload) - required_fields:
+        return 2
+    if payload.get("mode") != "extract_interface":
+        return 2
+    if not is_safe_repo_relative_path(payload.get("path")):
+        return 2
+    text = payload.get("text")
+    if not isinstance(text, str):
+        return 2
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
+            "mode": "extract_interface",
+            "path": payload["path"],
+            "interface_hash": interface_hash(text, payload["path"]),
+        }
+    )
+    return 0
+
+
 def safe_project_name(value: Any) -> str | None:
     if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value):
         return value
@@ -6108,6 +6205,8 @@ def analyze_project(payload: dict[str, Any]) -> int:
 def dispatch(payload: Any) -> int:
     if isinstance(payload, dict) and payload.get("mode") == "parse_document":
         return parse_document(payload)
+    if isinstance(payload, dict) and payload.get("mode") == "extract_interface":
+        return extract_interface(payload)
     if isinstance(payload, dict) and payload.get("mode") == "parse_project_config":
         return parse_project_config(payload)
     return analyze_project(payload)

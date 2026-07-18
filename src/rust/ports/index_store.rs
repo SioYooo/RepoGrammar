@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 7;
+pub const STORAGE_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -219,6 +219,10 @@ pub enum IndexStoreError {
     Unavailable(String),
     InvalidState(String),
     InvalidRecord(String),
+    /// The stored index was written by an older storage schema version than this
+    /// build understands. Read paths return this typed error; the recovery is a
+    /// full rebuild via `repogrammar resync`.
+    SchemaVersionOutdated(String),
 }
 
 pub trait IndexStore {
@@ -285,6 +289,40 @@ pub trait GenerationRetentionStore {
         &self,
         request: GenerationPruneRequest,
     ) -> Result<GenerationPruneReport, IndexStoreError>;
+}
+
+/// Reads the RepoGrammar engine version stamped on the active generation when it
+/// was built (`index_generations.repogrammar_version`). The incremental sync
+/// preflight compares it against the running binary: after an upgrade a sync
+/// whose delta avoids the project-context gate (docs-only, inventory-only,
+/// no-op) would otherwise copy forward facts produced by the older engine and
+/// stamp the new version on the fresh generation. Returns `None` when there is
+/// no active generation to read a stamp from.
+pub trait GenerationEngineStampStore {
+    fn active_generation_engine_version(&self) -> Result<Option<String>, IndexStoreError>;
+}
+
+/// One recorded Python module interface hash: the `interface_hash` the frontend
+/// worker produced for `path`'s content when it was last indexed (schema v10
+/// `python_module_interfaces`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonModuleInterfaceRecord {
+    pub path: String,
+    pub interface_hash: String,
+}
+
+/// Reads the active generation's stored Python module interface hashes. The
+/// incremental-sync preflight compares them against freshly probed hashes for
+/// modified `.py` modules: an unchanged hash proves the edit is file-local, a
+/// changed one forces a full rebuild (`python_interface_changed`), and a missing
+/// one forces a full rebuild (`python_interface_unverified` — a module's
+/// build-time interface probe failed; a base generation on an older schema is
+/// rejected earlier by the preflight schema gate, never here). Returns an empty
+/// list when there is no active generation.
+pub trait PythonModuleInterfaceStore {
+    fn active_python_module_interfaces(
+        &self,
+    ) -> Result<Vec<PythonModuleInterfaceRecord>, IndexStoreError>;
 }
 
 pub trait IndexMaintenanceStore {

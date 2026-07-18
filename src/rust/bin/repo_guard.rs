@@ -5,7 +5,9 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::application::install::{managed_instruction_block, MANAGED_INSTRUCTION_VERSION};
+use repogrammar::ports::index_store::IndexStore;
 use sha2::{Digest, Sha256, Sha512};
 
 const ROOT_GUIDES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
@@ -199,6 +201,23 @@ where
 {
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
     match args.as_slice() {
+        [command, rest @ ..] if command == "product-eval" => match product_eval_command(root, rest)
+        {
+            Ok(report) => CommandResult::ok(report),
+            Err(error) => CommandResult::err(format!("product evaluation failed: {error}\n")),
+        },
+        [command, rest @ ..] if command == "sync-equivalence" => {
+            match sync_equivalence_command(root, rest) {
+                Ok(summary) => CommandResult::ok(summary),
+                Err(error) => CommandResult::err(format!("sync-equivalence failed: {error}\n")),
+            }
+        }
+        [command, rest @ ..] if command == "payload-measure" => {
+            match payload_measure_command(root, rest) {
+                Ok(report) => CommandResult::ok(report),
+                Err(error) => CommandResult::err(format!("payload measurement failed: {error}\n")),
+            }
+        }
         [command] if command == "check" => run_check(root),
         [command, flag, source] if command == "sync-agent-guides" && flag == "--from" => {
             match sync_agent_guides(root, source) {
@@ -312,7 +331,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -1169,8 +1188,25 @@ fn smoke_packaged_artifact(
         "packaged check",
         &["check", "--project", &project, "--json", "schemas.py"],
     )?;
-    if check["status"] != "CONTEXT_ONLY" || check["check"]["advisory_status"] != "UNKNOWN" {
-        return Err("packaged check did not preserve advisory UNKNOWN".to_string());
+    // The packaged `check` now emits a static-alignment certificate, never the
+    // deprecated `CONTEXT_ONLY`/nested-advisory shape. Assert the stable key
+    // faces: `status` is one of the five static-alignment tokens, the
+    // runtime-equivalence obligation is held explicitly `UNKNOWN`, the schema
+    // version is stamped, and no legacy nested advisory `check` object leaks.
+    let check_status_is_static_alignment = matches!(
+        check["status"].as_str().unwrap_or_default(),
+        "STATICALLY_ALIGNED"
+            | "STATIC_DEVIATION"
+            | "PARTIAL_ALIGNMENT"
+            | "INSUFFICIENT_EVIDENCE"
+            | "UNKNOWN"
+    );
+    if !check_status_is_static_alignment
+        || check["runtime_equivalence"] != "UNKNOWN"
+        || check["schema_version"] != "product-schemas.v1"
+        || check.get("check").is_some()
+    {
+        return Err("packaged check did not emit a static-alignment certificate".to_string());
     }
 
     let stopped = smoke.run_json(
@@ -2202,6 +2238,3645 @@ fn executable_on_path(name: &str) -> Option<PathBuf> {
     env::split_paths(&path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+const PRODUCT_EVAL_CORPUS_SCHEMA: &str = "product-eval-corpus.v1";
+const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v2";
+
+/// Default recorded `condition` for a plain product run. `--condition <token>`
+/// overrides it verbatim so ablation runs (product built with ablation
+/// env/flags) are recorded distinctly under the same results schema.
+const PRODUCT_EVAL_CONDITION_DEFAULT: &str = "product";
+/// Recorded `condition` for the token-overlap naive baseline control.
+const BASELINE_TOKEN_OVERLAP_CONDITION: &str = "baseline_token_overlap";
+/// Query tokens shorter than this (in characters) are dropped before scoring.
+const BASELINE_MIN_TOKEN_LEN: usize = 3;
+/// Minimum token-overlap score required before the baseline may select a family.
+const BASELINE_SELECT_MIN_SCORE: usize = 2;
+/// Candidate-list depth K at which `candidate_recall` and MRR are evaluated, for
+/// every condition. The baseline also caps its own reported ranking at this K, so
+/// list-quality metrics compare like for like across product and baseline runs.
+const RETRIEVAL_CANDIDATE_K: usize = 5;
+
+/// A naive deterministic retrieval control evaluated on the same corpus gold as
+/// the product, emitted in the same results schema. It exists to contrast the
+/// product against an honest lower bound; it must never be tuned to flatter or
+/// diminish either side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalBaseline {
+    TokenOverlap,
+}
+
+impl EvalBaseline {
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "token-overlap" => Ok(EvalBaseline::TokenOverlap),
+            other => Err(format!("unsupported --baseline '{other}'")),
+        }
+    }
+
+    /// Stable token recorded in the results document's `baseline` field.
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalBaseline::TokenOverlap => "token-overlap",
+        }
+    }
+
+    /// The `condition` recorded when `--condition` is not given explicitly.
+    fn default_condition(self) -> &'static str {
+        match self {
+            EvalBaseline::TokenOverlap => BASELINE_TOKEN_OVERLAP_CONDITION,
+        }
+    }
+}
+
+/// Resolves the recorded `condition` from an optional explicit `--condition` and
+/// the selected baseline. An explicit `product` alongside a baseline is rejected
+/// (a baseline is not the product); otherwise an explicit token wins verbatim, a
+/// baseline contributes its default condition, and a plain run records `product`.
+fn resolve_eval_condition(
+    explicit: Option<String>,
+    baseline: Option<EvalBaseline>,
+) -> Result<String, String> {
+    if baseline.is_some() && explicit.as_deref() == Some(PRODUCT_EVAL_CONDITION_DEFAULT) {
+        return Err(
+            "--condition product is incompatible with --baseline; a baseline is not the product"
+                .to_string(),
+        );
+    }
+    Ok(explicit.unwrap_or_else(|| {
+        baseline
+            .map(|baseline| baseline.default_condition().to_string())
+            .unwrap_or_else(|| PRODUCT_EVAL_CONDITION_DEFAULT.to_string())
+    }))
+}
+
+/// Validates a low-cardinality condition token used to tag a results document.
+/// Accepts `[a-z0-9_-]+` up to 40 characters and returns it verbatim.
+fn validate_condition_token(token: &str) -> Result<String, String> {
+    if token.is_empty() {
+        return Err("--condition must not be empty".to_string());
+    }
+    // Reject a leading '-' so a forgotten flag value (e.g. `--condition --baseline`)
+    // is a hard error rather than a silently accepted condition token.
+    if token.starts_with('-') {
+        return Err("--condition must not start with '-'".to_string());
+    }
+    if !token
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Err("--condition must match [a-z0-9_-]+".to_string());
+    }
+    if token.chars().count() > 40 {
+        return Err("--condition must be at most 40 characters".to_string());
+    }
+    Ok(token.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalOutcome {
+    Ok,
+    PartialContext,
+    Unknown,
+    Fallback,
+}
+
+impl EvalOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalOutcome::Ok => "ok",
+            EvalOutcome::PartialContext => "partial_context",
+            EvalOutcome::Unknown => "unknown",
+            EvalOutcome::Fallback => "fallback",
+        }
+    }
+
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "ok" => Ok(EvalOutcome::Ok),
+            "partial_context" => Ok(EvalOutcome::PartialContext),
+            "unknown" => Ok(EvalOutcome::Unknown),
+            "fallback" => Ok(EvalOutcome::Fallback),
+            other => Err(format!("unsupported expected outcome '{other}'")),
+        }
+    }
+
+    /// Maps a product query `status` string onto the coarse retrieval outcome.
+    /// Retrieval-shaped successes (`ok`/`OK`) are `ok` on the retrieval axis, and
+    /// static-alignment certificates carry their own tokens (handled below via
+    /// `AlignmentStatus::outcome_class`). The legacy `CONTEXT_ONLY` token is
+    /// retained for historical-telemetry tolerance only: the live `check`
+    /// operation no longer emits it (it now returns a static-alignment
+    /// certificate). Any unrecognized status is conservatively reported as
+    /// fallback.
+    fn classify_status(status: &str) -> Self {
+        match status {
+            // `ok`/`OK` are retrieval successes; `CONTEXT_ONLY` is legacy
+            // historical tolerance only (no live operation emits it anymore).
+            "ok" | "OK" | "CONTEXT_ONLY" => EvalOutcome::Ok,
+            // Static-alignment certificates commit a compared answer, so a
+            // committed certificate (aligned or a definite deviation) is `ok`, a
+            // partial alignment maps to partial context, and an abstaining
+            // certificate maps to unknown. This mirrors
+            // `AlignmentStatus::outcome_class`, so a committed retrieval-intent
+            // check query keeps its MRR credit instead of being zeroed as a
+            // fallback.
+            "STATICALLY_ALIGNED" | "STATIC_DEVIATION" => EvalOutcome::Ok,
+            "PARTIAL_CONTEXT" | "PARTIAL_ALIGNMENT" => EvalOutcome::PartialContext,
+            "UNKNOWN" | "INSUFFICIENT_EVIDENCE" => EvalOutcome::Unknown,
+            _ => EvalOutcome::Fallback,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalOperation {
+    Find,
+    Family,
+    Member,
+    Explain,
+    Check,
+}
+
+impl EvalOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalOperation::Find => "find",
+            EvalOperation::Family => "family",
+            EvalOperation::Member => "member",
+            EvalOperation::Explain => "explain",
+            EvalOperation::Check => "check",
+        }
+    }
+
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "find" => Ok(EvalOperation::Find),
+            "family" => Ok(EvalOperation::Family),
+            "member" => Ok(EvalOperation::Member),
+            "explain" => Ok(EvalOperation::Explain),
+            "check" => Ok(EvalOperation::Check),
+            other => Err(format!("unsupported query operation '{other}'")),
+        }
+    }
+}
+
+/// Declares what correct behavior a query is measuring. `retrieval` means a
+/// specific family should be resolved; `abstention` means the correct behavior
+/// is a typed `UNKNOWN` (ambiguous, unsupported, unsafe, or stale input);
+/// `context` means metadata-only local context (`PARTIAL_CONTEXT` or a
+/// zero-family repository). The intent partitions the retrieval metrics below;
+/// it does not change the raw match verdict, which stays field-by-field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalIntent {
+    Retrieval,
+    Abstention,
+    Context,
+}
+
+impl EvalIntent {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalIntent::Retrieval => "retrieval",
+            EvalIntent::Abstention => "abstention",
+            EvalIntent::Context => "context",
+        }
+    }
+
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "retrieval" => Ok(EvalIntent::Retrieval),
+            "abstention" => Ok(EvalIntent::Abstention),
+            "context" => Ok(EvalIntent::Context),
+            other => Err(format!("unsupported query intent '{other}'")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct EvalExpected {
+    outcome: Option<EvalOutcome>,
+    family: Option<String>,
+    family_prefix: Option<String>,
+    family_any_of: Option<Vec<String>>,
+    /// Family-id prefixes that should appear in the actual candidate set. Gold
+    /// for Recall@K/MRR; independent of which single family (if any) is
+    /// selected. An empty/absent list leaves the query out of candidate recall.
+    candidates_include: Option<Vec<String>>,
+    unknown_reason: Option<String>,
+    route: Option<String>,
+    /// First-class matcher for the static-alignment certificate's
+    /// `alignment_status` token (e.g. `STATICALLY_ALIGNED`, `STATIC_DEVIATION`,
+    /// `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`). A mismatch is a query
+    /// mismatch, so alignment golds are enforced rather than decorative.
+    alignment_status: Option<String>,
+}
+
+impl EvalExpected {
+    fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "query expected must be an object".to_string())?;
+        let outcome = match object.get("outcome") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(token) => {
+                Some(EvalOutcome::from_token(token.as_str().ok_or_else(
+                    || "expected.outcome must be a string".to_string(),
+                )?)?)
+            }
+        };
+        let family_any_of = optional_string_array(object, "family_any_of")?;
+        let candidates_include = optional_string_array(object, "candidates_include")?;
+        Ok(Self {
+            outcome,
+            family: optional_object_string(object, "family")?,
+            family_prefix: optional_object_string(object, "family_prefix")?,
+            family_any_of,
+            candidates_include,
+            unknown_reason: optional_object_string(object, "unknown_reason")?,
+            route: optional_object_string(object, "route")?,
+            alignment_status: optional_object_string(object, "alignment_status")?,
+        })
+    }
+
+    fn to_value(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        if let Some(outcome) = self.outcome {
+            map.insert("outcome".to_string(), outcome.as_str().into());
+        }
+        if let Some(alignment_status) = &self.alignment_status {
+            map.insert(
+                "alignment_status".to_string(),
+                alignment_status.clone().into(),
+            );
+        }
+        if let Some(family) = &self.family {
+            map.insert("family".to_string(), family.clone().into());
+        }
+        if let Some(prefix) = &self.family_prefix {
+            map.insert("family_prefix".to_string(), prefix.clone().into());
+        }
+        if let Some(list) = &self.family_any_of {
+            map.insert("family_any_of".to_string(), list.clone().into());
+        }
+        if let Some(list) = &self.candidates_include {
+            map.insert("candidates_include".to_string(), list.clone().into());
+        }
+        if let Some(reason) = &self.unknown_reason {
+            map.insert("unknown_reason".to_string(), reason.clone().into());
+        }
+        if let Some(route) = &self.route {
+            map.insert("route".to_string(), route.clone().into());
+        }
+        serde_json::Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvalActual {
+    outcome: EvalOutcome,
+    route: Option<String>,
+    selected_family: Option<String>,
+    candidate_family_count: usize,
+    candidate_families: Vec<String>,
+    /// Count of families the product hydrated before selecting/abstaining, and
+    /// count of retrieval-pipeline stages executed. Both are read directly from
+    /// `query_route` and stay `None` until the product surfaces them; a later
+    /// wave adds the fields, at which point they populate without a schema bump.
+    hydrated_family_count: Option<u64>,
+    retrieval_stage_count: Option<u64>,
+    unknown_reason: Option<String>,
+    active_generation: Option<String>,
+    /// The static-alignment certificate's `alignment_status` token, when the
+    /// query drove the `check` operation. `None` for other operations.
+    alignment_status: Option<String>,
+}
+
+impl EvalActual {
+    fn from_query_json(value: &serde_json::Value) -> Result<Self, String> {
+        let status = value
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "query output omitted status".to_string())?;
+        let query_route = value.get("query_route");
+        let route = query_route
+            .and_then(|route| route.get("route"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let selected_family = query_route
+            .and_then(|route| route.get("selected_family_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let candidate_families = query_route
+            .and_then(|route| route.get("candidate_family_ids"))
+            .and_then(serde_json::Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let unknown_reason = value
+            .get("unknowns")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|unknowns| unknowns.first())
+            .and_then(|first| first.get("reason"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let hydrated_family_count = query_route
+            .and_then(|route| route.get("hydrated_family_count"))
+            .and_then(serde_json::Value::as_u64);
+        let retrieval_stage_count = query_route
+            .and_then(|route| route.get("retrieval_stage_count"))
+            .and_then(serde_json::Value::as_u64);
+        let active_generation = value
+            .get("active_generation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let alignment_status = value
+            .get("alignment_status")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        Ok(Self {
+            outcome: EvalOutcome::classify_status(status),
+            route,
+            selected_family,
+            candidate_family_count: candidate_families.len(),
+            candidate_families,
+            hydrated_family_count,
+            retrieval_stage_count,
+            unknown_reason,
+            active_generation,
+            alignment_status,
+        })
+    }
+
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "outcome": self.outcome.as_str(),
+            "route": self.route,
+            "selected_family": self.selected_family,
+            "candidate_family_count": self.candidate_family_count,
+            "candidate_families": self.candidate_families,
+            "hydrated_family_count": self.hydrated_family_count,
+            "retrieval_stage_count": self.retrieval_stage_count,
+            "unknown_reason": self.unknown_reason,
+            "active_generation": self.active_generation,
+            "alignment_status": self.alignment_status,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EvalMutation {
+    kind: String,
+    path: String,
+    line: String,
+}
+
+#[derive(Debug, Clone)]
+struct EvalQuery {
+    query_id: String,
+    fixture_id: String,
+    kind: String,
+    /// Optional measurement intent (`retrieval`/`abstention`/`context`). Parsed
+    /// as a new optional field so the corpus schema stays `product-eval-corpus.v1`
+    /// and legacy corpora without it still parse; intent-partitioned metrics only
+    /// count queries that declare an intent.
+    intent: Option<EvalIntent>,
+    operation: EvalOperation,
+    target: String,
+    mode: String,
+    mutation: Option<EvalMutation>,
+    expected: EvalExpected,
+}
+
+impl EvalQuery {
+    fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "corpus query must be an object".to_string())?;
+        let mutation = match object.get("mutation") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(mutation) => {
+                let mutation = mutation
+                    .as_object()
+                    .ok_or_else(|| "query mutation must be an object".to_string())?;
+                Some(EvalMutation {
+                    kind: required_object_string(mutation, "kind")?,
+                    path: required_object_string(mutation, "path")?,
+                    line: required_object_string(mutation, "line")?,
+                })
+            }
+        };
+        let expected = EvalExpected::from_value(
+            object
+                .get("expected")
+                .ok_or_else(|| "corpus query omitted expected".to_string())?,
+        )?;
+        let intent = match optional_object_string(object, "intent")? {
+            None => None,
+            Some(token) => Some(EvalIntent::from_token(&token)?),
+        };
+        Ok(Self {
+            query_id: required_object_string(object, "query_id")?,
+            fixture_id: required_object_string(object, "fixture_id")?,
+            kind: required_object_string(object, "kind")?,
+            intent,
+            operation: EvalOperation::from_token(&required_object_string(object, "operation")?)?,
+            target: required_object_string(object, "target")?,
+            mode: optional_object_string(object, "mode")?.unwrap_or_else(|| "compact".to_string()),
+            mutation,
+            expected,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EvalCorpusFixture {
+    fixture_id: String,
+    root: String,
+}
+
+#[derive(Debug, Clone)]
+struct EvalCorpus {
+    fixtures: Vec<EvalCorpusFixture>,
+    queries: Vec<EvalQuery>,
+}
+
+impl EvalCorpus {
+    fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "corpus must be a JSON object".to_string())?;
+        let schema = object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "corpus omitted schema_version".to_string())?;
+        if schema != PRODUCT_EVAL_CORPUS_SCHEMA {
+            return Err(format!("unsupported corpus schema_version '{schema}'"));
+        }
+        let fixtures_value = object
+            .get("fixtures")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "corpus omitted fixtures array".to_string())?;
+        let mut fixtures = Vec::with_capacity(fixtures_value.len());
+        for fixture in fixtures_value {
+            let fixture = fixture
+                .as_object()
+                .ok_or_else(|| "corpus fixture must be an object".to_string())?;
+            // `description` is validated as an optional string when present but is
+            // not retained: the results schema does not surface fixture prose.
+            let _ = optional_object_string(fixture, "description")?;
+            fixtures.push(EvalCorpusFixture {
+                fixture_id: required_object_string(fixture, "fixture_id")?,
+                root: required_object_string(fixture, "root")?,
+            });
+        }
+        let queries_value = object
+            .get("queries")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "corpus omitted queries array".to_string())?;
+        let mut queries = Vec::with_capacity(queries_value.len());
+        for query in queries_value {
+            queries.push(EvalQuery::from_value(query)?);
+        }
+        if queries.is_empty() {
+            return Err("corpus contains no queries".to_string());
+        }
+        for query in &queries {
+            if !fixtures
+                .iter()
+                .any(|fixture| fixture.fixture_id == query.fixture_id)
+            {
+                return Err(format!(
+                    "query '{}' references unknown fixture '{}'",
+                    query.query_id, query.fixture_id
+                ));
+            }
+        }
+        Ok(Self { fixtures, queries })
+    }
+}
+
+fn required_object_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<String, String> {
+    object
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("missing string field '{key}'"))
+}
+
+fn optional_object_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .ok_or_else(|| format!("field '{key}' must be a string"))?
+                .to_string(),
+        )),
+    }
+}
+
+fn optional_string_array(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<Vec<String>>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(array) => {
+            let array = array
+                .as_array()
+                .ok_or_else(|| format!("field '{key}' must be an array"))?;
+            let mut values = Vec::with_capacity(array.len());
+            for entry in array {
+                values.push(
+                    entry
+                        .as_str()
+                        .ok_or_else(|| format!("field '{key}' entries must be strings"))?
+                        .to_string(),
+                );
+            }
+            Ok(Some(values))
+        }
+    }
+}
+
+fn evaluate_match(expected: &EvalExpected, actual: &EvalActual) -> (bool, Vec<String>) {
+    let mut mismatches = Vec::new();
+    if let Some(outcome) = expected.outcome {
+        if actual.outcome != outcome {
+            mismatches.push("outcome".to_string());
+        }
+    }
+    if let Some(family) = &expected.family {
+        if actual.selected_family.as_deref() != Some(family.as_str()) {
+            mismatches.push("family".to_string());
+        }
+    }
+    if let Some(prefix) = &expected.family_prefix {
+        if !actual
+            .selected_family
+            .as_deref()
+            .is_some_and(|selected| selected.starts_with(prefix.as_str()))
+        {
+            mismatches.push("family_prefix".to_string());
+        }
+    }
+    if let Some(prefixes) = &expected.family_any_of {
+        if !actual.selected_family.as_deref().is_some_and(|selected| {
+            prefixes
+                .iter()
+                .any(|prefix| selected.starts_with(prefix.as_str()))
+        }) {
+            mismatches.push("family_any_of".to_string());
+        }
+    }
+    if let Some(reason) = &expected.unknown_reason {
+        if actual.unknown_reason.as_deref() != Some(reason.as_str()) {
+            mismatches.push("unknown_reason".to_string());
+        }
+    }
+    if let Some(route) = &expected.route {
+        if actual.route.as_deref() != Some(route.as_str()) {
+            mismatches.push("route".to_string());
+        }
+    }
+    if let Some(alignment_status) = &expected.alignment_status {
+        if actual.alignment_status.as_deref() != Some(alignment_status.as_str()) {
+            mismatches.push("alignment_status".to_string());
+        }
+    }
+    (mismatches.is_empty(), mismatches)
+}
+
+/// True when a family was selected but the query's expected family/prefix
+/// constraints exclude it. Queries without a family constraint never count.
+fn is_false_family_selection(expected: &EvalExpected, actual: &EvalActual) -> bool {
+    let Some(selected) = actual.selected_family.as_deref() else {
+        return false;
+    };
+    let mut has_constraint = false;
+    let mut satisfied = true;
+    if let Some(family) = &expected.family {
+        has_constraint = true;
+        if selected != family.as_str() {
+            satisfied = false;
+        }
+    }
+    if let Some(prefix) = &expected.family_prefix {
+        has_constraint = true;
+        if !selected.starts_with(prefix.as_str()) {
+            satisfied = false;
+        }
+    }
+    if let Some(prefixes) = &expected.family_any_of {
+        has_constraint = true;
+        if !prefixes
+            .iter()
+            .any(|prefix| selected.starts_with(prefix.as_str()))
+        {
+            satisfied = false;
+        }
+    }
+    has_constraint && !satisfied
+}
+
+/// True when the query declares at least one family constraint
+/// (`family`/`family_prefix`/`family_any_of`).
+fn has_family_constraint(expected: &EvalExpected) -> bool {
+    expected.family.is_some()
+        || expected.family_prefix.is_some()
+        || expected.family_any_of.is_some()
+}
+
+/// True when `id` satisfies every declared family constraint. Mirrors the
+/// per-field match semantics: exact `family`, `family_prefix` by prefix, and
+/// `family_any_of` by any prefix; all present constraints must hold. Returns
+/// false when no family constraint is declared, so a gold hit always requires an
+/// explicit family target.
+fn id_satisfies_family_gold(expected: &EvalExpected, id: &str) -> bool {
+    let mut present = false;
+    if let Some(family) = &expected.family {
+        present = true;
+        if id != family.as_str() {
+            return false;
+        }
+    }
+    if let Some(prefix) = &expected.family_prefix {
+        present = true;
+        if !id.starts_with(prefix.as_str()) {
+            return false;
+        }
+    }
+    if let Some(prefixes) = &expected.family_any_of {
+        present = true;
+        if !prefixes
+            .iter()
+            .any(|prefix| id.starts_with(prefix.as_str()))
+        {
+            return false;
+        }
+    }
+    present
+}
+
+/// True when the selected family satisfies the query's family gold. This is the
+/// Hit@1 predicate: a single supported selection that matches the gold family.
+fn selected_satisfies_family_gold(expected: &EvalExpected, actual: &EvalActual) -> bool {
+    actual
+        .selected_family
+        .as_deref()
+        .is_some_and(|selected| id_satisfies_family_gold(expected, selected))
+}
+
+/// Reciprocal rank of the committed answer. MRR credits only a run that commits
+/// (an `ok`/`partial_context` outcome): a selection satisfying gold is rank 1, and
+/// otherwise the first gold-satisfying id within the top `RETRIEVAL_CANDIDATE_K`
+/// candidates (1-based) sets the rank. A run that abstains (`unknown`/`fallback`)
+/// scores 0 regardless of its diagnostic candidate list, and a query with no
+/// family constraint scores 0. List construction is measured by `candidate_recall`,
+/// not here.
+fn reciprocal_rank(expected: &EvalExpected, actual: &EvalActual) -> f64 {
+    if !has_family_constraint(expected) {
+        return 0.0;
+    }
+    if matches!(actual.outcome, EvalOutcome::Unknown | EvalOutcome::Fallback) {
+        return 0.0;
+    }
+    if selected_satisfies_family_gold(expected, actual) {
+        return 1.0;
+    }
+    for (index, candidate) in actual
+        .candidate_families
+        .iter()
+        .take(RETRIEVAL_CANDIDATE_K)
+        .enumerate()
+    {
+        if id_satisfies_family_gold(expected, candidate) {
+            return 1.0 / (index as f64 + 1.0);
+        }
+    }
+    0.0
+}
+
+/// True when every `candidates_include` prefix is matched by some candidate family
+/// within the top `RETRIEVAL_CANDIDATE_K`. Empty gold vacuously holds, but such
+/// queries are excluded from the candidate-recall denominator by the caller.
+fn candidate_recall_satisfied(includes: &[String], candidates: &[String]) -> bool {
+    includes.iter().all(|include| {
+        candidates
+            .iter()
+            .take(RETRIEVAL_CANDIDATE_K)
+            .any(|candidate| candidate.starts_with(include.as_str()))
+    })
+}
+
+/// A token-overlap selection: the family the baseline chose (if any) and its
+/// own ranked candidate list (already capped at `RETRIEVAL_CANDIDATE_K`).
+struct BaselineSelection {
+    selected_family: Option<String>,
+    candidate_families: Vec<String>,
+}
+
+/// Lowercases `target`, splits on non-ASCII-alphanumeric characters, drops tokens
+/// shorter than `BASELINE_MIN_TOKEN_LEN` characters, and deduplicates preserving
+/// first occurrence. Deterministic for a given input.
+fn baseline_tokenize(target: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for piece in target
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+    {
+        if piece.chars().count() < BASELINE_MIN_TOKEN_LEN {
+            continue;
+        }
+        let token = piece.to_string();
+        if !tokens.contains(&token) {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
+/// Number of distinct query tokens that occur as substrings of `family_id`
+/// (case-insensitive). `tokens` are already lowercased and deduplicated, so the
+/// count is bounded by `tokens.len()`.
+fn baseline_family_score(tokens: &[String], family_id: &str) -> usize {
+    let lowered = family_id.to_lowercase();
+    tokens
+        .iter()
+        .filter(|token| lowered.contains(token.as_str()))
+        .count()
+}
+
+/// Deterministic token-overlap selection. Scores every family, ranks families
+/// with a positive score by score descending then family id ascending (capped at
+/// `RETRIEVAL_CANDIDATE_K`), and selects the unique argmax only when its score is
+/// at least `BASELINE_SELECT_MIN_SCORE`. A strict tie at the maximum or a
+/// sub-threshold maximum abstains. No aliases, concepts, or margin calibration.
+fn baseline_select_family(tokens: &[String], family_ids: &[String]) -> BaselineSelection {
+    let mut scored: Vec<(usize, &String)> = family_ids
+        .iter()
+        .map(|id| (baseline_family_score(tokens, id), id))
+        .filter(|(score, _)| *score >= 1)
+        .collect();
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+    let candidate_families: Vec<String> = scored
+        .iter()
+        .take(RETRIEVAL_CANDIDATE_K)
+        .map(|(_, id)| (*id).clone())
+        .collect();
+    let max_score = scored.first().map(|(score, _)| *score).unwrap_or(0);
+    let top_count = scored
+        .iter()
+        .filter(|(score, _)| *score == max_score)
+        .count();
+    let selected_family = if max_score >= BASELINE_SELECT_MIN_SCORE && top_count == 1 {
+        scored.first().map(|(_, id)| (*id).clone())
+    } else {
+        None
+    };
+    BaselineSelection {
+        selected_family,
+        candidate_families,
+    }
+}
+
+/// Projects a baseline selection onto the same `EvalActual` shape the product
+/// path produces: a selection reports `ok`, an abstention reports `unknown`. The
+/// baseline has no route, typed unknown reason, or pipeline counters, so those
+/// stay `None`; `active_generation` carries the generation of the family listing.
+fn baseline_actual(selection: BaselineSelection, active_generation: Option<String>) -> EvalActual {
+    let outcome = if selection.selected_family.is_some() {
+        EvalOutcome::Ok
+    } else {
+        EvalOutcome::Unknown
+    };
+    EvalActual {
+        outcome,
+        route: None,
+        selected_family: selection.selected_family,
+        candidate_family_count: selection.candidate_families.len(),
+        candidate_families: selection.candidate_families,
+        hydrated_family_count: None,
+        retrieval_stage_count: None,
+        unknown_reason: None,
+        active_generation,
+        alignment_status: None,
+    }
+}
+
+/// Runs the token-overlap baseline for one query against a fixture's family
+/// listing. Selection is deterministic, so the repetition loop only records
+/// scoring latencies for schema parity with the product path.
+fn run_baseline_query(
+    query: &EvalQuery,
+    active_generation: Option<&str>,
+    family_ids: &[String],
+    repetitions: usize,
+) -> (EvalActual, Vec<u128>) {
+    let tokens = baseline_tokenize(&query.target);
+    let mut latencies = Vec::with_capacity(repetitions);
+    let mut selection = BaselineSelection {
+        selected_family: None,
+        candidate_families: Vec::new(),
+    };
+    for _ in 0..repetitions {
+        let started = std::time::Instant::now();
+        selection = baseline_select_family(&tokens, family_ids);
+        latencies.push(started.elapsed().as_millis());
+    }
+    let actual = baseline_actual(selection, active_generation.map(str::to_string));
+    (actual, latencies)
+}
+
+/// One evaluated query reduced to the fields the retrieval metrics need.
+struct EvalMetricRecord<'a> {
+    intent: Option<EvalIntent>,
+    kind: &'a str,
+    expected: &'a EvalExpected,
+    actual: &'a EvalActual,
+    is_match: bool,
+}
+
+/// Retrieval-quality metrics derived from the intent taxonomy. Every rate keeps
+/// its integer numerator/denominator so a reader can audit it without trusting
+/// the float, and a rate over an empty denominator serializes as `null`.
+#[derive(Debug, Default, PartialEq)]
+struct ProductEvalMetrics {
+    hit_at_1_num: usize,
+    hit_at_1_den: usize,
+    candidate_recall_num: usize,
+    candidate_recall_den: usize,
+    mrr_sum: f64,
+    mrr_den: usize,
+    correct_abstention_num: usize,
+    correct_abstention_den: usize,
+    false_family_selections: usize,
+    family_constrained_total: usize,
+    /// Safety counter: queries whose gold outcome is `unknown` (a family should not
+    /// be committed) where the run nonetheless selected a family. Independent of
+    /// `false_family_selections`, which needs a declared family constraint; an
+    /// abstention-gold query carries none, so a confident wrong selection there is
+    /// invisible to `false_family_selections` but counted here.
+    selected_on_abstention_gold: usize,
+    unsupported_rejection_num: usize,
+    unsupported_rejection_den: usize,
+    ambiguity_precision_num: usize,
+    ambiguity_precision_den: usize,
+    by_intent: std::collections::BTreeMap<&'static str, (usize, usize)>,
+}
+
+fn ratio_value(num: usize, den: usize) -> serde_json::Value {
+    if den == 0 {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(num as f64 / den as f64)
+    }
+}
+
+fn mean_value(sum: f64, den: usize) -> serde_json::Value {
+    if den == 0 {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(sum / den as f64)
+    }
+}
+
+fn format_mean(sum: f64, den: usize) -> String {
+    if den == 0 {
+        "n/a".to_string()
+    } else {
+        format!("{:.3}", sum / den as f64)
+    }
+}
+
+fn compute_product_eval_metrics(records: &[EvalMetricRecord]) -> ProductEvalMetrics {
+    let mut metrics = ProductEvalMetrics::default();
+    for record in records {
+        if let Some(intent) = record.intent {
+            let counters = metrics.by_intent.entry(intent.as_str()).or_insert((0, 0));
+            counters.0 += 1;
+            if record.is_match {
+                counters.1 += 1;
+            }
+        }
+        if has_family_constraint(record.expected) {
+            metrics.family_constrained_total += 1;
+            if is_false_family_selection(record.expected, record.actual) {
+                metrics.false_family_selections += 1;
+            }
+        }
+        if record.expected.outcome == Some(EvalOutcome::Unknown)
+            && record.actual.selected_family.is_some()
+        {
+            metrics.selected_on_abstention_gold += 1;
+        }
+        if let Some(includes) = &record.expected.candidates_include {
+            if !includes.is_empty() {
+                metrics.candidate_recall_den += 1;
+                if candidate_recall_satisfied(includes, &record.actual.candidate_families) {
+                    metrics.candidate_recall_num += 1;
+                }
+            }
+        }
+        if record.kind == "unsupported_concept" {
+            metrics.unsupported_rejection_den += 1;
+            if record.actual.outcome == EvalOutcome::Unknown {
+                metrics.unsupported_rejection_num += 1;
+            }
+        }
+        match record.intent {
+            Some(EvalIntent::Retrieval) => {
+                metrics.hit_at_1_den += 1;
+                if selected_satisfies_family_gold(record.expected, record.actual) {
+                    metrics.hit_at_1_num += 1;
+                }
+                metrics.mrr_den += 1;
+                metrics.mrr_sum += reciprocal_rank(record.expected, record.actual);
+            }
+            Some(EvalIntent::Abstention) => {
+                metrics.correct_abstention_den += 1;
+                if record.actual.outcome == EvalOutcome::Unknown {
+                    metrics.correct_abstention_num += 1;
+                }
+                if record.kind == "ambiguous" || record.kind == "nl_pattern_question" {
+                    metrics.ambiguity_precision_den += 1;
+                    if record.actual.outcome == EvalOutcome::Unknown {
+                        metrics.ambiguity_precision_num += 1;
+                    }
+                }
+            }
+            Some(EvalIntent::Context) | None => {}
+        }
+    }
+    metrics
+}
+
+impl ProductEvalMetrics {
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "hit_at_1": ratio_value(self.hit_at_1_num, self.hit_at_1_den),
+            "hit_at_1_counts": { "num": self.hit_at_1_num, "den": self.hit_at_1_den },
+            "candidate_recall": ratio_value(self.candidate_recall_num, self.candidate_recall_den),
+            "candidate_recall_counts": {
+                "num": self.candidate_recall_num,
+                "den": self.candidate_recall_den,
+            },
+            "mrr": mean_value(self.mrr_sum, self.mrr_den),
+            "mrr_counts": { "den": self.mrr_den },
+            "correct_abstention_rate": ratio_value(
+                self.correct_abstention_num,
+                self.correct_abstention_den,
+            ),
+            "correct_abstention_counts": {
+                "num": self.correct_abstention_num,
+                "den": self.correct_abstention_den,
+            },
+            "false_family_rate": ratio_value(
+                self.false_family_selections,
+                self.family_constrained_total,
+            ),
+            "false_family_selections": self.false_family_selections,
+            "family_constrained_total": self.family_constrained_total,
+            "selected_on_abstention_gold": self.selected_on_abstention_gold,
+            "unsupported_rejection_rate": ratio_value(
+                self.unsupported_rejection_num,
+                self.unsupported_rejection_den,
+            ),
+            "unsupported_rejection_counts": {
+                "num": self.unsupported_rejection_num,
+                "den": self.unsupported_rejection_den,
+            },
+            "ambiguity_precision": ratio_value(
+                self.ambiguity_precision_num,
+                self.ambiguity_precision_den,
+            ),
+            "ambiguity_precision_counts": {
+                "num": self.ambiguity_precision_num,
+                "den": self.ambiguity_precision_den,
+            },
+        })
+    }
+}
+
+fn percentile(values: &[u128], percentile: u8) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let rank = (percentile as usize * sorted.len()).div_ceil(100);
+    let index = rank.saturating_sub(1).min(sorted.len() - 1);
+    sorted[index]
+}
+
+fn unix_seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_position = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_position + 2) / 5 + 1) as u32;
+    let month = if month_position < 10 {
+        month_position + 3
+    } else {
+        month_position - 9
+    } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+fn rfc3339_utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let remainder = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = remainder / 3600;
+    let minute = (remainder % 3600) / 60;
+    let second = remainder % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn fixture_version_hash(root: &Path) -> Result<String, String> {
+    let mut files = Vec::new();
+    collect_fixture_files(root, root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut hasher = Sha256::new();
+    for (relative, absolute) in &files {
+        hasher.update((relative.len() as u64).to_le_bytes());
+        hasher.update(relative.as_bytes());
+        let contents = fs::read(absolute)
+            .map_err(|_| "could not read fixture file for hashing".to_string())?;
+        hasher.update((contents.len() as u64).to_le_bytes());
+        hasher.update(&contents);
+    }
+    Ok(hex_digest(hasher.finalize().as_slice()))
+}
+
+fn collect_fixture_files(
+    base: &Path,
+    current: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<(), String> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(current)
+        .map_err(|_| "could not read fixture directory for hashing".to_string())?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    entries.sort();
+    for entry in entries {
+        let metadata = fs::symlink_metadata(&entry)
+            .map_err(|_| "could not inspect fixture entry for hashing".to_string())?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_fixture_files(base, &entry, out)?;
+        } else if metadata.is_file() {
+            let relative = entry
+                .strip_prefix(base)
+                .map_err(|_| "fixture path escaped the fixture root".to_string())?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| "fixture path was not UTF-8".to_string())?
+                .replace('\\', "/");
+            out.push((relative, entry));
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_sorted(src: &Path, dst: &Path) -> Result<(), String> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(src)
+        .map_err(|_| "could not read fixture directory".to_string())?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    entries.sort();
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .ok_or_else(|| "fixture entry has no file name".to_string())?;
+        let target = dst.join(name);
+        let metadata = fs::symlink_metadata(&entry)
+            .map_err(|_| "could not inspect fixture entry".to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err("fixture contains a symlink, which is not supported".to_string());
+        }
+        if metadata.is_dir() {
+            fs::create_dir_all(&target)
+                .map_err(|_| "could not create fixture subdirectory".to_string())?;
+            copy_dir_sorted(&entry, &target)?;
+        } else if metadata.is_file() {
+            fs::copy(&entry, &target).map_err(|_| "could not copy fixture file".to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn unique_product_eval_root() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    env::temp_dir().join(format!(
+        "repogrammar-product-eval-{}-{nanos}-{sequence}",
+        std::process::id()
+    ))
+}
+
+struct ResyncStats {
+    latency_ms: u128,
+    discovered_files: Option<u64>,
+    stored_files: Option<u64>,
+}
+
+struct EvalWorkspace {
+    root: PathBuf,
+    home: PathBuf,
+    project: PathBuf,
+    tools: PathBuf,
+    binary: PathBuf,
+    python: PathBuf,
+    cleanup: std::cell::Cell<bool>,
+}
+
+impl EvalWorkspace {
+    fn new(binary: &Path, fixture_source: &Path) -> Result<Self, String> {
+        let root = unique_product_eval_root();
+        let home = root.join("home");
+        let project = root.join("project");
+        let tools = root.join("tools");
+        fs::create_dir_all(&home).map_err(|_| "could not create isolated eval HOME".to_string())?;
+        fs::create_dir_all(&project)
+            .map_err(|_| "could not create isolated eval project".to_string())?;
+        fs::create_dir_all(&tools)
+            .map_err(|_| "could not create isolated eval tool PATH".to_string())?;
+        let python = prepare_isolated_tool_path(&tools)?;
+        copy_dir_sorted(fixture_source, &project)?;
+        Ok(Self {
+            root,
+            home,
+            project,
+            tools,
+            binary: binary.to_path_buf(),
+            python,
+            cleanup: std::cell::Cell::new(true),
+        })
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env_clear()
+            .current_dir(&self.project)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("XDG_DATA_HOME", self.home.join(".local/share"))
+            .env("XDG_CACHE_HOME", self.home.join(".cache"))
+            .env("CODEX_HOME", self.home.join(".codex"))
+            .env("PATH", &self.tools)
+            .env("REPOGRAMMAR_PYTHON_EXECUTABLE", &self.python)
+            .env("REPOGRAMMAR_TELEMETRY", "0")
+            .env("DO_NOT_TRACK", "1");
+        command
+    }
+
+    fn project_arg(&self) -> Result<String, String> {
+        self.project
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| "isolated eval project path was not UTF-8".to_string())
+    }
+
+    fn init(&self) -> Result<(), String> {
+        let project = self.project_arg()?;
+        let output = self
+            .command()
+            .args([
+                "init",
+                "--project",
+                &project,
+                "--yes",
+                "--json",
+                "--progress",
+                "never",
+            ])
+            .output()
+            .map_err(|_| "eval init could not execute".to_string())?;
+        if !output.status.success() {
+            return Err("eval init returned a failure status".to_string());
+        }
+        Ok(())
+    }
+
+    fn resync(&self) -> Result<ResyncStats, String> {
+        let project = self.project_arg()?;
+        let started = std::time::Instant::now();
+        let output = self
+            .command()
+            .args([
+                "resync",
+                "--project",
+                &project,
+                "--json",
+                "--progress",
+                "never",
+            ])
+            .output()
+            .map_err(|_| "eval resync could not execute".to_string())?;
+        let latency_ms = started.elapsed().as_millis();
+        if !output.status.success() {
+            return Err("eval resync returned a failure status".to_string());
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| "eval resync output was not UTF-8".to_string())?;
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|_| "eval resync output was not JSON".to_string())?;
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("complete") {
+            return Err("eval resync did not complete".to_string());
+        }
+        Ok(ResyncStats {
+            latency_ms,
+            discovered_files: value
+                .get("discovered_files")
+                .and_then(serde_json::Value::as_u64),
+            stored_files: value
+                .get("stored_files")
+                .and_then(serde_json::Value::as_u64),
+        })
+    }
+
+    /// Fetches the product's `families --json` listing once for an indexed
+    /// fixture. Returns the active generation and every reported `family_id`;
+    /// an empty (typed-`UNKNOWN`) listing yields an empty vector rather than an
+    /// error, so the baseline abstains everywhere for that fixture.
+    fn families(&self) -> Result<(Option<String>, Vec<String>), String> {
+        let project = self.project_arg()?;
+        let output = self
+            .command()
+            .args(["families", "--project", &project, "--json"])
+            .output()
+            .map_err(|_| "eval families listing could not execute".to_string())?;
+        if !output.status.success() {
+            return Err("eval families listing returned a failure status".to_string());
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| "eval families listing output was not UTF-8".to_string())?;
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|_| "eval families listing output was not JSON".to_string())?;
+        let active_generation = value
+            .get("active_generation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let family_ids = value
+            .get("families")
+            .and_then(serde_json::Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .get("family_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok((active_generation, family_ids))
+    }
+
+    fn apply_mutation(&self, mutation: &EvalMutation) -> Result<(), String> {
+        if mutation.kind != "append_line" {
+            return Err(format!("unsupported mutation kind '{}'", mutation.kind));
+        }
+        let relative = Path::new(&mutation.path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err("mutation path must be a normalized relative path".to_string());
+        }
+        let target = self.project.join(relative);
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&target)
+            .map_err(|_| "could not open fixture file for mutation".to_string())?;
+        writeln!(file, "\n{}", mutation.line).map_err(|_| "could not apply mutation".to_string())
+    }
+
+    fn run_query(
+        &self,
+        query: &EvalQuery,
+        repetitions: usize,
+    ) -> Result<(EvalActual, Vec<u128>), String> {
+        let project = self.project_arg()?;
+        let mut latencies = Vec::with_capacity(repetitions);
+        let mut last_stdout = None;
+        for _ in 0..repetitions {
+            let started = std::time::Instant::now();
+            let output = self
+                .command()
+                .args([
+                    query.operation.as_str(),
+                    query.target.as_str(),
+                    "--project",
+                    &project,
+                    "--mode",
+                    query.mode.as_str(),
+                    "--json",
+                ])
+                .output()
+                .map_err(|_| format!("query '{}' could not execute", query.query_id))?;
+            latencies.push(started.elapsed().as_millis());
+            last_stdout = Some(
+                String::from_utf8(output.stdout)
+                    .map_err(|_| format!("query '{}' output was not UTF-8", query.query_id))?,
+            );
+        }
+        let stdout = last_stdout
+            .ok_or_else(|| format!("query '{}' produced no repetitions", query.query_id))?;
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|_| format!("query '{}' output was not JSON", query.query_id))?;
+        let actual = EvalActual::from_query_json(&value)?;
+        Ok((actual, latencies))
+    }
+
+    /// Captures one query response as the verbatim CLI `--json` payload plus its
+    /// exact serialized byte length, threading the requested `verbosity` tier.
+    /// Unlike [`EvalWorkspace::run_query`] it performs no matching or
+    /// repetitions and does not require a success exit status, so abstention,
+    /// partial-context, and insufficient-evidence shapes (which the product
+    /// emits on stdout) are measured verbatim. The byte length is the trimmed
+    /// payload length, excluding any trailing newline, so it is stable across
+    /// runs of the same fixture and binary. Used only by the payload-measure
+    /// harness; the resolution decision is unchanged.
+    fn capture_query_json(
+        &self,
+        operation: &str,
+        target: &str,
+        mode: &str,
+        verbosity: &str,
+        include_source_spans: bool,
+    ) -> Result<(serde_json::Value, usize), String> {
+        let project = self.project_arg()?;
+        let mut command = self.command();
+        command.args([
+            operation,
+            target,
+            "--project",
+            &project,
+            "--mode",
+            mode,
+            "--verbosity",
+            verbosity,
+            "--json",
+        ]);
+        if include_source_spans {
+            command.arg("--include-source-spans");
+        }
+        let output = command.output().map_err(|_| {
+            format!("payload-measure query '{operation} {target}' could not execute")
+        })?;
+        let stdout = String::from_utf8(output.stdout).map_err(|_| {
+            format!("payload-measure query '{operation} {target}' output was not UTF-8")
+        })?;
+        let trimmed = stdout.trim();
+        let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|_| {
+            format!("payload-measure query '{operation} {target}' output was not JSON")
+        })?;
+        Ok((value, trimmed.len()))
+    }
+
+    /// Drives the product's MCP `serve` stdio surface for a single
+    /// `inspect_readiness` call and returns the bounded, source-free readiness
+    /// payload plus its serialized byte length. This measures the actual MCP
+    /// readiness surface (lean by construction) rather than the CLI `status`
+    /// lifecycle command, whose storage internals (`wal_bytes`/`shm_bytes`/...)
+    /// are volatile and out of scope for the response-precision policy.
+    fn capture_inspect_readiness(&self) -> Result<(serde_json::Value, usize), String> {
+        let project = self.project_arg()?;
+        let mut child = self
+            .command()
+            .args(["serve", "--project", &project])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| "payload-measure could not start MCP serve".to_string())?;
+        let requests = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\
+{\"name\":\"repogrammar_context\",\"arguments\":{\"operation\":\"inspect_readiness\"}}}\n"
+        );
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "payload-measure MCP serve stdin was unavailable".to_string())?
+            .write_all(requests.as_bytes())
+            .map_err(|_| "payload-measure could not write the MCP serve request".to_string())?;
+        let output = child
+            .wait_with_output()
+            .map_err(|_| "payload-measure MCP serve did not complete".to_string())?;
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| "payload-measure MCP serve output was not UTF-8".to_string())?;
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let message: serde_json::Value = match serde_json::from_str(line) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if message.get("id").and_then(serde_json::Value::as_u64) != Some(1) {
+                continue;
+            }
+            let text = message
+                .get("result")
+                .and_then(|result| result.get("content"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "MCP inspect_readiness response had no text content".to_string())?;
+            let value: serde_json::Value = serde_json::from_str(text)
+                .map_err(|_| "MCP inspect_readiness content was not JSON".to_string())?;
+            return Ok((value, text.len()));
+        }
+        Err("MCP inspect_readiness produced no tools/call response".to_string())
+    }
+
+    fn retain(&self) {
+        if self.cleanup.replace(false) {
+            eprintln!(
+                "product-eval workspace retained for inspection: {}",
+                self.root.display()
+            );
+        }
+    }
+}
+
+impl Drop for EvalWorkspace {
+    fn drop(&mut self) {
+        if self.cleanup.get() {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
+fn retain_workspaces(workspaces: &[(String, EvalWorkspace)]) {
+    for (_, workspace) in workspaces {
+        workspace.retain();
+    }
+}
+
+fn resolve_product_binary(root: &Path, bin_override: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(explicit) = bin_override {
+        return regular_input_file(root, explicit, "repogrammar binary");
+    }
+    let current = env::current_exe()
+        .map_err(|_| "could not resolve the running executable path".to_string())?;
+    let directory = current
+        .parent()
+        .ok_or_else(|| "running executable has no parent directory".to_string())?;
+    let sibling = directory.join("repogrammar");
+    let metadata = fs::symlink_metadata(&sibling)
+        .map_err(|_| "sibling repogrammar binary not found; pass --bin <path>".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(
+            "sibling repogrammar binary is not a regular file; pass --bin <path>".to_string(),
+        );
+    }
+    fs::canonicalize(&sibling)
+        .map_err(|_| "sibling repogrammar binary is unavailable; pass --bin <path>".to_string())
+}
+
+fn corpus_relative_path(root: &Path, absolute: &Path, original: &str) -> String {
+    if let Ok(relative) = absolute.strip_prefix(root) {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    if !Path::new(original).is_absolute() {
+        return original.replace('\\', "/");
+    }
+    original.to_string()
+}
+
+// ===========================================================================
+// Phase 4 S0: incremental/full-build equivalence oracle.
+//
+// `sync-equivalence` proves that a dependency-gated incremental `sync` produces
+// a semantically identical active generation to a clean full rebuild over the
+// same worktree, or explicitly falls back to a full rebuild. It drives the
+// product `repogrammar` binary in isolated workspaces (identical env to
+// `product-eval`) and compares canonical dumps of the product's own read
+// surfaces plus the semantic-fact ledger.
+//
+// Canonicalization strips only the sanctioned non-semantic fields: generation
+// ids/timestamps (never surfaced into the compared dumps — the top-level
+// `active_generation` of every response and the `unknown_inventory`'s
+// `active_generation` are dropped) and the order/history-assigned
+// `fact_id`/`evidence_id` sequence numbers (excluded from the fact content
+// tuple). The single sanctioned semantic divergence — provider/worker-origin
+// facts retained by a worker-less incremental sync for unchanged files — is
+// encoded explicitly: such facts are checked against the retention rule
+// (path unchanged and content hash matching the current indexed file) instead
+// of by equality with the clean rebuild. Every v1 scenario is worker-less, so
+// that provider bucket is empty by construction; the rule is nonetheless
+// applied rather than blanket-ignored.
+// ===========================================================================
+
+/// A scripted, deterministic patch applied identically to the incremental
+/// workspace (after its base build) and the clean-rebuild workspace, together
+/// with the outcome the oracle demands. A scenario passes only when the observed
+/// outcome and (for fallbacks) the fallback reason match these expectations, so
+/// an unexpected `EQUAL` (a gate that silently regressed to the incremental
+/// path), an unexpected fallback (e.g. a preflight that misfires and falls back
+/// everywhere), or a wrong fallback reason all exit non-zero.
+struct SyncEquivalenceScenario {
+    id: &'static str,
+    patch_summary: &'static str,
+    apply: fn(&Path) -> Result<(), String>,
+    expected_outcome: &'static str,
+    expected_fallback_reason: Option<&'static str>,
+    /// When set, the observed `reparsed_files` in the sync report must match
+    /// exactly. Used to prove a file-local incremental path reparsed only the
+    /// edited file(s) rather than silently rebuilding more; `None` skips the
+    /// check (e.g. every full-rebuild fallback, which reparses everything).
+    expected_reparsed_files: Option<usize>,
+}
+
+const SYNC_EQUIVALENCE_SCENARIOS: &[SyncEquivalenceScenario] = &[
+    SyncEquivalenceScenario {
+        id: "java_edit",
+        patch_summary: "modify a Java test-method body (file-local incremental path)",
+        apply: patch_java_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "csharp_edit",
+        patch_summary: "modify a C# test-method body (file-local incremental path)",
+        apply: patch_csharp_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "docs_noop",
+        patch_summary: "edit an undiscovered Markdown file (empty delta, no-op sync)",
+        apply: patch_docs_noop,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "java_add",
+        patch_summary: "add a new Java test file (incremental add path)",
+        apply: patch_java_add,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "java_delete",
+        patch_summary: "delete a Java test file (incremental remove path)",
+        apply: patch_java_delete,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "rs_content_edit",
+        patch_summary: "modify a Rust test-fn body (file-local incremental fast path)",
+        apply: patch_rs_content_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: Some(1),
+    },
+    SyncEquivalenceScenario {
+        id: "tsjs_content_edit",
+        patch_summary: "modify a TS ambient test body (file-local incremental fast path)",
+        apply: patch_tsjs_content_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        expected_reparsed_files: Some(1),
+    },
+    SyncEquivalenceScenario {
+        id: "tsjs_add",
+        patch_summary: "add a new TS test file (path set grows: fallback)",
+        apply: patch_tsjs_add,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "rs_add",
+        patch_summary: "add a new Rust source file (path set grows: fallback)",
+        apply: patch_rs_add,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "mocharc_remove",
+        patch_summary: "remove .mocharc.json, flipping the TS/JS test-runner flag (defect-1 fix)",
+        apply: patch_mocharc_remove,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "python_body_edit",
+        patch_summary:
+            "modify a Python function body (interface unchanged: file-local incremental)",
+        apply: patch_python_body_edit,
+        expected_outcome: "EQUAL",
+        expected_fallback_reason: None,
+        // Only the edited module is reparsed; the sibling conftest copies forward.
+        expected_reparsed_files: Some(1),
+    },
+    SyncEquivalenceScenario {
+        id: "python_interface_edit",
+        patch_summary: "add a top-level Python function (interface changes: fallback)",
+        apply: patch_python_interface_edit,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("python_interface_changed"),
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "python_conftest_edit",
+        patch_summary:
+            "modify a conftest.py body (fixture context: fallback regardless of interface)",
+        apply: patch_python_conftest_edit,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("project_context_changed"),
+        expected_reparsed_files: None,
+    },
+    SyncEquivalenceScenario {
+        id: "python_context_budget",
+        patch_summary:
+            "grow a control-char-dense Python module body across the context-payload budget (interface unchanged: fallback)",
+        apply: patch_python_context_budget,
+        expected_outcome: "FELL_BACK",
+        expected_fallback_reason: Some("python_context_budget"),
+        expected_reparsed_files: None,
+    },
+];
+
+fn sync_equivalence_replace_once(
+    project: &Path,
+    relative: &str,
+    needle: &str,
+    replacement: &str,
+) -> Result<(), String> {
+    let path = project.join(relative);
+    let text = fs::read_to_string(&path)
+        .map_err(|_| format!("could not read scenario file '{relative}'"))?;
+    let Some(position) = text.find(needle) else {
+        return Err(format!("scenario needle not found in '{relative}'"));
+    };
+    let mut patched = String::with_capacity(text.len() + replacement.len());
+    patched.push_str(&text[..position]);
+    patched.push_str(replacement);
+    patched.push_str(&text[position + needle.len()..]);
+    fs::write(&path, patched).map_err(|_| format!("could not write scenario file '{relative}'"))
+}
+
+fn patch_java_edit(project: &Path) -> Result<(), String> {
+    sync_equivalence_replace_once(
+        project,
+        "service/java/OrderServiceTest.java",
+        "void placesOrder() {\n        assert true;",
+        "void placesOrder() {\n        assert 1 == 1;",
+    )
+}
+
+fn patch_csharp_edit(project: &Path) -> Result<(), String> {
+    sync_equivalence_replace_once(
+        project,
+        "service/csharp/CatalogTests.cs",
+        "public void ReturnsItems()\n    {\n        Assert.True(true);",
+        "public void ReturnsItems()\n    {\n        Assert.True(1 == 1);",
+    )
+}
+
+fn patch_docs_noop(project: &Path) -> Result<(), String> {
+    let path = project.join("docs/NOTES.md");
+    let mut text =
+        fs::read_to_string(&path).map_err(|_| "could not read scenario file 'docs/NOTES.md'")?;
+    text.push_str("\nAppended by the docs-only no-op scenario.\n");
+    fs::write(&path, text).map_err(|_| "could not write scenario file 'docs/NOTES.md'".to_string())
+}
+
+fn patch_rs_content_edit(project: &Path) -> Result<(), String> {
+    // Content-only edit of one Rust test-fn body. The Rust path set and (absent)
+    // manifest are unchanged, so only this file is reparsed on the incremental
+    // path; the recomputed family must match a clean rebuild exactly.
+    sync_equivalence_replace_once(
+        project,
+        "service/rust/order_service.rs",
+        "let outcome = place_order(\"alpha\");",
+        "let outcome = place_order(\"renamed\");",
+    )
+}
+
+fn patch_tsjs_content_edit(project: &Path) -> Result<(), String> {
+    // Content-only edit of one TS ambient test body. TS parsing consumes only the
+    // path set and root config, so the edit is file-local and stays incremental.
+    sync_equivalence_replace_once(
+        project,
+        "web/users.test.ts",
+        "it(\"loads users\", () => {});",
+        "it(\"loads users\", () => { return; });",
+    )
+}
+
+fn patch_tsjs_add(project: &Path) -> Result<(), String> {
+    // Adding a TS file grows `tsjs_module_paths`, which can change how other files
+    // resolve import specifiers, so the gate must fall back to a full rebuild.
+    fs::write(
+        project.join("web/payments.test.ts"),
+        "describe(\"ambient payments\", () => {\n  it(\"loads payments\", () => {});\n  test(\"refunds payments\", () => {});\n});\n",
+    )
+    .map_err(|_| "could not add scenario file 'web/payments.test.ts'".to_string())
+}
+
+fn patch_rs_add(project: &Path) -> Result<(), String> {
+    // Adding a Rust file grows `rust_module_paths`, which can change `mod`
+    // candidate resolution for other files, so the gate must fall back.
+    fs::write(
+        project.join("service/rust/extra_service.rs"),
+        "#[test]\nfn refunds_order() {\n    let outcome = settle_order(\"delta\");\n    assert!(outcome);\n}\n\nfn settle_order(_name: &str) -> bool {\n    true\n}\n",
+    )
+    .map_err(|_| "could not add scenario file 'service/rust/extra_service.rs'".to_string())
+}
+
+fn patch_mocharc_remove(project: &Path) -> Result<(), String> {
+    // Removing the root .mocharc.json flips the global TS/JS test-runner flag
+    // off. The ambient tests under web/ form runner families only while the flag
+    // is on, so if the gate ever regressed to the incremental path B would copy
+    // forward the stale flag-on families while the clean rebuild C would not,
+    // producing a real inequality on top of the expected-outcome check.
+    fs::remove_file(project.join(".mocharc.json"))
+        .map_err(|_| "could not delete scenario file '.mocharc.json'".to_string())
+}
+
+fn patch_python_body_edit(project: &Path) -> Result<(), String> {
+    // A function-body edit that leaves every top-level symbol, `__all__`, and
+    // `__init__` re-export untouched: the module interface hash is stable, so the
+    // edit is provably file-local. Only `analytics/app.py` reparses; its sibling
+    // `analytics/conftest.py` copies forward, and the result must equal a clean
+    // rebuild exactly.
+    sync_equivalence_replace_once(
+        project,
+        "analytics/app.py",
+        "return \"default\"",
+        "return \"primary\"",
+    )
+}
+
+fn patch_python_interface_edit(project: &Path) -> Result<(), String> {
+    // Adding a top-level function changes `analytics/app.py`'s exported symbol
+    // surface, so the interface hash changes and the preflight must fall back to
+    // a full rebuild rather than reparse the file in isolation (another module
+    // could resolve the new symbol).
+    sync_equivalence_replace_once(
+        project,
+        "analytics/app.py",
+        "def current_tenant() -> str:",
+        "def new_public_helper() -> int:\n    return 0\n\n\ndef current_tenant() -> str:",
+    )
+}
+
+fn patch_python_conftest_edit(project: &Path) -> Result<(), String> {
+    // A `conftest.py` edit alters ancestor pytest-fixture context for its whole
+    // subtree, which the module interface projection deliberately does not model,
+    // so a conftest change always forces a full rebuild regardless of its
+    // interface hash. This is the safety carve-out that keeps the interface fast
+    // path sound.
+    sync_equivalence_replace_once(
+        project,
+        "analytics/conftest.py",
+        "return \"default\"",
+        "return \"primary\"",
+    )
+}
+
+fn patch_python_context_budget(project: &Path) -> Result<(), String> {
+    // Grow the body-local blob of `analytics/escape_heavy.py` from its sentinel to
+    // 128 KiB of U+0001 control bytes. The edit changes no top-level symbol,
+    // `__all__`, or re-export, so the module interface hash is stable and the
+    // interface probe would pass — but the added bytes push the whole-project
+    // Python context-payload estimate across the incremental-sync budget
+    // (`raw * 6 >= MAX_PYTHON_FRONTEND_INPUT_BYTES`, the 1 MiB worker cap). Control
+    // bytes are the worst case the size-only budget gate must bound: serde_json
+    // escapes each to a six-byte `\uXXXX` sequence, so this module's ~128 KiB
+    // escape to ~768 KiB. The gate must fall back with `python_context_budget`
+    // before probing the (stable) interface. The retired 2x headroom judged this
+    // same manifest safe (`raw * 2 < cap`) and would copy sibling facts forward
+    // under a regime the real request can no longer serialize context-complete, so
+    // this scenario fails closed if that unsound bound ever returns.
+    let blob = "\u{1}".repeat(131_072);
+    sync_equivalence_replace_once(
+        project,
+        "analytics/escape_heavy.py",
+        "ESCAPE_HEAVY_BLOB_SENTINEL",
+        &blob,
+    )
+}
+
+fn patch_java_add(project: &Path) -> Result<(), String> {
+    let path = project.join("service/java/ExtraServiceTest.java");
+    fs::write(
+        &path,
+        "package com.example.orders;\n\nimport org.junit.jupiter.api.Test;\n\nclass ExtraServiceTest {\n    @Test\n    void reservesOrder() {\n        assert true;\n    }\n}\n",
+    )
+    .map_err(|_| "could not add scenario file 'service/java/ExtraServiceTest.java'".to_string())
+}
+
+fn patch_java_delete(project: &Path) -> Result<(), String> {
+    fs::remove_file(project.join("service/java/OrderServiceTest.java")).map_err(|_| {
+        "could not delete scenario file 'service/java/OrderServiceTest.java'".to_string()
+    })
+}
+
+/// Canonical serialization with recursively sorted object keys, so the compared
+/// strings are independent of the product's JSON map ordering.
+fn canonical_json_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let inner: Vec<String> = keys
+                .iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::String((*key).clone()),
+                        canonical_json_string(&map[*key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(canonical_json_string).collect();
+            format!("[{}]", inner.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
+fn sync_equivalence_sorted_items(value: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut items: Vec<String> = value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|array| array.iter().map(canonical_json_string).collect())
+        .unwrap_or_default();
+    items.sort();
+    items
+}
+
+/// One compared read surface's multiset difference between the incremental
+/// state (B) and the clean rebuild (C), with bounded samples.
+struct SyncEquivalenceSurfaceDiff {
+    surface: &'static str,
+    equal: bool,
+    b_only_sample: Vec<String>,
+    c_only_sample: Vec<String>,
+    note: Option<String>,
+}
+
+const SYNC_EQUIVALENCE_DIFF_SAMPLE_CAP: usize = 8;
+
+fn sync_equivalence_multiset_diff(b: &[String], c: &[String]) -> (Vec<String>, Vec<String>) {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<&str, i64> = BTreeMap::new();
+    for item in b {
+        *counts.entry(item.as_str()).or_default() += 1;
+    }
+    for item in c {
+        *counts.entry(item.as_str()).or_default() -= 1;
+    }
+    let mut b_only = Vec::new();
+    let mut c_only = Vec::new();
+    for (item, count) in counts {
+        if count > 0 {
+            b_only.push(item.to_string());
+        } else if count < 0 {
+            c_only.push(item.to_string());
+        }
+    }
+    b_only.truncate(SYNC_EQUIVALENCE_DIFF_SAMPLE_CAP);
+    c_only.truncate(SYNC_EQUIVALENCE_DIFF_SAMPLE_CAP);
+    (b_only, c_only)
+}
+
+fn sync_equivalence_surface(
+    surface: &'static str,
+    b: &[String],
+    c: &[String],
+) -> SyncEquivalenceSurfaceDiff {
+    let (b_only_sample, c_only_sample) = sync_equivalence_multiset_diff(b, c);
+    SyncEquivalenceSurfaceDiff {
+        surface,
+        equal: b_only_sample.is_empty() && c_only_sample.is_empty(),
+        b_only_sample,
+        c_only_sample,
+        note: None,
+    }
+}
+
+/// The one semantic-fact origin a worker-less clean rebuild genuinely cannot
+/// reproduce: raw facts from an external TypeScript worker (`typescript`),
+/// retained for unchanged files by a worker-less incremental sync — the design's
+/// single sanctioned divergence. `cargo_metadata` is deliberately excluded: the
+/// in-binary Rust provider runs under the identical isolated environment in both
+/// the incremental base build and the clean rebuild, so its facts are
+/// reproducible in C and must be compared by strict equality like any other
+/// local engine.
+fn sync_equivalence_is_worker_provider_origin(origin_engine: &str) -> bool {
+    origin_engine == "typescript"
+}
+
+/// Canonical content tuple of a semantic fact: every persisted field except the
+/// order/history-assigned `fact_id`/`evidence_id` (re-keyed across generations).
+/// `content_hash` IS included — it records the file content the fact was
+/// extracted from and is exactly the field that distinguishes a wrongfully
+/// retained (stale) fact from a correctly re-parsed one when all other fields
+/// coincide; in a correct incremental sync every retained fact's hash equals the
+/// current file hash, so equality with the clean rebuild still holds.
+/// `target` Option-ness is encoded explicitly (`some:`/`none`) so `None` and
+/// `Some("")` never collapse, and assumptions keep their emitted order joined by
+/// the unit separator so `["a,b"]` and `["a","b"]` cannot canonicalize alike.
+fn sync_equivalence_fact_tuple(
+    fact: &repogrammar::ports::index_store::IndexedSemanticFactRecord,
+) -> String {
+    let target = match &fact.target {
+        Some(value) => format!("some:{value}"),
+        None => "none".to_string(),
+    };
+    [
+        fact.path.clone(),
+        fact.content_hash.as_str().to_string(),
+        fact.start_byte.to_string(),
+        fact.end_byte.to_string(),
+        fact.code_unit_id.clone(),
+        fact.kind.clone(),
+        fact.subject.clone(),
+        target,
+        fact.certainty.clone(),
+        fact.origin_engine.clone(),
+        fact.origin_engine_version.clone(),
+        fact.origin_method.clone(),
+        fact.assumptions.join("\u{1f}"),
+        fact.note.clone(),
+    ]
+    .join("\u{1f}")
+}
+
+/// Store-port ledgers read through the `SqliteIndexStore` handle: the
+/// semantic-fact multiset (partitioned local vs external-worker provider), the
+/// IR graph (which has bespoke incremental copy-forward logic that a full
+/// rebuild replays differently), and the repo-shape stats. These are not exposed
+/// by any product CLI read surface.
+struct SyncEquivalenceStoreLedgers {
+    facts_local: Vec<String>,
+    facts_provider: Vec<String>,
+    provider_retained_ok: bool,
+    ir_nodes: Vec<String>,
+    ir_edges: Vec<String>,
+    repo_shape: Vec<String>,
+}
+
+fn sync_equivalence_dump_store_ledgers(
+    state_dir: &Path,
+) -> Result<SyncEquivalenceStoreLedgers, String> {
+    use std::collections::BTreeMap;
+    let store = SqliteIndexStore::new(state_dir);
+    let facts = store
+        .list_active_semantic_facts()
+        .map_err(|_| "could not read the semantic-fact ledger".to_string())?
+        .facts;
+    let file_hashes: BTreeMap<String, String> = store
+        .list_active_indexed_files()
+        .map_err(|_| "could not read the indexed-file ledger".to_string())?
+        .files
+        .into_iter()
+        .map(|file| (file.path, file.content_hash.as_str().to_string()))
+        .collect();
+    let mut facts_local = Vec::new();
+    let mut facts_provider = Vec::new();
+    let mut provider_retained_ok = true;
+    for fact in &facts {
+        let tuple = sync_equivalence_fact_tuple(fact);
+        if sync_equivalence_is_worker_provider_origin(&fact.origin_engine) {
+            let retained = file_hashes
+                .get(&fact.path)
+                .is_some_and(|hash| hash == fact.content_hash.as_str());
+            if !retained {
+                provider_retained_ok = false;
+            }
+            facts_provider.push(tuple);
+        } else {
+            facts_local.push(tuple);
+        }
+    }
+    facts_local.sort();
+    facts_provider.sort();
+
+    let ir = store
+        .list_active_ir_graph()
+        .map_err(|_| "could not read the IR graph ledger".to_string())?;
+    let mut ir_nodes: Vec<String> = ir
+        .nodes
+        .iter()
+        .map(|node| {
+            [
+                node.id.clone(),
+                node.code_unit_id.clone(),
+                node.kind.clone(),
+                node.payload_json.clone(),
+            ]
+            .join("\u{1f}")
+        })
+        .collect();
+    ir_nodes.sort();
+    let mut ir_edges: Vec<String> = ir
+        .edges
+        .iter()
+        .map(|edge| {
+            [
+                edge.from_node_id.clone(),
+                edge.to_node_id.clone(),
+                edge.label.clone(),
+            ]
+            .join("\u{1f}")
+        })
+        .collect();
+    ir_edges.sort();
+
+    let shape = store
+        .active_repo_shape_stats()
+        .map_err(|_| "could not read the repo-shape stats".to_string())?;
+    let mut repo_shape: Vec<String> = shape
+        .by_language
+        .iter()
+        .map(|language| {
+            format!(
+                "lang\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                language.language,
+                language.indexed_file_count,
+                language.indexed_code_unit_count,
+                language.eligible_code_units,
+                language.family_count,
+                language.family_member_count,
+                language.covered_code_units,
+            )
+        })
+        .collect();
+    repo_shape.push(format!(
+        "totals\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        shape.indexed_file_count,
+        shape.indexed_code_unit_count,
+        shape.semantic_fact_count,
+        shape.eligible_code_units,
+        shape.family_count,
+        shape.family_member_count,
+        shape.covered_code_units,
+    ));
+    repo_shape.sort();
+
+    Ok(SyncEquivalenceStoreLedgers {
+        facts_local,
+        facts_provider,
+        provider_retained_ok,
+        ir_nodes,
+        ir_edges,
+        repo_shape,
+    })
+}
+
+/// A canonical, order-independent dump of one active generation across the
+/// product read surfaces plus the store-port ledgers.
+struct SyncEquivalenceStateDump {
+    files: Vec<String>,
+    units: Vec<String>,
+    families: Vec<String>,
+    family_details: Vec<String>,
+    unknowns: Vec<String>,
+    facts_local: Vec<String>,
+    facts_provider: Vec<String>,
+    provider_retained_ok: bool,
+    ir_nodes: Vec<String>,
+    ir_edges: Vec<String>,
+    repo_shape: Vec<String>,
+}
+
+struct SyncEquivalenceWorkspace {
+    root: PathBuf,
+    home: PathBuf,
+    project: PathBuf,
+    tools: PathBuf,
+    binary: PathBuf,
+    python: PathBuf,
+}
+
+impl SyncEquivalenceWorkspace {
+    fn new(binary: &Path, fixture_source: &Path, label: &str) -> Result<Self, String> {
+        let root = unique_sync_equivalence_root(label);
+        let home = root.join("home");
+        let project = root.join("project");
+        let tools = root.join("tools");
+        fs::create_dir_all(&home)
+            .map_err(|_| "could not create isolated sync-equivalence HOME".to_string())?;
+        fs::create_dir_all(&project)
+            .map_err(|_| "could not create isolated sync-equivalence project".to_string())?;
+        fs::create_dir_all(&tools)
+            .map_err(|_| "could not create isolated sync-equivalence tool PATH".to_string())?;
+        let python = prepare_isolated_tool_path(&tools)?;
+        copy_dir_sorted(fixture_source, &project)?;
+        Ok(Self {
+            root,
+            home,
+            project,
+            tools,
+            binary: binary.to_path_buf(),
+            python,
+        })
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary);
+        command
+            .env_clear()
+            .current_dir(&self.project)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("XDG_DATA_HOME", self.home.join(".local/share"))
+            .env("XDG_CACHE_HOME", self.home.join(".cache"))
+            .env("CODEX_HOME", self.home.join(".codex"))
+            .env("PATH", &self.tools)
+            .env("REPOGRAMMAR_PYTHON_EXECUTABLE", &self.python)
+            .env("REPOGRAMMAR_TELEMETRY", "0")
+            .env("DO_NOT_TRACK", "1");
+        command
+    }
+
+    fn project_arg(&self) -> Result<String, String> {
+        self.project
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| "isolated sync-equivalence project path was not UTF-8".to_string())
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.project.join(".repogrammar")
+    }
+
+    fn run_json(&self, command: &str, extra: &[&str]) -> Result<serde_json::Value, String> {
+        let project = self.project_arg()?;
+        let mut args: Vec<String> = vec![command.to_string(), "--project".to_string(), project];
+        args.extend(extra.iter().map(|value| (*value).to_string()));
+        let output = self
+            .command()
+            .args(&args)
+            .output()
+            .map_err(|_| format!("sync-equivalence '{command}' could not execute"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "sync-equivalence '{command}' returned a failure status"
+            ));
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| format!("sync-equivalence '{command}' output was not UTF-8"))?;
+        serde_json::from_str(stdout.trim())
+            .map_err(|_| format!("sync-equivalence '{command}' output was not JSON"))
+    }
+
+    fn init(&self) -> Result<(), String> {
+        self.run_json("init", &["--yes", "--json", "--progress", "never"])?;
+        Ok(())
+    }
+
+    fn resync(&self) -> Result<(), String> {
+        let value = self.run_json("resync", &["--json", "--progress", "never"])?;
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("complete") {
+            return Err("sync-equivalence 'resync' did not complete".to_string());
+        }
+        Ok(())
+    }
+
+    fn dump_state(&self) -> Result<SyncEquivalenceStateDump, String> {
+        let files_value = self.run_json("files", &["--json"])?;
+        let units_value = self.run_json("units", &["--json"])?;
+        let families_value = self.run_json("families", &["--json"])?;
+        let unknowns_value = self.run_json("unknowns", &["--json"])?;
+
+        let files = sync_equivalence_sorted_items(&files_value, "files");
+        let units = sync_equivalence_sorted_items(&units_value, "units");
+        let mut families = sync_equivalence_sorted_items(&families_value, "families");
+        for listing_unknown in sync_equivalence_sorted_items(&families_value, "unknowns") {
+            families.push(format!("list_unknown|{listing_unknown}"));
+        }
+        families.sort();
+
+        let mut family_ids: Vec<String> = families_value
+            .get("families")
+            .and_then(serde_json::Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("family_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        family_ids.sort();
+        family_ids.dedup();
+        let mut family_details = Vec::new();
+        for family_id in &family_ids {
+            // `--mode deep` is required: the default compact mode returns an
+            // empty selected-evidence array, so the family-evidence ledger would
+            // never actually be compared.
+            let detail = self.run_json("family", &[family_id, "--mode", "deep", "--json"])?;
+            for key in [
+                "family",
+                "members",
+                "variation_slots",
+                "evidence",
+                "unknowns",
+            ] {
+                let value = detail.get(key).cloned().unwrap_or(serde_json::Value::Null);
+                let value = if key == "evidence" {
+                    sync_equivalence_strip_evidence_presentation(value)
+                } else {
+                    value
+                };
+                let canon = canonical_json_string(&value);
+                family_details.push(format!("{family_id}|{key}|{canon}"));
+            }
+        }
+        family_details.sort();
+
+        let mut inventory = unknowns_value
+            .get("unknown_inventory")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(map) = &mut inventory {
+            map.remove("active_generation");
+        }
+        let unknowns = vec![format!("inventory|{}", canonical_json_string(&inventory))];
+
+        let ledgers = sync_equivalence_dump_store_ledgers(&self.state_dir())?;
+        Ok(SyncEquivalenceStateDump {
+            files,
+            units,
+            families,
+            family_details,
+            unknowns,
+            facts_local: ledgers.facts_local,
+            facts_provider: ledgers.facts_provider,
+            provider_retained_ok: ledgers.provider_retained_ok,
+            ir_nodes: ledgers.ir_nodes,
+            ir_edges: ledgers.ir_edges,
+            repo_shape: ledgers.repo_shape,
+        })
+    }
+}
+
+/// Strips the non-semantic fields from deep-mode family-evidence rows: the
+/// order/history-assigned `evidence_id` (re-keyed across generations, like
+/// `fact_id`) and `estimated_tokens` (a query-presentation estimate, not
+/// persisted family state). The load-bearing rows — `code_unit_id`, `path`,
+/// `content_hash`, byte ranges, `covered_claims`, `note` — are retained and
+/// compared.
+fn sync_equivalence_strip_evidence_presentation(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(sync_equivalence_strip_evidence_presentation)
+                .collect(),
+        ),
+        serde_json::Value::Object(mut map) => {
+            map.remove("evidence_id");
+            map.remove("estimated_tokens");
+            serde_json::Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+impl Drop for SyncEquivalenceWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn unique_sync_equivalence_root(label: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let sanitized: String = label
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    env::temp_dir().join(format!(
+        "repogrammar-sync-equivalence-{}-{sanitized}-{nanos}-{sequence}",
+        std::process::id()
+    ))
+}
+
+struct SyncEquivalenceScenarioResult {
+    id: &'static str,
+    patch_summary: &'static str,
+    sync_mode: String,
+    fallback_reason: Option<String>,
+    reparsed_files: Option<u64>,
+    expected_reparsed_files: Option<usize>,
+    equal: bool,
+    outcome: &'static str,
+    expected_outcome: &'static str,
+    expected_fallback_reason: Option<&'static str>,
+    pass: bool,
+    surfaces: Vec<SyncEquivalenceSurfaceDiff>,
+}
+
+fn sync_equivalence_compare(
+    incremental: &SyncEquivalenceStateDump,
+    clean: &SyncEquivalenceStateDump,
+) -> Vec<SyncEquivalenceSurfaceDiff> {
+    let mut surfaces = vec![
+        sync_equivalence_surface("indexed_files", &incremental.files, &clean.files),
+        sync_equivalence_surface("code_units", &incremental.units, &clean.units),
+        sync_equivalence_surface("ir_nodes", &incremental.ir_nodes, &clean.ir_nodes),
+        sync_equivalence_surface("ir_edges", &incremental.ir_edges, &clean.ir_edges),
+        sync_equivalence_surface("families", &incremental.families, &clean.families),
+        sync_equivalence_surface(
+            "family_details",
+            &incremental.family_details,
+            &clean.family_details,
+        ),
+        sync_equivalence_surface("unknown_inventory", &incremental.unknowns, &clean.unknowns),
+        sync_equivalence_surface(
+            "repo_shape_stats",
+            &incremental.repo_shape,
+            &clean.repo_shape,
+        ),
+        sync_equivalence_surface(
+            "semantic_facts_local",
+            &incremental.facts_local,
+            &clean.facts_local,
+        ),
+    ];
+    // External-worker (`typescript`) provider facts retained by a worker-less
+    // incremental sync are the one sanctioned divergence, checked against the
+    // retention rule rather than by equality with the clean rebuild. The rule is
+    // two-sided: it also fails on clean-only provider facts unmatched in the
+    // incremental state (a dropped-fact regression). In worker-less runs both
+    // buckets are empty and the surface is trivially equal.
+    let (b_only, c_only) =
+        sync_equivalence_multiset_diff(&incremental.facts_provider, &clean.facts_provider);
+    let provider_equal = incremental.provider_retained_ok && c_only.is_empty();
+    surfaces.push(SyncEquivalenceSurfaceDiff {
+        surface: "semantic_facts_provider_retained",
+        equal: provider_equal,
+        b_only_sample: if incremental.provider_retained_ok {
+            Vec::new()
+        } else {
+            b_only
+        },
+        c_only_sample: c_only,
+        note: Some(format!(
+            "incremental provider facts: {}, clean provider facts: {}, retention satisfied: {}",
+            incremental.facts_provider.len(),
+            clean.facts_provider.len(),
+            incremental.provider_retained_ok
+        )),
+    });
+    surfaces
+}
+
+/// A scenario passes only when the observed outcome matches the declared
+/// expectation and, for a fallback, the observed reason matches too. This is
+/// what makes the exit-0 gate non-trivial: an unexpected EQUAL (a regressed gate
+/// that took the incremental path), an unexpected fallback (a misfiring
+/// preflight), a wrong fallback reason, or any INEQUAL all fail.
+fn sync_equivalence_scenario_passes(
+    outcome: &str,
+    fallback_reason: Option<&str>,
+    reparsed_files: Option<u64>,
+    expected_outcome: &str,
+    expected_fallback_reason: Option<&str>,
+    expected_reparsed_files: Option<usize>,
+) -> bool {
+    let reparsed_ok = match expected_reparsed_files {
+        Some(expected) => reparsed_files == Some(expected as u64),
+        None => true,
+    };
+    outcome == expected_outcome && fallback_reason == expected_fallback_reason && reparsed_ok
+}
+
+fn run_sync_equivalence_scenario(
+    binary: &Path,
+    fixture_source: &Path,
+    scenario: &SyncEquivalenceScenario,
+) -> Result<SyncEquivalenceScenarioResult, String> {
+    // Workspace A -> B: full base build, scripted patch, then incremental sync.
+    let incremental_workspace =
+        SyncEquivalenceWorkspace::new(binary, fixture_source, &format!("{}-inc", scenario.id))?;
+    incremental_workspace.init()?;
+    incremental_workspace.resync()?;
+    (scenario.apply)(&incremental_workspace.project)?;
+    let sync_value = incremental_workspace.run_json("sync", &["--json", "--progress", "never"])?;
+    let sync_mode = sync_value
+        .get("sync_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let fallback_reason = sync_value
+        .get("fallback_reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let reparsed_files = sync_value
+        .get("reparsed_files")
+        .and_then(serde_json::Value::as_u64);
+    let incremental_dump = incremental_workspace.dump_state()?;
+
+    // Workspace C: patch first, then a clean full build over the same worktree.
+    let clean_workspace =
+        SyncEquivalenceWorkspace::new(binary, fixture_source, &format!("{}-clean", scenario.id))?;
+    (scenario.apply)(&clean_workspace.project)?;
+    clean_workspace.init()?;
+    clean_workspace.resync()?;
+    let clean_dump = clean_workspace.dump_state()?;
+
+    let surfaces = sync_equivalence_compare(&incremental_dump, &clean_dump);
+    let equal = surfaces.iter().all(|surface| surface.equal);
+    let outcome = if !equal {
+        "INEQUAL"
+    } else if sync_mode == "full_rebuild_fallback" {
+        "FELL_BACK"
+    } else {
+        "EQUAL"
+    };
+    let pass = sync_equivalence_scenario_passes(
+        outcome,
+        fallback_reason.as_deref(),
+        reparsed_files,
+        scenario.expected_outcome,
+        scenario.expected_fallback_reason,
+        scenario.expected_reparsed_files,
+    );
+    Ok(SyncEquivalenceScenarioResult {
+        id: scenario.id,
+        patch_summary: scenario.patch_summary,
+        sync_mode,
+        fallback_reason,
+        reparsed_files,
+        expected_reparsed_files: scenario.expected_reparsed_files,
+        equal,
+        outcome,
+        expected_outcome: scenario.expected_outcome,
+        expected_fallback_reason: scenario.expected_fallback_reason,
+        pass,
+        surfaces,
+    })
+}
+
+fn sync_equivalence_report(
+    fixture: &str,
+    binary: &Path,
+    results: &[SyncEquivalenceScenarioResult],
+) -> serde_json::Value {
+    let scenarios: Vec<serde_json::Value> = results
+        .iter()
+        .map(|result| {
+            let surfaces: Vec<serde_json::Value> = result
+                .surfaces
+                .iter()
+                .map(|surface| {
+                    serde_json::json!({
+                        "surface": surface.surface,
+                        "equal": surface.equal,
+                        "b_only_sample": surface.b_only_sample,
+                        "c_only_sample": surface.c_only_sample,
+                        "note": surface.note,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "id": result.id,
+                "patch_summary": result.patch_summary,
+                "sync_mode": result.sync_mode,
+                "fallback_reason": result.fallback_reason,
+                "reparsed_files": result.reparsed_files,
+                "expected_reparsed_files": result.expected_reparsed_files,
+                "equal": result.equal,
+                "outcome": result.outcome,
+                "expected_outcome": result.expected_outcome,
+                "expected_fallback_reason": result.expected_fallback_reason,
+                "pass": result.pass,
+                "surfaces": surfaces,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "schema": "sync-equivalence.v1",
+        "fixture": fixture,
+        "binary": binary.to_string_lossy(),
+        "scenario_count": results.len(),
+        "all_passed": results.iter().all(|result| result.pass),
+        "scenarios": scenarios,
+    })
+}
+
+fn resolve_sync_equivalence_fixture(root: &Path, fixture: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(fixture);
+    let path = if candidate.is_absolute() {
+        candidate
+    } else {
+        root.join(candidate)
+    };
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| "fixture root is unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("fixture root must be a directory".to_string());
+    }
+    fs::canonicalize(path).map_err(|_| "fixture root is unavailable".to_string())
+}
+
+fn sync_equivalence_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut fixture = None;
+    let mut out = None;
+    let mut bin = None;
+    let mut scenario: Option<String> = None;
+    let mut all = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--fixture" => fixture = Some(product_eval_take_value(args, &mut index, "--fixture")?),
+            "--out" => out = Some(product_eval_take_value(args, &mut index, "--out")?),
+            "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            "--scenario" => {
+                scenario = Some(product_eval_take_value(args, &mut index, "--scenario")?)
+            }
+            "--all" => all = true,
+            other => return Err(format!("unknown sync-equivalence argument '{other}'")),
+        }
+        index += 1;
+    }
+    let fixture = fixture.ok_or_else(|| "--fixture <path> is required".to_string())?;
+    let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
+    if all && scenario.is_some() {
+        return Err("--all and --scenario are mutually exclusive".to_string());
+    }
+
+    let binary = resolve_product_binary(root, bin.as_deref())?;
+    let fixture_source = resolve_sync_equivalence_fixture(root, &fixture)?;
+    let selected: Vec<&SyncEquivalenceScenario> = match &scenario {
+        Some(id) => vec![SYNC_EQUIVALENCE_SCENARIOS
+            .iter()
+            .find(|candidate| candidate.id == id)
+            .ok_or_else(|| format!("unknown scenario '{id}'"))?],
+        None => SYNC_EQUIVALENCE_SCENARIOS.iter().collect(),
+    };
+
+    let out_dir = if Path::new(&out).is_absolute() {
+        PathBuf::from(&out)
+    } else {
+        root.join(&out)
+    };
+    fs::create_dir_all(&out_dir).map_err(|_| "could not create --out directory".to_string())?;
+
+    let mut results = Vec::new();
+    for scenario in selected {
+        results.push(run_sync_equivalence_scenario(
+            &binary,
+            &fixture_source,
+            scenario,
+        )?);
+    }
+
+    let report = sync_equivalence_report(&fixture, &binary, &results);
+    let report_path = out_dir.join("sync-equivalence.json");
+    let serialized = serde_json::to_string_pretty(&report)
+        .map_err(|_| "could not serialize the sync-equivalence report".to_string())?;
+    fs::write(&report_path, format!("{serialized}\n"))
+        .map_err(|_| "could not write the sync-equivalence report".to_string())?;
+
+    let mut summary = format!(
+        "sync-equivalence: {} scenario(s) over {}\n",
+        results.len(),
+        fixture
+    );
+    for result in &results {
+        let fallback = result
+            .fallback_reason
+            .as_deref()
+            .map(|reason| format!("[{reason}]"))
+            .unwrap_or_default();
+        summary.push_str(&format!(
+            "  {:<15} {:<22} {:<10} expected {:<10} {}\n",
+            result.id,
+            format!("{}{}", result.sync_mode, fallback),
+            result.outcome,
+            result.expected_outcome,
+            if result.pass { "PASS" } else { "FAIL" },
+        ));
+    }
+    summary.push_str(&format!("report: {}\n", report_path.display()));
+
+    let failed: Vec<&str> = results
+        .iter()
+        .filter(|result| !result.pass)
+        .map(|result| result.id)
+        .collect();
+    if failed.is_empty() {
+        Ok(summary)
+    } else {
+        Err(format!(
+            "{summary}outcome mismatch in scenario(s): {}",
+            failed.join(", ")
+        ))
+    }
+}
+
+fn product_eval_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut corpus = None;
+    let mut out = None;
+    let mut repetitions = 3usize;
+    let mut bin = None;
+    let mut condition: Option<String> = None;
+    let mut baseline: Option<EvalBaseline> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--corpus" => corpus = Some(product_eval_take_value(args, &mut index, "--corpus")?),
+            "--out" => out = Some(product_eval_take_value(args, &mut index, "--out")?),
+            "--repetitions" => {
+                let raw = product_eval_take_value(args, &mut index, "--repetitions")?;
+                repetitions = raw
+                    .parse::<usize>()
+                    .map_err(|_| "--repetitions must be a positive integer".to_string())?;
+            }
+            "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            "--condition" => {
+                let raw = product_eval_take_value(args, &mut index, "--condition")?;
+                condition = Some(validate_condition_token(&raw)?);
+            }
+            "--baseline" => {
+                let raw = product_eval_take_value(args, &mut index, "--baseline")?;
+                baseline = Some(EvalBaseline::from_token(&raw)?);
+            }
+            other => return Err(format!("unknown product-eval argument '{other}'")),
+        }
+        index += 1;
+    }
+    let corpus = corpus.ok_or_else(|| "--corpus <path> is required".to_string())?;
+    let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
+    let condition = resolve_eval_condition(condition, baseline)?;
+    run_product_eval(
+        root,
+        &corpus,
+        &out,
+        repetitions,
+        bin.as_deref(),
+        &condition,
+        baseline,
+    )
+}
+
+fn product_eval_take_value(
+    args: &[String],
+    index: &mut usize,
+    flag: &str,
+) -> Result<String, String> {
+    let value = args
+        .get(*index + 1)
+        .ok_or_else(|| format!("{flag} requires a value"))?
+        .clone();
+    *index += 1;
+    Ok(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_product_eval(
+    root: &Path,
+    corpus_path: &str,
+    out_dir: &str,
+    repetitions: usize,
+    bin_override: Option<&str>,
+    condition: &str,
+    baseline: Option<EvalBaseline>,
+) -> Result<String, String> {
+    if repetitions == 0 {
+        return Err("--repetitions must be at least 1".to_string());
+    }
+    let binary = resolve_product_binary(root, bin_override)?;
+    let corpus_absolute = if Path::new(corpus_path).is_absolute() {
+        PathBuf::from(corpus_path)
+    } else {
+        root.join(corpus_path)
+    };
+    let corpus_text = fs::read_to_string(&corpus_absolute)
+        .map_err(|_| "corpus file is unavailable".to_string())?;
+    let corpus_value: serde_json::Value = serde_json::from_str(&corpus_text)
+        .map_err(|_| "corpus file was not valid JSON".to_string())?;
+    let corpus = EvalCorpus::from_value(&corpus_value)?;
+
+    let commit = resolve_git_commit(root, "HEAD").unwrap_or_else(|_| "unknown".to_string());
+    let started_at = rfc3339_utc(unix_seconds_now());
+
+    let mut base_workspaces: Vec<(String, EvalWorkspace)> = Vec::new();
+    // Populated only in baseline mode: the product's `families --json` listing
+    // (active generation + family ids) captured once per indexed fixture.
+    let mut baseline_families: std::collections::BTreeMap<String, (Option<String>, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    let mut fixture_results: Vec<serde_json::Value> = Vec::new();
+    for fixture in &corpus.fixtures {
+        let source = fs::canonicalize(root.join(&fixture.root))
+            .map_err(|_| format!("fixture root '{}' is unavailable", fixture.root))?;
+        let fixture_version = match fixture_version_hash(&source) {
+            Ok(hash) => hash,
+            Err(error) => {
+                retain_workspaces(&base_workspaces);
+                return Err(error);
+            }
+        };
+        let workspace = match EvalWorkspace::new(&binary, &source) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                retain_workspaces(&base_workspaces);
+                return Err(error);
+            }
+        };
+        if let Err(error) = workspace.init() {
+            workspace.retain();
+            retain_workspaces(&base_workspaces);
+            return Err(error);
+        }
+        let resync = match workspace.resync() {
+            Ok(resync) => resync,
+            Err(error) => {
+                workspace.retain();
+                retain_workspaces(&base_workspaces);
+                return Err(error);
+            }
+        };
+        if baseline.is_some() {
+            match workspace.families() {
+                Ok(families) => {
+                    baseline_families.insert(fixture.fixture_id.clone(), families);
+                }
+                Err(error) => {
+                    workspace.retain();
+                    retain_workspaces(&base_workspaces);
+                    return Err(error);
+                }
+            }
+        }
+        fixture_results.push(serde_json::json!({
+            "fixture_id": fixture.fixture_id,
+            "fixture_version": fixture_version,
+            "resync_latency_ms": resync.latency_ms,
+            "discovered_files": resync.discovered_files,
+            "stored_files": resync.stored_files,
+        }));
+        base_workspaces.push((fixture.fixture_id.clone(), workspace));
+    }
+
+    let mut query_results: Vec<serde_json::Value> = Vec::new();
+    let mut table_rows: Vec<(String, String, &'static str, u128)> = Vec::new();
+    let mut all_latencies: Vec<u128> = Vec::new();
+    let mut matches = 0usize;
+    let mut false_family_selections = 0usize;
+    let mut by_kind: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    // (intent, kind, expected, actual, is_match) retained so intent-partitioned
+    // metrics can be computed once after every query has been driven.
+    let mut metric_inputs: Vec<(Option<EvalIntent>, String, EvalExpected, EvalActual, bool)> =
+        Vec::new();
+
+    for query in &corpus.queries {
+        let outcome = match baseline {
+            // Baseline mode scores the query against the fixture's pre-fetched
+            // family listing; it never drives the product per query and ignores
+            // source mutations, which the naive control does not model.
+            Some(EvalBaseline::TokenOverlap) => {
+                let (active_generation, family_ids) =
+                    baseline_families.get(&query.fixture_id).ok_or_else(|| {
+                        format!(
+                            "baseline is missing the family listing for fixture '{}'",
+                            query.fixture_id
+                        )
+                    })?;
+                run_baseline_query(query, active_generation.as_deref(), family_ids, repetitions)
+            }
+            None => {
+                let base = base_workspaces
+                    .iter()
+                    .find(|(fixture_id, _)| fixture_id == &query.fixture_id)
+                    .map(|(_, workspace)| workspace)
+                    .ok_or_else(|| {
+                        format!(
+                            "query '{}' references unindexed fixture '{}'",
+                            query.query_id, query.fixture_id
+                        )
+                    })?;
+                if let Some(mutation) = &query.mutation {
+                    let fixture = corpus
+                        .fixtures
+                        .iter()
+                        .find(|fixture| fixture.fixture_id == query.fixture_id)
+                        .ok_or_else(|| {
+                            "mutation query references an unknown fixture".to_string()
+                        })?;
+                    let source = fs::canonicalize(root.join(&fixture.root))
+                        .map_err(|_| "fixture root is unavailable".to_string())?;
+                    let mutation_workspace = match EvalWorkspace::new(&binary, &source) {
+                        Ok(workspace) => workspace,
+                        Err(error) => {
+                            retain_workspaces(&base_workspaces);
+                            return Err(error);
+                        }
+                    };
+                    let run = (|| {
+                        mutation_workspace.init()?;
+                        mutation_workspace.resync()?;
+                        mutation_workspace.apply_mutation(mutation)?;
+                        mutation_workspace.run_query(query, repetitions)
+                    })();
+                    match run {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            mutation_workspace.retain();
+                            retain_workspaces(&base_workspaces);
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    match base.run_query(query, repetitions) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            retain_workspaces(&base_workspaces);
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        };
+        let (actual, latencies) = outcome;
+
+        let (is_match, mismatch_fields) = evaluate_match(&query.expected, &actual);
+        if is_match {
+            matches += 1;
+        }
+        if is_false_family_selection(&query.expected, &actual) {
+            false_family_selections += 1;
+        }
+        let counters = by_kind.entry(query.kind.clone()).or_insert((0, 0));
+        counters.0 += 1;
+        if is_match {
+            counters.1 += 1;
+        }
+        all_latencies.extend(latencies.iter().copied());
+        let query_p50 = percentile(&latencies, 50);
+        table_rows.push((
+            query.query_id.clone(),
+            query.kind.clone(),
+            if is_match { "match" } else { "mismatch" },
+            query_p50,
+        ));
+        query_results.push(serde_json::json!({
+            "query_id": query.query_id,
+            "fixture_id": query.fixture_id,
+            "kind": query.kind,
+            "intent": query.intent.map(EvalIntent::as_str),
+            "operation": query.operation.as_str(),
+            "target": query.target,
+            "expected": query.expected.to_value(),
+            "actual": actual.to_value(),
+            "match": is_match,
+            "mismatch_fields": mismatch_fields,
+            "reciprocal_rank": if query.intent == Some(EvalIntent::Retrieval) {
+                serde_json::json!(reciprocal_rank(&query.expected, &actual))
+            } else {
+                serde_json::Value::Null
+            },
+            "latency_ms_all_reps": latencies,
+            "latency_ms_p50": query_p50,
+        }));
+        metric_inputs.push((
+            query.intent,
+            query.kind.clone(),
+            query.expected.clone(),
+            actual,
+            is_match,
+        ));
+    }
+
+    let finished_at = rfc3339_utc(unix_seconds_now());
+    let total = corpus.queries.len();
+    let mismatches = total - matches;
+    let by_kind_value: serde_json::Map<String, serde_json::Value> = by_kind
+        .iter()
+        .map(|(kind, (kind_total, kind_matches))| {
+            (
+                kind.clone(),
+                serde_json::json!({ "total": kind_total, "matches": kind_matches }),
+            )
+        })
+        .collect();
+    let metric_records: Vec<EvalMetricRecord> = metric_inputs
+        .iter()
+        .map(
+            |(intent, kind, expected, actual, is_match)| EvalMetricRecord {
+                intent: *intent,
+                kind: kind.as_str(),
+                expected,
+                actual,
+                is_match: *is_match,
+            },
+        )
+        .collect();
+    let metrics = compute_product_eval_metrics(&metric_records);
+    let by_intent_value: serde_json::Map<String, serde_json::Value> = metrics
+        .by_intent
+        .iter()
+        .map(|(intent, (intent_total, intent_matches))| {
+            (
+                (*intent).to_string(),
+                serde_json::json!({ "total": intent_total, "matches": intent_matches }),
+            )
+        })
+        .collect();
+    let summary = serde_json::json!({
+        "total": total,
+        "matches": matches,
+        "mismatches": mismatches,
+        "by_kind": serde_json::Value::Object(by_kind_value),
+        "by_intent": serde_json::Value::Object(by_intent_value),
+        "latency_ms_p50": percentile(&all_latencies, 50),
+        "latency_ms_p95": percentile(&all_latencies, 95),
+        "false_family_selections": false_family_selections,
+        "selected_on_abstention_gold": metrics.selected_on_abstention_gold,
+        "metrics": metrics.to_value(),
+    });
+
+    let results = serde_json::json!({
+        "schema_version": PRODUCT_EVAL_RESULTS_SCHEMA,
+        "condition": condition,
+        "baseline": baseline.map(EvalBaseline::as_str),
+        "repogrammar_commit": commit,
+        "platform": { "os": env::consts::OS, "arch": env::consts::ARCH },
+        "corpus_schema_version": PRODUCT_EVAL_CORPUS_SCHEMA,
+        "corpus_path": corpus_relative_path(root, &corpus_absolute, corpus_path),
+        "repetitions": repetitions,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "fixtures": fixture_results,
+        "results": query_results,
+        "summary": summary,
+    });
+
+    let out_dir_absolute = if Path::new(out_dir).is_absolute() {
+        PathBuf::from(out_dir)
+    } else {
+        root.join(out_dir)
+    };
+    fs::create_dir_all(&out_dir_absolute)
+        .map_err(|_| "could not create output directory".to_string())?;
+    let out_file = out_dir_absolute.join("product-eval-results.json");
+    let serialized = serde_json::to_string_pretty(&results)
+        .map_err(|_| "could not serialize product-eval results".to_string())?;
+    fs::write(&out_file, format!("{serialized}\n"))
+        .map_err(|_| "could not write product-eval results file".to_string())?;
+
+    let mut report = String::new();
+    report.push_str(&format!(
+        "product-eval corpus {} at commit {} ({} repetitions, condition {})\n",
+        corpus_relative_path(root, &corpus_absolute, corpus_path),
+        commit,
+        repetitions,
+        condition,
+    ));
+    report.push_str(&format!(
+        "{:<34}{:<22}{:<10}{:>8}\n",
+        "query_id", "kind", "verdict", "p50_ms"
+    ));
+    for (query_id, kind, verdict, query_p50) in &table_rows {
+        report.push_str(&format!(
+            "{query_id:<34}{kind:<22}{verdict:<10}{query_p50:>8}\n"
+        ));
+    }
+    report.push_str(&format!(
+        "summary: {total} queries, {matches} match, {mismatches} mismatch | p50 {}ms p95 {}ms | false_family_selections {false_family_selections} | selected_on_abstention_gold {}\n",
+        percentile(&all_latencies, 50),
+        percentile(&all_latencies, 95),
+        metrics.selected_on_abstention_gold,
+    ));
+    report.push_str(&format!(
+        "metrics: hit@1 {}/{} | candidate_recall {}/{} | mrr {} | correct_abstention {}/{} | false_family_rate {}/{} | unsupported_rejection {}/{} | ambiguity_precision {}/{}\n",
+        metrics.hit_at_1_num,
+        metrics.hit_at_1_den,
+        metrics.candidate_recall_num,
+        metrics.candidate_recall_den,
+        format_mean(metrics.mrr_sum, metrics.mrr_den),
+        metrics.correct_abstention_num,
+        metrics.correct_abstention_den,
+        metrics.false_family_selections,
+        metrics.family_constrained_total,
+        metrics.unsupported_rejection_num,
+        metrics.unsupported_rejection_den,
+        metrics.ambiguity_precision_num,
+        metrics.ambiguity_precision_den,
+    ));
+    let intent_summary: Vec<String> = metrics
+        .by_intent
+        .iter()
+        .map(|(intent, (intent_total, intent_matches))| {
+            format!("{intent} {intent_matches}/{intent_total}")
+        })
+        .collect();
+    report.push_str(&format!("by_intent: {}\n", intent_summary.join(" | ")));
+    Ok(report)
+}
+
+// ===========================================================================
+// S10: response payload byte-measurement harness (`payload-measure`).
+//
+// Serializes a fixed query corpus against one deterministic fixture index and
+// records the exact response byte count and top-level field-group attribution
+// per operation x category x tier (mode x verbosity). The output is a stable,
+// sorted, timestamp-free `payload-bytes.summary.json` (plus a human
+// `payload-bytes.md`) so a run before a precision slice and a run after it diff
+// cleanly. This harness only measures; it never asserts a savings figure. A
+// savings claim is declarable only from a before/after diff of two summaries.
+// ===========================================================================
+
+const PAYLOAD_MEASURE_SCHEMA: &str = "payload-bytes.v1";
+const PAYLOAD_MEASURE_FIXTURE_ID: &str = "payload-measure";
+const PAYLOAD_MEASURE_FIXTURE_DEFAULT: &str = "src/fixtures/evaluation/payload-measure";
+const PAYLOAD_MEASURE_MODES: &[&str] = &["compact", "deep"];
+const PAYLOAD_MEASURE_VERBOSITIES: &[&str] = &["minimal", "standard", "full"];
+
+/// One query-serializer case in the fixed payload corpus. Every case is driven
+/// at the full `mode x verbosity` cross product so a before/after run can
+/// attribute field-group byte deltas per report variant. Targets are chosen to
+/// exercise every reachable report shape on the committed fixture: Found (big/
+/// small/NL/TypeScript), abstention UNKNOWN, PARTIAL_CONTEXT, exact family
+/// hydration, and static-alignment conformance.
+///
+/// When `measure_source_spans` is set, the case is additionally driven at
+/// `--mode deep --include-source-spans` (one extra row per verbosity) so the
+/// `read_plan` <-> `source_spans` overlap region (the S6 dedup target, the plan's
+/// largest single per-response item) is measurable — it is invisible unless
+/// source spans are explicitly requested.
+struct PayloadMeasureCase {
+    operation: &'static str,
+    category: &'static str,
+    target: &'static str,
+    measure_source_spans: bool,
+}
+
+const PAYLOAD_MEASURE_CASES: &[PayloadMeasureCase] = &[
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_big_family_path",
+        target: "api/routes.py",
+        measure_source_spans: true,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_small_family_path",
+        target: "db/repository.py",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_big_family_nl",
+        target: "fastapi route handler",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_typescript_family_path",
+        target: "web/router.ts",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "abstain_unknown_nl",
+        target: "http endpoint route",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "abstain_no_candidate_nl",
+        target: "zzz nonexistent qqq",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "partial_context_path",
+        target: "legacy_app.py",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "family",
+        category: "family_big",
+        target: "family:python:fastapi_route:framework_fastapi_route",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "family",
+        category: "family_small",
+        target: "family:python:pydantic_model:framework_pydantic_model",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "check",
+        category: "check_big_family_path",
+        target: "api/routes.py",
+        measure_source_spans: true,
+    },
+];
+
+/// Number of extra `--include-source-spans` rows the corpus emits: one per
+/// verbosity for each case flagged `measure_source_spans`. Used by the smoke
+/// test to derive the expected row count from the corpus definition.
+#[cfg(test)]
+const fn payload_measure_source_span_rows() -> usize {
+    let mut spans_cases = 0;
+    let mut index = 0;
+    while index < PAYLOAD_MEASURE_CASES.len() {
+        if PAYLOAD_MEASURE_CASES[index].measure_source_spans {
+            spans_cases += 1;
+        }
+        index += 1;
+    }
+    spans_cases * PAYLOAD_MEASURE_VERBOSITIES.len()
+}
+
+fn payload_measure_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut out = None;
+    let mut bin = None;
+    let mut fixture = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" => out = Some(product_eval_take_value(args, &mut index, "--out")?),
+            "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            "--fixture" => fixture = Some(product_eval_take_value(args, &mut index, "--fixture")?),
+            other => return Err(format!("unknown payload-measure argument '{other}'")),
+        }
+        index += 1;
+    }
+    let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
+    run_payload_measure(root, &out, bin.as_deref(), fixture.as_deref())
+}
+
+/// Attributes serialized compact bytes to each top-level field of a response,
+/// mirroring the audit methodology (`len(json.dumps(value, separators=...))`).
+/// The result is a sorted map, so the same payload always attributes the same
+/// bytes to the same fields in the same order.
+fn attribute_field_bytes(value: &serde_json::Value) -> std::collections::BTreeMap<String, u64> {
+    let mut attribution = std::collections::BTreeMap::new();
+    if let Some(object) = value.as_object() {
+        for (field, body) in object {
+            let bytes = serde_json::to_string(body)
+                .map(|text| text.len() as u64)
+                .unwrap_or(0);
+            attribution.insert(field.clone(), bytes);
+        }
+    }
+    attribution
+}
+
+/// Builds one measurement row plus its field-group attribution (for aggregate
+/// totals). The row is a fully deterministic object; `route` is `null` when the
+/// payload carries no `query_route`.
+#[allow(clippy::too_many_arguments)]
+fn payload_measure_row(
+    operation: &str,
+    category: &str,
+    mode: &str,
+    verbosity: &str,
+    source_spans: &str,
+    surface: &str,
+    value: &serde_json::Value,
+    total_bytes: usize,
+) -> (serde_json::Value, Vec<(String, u64)>) {
+    let field_bytes = attribute_field_bytes(value);
+    let field_bytes_object: serde_json::Map<String, serde_json::Value> = field_bytes
+        .iter()
+        .map(|(field, bytes)| (field.clone(), serde_json::json!(bytes)))
+        .collect();
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let route = value
+        .get("query_route")
+        .and_then(|route| route.get("route"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let row = serde_json::json!({
+        "operation": operation,
+        "category": category,
+        "mode": mode,
+        "verbosity": verbosity,
+        "source_spans": source_spans,
+        "surface": surface,
+        "status": status,
+        "route": route,
+        "total_bytes": total_bytes,
+        "field_bytes": serde_json::Value::Object(field_bytes_object),
+    });
+    (row, field_bytes.into_iter().collect())
+}
+
+#[allow(clippy::type_complexity)]
+fn payload_measure_row_lines(
+    summary: &serde_json::Value,
+) -> Vec<(String, String, String, String, String, String, u64)> {
+    summary
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    (
+                        row["operation"].as_str().unwrap_or("").to_string(),
+                        row["category"].as_str().unwrap_or("").to_string(),
+                        row["mode"].as_str().unwrap_or("").to_string(),
+                        row["verbosity"].as_str().unwrap_or("").to_string(),
+                        row["source_spans"].as_str().unwrap_or("").to_string(),
+                        row["status"].as_str().unwrap_or("").to_string(),
+                        row["total_bytes"].as_u64().unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn payload_measure_top_field_groups(
+    summary: &serde_json::Value,
+    limit: usize,
+) -> Vec<(String, u64)> {
+    let mut pairs: Vec<(String, u64)> = summary
+        .get("field_group_totals")
+        .and_then(serde_json::Value::as_object)
+        .map(|object| {
+            object
+                .iter()
+                .map(|(field, bytes)| (field.clone(), bytes.as_u64().unwrap_or(0)))
+                .collect()
+        })
+        .unwrap_or_default();
+    pairs.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    pairs.truncate(limit);
+    pairs
+}
+
+fn payload_measure_markdown(summary: &serde_json::Value) -> String {
+    let mut markdown = String::new();
+    markdown.push_str("# Payload byte measurement\n\n");
+    markdown.push_str(&format!(
+        "- Schema: `{}`\n",
+        summary["schema_version"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Fixture: `{}` (version `{}`)\n",
+        summary["fixture_id"].as_str().unwrap_or("?"),
+        summary["fixture_version"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Product schema: `{}`\n",
+        summary["product_schema_version"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Commit: `{}`\n",
+        summary["repogrammar_commit"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Rows: {} | Grand total: {} B\n\n",
+        summary["totals"]["row_count"].as_u64().unwrap_or(0),
+        summary["totals"]["grand_total_bytes"].as_u64().unwrap_or(0)
+    ));
+    markdown.push_str(
+        "| operation | category | mode | verbosity | source_spans | status | total_bytes |\n",
+    );
+    markdown.push_str("|---|---|---|---|---|---|---|\n");
+    for (operation, category, mode, verbosity, source_spans, status, total_bytes) in
+        payload_measure_row_lines(summary)
+    {
+        markdown.push_str(&format!(
+            "| {operation} | {category} | {mode} | {verbosity} | {source_spans} | {status} | {total_bytes} |\n"
+        ));
+    }
+    markdown.push_str("\n## Heaviest field groups (summed across rows)\n\n");
+    markdown.push_str("| field | bytes |\n|---|---|\n");
+    for (field, bytes) in payload_measure_top_field_groups(summary, 12) {
+        markdown.push_str(&format!("| {field} | {bytes} |\n"));
+    }
+    markdown.push_str(
+        "\nA \"we saved X bytes\" claim is declarable only from a before/after diff of two \
+`payload-bytes.summary.json` runs (same fixture, one with the slice, one without).\n",
+    );
+    markdown
+}
+
+fn payload_measure_report(summary: &serde_json::Value, summary_file: &Path) -> String {
+    let mut report = String::new();
+    report.push_str(&format!(
+        "payload-measure fixture {} (version {}) at commit {}\n",
+        summary["fixture_id"].as_str().unwrap_or("?"),
+        summary["fixture_version"].as_str().unwrap_or("?"),
+        summary["repogrammar_commit"].as_str().unwrap_or("?"),
+    ));
+    report.push_str(&format!(
+        "schema {} | product schema {} | {} rows | grand total {} B\n",
+        summary["schema_version"].as_str().unwrap_or("?"),
+        summary["product_schema_version"].as_str().unwrap_or("?"),
+        summary["totals"]["row_count"].as_u64().unwrap_or(0),
+        summary["totals"]["grand_total_bytes"].as_u64().unwrap_or(0),
+    ));
+    report.push_str(&format!(
+        "{:<18}{:<32}{:<9}{:<11}{:<7}{:<22}{:>12}\n",
+        "operation", "category", "mode", "verbosity", "spans", "status", "total_bytes"
+    ));
+    for (operation, category, mode, verbosity, source_spans, status, total_bytes) in
+        payload_measure_row_lines(summary)
+    {
+        report.push_str(&format!(
+            "{operation:<18}{category:<32}{mode:<9}{verbosity:<11}{source_spans:<7}{status:<22}{total_bytes:>12}\n"
+        ));
+    }
+    let top: Vec<String> = payload_measure_top_field_groups(summary, 8)
+        .into_iter()
+        .map(|(field, bytes)| format!("{field}={bytes}"))
+        .collect();
+    report.push_str(&format!("top field groups (summed): {}\n", top.join(", ")));
+    report.push_str(&format!("wrote {}\n", summary_file.display()));
+    report.push_str(
+        "before/after: rerun payload-measure after a precision slice lands and diff \
+payload-bytes.summary.json; any savings claim must cite the two-run byte table.\n",
+    );
+    report
+}
+
+fn run_payload_measure(
+    root: &Path,
+    out_dir: &str,
+    bin_override: Option<&str>,
+    fixture_override: Option<&str>,
+) -> Result<String, String> {
+    let binary = resolve_product_binary(root, bin_override)?;
+    let fixture_rel = fixture_override.unwrap_or(PAYLOAD_MEASURE_FIXTURE_DEFAULT);
+    let source = fs::canonicalize(root.join(fixture_rel))
+        .map_err(|_| format!("payload-measure fixture '{fixture_rel}' is unavailable"))?;
+    let fixture_version = fixture_version_hash(&source)?;
+    let commit = resolve_git_commit(root, "HEAD").unwrap_or_else(|_| "unknown".to_string());
+
+    let workspace = EvalWorkspace::new(&binary, &source)?;
+    if let Err(error) = workspace.init() {
+        workspace.retain();
+        return Err(error);
+    }
+    if let Err(error) = workspace.resync() {
+        workspace.retain();
+        return Err(error);
+    }
+
+    let mut sortable: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut field_group_totals: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+    let mut grand_total_bytes: u64 = 0;
+    let mut product_schema_version: Option<String> = None;
+    let mut fixture_shape: Option<serde_json::Value> = None;
+
+    for case in PAYLOAD_MEASURE_CASES {
+        // Base cross product: `mode x verbosity`, no rendered source spans.
+        for mode in PAYLOAD_MEASURE_MODES {
+            for verbosity in PAYLOAD_MEASURE_VERBOSITIES {
+                let (value, total_bytes) = match workspace.capture_query_json(
+                    case.operation,
+                    case.target,
+                    mode,
+                    verbosity,
+                    false,
+                ) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        workspace.retain();
+                        return Err(error);
+                    }
+                };
+                if product_schema_version.is_none() {
+                    product_schema_version = value
+                        .get("schema_version")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                // Record the big family's shape once so a before/after run and
+                // the smoke test can detect fixture drift (member cap / count).
+                if case.category == "found_big_family_path" && fixture_shape.is_none() {
+                    fixture_shape = Some(serde_json::json!({
+                        "category": case.category,
+                        "member_count": value.get("member_count").and_then(serde_json::Value::as_u64),
+                        "members_rendered": value
+                            .get("members")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|members| members.len()),
+                        "members_truncated": value
+                            .get("members_truncated")
+                            .and_then(serde_json::Value::as_bool),
+                    }));
+                }
+                let (row, field_bytes) = payload_measure_row(
+                    case.operation,
+                    case.category,
+                    mode,
+                    verbosity,
+                    "off",
+                    "cli_json",
+                    &value,
+                    total_bytes,
+                );
+                for (field, bytes) in field_bytes {
+                    *field_group_totals.entry(field).or_insert(0) += bytes;
+                }
+                grand_total_bytes += total_bytes as u64;
+                let key = format!(
+                    "{}|{}|{}|{}|off",
+                    case.operation, case.category, mode, verbosity
+                );
+                sortable.push((key, row));
+            }
+        }
+        // Source-spans variant: deep mode with rendered spans, so the
+        // `read_plan` <-> `source_spans` overlap (S6, the plan's largest single
+        // per-response item) is measurable — invisible without this request.
+        if case.measure_source_spans {
+            for verbosity in PAYLOAD_MEASURE_VERBOSITIES {
+                let (value, total_bytes) = match workspace.capture_query_json(
+                    case.operation,
+                    case.target,
+                    "deep",
+                    verbosity,
+                    true,
+                ) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        workspace.retain();
+                        return Err(error);
+                    }
+                };
+                let (row, field_bytes) = payload_measure_row(
+                    case.operation,
+                    case.category,
+                    "deep",
+                    verbosity,
+                    "on",
+                    "cli_json",
+                    &value,
+                    total_bytes,
+                );
+                for (field, bytes) in field_bytes {
+                    *field_group_totals.entry(field).or_insert(0) += bytes;
+                }
+                grand_total_bytes += total_bytes as u64;
+                let key = format!("{}|{}|deep|{}|on", case.operation, case.category, verbosity);
+                sortable.push((key, row));
+            }
+        }
+    }
+
+    // Readiness: the bounded, source-free MCP `inspect_readiness` surface. The
+    // CLI `status` lifecycle command is deliberately not measured here — its
+    // storage internals are volatile and out of scope for the precision policy.
+    let (readiness_value, readiness_bytes) = match workspace.capture_inspect_readiness() {
+        Ok(pair) => pair,
+        Err(error) => {
+            workspace.retain();
+            return Err(error);
+        }
+    };
+    let (readiness_row, readiness_field_bytes) = payload_measure_row(
+        "inspect_readiness",
+        "readiness",
+        "-",
+        "-",
+        "-",
+        "mcp_tool",
+        &readiness_value,
+        readiness_bytes,
+    );
+    for (field, bytes) in readiness_field_bytes {
+        *field_group_totals.entry(field).or_insert(0) += bytes;
+    }
+    grand_total_bytes += readiness_bytes as u64;
+    sortable.push((
+        "inspect_readiness|readiness|-|-|-".to_string(),
+        readiness_row,
+    ));
+
+    sortable.sort_by(|left, right| left.0.cmp(&right.0));
+    let rows: Vec<serde_json::Value> = sortable.into_iter().map(|(_, row)| row).collect();
+    let row_count = rows.len();
+
+    let field_group_totals_object: serde_json::Map<String, serde_json::Value> = field_group_totals
+        .iter()
+        .map(|(field, bytes)| (field.clone(), serde_json::json!(bytes)))
+        .collect();
+
+    let summary = serde_json::json!({
+        "schema_version": PAYLOAD_MEASURE_SCHEMA,
+        "fixture_id": PAYLOAD_MEASURE_FIXTURE_ID,
+        "fixture_relpath": fixture_rel.replace('\\', "/"),
+        "fixture_version": fixture_version,
+        "product_schema_version": product_schema_version,
+        "repogrammar_commit": commit,
+        "mode_axis": PAYLOAD_MEASURE_MODES,
+        "verbosity_axis": PAYLOAD_MEASURE_VERBOSITIES,
+        "fixture_shape": fixture_shape,
+        "totals": {
+            "row_count": row_count,
+            "grand_total_bytes": grand_total_bytes,
+        },
+        "field_group_totals": serde_json::Value::Object(field_group_totals_object),
+        "rows": rows,
+    });
+
+    let out_dir_absolute = if Path::new(out_dir).is_absolute() {
+        PathBuf::from(out_dir)
+    } else {
+        root.join(out_dir)
+    };
+    fs::create_dir_all(&out_dir_absolute)
+        .map_err(|_| "could not create payload-measure output directory".to_string())?;
+    let summary_file = out_dir_absolute.join("payload-bytes.summary.json");
+    let serialized = serde_json::to_string_pretty(&summary)
+        .map_err(|_| "could not serialize payload-measure summary".to_string())?;
+    fs::write(&summary_file, format!("{serialized}\n"))
+        .map_err(|_| "could not write payload-measure summary".to_string())?;
+    let human_file = out_dir_absolute.join("payload-bytes.md");
+    fs::write(&human_file, payload_measure_markdown(&summary))
+        .map_err(|_| "could not write payload-measure human summary".to_string())?;
+
+    Ok(payload_measure_report(&summary, &summary_file))
 }
 
 fn run_check(root: &Path) -> CommandResult {
@@ -5172,5 +8847,1516 @@ verify-stable-release-evidence --evidence-dir evidence
             fs::create_dir_all(parent).expect("create parent");
         }
         fs::write(path, contents).expect("write file");
+    }
+
+    #[test]
+    fn product_eval_corpus_parses_minimal_document() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "src/fixtures/x", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "exact_family_id",
+                "operation": "family",
+                "target": "family:python:fastapi_route:framework_fastapi_route",
+                "mode": "compact",
+                "expected": {
+                    "outcome": "ok",
+                    "family": "family:python:fastapi_route:framework_fastapi_route"
+                }
+            }]
+        });
+        let corpus = EvalCorpus::from_value(&value).expect("corpus parses");
+        assert_eq!(corpus.fixtures.len(), 1);
+        assert_eq!(corpus.queries.len(), 1);
+        assert_eq!(corpus.queries[0].operation, EvalOperation::Family);
+        assert_eq!(corpus.queries[0].expected.outcome, Some(EvalOutcome::Ok));
+        assert!(corpus.queries[0].mutation.is_none());
+    }
+
+    #[test]
+    fn product_eval_corpus_rejects_unknown_schema_version() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v2",
+            "fixtures": [],
+            "queries": []
+        });
+        assert!(EvalCorpus::from_value(&value).is_err());
+    }
+
+    #[test]
+    fn product_eval_corpus_rejects_query_for_unknown_fixture() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "r", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "missing",
+                "kind": "exact_path",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {"outcome": "ok"}
+            }]
+        });
+        assert!(EvalCorpus::from_value(&value).is_err());
+    }
+
+    #[test]
+    fn product_eval_status_classifier_is_deterministic() {
+        assert_eq!(EvalOutcome::classify_status("ok"), EvalOutcome::Ok);
+        assert_eq!(
+            EvalOutcome::classify_status("CONTEXT_ONLY"),
+            EvalOutcome::Ok
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("PARTIAL_CONTEXT"),
+            EvalOutcome::PartialContext
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("UNKNOWN"),
+            EvalOutcome::Unknown
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("SOMETHING_ELSE"),
+            EvalOutcome::Fallback
+        );
+        // Static-alignment certificates classify honestly: a committed certificate
+        // (aligned or a definite deviation) is `ok`, a partial alignment is partial
+        // context, and an abstaining certificate is unknown — never fallback, so a
+        // committed retrieval-intent check query keeps its MRR credit.
+        assert_eq!(
+            EvalOutcome::classify_status("STATICALLY_ALIGNED"),
+            EvalOutcome::Ok
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("STATIC_DEVIATION"),
+            EvalOutcome::Ok
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("PARTIAL_ALIGNMENT"),
+            EvalOutcome::PartialContext
+        );
+        assert_eq!(
+            EvalOutcome::classify_status("INSUFFICIENT_EVIDENCE"),
+            EvalOutcome::Unknown
+        );
+    }
+
+    #[test]
+    fn product_eval_alignment_status_is_a_first_class_matcher() {
+        // A declared alignment_status gold must be enforced: a mismatch is a query
+        // mismatch, and the actual reads the certificate's alignment_status field.
+        let value = serde_json::json!({
+            "status": "STATIC_DEVIATION",
+            "alignment_status": "STATIC_DEVIATION",
+            "query_route": {"selected_family_id": "family:python:fastapi_route"},
+        });
+        let actual = EvalActual::from_query_json(&value).expect("parses");
+        assert_eq!(actual.alignment_status.as_deref(), Some("STATIC_DEVIATION"));
+
+        let aligned_gold = EvalExpected {
+            alignment_status: Some("STATICALLY_ALIGNED".to_string()),
+            ..EvalExpected::default()
+        };
+        let (matched, mismatches) = evaluate_match(&aligned_gold, &actual);
+        assert!(!matched);
+        assert!(mismatches.contains(&"alignment_status".to_string()));
+
+        let deviation_gold = EvalExpected {
+            alignment_status: Some("STATIC_DEVIATION".to_string()),
+            ..EvalExpected::default()
+        };
+        let (matched, _) = evaluate_match(&deviation_gold, &actual);
+        assert!(matched);
+    }
+
+    fn sample_found_actual() -> EvalActual {
+        EvalActual {
+            outcome: EvalOutcome::Ok,
+            route: Some("discover_hydrate_compose".to_string()),
+            selected_family: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_count: 1,
+            candidate_families: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
+            unknown_reason: None,
+            active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
+        }
+    }
+
+    fn abstain_actual() -> EvalActual {
+        EvalActual {
+            outcome: EvalOutcome::Unknown,
+            route: Some("discovery_unknown".to_string()),
+            selected_family: None,
+            candidate_family_count: 0,
+            candidate_families: Vec::new(),
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
+        }
+    }
+
+    #[test]
+    fn product_eval_matcher_accepts_found_expectation() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let (is_match, fields) = evaluate_match(&expected, &sample_found_actual());
+        assert!(is_match);
+        assert!(fields.is_empty());
+        assert!(!is_false_family_selection(
+            &expected,
+            &sample_found_actual()
+        ));
+    }
+
+    #[test]
+    fn product_eval_matcher_flags_wrong_family_as_false_selection() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let actual = EvalActual {
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        let (is_match, fields) = evaluate_match(&expected, &actual);
+        assert!(!is_match);
+        assert_eq!(fields, vec!["family_prefix".to_string()]);
+        assert!(is_false_family_selection(&expected, &actual));
+    }
+
+    #[test]
+    fn product_eval_matcher_supports_any_of_and_unconstrained_fields() {
+        let actual = EvalActual {
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        let any_of = EvalExpected {
+            family_any_of: Some(vec![
+                "family:python:sqlalchemy_model".to_string(),
+                "family:python:pydantic_model".to_string(),
+            ]),
+            ..EvalExpected::default()
+        };
+        let (is_match, _) = evaluate_match(&any_of, &actual);
+        assert!(is_match);
+
+        let unconstrained = EvalExpected::default();
+        let (is_match, fields) = evaluate_match(&unconstrained, &actual);
+        assert!(is_match);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn product_eval_matcher_enforces_unknown_reason_constraint() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            unknown_reason: Some("StaleEvidence".to_string()),
+            route: Some("exact_lookup_unknown".to_string()),
+            ..EvalExpected::default()
+        };
+        let stale = EvalActual {
+            outcome: EvalOutcome::Unknown,
+            route: Some("exact_lookup_unknown".to_string()),
+            selected_family: None,
+            candidate_family_count: 0,
+            candidate_families: Vec::new(),
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
+            unknown_reason: Some("StaleEvidence".to_string()),
+            active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
+        };
+        let (is_match, _) = evaluate_match(&expected, &stale);
+        assert!(is_match);
+        assert!(!is_false_family_selection(&expected, &stale));
+
+        let wrong = EvalActual {
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            ..stale
+        };
+        let (is_match, fields) = evaluate_match(&expected, &wrong);
+        assert!(!is_match);
+        assert!(fields.contains(&"unknown_reason".to_string()));
+    }
+
+    #[test]
+    fn product_eval_fixture_hash_is_order_independent() {
+        let first = TempRoot::new("eval-hash-a");
+        write_file(first.path().join("sub/one.py"), b"alpha");
+        write_file(first.path().join("two.py"), b"beta");
+
+        let second = TempRoot::new("eval-hash-b");
+        write_file(second.path().join("two.py"), b"beta");
+        write_file(second.path().join("sub/one.py"), b"alpha");
+
+        let first_hash = fixture_version_hash(first.path()).expect("hash first");
+        let second_hash = fixture_version_hash(second.path()).expect("hash second");
+        assert_eq!(first_hash, second_hash);
+
+        write_file(second.path().join("two.py"), b"beta-changed");
+        let changed_hash = fixture_version_hash(second.path()).expect("hash changed");
+        assert_ne!(first_hash, changed_hash);
+    }
+
+    #[test]
+    fn product_eval_time_and_percentile_helpers_are_deterministic() {
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_utc(1_600_000_000), "2020-09-13T12:26:40Z");
+        assert_eq!(percentile(&[], 50), 0);
+        assert_eq!(percentile(&[5u128], 95), 5);
+        assert_eq!(percentile(&[10u128, 20, 30], 50), 20);
+        assert_eq!(percentile(&[10u128, 20, 30, 40], 95), 40);
+    }
+
+    #[test]
+    fn product_eval_result_entry_round_trips_required_fields() {
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let actual = EvalActual {
+            outcome: EvalOutcome::Unknown,
+            route: Some("discovery_unknown".to_string()),
+            selected_family: None,
+            candidate_family_count: 0,
+            candidate_families: Vec::new(),
+            hydrated_family_count: None,
+            retrieval_stage_count: None,
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            active_generation: Some("gen-000002".to_string()),
+            alignment_status: None,
+        };
+        let (is_match, mismatch_fields) = evaluate_match(&expected, &actual);
+        let entry = serde_json::json!({
+            "query_id": "py-nl-fastapi-routes",
+            "fixture_id": "python-v0_1",
+            "kind": "nl_pattern_question",
+            "operation": "find",
+            "target": "How are FastAPI routes implemented?",
+            "expected": expected.to_value(),
+            "actual": actual.to_value(),
+            "match": is_match,
+            "mismatch_fields": mismatch_fields,
+            "latency_ms_all_reps": [10u128, 12, 11],
+            "latency_ms_p50": percentile(&[10u128, 12, 11], 50),
+        });
+        let serialized = serde_json::to_string(&entry).expect("serialize entry");
+        let parsed: serde_json::Value = serde_json::from_str(&serialized).expect("parse entry");
+        assert_eq!(parsed["match"], false);
+        assert_eq!(parsed["actual"]["outcome"], "unknown");
+        assert!(parsed["actual"]["selected_family"].is_null());
+        assert_eq!(parsed["actual"]["candidate_family_count"], 0);
+        assert_eq!(parsed["actual"]["unknown_reason"], "InsufficientSupport");
+        assert_eq!(
+            parsed["expected"]["family_prefix"],
+            "family:python:fastapi_route"
+        );
+        assert_eq!(parsed["latency_ms_p50"], 11);
+        assert!(parsed["mismatch_fields"]
+            .as_array()
+            .expect("mismatch fields array")
+            .iter()
+            .any(|field| field == "outcome"));
+    }
+
+    #[test]
+    fn product_eval_corpus_parses_intent_and_candidates_include() {
+        let value = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "src/fixtures/x", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "ambiguous",
+                "intent": "abstention",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {
+                    "outcome": "unknown",
+                    "candidates_include": [
+                        "family:python:fastapi_route",
+                        "family:python:pydantic_model"
+                    ]
+                }
+            }]
+        });
+        let corpus = EvalCorpus::from_value(&value).expect("corpus parses");
+        assert_eq!(corpus.queries[0].intent, Some(EvalIntent::Abstention));
+        assert_eq!(
+            corpus.queries[0].expected.candidates_include,
+            Some(vec![
+                "family:python:fastapi_route".to_string(),
+                "family:python:pydantic_model".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn product_eval_intent_is_optional_and_rejects_unknown_token() {
+        // Absent intent stays None so a legacy v1 corpus keeps parsing.
+        let legacy = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "r", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "exact_path",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {"outcome": "ok"}
+            }]
+        });
+        let corpus = EvalCorpus::from_value(&legacy).expect("legacy corpus parses");
+        assert_eq!(corpus.queries[0].intent, None);
+
+        let bad_intent = serde_json::json!({
+            "schema_version": "product-eval-corpus.v1",
+            "fixtures": [{"fixture_id": "f1", "root": "r", "description": "d"}],
+            "queries": [{
+                "query_id": "q1",
+                "fixture_id": "f1",
+                "kind": "exact_path",
+                "intent": "recall",
+                "operation": "find",
+                "target": "app.py",
+                "mode": "compact",
+                "expected": {"outcome": "ok"}
+            }]
+        });
+        assert!(EvalCorpus::from_value(&bad_intent).is_err());
+    }
+
+    #[test]
+    fn product_eval_actual_reads_optional_count_fields() {
+        let with_counts = serde_json::json!({
+            "status": "ok",
+            "active_generation": "gen-000009",
+            "query_route": {
+                "route": "discover_hydrate_compose",
+                "selected_family_id": "family:python:fastapi_route:framework_fastapi_route",
+                "candidate_family_ids": [
+                    "family:python:fastapi_route:framework_fastapi_route"
+                ],
+                "hydrated_family_count": 3,
+                "retrieval_stage_count": 4
+            }
+        });
+        let actual = EvalActual::from_query_json(&with_counts).expect("parses");
+        assert_eq!(actual.hydrated_family_count, Some(3));
+        assert_eq!(actual.retrieval_stage_count, Some(4));
+
+        // Absent count fields (current product) stay None and serialize as null.
+        let without_counts = serde_json::json!({
+            "status": "UNKNOWN",
+            "query_route": {"route": "discovery_unknown", "candidate_family_ids": []}
+        });
+        let actual = EvalActual::from_query_json(&without_counts).expect("parses");
+        assert_eq!(actual.hydrated_family_count, None);
+        assert_eq!(actual.retrieval_stage_count, None);
+        assert!(actual.to_value()["hydrated_family_count"].is_null());
+        assert!(actual.to_value()["retrieval_stage_count"].is_null());
+    }
+
+    #[test]
+    fn product_eval_reciprocal_rank_ranks_selected_then_candidates() {
+        let expected = EvalExpected {
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        // Selected satisfies gold -> rank 1.
+        assert_eq!(reciprocal_rank(&expected, &sample_found_actual()), 1.0);
+
+        // Committed a wrong selection (outcome ok), gold appears second in the
+        // candidate list -> 1/2. MRR credits the committed ranking.
+        let committed_ranked = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            candidate_families: vec![
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ],
+            ..sample_found_actual()
+        };
+        assert_eq!(reciprocal_rank(&expected, &committed_ranked), 0.5);
+
+        // Abstention outcome scores 0 even when gold sits in the candidate list:
+        // MRR measures the committed answer, not list construction.
+        let abstained_with_gold = EvalActual {
+            candidate_families: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            ..abstain_actual()
+        };
+        assert_eq!(reciprocal_rank(&expected, &abstained_with_gold), 0.0);
+
+        // Gold only beyond the top-K committed candidates -> 0 (K = 5).
+        let mut deep_candidates: Vec<String> = (0..5)
+            .map(|index| format!("family:python:pydantic_model:framework_pydantic_model_{index}"))
+            .collect();
+        deep_candidates.push("family:python:fastapi_route:framework_fastapi_route".to_string());
+        let committed_deep = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            candidate_families: deep_candidates,
+            ..sample_found_actual()
+        };
+        assert_eq!(reciprocal_rank(&expected, &committed_deep), 0.0);
+
+        // Gold absent entirely -> 0.
+        assert_eq!(reciprocal_rank(&expected, &abstain_actual()), 0.0);
+
+        // No family constraint -> 0 regardless of selection.
+        assert_eq!(
+            reciprocal_rank(&EvalExpected::default(), &sample_found_actual()),
+            0.0
+        );
+    }
+
+    #[test]
+    fn product_eval_candidate_recall_requires_every_prefix() {
+        let includes = vec![
+            "family:python:fastapi_route".to_string(),
+            "family:python:pydantic_model".to_string(),
+        ];
+        let both = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854".to_string(),
+        ];
+        assert!(candidate_recall_satisfied(&includes, &both));
+        let only_one = vec!["family:python:fastapi_route:framework_fastapi_route".to_string()];
+        assert!(!candidate_recall_satisfied(&includes, &only_one));
+
+        // A prefix matched only beyond the top-K candidates does not count (K = 5).
+        let mut deep = vec!["family:python:fastapi_route:framework_fastapi_route".to_string()];
+        for index in 0..5 {
+            deep.push(format!("family:python:filler_{index}:framework_filler"));
+        }
+        deep.push("family:python:pydantic_model:framework_pydantic_model".to_string());
+        assert!(!candidate_recall_satisfied(&includes, &deep));
+    }
+
+    #[test]
+    fn product_eval_metrics_math_is_deterministic() {
+        // Retrieval hit: selected family matches gold prefix.
+        let retrieval_hit_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let retrieval_hit_actual = sample_found_actual();
+
+        // Retrieval gap: gold family exists but product abstains (the NL gap).
+        let retrieval_gap_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            family_prefix: Some("family:python:pytest_fixture".to_string()),
+            ..EvalExpected::default()
+        };
+        let retrieval_gap_actual = abstain_actual();
+
+        // Abstention with candidates surfaced: gold candidates_include is met.
+        let abstain_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            candidates_include: Some(vec![
+                "family:python:fastapi_route".to_string(),
+                "family:python:pydantic_model".to_string(),
+            ]),
+            ..EvalExpected::default()
+        };
+        let abstain_actual_candidates = EvalActual {
+            candidate_family_count: 2,
+            candidate_families: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854".to_string(),
+            ],
+            ..abstain_actual()
+        };
+
+        // Unsupported concept: correctly rejected as unknown.
+        let unsupported_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            ..EvalExpected::default()
+        };
+
+        let expected_slots = [
+            retrieval_hit_expected,
+            retrieval_gap_expected,
+            abstain_expected,
+            unsupported_expected,
+        ];
+        let actual_slots = [
+            retrieval_hit_actual,
+            retrieval_gap_actual,
+            abstain_actual_candidates,
+            abstain_actual(),
+        ];
+        let records = vec![
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Retrieval),
+                kind: "nl_pattern_question",
+                expected: &expected_slots[0],
+                actual: &actual_slots[0],
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Retrieval),
+                kind: "nl_pattern_question",
+                expected: &expected_slots[1],
+                actual: &actual_slots[1],
+                is_match: false,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "ambiguous",
+                expected: &expected_slots[2],
+                actual: &actual_slots[2],
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "unsupported_concept",
+                expected: &expected_slots[3],
+                actual: &actual_slots[3],
+                is_match: true,
+            },
+        ];
+        let metrics = compute_product_eval_metrics(&records);
+
+        // Hit@1 over the two retrieval queries: one hit.
+        assert_eq!((metrics.hit_at_1_num, metrics.hit_at_1_den), (1, 2));
+        // MRR: 1.0 (hit) + 0.0 (gap) over 2 retrieval queries -> 0.5.
+        assert_eq!(metrics.mrr_den, 2);
+        assert_eq!(metrics.mrr_sum, 1.0);
+        // Candidate recall: only the abstention query declares candidates_include.
+        assert_eq!(
+            (metrics.candidate_recall_num, metrics.candidate_recall_den),
+            (1, 1)
+        );
+        // Correct abstention: both abstention queries returned unknown.
+        assert_eq!(
+            (
+                metrics.correct_abstention_num,
+                metrics.correct_abstention_den
+            ),
+            (2, 2)
+        );
+        // Only the retrieval-hit query carries a satisfied family constraint;
+        // no false family selections anywhere.
+        assert_eq!(metrics.false_family_selections, 0);
+        assert_eq!(metrics.family_constrained_total, 2);
+        // Every abstention-gold query here correctly abstains: no confident wrong
+        // selections on abstention gold.
+        assert_eq!(metrics.selected_on_abstention_gold, 0);
+        // Unsupported rejection: the one unsupported_concept query is unknown.
+        assert_eq!(
+            (
+                metrics.unsupported_rejection_num,
+                metrics.unsupported_rejection_den
+            ),
+            (1, 1)
+        );
+        // Ambiguity precision: the ambiguous abstention query is unknown.
+        assert_eq!(
+            (
+                metrics.ambiguity_precision_num,
+                metrics.ambiguity_precision_den
+            ),
+            (1, 1)
+        );
+        assert_eq!(metrics.by_intent.get("retrieval"), Some(&(2, 1)));
+        assert_eq!(metrics.by_intent.get("abstention"), Some(&(2, 2)));
+
+        let value = metrics.to_value();
+        assert_eq!(value["hit_at_1"], serde_json::json!(0.5));
+        assert_eq!(value["mrr"], serde_json::json!(0.5));
+        assert_eq!(value["candidate_recall"], serde_json::json!(1.0));
+        assert_eq!(value["false_family_rate"], serde_json::json!(0.0));
+    }
+
+    #[test]
+    fn product_eval_metrics_empty_denominators_serialize_null() {
+        let metrics = compute_product_eval_metrics(&[]);
+        let value = metrics.to_value();
+        assert!(value["hit_at_1"].is_null());
+        assert!(value["mrr"].is_null());
+        assert!(value["candidate_recall"].is_null());
+        assert!(value["correct_abstention_rate"].is_null());
+        assert!(value["false_family_rate"].is_null());
+        assert!(value["unsupported_rejection_rate"].is_null());
+        assert!(value["ambiguity_precision"].is_null());
+    }
+
+    #[test]
+    fn product_eval_condition_token_validation() {
+        for valid in [
+            "product",
+            "baseline_token_overlap",
+            "ablation-1",
+            "abc123",
+            &"a".repeat(40),
+        ] {
+            assert_eq!(
+                validate_condition_token(valid).expect("token accepted"),
+                valid
+            );
+        }
+        for invalid in [
+            "",
+            "Product",
+            "has space",
+            "a.b",
+            "trailing\n",
+            "-leading",
+            "--baseline",
+            "-",
+            &"a".repeat(41),
+        ] {
+            assert!(
+                validate_condition_token(invalid).is_err(),
+                "expected '{invalid}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn product_eval_baseline_token_maps_to_default_condition() {
+        assert_eq!(
+            EvalBaseline::from_token("token-overlap").expect("baseline token"),
+            EvalBaseline::TokenOverlap
+        );
+        assert!(EvalBaseline::from_token("bm25").is_err());
+        assert_eq!(
+            EvalBaseline::TokenOverlap.default_condition(),
+            "baseline_token_overlap"
+        );
+        assert_eq!(EvalBaseline::TokenOverlap.as_str(), "token-overlap");
+    }
+
+    #[test]
+    fn product_eval_resolve_condition_couples_baseline_and_condition() {
+        // Defaults: plain product, and a baseline's own default condition.
+        assert_eq!(
+            resolve_eval_condition(None, None).expect("product default"),
+            "product"
+        );
+        assert_eq!(
+            resolve_eval_condition(None, Some(EvalBaseline::TokenOverlap))
+                .expect("baseline default"),
+            "baseline_token_overlap"
+        );
+        // An explicit token wins verbatim, with or without a baseline.
+        assert_eq!(
+            resolve_eval_condition(Some("ablation-1".to_string()), None).expect("explicit"),
+            "ablation-1"
+        );
+        assert_eq!(
+            resolve_eval_condition(
+                Some("ablation-1".to_string()),
+                Some(EvalBaseline::TokenOverlap)
+            )
+            .expect("labeled baseline"),
+            "ablation-1"
+        );
+        // Explicit `product` alone is fine; with a baseline it is rejected.
+        assert_eq!(
+            resolve_eval_condition(Some("product".to_string()), None).expect("explicit product"),
+            "product"
+        );
+        assert!(resolve_eval_condition(
+            Some("product".to_string()),
+            Some(EvalBaseline::TokenOverlap)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn product_eval_selected_on_abstention_gold_counts_confident_wrong_selections() {
+        // Abstention gold where a family is nonetheless selected: counted, even
+        // though the query declares no family constraint so false_family stays 0.
+        let abstention_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            ..EvalExpected::default()
+        };
+        let selected_actual = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        // A correctly abstaining run on the same gold is not counted.
+        let abstained_actual = abstain_actual();
+        let records = vec![
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "typo_unsafe",
+                expected: &abstention_expected,
+                actual: &selected_actual,
+                is_match: false,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "ambiguous",
+                expected: &abstention_expected,
+                actual: &abstained_actual,
+                is_match: true,
+            },
+        ];
+        let metrics = compute_product_eval_metrics(&records);
+        assert_eq!(metrics.selected_on_abstention_gold, 1);
+        assert_eq!(metrics.false_family_selections, 0);
+        assert_eq!(metrics.family_constrained_total, 0);
+        assert_eq!(metrics.to_value()["selected_on_abstention_gold"], 1);
+    }
+
+    #[test]
+    fn product_eval_baseline_tokenize_lowercases_splits_and_dedups() {
+        assert_eq!(
+            baseline_tokenize("How are FastAPI routes implemented?"),
+            vec!["how", "are", "fastapi", "routes", "implemented"]
+        );
+        // `py` (2 chars) and `3` (1 char) fall below the minimum length.
+        assert_eq!(baseline_tokenize("app.py:3"), vec!["app"]);
+        // The repeated `fastapi`/`route` tokens are recorded once each.
+        assert_eq!(
+            baseline_tokenize("family:python:fastapi_route:framework_fastapi_route"),
+            vec!["family", "python", "fastapi", "route", "framework"]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_score_counts_distinct_substring_tokens() {
+        let tokens = vec![
+            "fastapi".to_string(),
+            "route".to_string(),
+            "xyz".to_string(),
+        ];
+        assert_eq!(
+            baseline_family_score(
+                &tokens,
+                "family:python:fastapi_route:framework_fastapi_route"
+            ),
+            2
+        );
+        assert_eq!(
+            baseline_family_score(
+                &tokens,
+                "family:python:pydantic_model:framework_pydantic_model"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_selects_unique_argmax_above_threshold() {
+        let tokens = baseline_tokenize("family:python:fastapi_route:framework_fastapi_route");
+        let families = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model".to_string(),
+        ];
+        let selection = baseline_select_family(&tokens, &families);
+        assert_eq!(
+            selection.selected_family.as_deref(),
+            Some("family:python:fastapi_route:framework_fastapi_route")
+        );
+        // Both families share the structural `family`/`python` tokens, so both are
+        // ranked candidates; the fastapi family sorts first on its higher score.
+        assert_eq!(
+            selection.candidate_families,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_abstains_on_strict_tie() {
+        // Only the structural prefix tokens match, and they match both families
+        // equally, so the strict-tie rule abstains while still listing candidates.
+        let tokens = vec!["family".to_string(), "python".to_string()];
+        let families = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model".to_string(),
+        ];
+        let selection = baseline_select_family(&tokens, &families);
+        assert!(selection.selected_family.is_none());
+        assert_eq!(selection.candidate_families.len(), 2);
+    }
+
+    #[test]
+    fn product_eval_baseline_abstains_below_threshold() {
+        // A unique max of 1 is below the score-of-2 selection threshold.
+        let tokens = vec!["fastapi".to_string()];
+        let families = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model".to_string(),
+        ];
+        let selection = baseline_select_family(&tokens, &families);
+        assert!(selection.selected_family.is_none());
+        assert_eq!(
+            selection.candidate_families,
+            vec!["family:python:fastapi_route:framework_fastapi_route".to_string()]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_ranking_is_deterministic_and_capped() {
+        let tokens = vec!["alpha".to_string(), "beta".to_string()];
+        let families: Vec<String> = (0..7).map(|index| format!("alpha_beta_{index}")).collect();
+        let mut shuffled = families.clone();
+        shuffled.reverse();
+        let forward = baseline_select_family(&tokens, &families);
+        let reversed = baseline_select_family(&tokens, &shuffled);
+        // Seven families tie at score 2, so selection abstains; the candidate list
+        // is capped at five and ordered by id regardless of input order.
+        assert!(forward.selected_family.is_none());
+        assert_eq!(forward.candidate_families, reversed.candidate_families);
+        assert_eq!(
+            forward.candidate_families,
+            vec![
+                "alpha_beta_0".to_string(),
+                "alpha_beta_1".to_string(),
+                "alpha_beta_2".to_string(),
+                "alpha_beta_3".to_string(),
+                "alpha_beta_4".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_actual_projects_outcome() {
+        let selected = baseline_actual(
+            BaselineSelection {
+                selected_family: Some("family:python:fastapi_route:x".to_string()),
+                candidate_families: vec!["family:python:fastapi_route:x".to_string()],
+            },
+            Some("gen-000002".to_string()),
+        );
+        assert_eq!(selected.outcome, EvalOutcome::Ok);
+        assert_eq!(selected.candidate_family_count, 1);
+        assert!(selected.route.is_none());
+        assert!(selected.unknown_reason.is_none());
+        assert_eq!(selected.active_generation.as_deref(), Some("gen-000002"));
+
+        let abstained = baseline_actual(
+            BaselineSelection {
+                selected_family: None,
+                candidate_families: Vec::new(),
+            },
+            None,
+        );
+        assert_eq!(abstained.outcome, EvalOutcome::Unknown);
+        assert!(abstained.selected_family.is_none());
+    }
+
+    #[test]
+    fn product_eval_results_serialize_condition_and_baseline_fields() {
+        // Build a results document with the same top-level and summary shape
+        // `run_product_eval` emits, so the new provenance/safety fields are
+        // asserted end-to-end through real serialization (no product binary).
+        let abstention_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            ..EvalExpected::default()
+        };
+        let selected_actual = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        let records = vec![EvalMetricRecord {
+            intent: Some(EvalIntent::Abstention),
+            kind: "typo_unsafe",
+            expected: &abstention_expected,
+            actual: &selected_actual,
+            is_match: false,
+        }];
+        let metrics = compute_product_eval_metrics(&records);
+
+        let build = |baseline: Option<EvalBaseline>,
+                     explicit: Option<String>|
+         -> serde_json::Value {
+            let condition = resolve_eval_condition(explicit, baseline).expect("condition resolves");
+            serde_json::json!({
+                "schema_version": PRODUCT_EVAL_RESULTS_SCHEMA,
+                "condition": condition,
+                "baseline": baseline.map(EvalBaseline::as_str),
+                "repetitions": 1,
+                "summary": {
+                    "total": 1,
+                    "false_family_selections": metrics.false_family_selections,
+                    "selected_on_abstention_gold": metrics.selected_on_abstention_gold,
+                    "metrics": metrics.to_value(),
+                },
+            })
+        };
+
+        // Baseline run: condition defaults, baseline field names the control, and
+        // the safety counter is surfaced both at summary top level and in metrics.
+        let baseline_doc = build(Some(EvalBaseline::TokenOverlap), None);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&baseline_doc).expect("serialize"))
+                .expect("parse");
+        assert_eq!(parsed["schema_version"], PRODUCT_EVAL_RESULTS_SCHEMA);
+        assert_eq!(parsed["condition"], "baseline_token_overlap");
+        assert_eq!(parsed["baseline"], "token-overlap");
+        assert_eq!(parsed["summary"]["selected_on_abstention_gold"], 1);
+        assert_eq!(
+            parsed["summary"]["metrics"]["selected_on_abstention_gold"],
+            1
+        );
+        assert_eq!(parsed["summary"]["metrics"]["false_family_selections"], 0);
+
+        // Product run: baseline field is explicit null.
+        let product_doc = build(None, None);
+        let parsed_product: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&product_doc).expect("serialize"))
+                .expect("parse");
+        assert_eq!(parsed_product["condition"], "product");
+        assert!(parsed_product["baseline"].is_null());
+    }
+
+    #[test]
+    fn canonical_json_string_is_stable_and_discriminating() {
+        let left: serde_json::Value =
+            serde_json::from_str(r#"{"b":1,"a":[3,{"y":2,"x":1}]}"#).expect("parse left");
+        let right: serde_json::Value =
+            serde_json::from_str(r#"{"a":[3,{"x":1,"y":2}],"b":1}"#).expect("parse right");
+        assert_eq!(canonical_json_string(&left), canonical_json_string(&right));
+        let changed: serde_json::Value =
+            serde_json::from_str(r#"{"a":[3,{"x":9,"y":2}],"b":1}"#).expect("parse changed");
+        assert_ne!(
+            canonical_json_string(&left),
+            canonical_json_string(&changed)
+        );
+    }
+
+    #[test]
+    fn sync_equivalence_multiset_diff_has_teeth() {
+        let incremental = vec!["a".to_string(), "b".to_string(), "b".to_string()];
+        let clean = vec!["a".to_string(), "b".to_string()];
+        let (b_only, c_only) = sync_equivalence_multiset_diff(&incremental, &clean);
+        assert_eq!(b_only, vec!["b".to_string()]);
+        assert!(c_only.is_empty());
+
+        let (same_b, same_c) = sync_equivalence_multiset_diff(&incremental, &incremental);
+        assert!(same_b.is_empty() && same_c.is_empty());
+
+        assert!(!sync_equivalence_surface("code_units", &incremental, &clean).equal);
+        assert!(sync_equivalence_surface("code_units", &incremental, &incremental).equal);
+    }
+
+    #[test]
+    fn sync_equivalence_provider_origin_classification() {
+        // Only the external TypeScript worker is exempted from equality; the
+        // in-binary Rust provider (`cargo_metadata`) is reproducible in the clean
+        // rebuild and must be compared like any local engine.
+        assert!(sync_equivalence_is_worker_provider_origin("typescript"));
+        assert!(!sync_equivalence_is_worker_provider_origin(
+            "cargo_metadata"
+        ));
+        assert!(!sync_equivalence_is_worker_provider_origin("python"));
+        assert!(!sync_equivalence_is_worker_provider_origin(
+            "repogrammar-java-syntax"
+        ));
+        assert!(!sync_equivalence_is_worker_provider_origin(
+            "repogrammar-tsjs-syntax"
+        ));
+    }
+
+    #[test]
+    fn sync_equivalence_scenario_pass_gate_is_not_trivially_satisfiable() {
+        // Expected EQUAL, incremental path, no reparsed-count expectation: passes.
+        assert!(sync_equivalence_scenario_passes(
+            "EQUAL", None, None, "EQUAL", None, None
+        ));
+        // Expected FELL_BACK with a reason: passes on the exact reason.
+        assert!(sync_equivalence_scenario_passes(
+            "FELL_BACK",
+            Some("project_context_changed"),
+            None,
+            "FELL_BACK",
+            Some("project_context_changed"),
+            None,
+        ));
+        // Expected EQUAL with a reparsed-count expectation that matches: passes.
+        assert!(sync_equivalence_scenario_passes(
+            "EQUAL",
+            None,
+            Some(1),
+            "EQUAL",
+            None,
+            Some(1),
+        ));
+        // Gate regression: an expected fallback silently ran incrementally and
+        // was (vacuously) EQUAL — must FAIL.
+        assert!(!sync_equivalence_scenario_passes(
+            "EQUAL",
+            None,
+            None,
+            "FELL_BACK",
+            Some("project_context_changed"),
+            None,
+        ));
+        // Preflight misfire: an expected-incremental scenario fell back — fail.
+        assert!(!sync_equivalence_scenario_passes(
+            "FELL_BACK",
+            Some("engine_version_changed"),
+            None,
+            "EQUAL",
+            None,
+            None,
+        ));
+        // Right outcome, wrong reason — fail.
+        assert!(!sync_equivalence_scenario_passes(
+            "FELL_BACK",
+            Some("engine_version_changed"),
+            None,
+            "FELL_BACK",
+            Some("project_context_changed"),
+            None,
+        ));
+        // Right outcome, but reparsed more files than the file-local path should —
+        // fail (this is what catches a fast path that silently reparsed too much).
+        assert!(!sync_equivalence_scenario_passes(
+            "EQUAL",
+            None,
+            Some(3),
+            "EQUAL",
+            None,
+            Some(1),
+        ));
+        // Any inequality — fail regardless of expectation.
+        assert!(!sync_equivalence_scenario_passes(
+            "INEQUAL", None, None, "EQUAL", None, None
+        ));
+    }
+
+    #[test]
+    fn sync_equivalence_fact_tuple_distinguishes_hash_target_and_assumptions() {
+        use repogrammar::core::model::ContentHash;
+        use repogrammar::ports::index_store::IndexedSemanticFactRecord;
+        let base = || IndexedSemanticFactRecord {
+            fact_id: "semantic-fact:1".to_string(),
+            kind: "FRAMEWORK_ROLE".to_string(),
+            subject: "s".to_string(),
+            target: None,
+            certainty: "FRAMEWORK_HEURISTIC".to_string(),
+            origin_engine: "python".to_string(),
+            origin_engine_version: "1".to_string(),
+            origin_method: "m".to_string(),
+            assumptions: vec!["a".to_string(), "b".to_string()],
+            evidence_id: "semantic-evidence:1".to_string(),
+            code_unit_id: "unit:x".to_string(),
+            path: "x.py".to_string(),
+            content_hash: ContentHash::new(format!("sha256:{}", "a".repeat(64))).expect("hash"),
+            start_byte: 0,
+            end_byte: 10,
+            note: "n".to_string(),
+        };
+        // Sequence ids are excluded, so tuples ignore fact_id/evidence_id.
+        let mut only_ids = base();
+        only_ids.fact_id = "semantic-fact:99".to_string();
+        only_ids.evidence_id = "semantic-evidence:99".to_string();
+        assert_eq!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&only_ids)
+        );
+        // content_hash is part of the tuple (stale-fact detection).
+        let mut other_hash = base();
+        other_hash.content_hash =
+            ContentHash::new(format!("sha256:{}", "b".repeat(64))).expect("hash");
+        assert_ne!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&other_hash)
+        );
+        // target=None and target=Some("") do not collapse.
+        let mut empty_target = base();
+        empty_target.target = Some(String::new());
+        assert_ne!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&empty_target)
+        );
+        // ["a","b"] and ["a,b"] do not canonicalize alike (unit-separator join).
+        let mut joined_assumptions = base();
+        joined_assumptions.assumptions = vec!["a,b".to_string()];
+        assert_ne!(
+            sync_equivalence_fact_tuple(&base()),
+            sync_equivalence_fact_tuple(&joined_assumptions)
+        );
+    }
+
+    #[test]
+    fn resolve_sync_equivalence_fixture_requires_a_directory() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let error = resolve_sync_equivalence_fixture(manifest, "Cargo.toml")
+            .expect_err("a regular file is not a fixture root");
+        assert!(error.contains("directory"));
+        resolve_sync_equivalence_fixture(manifest, "src/fixtures/incremental_equivalence/v1")
+            .expect("committed oracle fixture resolves");
+    }
+
+    #[test]
+    fn sync_equivalence_scenario_patches_apply_to_committed_fixture() {
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/incremental_equivalence/v1");
+        for scenario in SYNC_EQUIVALENCE_SCENARIOS {
+            let scratch = unique_smoke_root().with_file_name(format!(
+                "repogrammar-sync-equivalence-patch-{}-{}",
+                std::process::id(),
+                scenario.id
+            ));
+            let project = scratch.join("project");
+            fs::create_dir_all(&project).expect("create scratch project");
+            copy_dir_sorted(&source, &project).expect("copy committed fixture");
+            (scenario.apply)(&project).unwrap_or_else(|error| panic!("{}: {error}", scenario.id));
+            let read = |relative: &str| {
+                fs::read_to_string(project.join(relative)).expect("read patched file")
+            };
+            match scenario.id {
+                "java_edit" => {
+                    assert!(read("service/java/OrderServiceTest.java").contains("assert 1 == 1;"))
+                }
+                "csharp_edit" => {
+                    assert!(read("service/csharp/CatalogTests.cs").contains("Assert.True(1 == 1);"))
+                }
+                "docs_noop" => {
+                    assert!(read("docs/NOTES.md").contains("docs-only no-op scenario"))
+                }
+                "rs_content_edit" => {
+                    assert!(
+                        read("service/rust/order_service.rs").contains("place_order(\"renamed\")")
+                    )
+                }
+                "tsjs_content_edit" => assert!(read("web/users.test.ts").contains("return;")),
+                "tsjs_add" => assert!(project.join("web/payments.test.ts").is_file()),
+                "rs_add" => assert!(project.join("service/rust/extra_service.rs").is_file()),
+                "mocharc_remove" => assert!(!project.join(".mocharc.json").exists()),
+                "python_body_edit" => {
+                    assert!(read("analytics/app.py").contains("return \"primary\""))
+                }
+                "python_interface_edit" => {
+                    assert!(read("analytics/app.py").contains("def new_public_helper()"))
+                }
+                "python_conftest_edit" => {
+                    assert!(read("analytics/conftest.py").contains("return \"primary\""))
+                }
+                "python_context_budget" => {
+                    let patched = read("analytics/escape_heavy.py");
+                    // The sentinel is fully replaced by the control-char blob, and
+                    // the module grows past the 6x budget boundary (cap/6 ~= 175 KB
+                    // raw is crossed once the blob is counted twice in the estimate).
+                    assert!(!patched.contains("ESCAPE_HEAVY_BLOB_SENTINEL"));
+                    assert!(patched.len() > 131_072);
+                    assert!(patched.contains('\u{1}'));
+                }
+                "java_add" => {
+                    assert!(project.join("service/java/ExtraServiceTest.java").is_file())
+                }
+                "java_delete" => {
+                    assert!(!project.join("service/java/OrderServiceTest.java").exists())
+                }
+                other => panic!("unhandled scenario '{other}'"),
+            }
+            let _ = fs::remove_dir_all(&scratch);
+        }
+    }
+
+    #[test]
+    fn attribute_field_bytes_sorts_fields_and_measures_compact_bytes() {
+        let value = serde_json::json!({
+            "z_last": [1, 2, 3],
+            "a_first": "value",
+            "middle": {"k": 1},
+        });
+        let attribution = attribute_field_bytes(&value);
+        // Sorted key order is stable regardless of insertion order.
+        let keys: Vec<&String> = attribution.keys().collect();
+        assert_eq!(keys, vec!["a_first", "middle", "z_last"]);
+        // Compact serialized byte lengths, matching the audit's `vbytes`.
+        assert_eq!(attribution["a_first"], "\"value\"".len() as u64);
+        assert_eq!(attribution["z_last"], "[1,2,3]".len() as u64);
+        assert_eq!(attribution["middle"], "{\"k\":1}".len() as u64);
+        // A non-object payload attributes nothing.
+        assert!(attribute_field_bytes(&serde_json::json!("scalar")).is_empty());
+    }
+
+    #[test]
+    fn payload_measure_row_extracts_status_route_and_field_bytes() {
+        let value = serde_json::json!({
+            "status": "ok",
+            "query_route": {"route": "discover_hydrate_compose"},
+            "family": {"family_id": "family:python:fastapi_route:framework_fastapi_route"},
+        });
+        let (row, field_bytes) = payload_measure_row(
+            "find",
+            "found_big_family_path",
+            "deep",
+            "minimal",
+            "on",
+            "cli_json",
+            &value,
+            7617,
+        );
+        assert_eq!(row["operation"], "find");
+        assert_eq!(row["category"], "found_big_family_path");
+        assert_eq!(row["mode"], "deep");
+        assert_eq!(row["verbosity"], "minimal");
+        assert_eq!(row["source_spans"], "on");
+        assert_eq!(row["surface"], "cli_json");
+        assert_eq!(row["status"], "ok");
+        assert_eq!(row["route"], "discover_hydrate_compose");
+        assert_eq!(row["total_bytes"], 7617);
+        assert!(row["field_bytes"].is_object());
+        // Aggregation payload carries every top-level field.
+        let fields: std::collections::BTreeSet<String> =
+            field_bytes.into_iter().map(|(field, _)| field).collect();
+        assert!(fields.contains("family"));
+        assert!(fields.contains("query_route"));
+        // An abstention payload without a route yields a null route.
+        let abstention = serde_json::json!({"status": "UNKNOWN"});
+        let (abstention_row, _) = payload_measure_row(
+            "find",
+            "abstain_unknown_nl",
+            "compact",
+            "minimal",
+            "off",
+            "cli_json",
+            &abstention,
+            1411,
+        );
+        assert!(abstention_row["route"].is_null());
+        assert_eq!(abstention_row["status"], "UNKNOWN");
+        assert_eq!(abstention_row["source_spans"], "off");
+    }
+
+    #[test]
+    fn payload_measure_cases_cover_the_required_report_variants() {
+        let categories: std::collections::BTreeSet<&str> = PAYLOAD_MEASURE_CASES
+            .iter()
+            .map(|case| case.category)
+            .collect();
+        for required in [
+            "found_big_family_path",
+            "found_small_family_path",
+            "found_big_family_nl",
+            "found_typescript_family_path",
+            "abstain_unknown_nl",
+            "partial_context_path",
+            "check_big_family_path",
+            "family_big",
+            "family_small",
+        ] {
+            assert!(categories.contains(required), "missing category {required}");
+        }
+        // Every case names a supported query verb and a non-empty target.
+        for case in PAYLOAD_MEASURE_CASES {
+            assert!(
+                matches!(case.operation, "find" | "family" | "check"),
+                "unexpected operation {}",
+                case.operation
+            );
+            assert!(!case.target.is_empty());
+        }
+        assert_eq!(PAYLOAD_MEASURE_MODES, ["compact", "deep"]);
+        assert_eq!(PAYLOAD_MEASURE_VERBOSITIES, ["minimal", "standard", "full"]);
+        // The source-spans variant (S6 read_plan<->spans dedup target) is
+        // measured on the big Found family and on conformance.
+        let spans_cases: std::collections::BTreeSet<&str> = PAYLOAD_MEASURE_CASES
+            .iter()
+            .filter(|case| case.measure_source_spans)
+            .map(|case| case.category)
+            .collect();
+        assert!(spans_cases.contains("found_big_family_path"));
+        assert!(spans_cases.contains("check_big_family_path"));
+        assert_eq!(payload_measure_source_span_rows(), spans_cases.len() * 3);
+    }
+
+    /// Locates the product `repogrammar` binary that `cargo test --workspace`
+    /// builds alongside the test harness by walking up from the test executable
+    /// (`target/<profile>/deps/`) to the profile directory. Returns `None` only
+    /// when the binary is absent; the smoke test then fails loudly rather than
+    /// passing silently, so a green CI never hides an unmeasured harness.
+    fn locate_built_product_binary() -> Option<PathBuf> {
+        let file_name = if cfg!(windows) {
+            "repogrammar.exe"
+        } else {
+            "repogrammar"
+        };
+        let executable = std::env::current_exe().ok()?;
+        let mut directory = executable.parent();
+        for _ in 0..6 {
+            let current = directory?;
+            let candidate = current.join(file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            directory = current.parent();
+        }
+        None
+    }
+
+    #[test]
+    fn payload_measure_is_deterministic_and_schema_stable_end_to_end() {
+        let binary = locate_built_product_binary().expect(
+            "product `repogrammar` binary not found next to the test harness; \
+build it first with `cargo build --bin repogrammar` or run the mandated \
+`cargo test --workspace --all-features` (which builds every bin)",
+        );
+        let binary = binary.to_str().expect("product binary path is UTF-8");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let out_first = unique_product_eval_root();
+        let out_second = unique_product_eval_root();
+
+        run_payload_measure(root, out_first.to_str().unwrap(), Some(binary), None)
+            .expect("first payload-measure run");
+        run_payload_measure(root, out_second.to_str().unwrap(), Some(binary), None)
+            .expect("second payload-measure run");
+
+        let first = fs::read(out_first.join("payload-bytes.summary.json"))
+            .expect("first summary is readable");
+        let second = fs::read(out_second.join("payload-bytes.summary.json"))
+            .expect("second summary is readable");
+        assert_eq!(
+            first, second,
+            "payload-bytes.summary.json must be byte-identical across two runs of the same fixture"
+        );
+
+        let summary: serde_json::Value =
+            serde_json::from_slice(&first).expect("summary parses as JSON");
+        assert_eq!(summary["schema_version"], PAYLOAD_MEASURE_SCHEMA);
+        assert_eq!(summary["fixture_id"], PAYLOAD_MEASURE_FIXTURE_ID);
+        assert_eq!(
+            summary["product_schema_version"],
+            repogrammar::application::query::PRODUCT_SCHEMA_VERSION
+        );
+
+        let rows = summary["rows"].as_array().expect("rows is an array");
+        // query cases x 2 modes x 3 verbosities, plus source-spans variants,
+        // plus 1 readiness row.
+        let expected_rows =
+            PAYLOAD_MEASURE_CASES.len() * 6 + payload_measure_source_span_rows() + 1;
+        assert_eq!(rows.len(), expected_rows);
+        assert_eq!(
+            summary["totals"]["row_count"].as_u64().unwrap(),
+            rows.len() as u64
+        );
+
+        let categories: std::collections::BTreeSet<&str> = rows
+            .iter()
+            .filter_map(|row| row["category"].as_str())
+            .collect();
+        for required in [
+            "found_big_family_path",
+            "found_small_family_path",
+            "found_big_family_nl",
+            "abstain_unknown_nl",
+            "partial_context_path",
+            "check_big_family_path",
+            "readiness",
+        ] {
+            assert!(
+                categories.contains(required),
+                "missing measured category {required}"
+            );
+        }
+
+        for row in rows {
+            assert!(
+                row["total_bytes"].as_u64().unwrap() > 0,
+                "every measured payload has positive bytes"
+            );
+            assert!(row["field_bytes"].is_object());
+        }
+
+        // The big family really has 31 members with the cap rendering 20; a
+        // fixture drift that changed either would fail here.
+        let shape = &summary["fixture_shape"];
+        assert_eq!(shape["category"], "found_big_family_path");
+        assert_eq!(
+            shape["member_count"].as_u64(),
+            Some(31),
+            "big family must report 31 members"
+        );
+        assert_eq!(
+            shape["members_rendered"].as_u64(),
+            Some(20),
+            "member cap must render exactly 20 members"
+        );
+        assert_eq!(shape["members_truncated"].as_bool(), Some(true));
+        // The source_spans field carries the full membership under the read plan;
+        // cross-check the found_big_family row's `members` byte attribution stays
+        // present at both source_spans states.
+        let spans_on_rows: Vec<&serde_json::Value> = rows
+            .iter()
+            .filter(|row| row["source_spans"] == "on")
+            .collect();
+        assert_eq!(
+            spans_on_rows.len(),
+            payload_measure_source_span_rows(),
+            "one source-spans row per flagged case per verbosity"
+        );
+        for row in &spans_on_rows {
+            assert_eq!(row["mode"], "deep", "source spans only render in deep mode");
+            assert!(
+                row["field_bytes"].get("source_spans").is_some(),
+                "a spans-on row must carry a non-empty source_spans field group"
+            );
+        }
+
+        // Readiness is measured through the lean MCP surface, not CLI `status`.
+        let readiness = rows
+            .iter()
+            .find(|row| row["category"] == "readiness")
+            .expect("readiness row present");
+        assert_eq!(readiness["surface"], "mcp_tool");
+        assert_eq!(readiness["operation"], "inspect_readiness");
+        // Rows are sorted, so the artifact ordering is itself deterministic.
+        let ordered: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}|{}|{}|{}|{}",
+                    row["operation"].as_str().unwrap_or(""),
+                    row["category"].as_str().unwrap_or(""),
+                    row["mode"].as_str().unwrap_or(""),
+                    row["verbosity"].as_str().unwrap_or(""),
+                    row["source_spans"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        let mut sorted = ordered.clone();
+        sorted.sort();
+        assert_eq!(ordered, sorted, "rows must be emitted in sorted order");
+
+        let _ = fs::remove_dir_all(&out_first);
+        let _ = fs::remove_dir_all(&out_second);
     }
 }

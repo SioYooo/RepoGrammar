@@ -1,6 +1,7 @@
 //! CLI argument boundary for the `repogrammar` binary.
 
 use crate::application::autosync::{AutosyncReport, AutosyncSettings};
+use crate::application::conformance::{AlignmentComputation, ALIGNMENT_DEVIATION_CAP};
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
     binary_name, known_agent_targets, manage_instruction_file, normalize_concrete_targets,
@@ -14,16 +15,21 @@ use crate::application::install::{
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
-    build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
-    family_query_unknown_metric, query_preflight, read_plan_with_rendered_spans,
+    bounded_family_members, build_read_plan, estimate_alignment_potential_token_savings,
+    estimate_family_output_potential_token_savings,
+    estimate_partial_context_potential_token_savings, family_query_abstention_reason,
+    family_query_route_report, family_query_unknown_metric, found_outcome_token_savings,
+    product_readiness_value, query_preflight, read_plan_with_rendered_spans,
     repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport,
-    IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation, QueryPreflightReport,
+    validate_query_token_budget, AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode,
+    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
+    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport,
     ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
     RepoShapeLanguageDiagnostics, ResolvedQueryTarget, SelectedFamilyEvidence,
-    SourceSpanRenderReport, TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
+    SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket,
+    UnknownInventoryReport, Verbosity, VerbosityTier, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -31,7 +37,8 @@ use crate::application::query::{
     UnknownInventoryLanguageSummary,
 };
 use crate::application::recovery::{
-    recovery_command, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth, RecoveryLockState,
+    recovery_command, recovery_guidance, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth,
+    RecoveryLockState,
 };
 #[cfg(test)]
 use crate::application::recovery::{RecoveryAction, RecoveryReason, RecoveryRecommendation};
@@ -60,17 +67,19 @@ use crate::application::telemetry::{
     experiment_stop, export_anonymous_telemetry, family_query_outcome_rollup,
     latest_comparable_experiment_report, purge_telemetry, record_estimated_potential_token_savings,
     record_family_query_outcome, record_passive_diagnostics_rollup, research_export,
-    research_purge, set_anonymous_telemetry, set_research_trace, telemetry_disabled_by_environment,
-    telemetry_status, upload_anonymous_telemetry, validate_telemetry_endpoint,
-    EstimatedPotentialTokenSavingsRollup, ExperimentMode, ExperimentRecordRequest,
-    ExperimentStartRequest, ExperimentWorkflowMode, FamilyQueryCommandCategory,
-    FamilyQueryEntrypoint, FamilyQueryLookupMode, FamilyQueryOutcomeRecord,
-    FamilyQueryOutcomeRollup, FamilyQueryOutcomeStatus, MeasurementSource, TelemetryDiagnostics,
-    TelemetryExportReport, TelemetryPaths, TelemetryPurgeReport, TelemetryStatusReport,
-    TelemetryUploadReceipt, TelemetryUploadReport, TelemetryUploadRequest,
-    TelemetryUploadTransport, TestOutcome,
+    research_purge, savings_breakdown_map_json, set_anonymous_telemetry, set_research_trace,
+    telemetry_disabled_by_environment, telemetry_status, upload_anonymous_telemetry,
+    validate_telemetry_endpoint, EstimatedPotentialTokenSavingsRollup, ExperimentMode,
+    ExperimentRecordRequest, ExperimentStartRequest, ExperimentWorkflowMode,
+    FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
+    FamilyQueryOutcomeRecord, FamilyQueryOutcomeRollup, FamilyQueryOutcomeStatus,
+    MeasurementSource, SavingsBreakdown, TelemetryDiagnostics, TelemetryExportReport,
+    TelemetryPaths, TelemetryPurgeReport, TelemetryStatusReport, TelemetryUploadReceipt,
+    TelemetryUploadReport, TelemetryUploadRequest, TelemetryUploadTransport, TestOutcome,
 };
-use crate::core::model::EstimatedPotentialTokenSavings;
+use crate::core::model::{
+    EstimatedPotentialTokenSavings, FamilyConstraintProfile, FamilyPrevalence, MeasurementKind,
+};
 use crate::error::RepoGrammarError;
 #[cfg(test)]
 use crate::ports::index_store::LegacyLayoutCleanupReport;
@@ -256,6 +265,13 @@ pub trait CliRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<UnknownInventoryReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("unknowns"))
+    }
+
+    fn product_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("readiness"))
     }
 
     fn install_agent_integration(
@@ -621,7 +637,7 @@ fn full_usage() -> String {
         "  doctor [--project <path>] [--json]",
         "      Inspect lifecycle hygiene, storage health, locks, and repair guidance.",
         "  unlock [--project <path>] [--force --yes] [--json]",
-        "      Inspect locks; remove only confirmed stale index locks with --force --yes.",
+        "      Inspect locks; remove confirmed stale or legacy pre-host-format index locks with --force --yes.",
         "  logs [--project <path>] [--component index|daemon|mcp|telemetry] [--tail [n]] [--since <duration>] [--json]",
         "      Read redacted repo-local diagnostics.",
         "",
@@ -637,7 +653,7 @@ fn full_usage() -> String {
         "  explain [target] [--include-variations] [--include-exceptions] [--json]",
         "      Explain whether a target is a legal variation, exception, incompatibility, or UNKNOWN.",
         "  check [target] [--mode compact|evidence|deep] [--json]",
-        "      Return advisory conformance context; runtime equivalence remains UNKNOWN in this slice.",
+        "      Report a source-backed static-alignment certificate; runtime equivalence stays UNKNOWN.",
         "  files [--project <path>] [--json]",
         "      Read active indexed file inventory.",
         "  units [--project <path>] [--json]",
@@ -800,11 +816,13 @@ pub fn command_usage(command: &str) -> Option<String> {
             "Usage: repogrammar unlock [--project <path>|--path <path>] [--force --yes] [--json] [--quiet|--verbose]",
             "",
             "Inspects RepoGrammar locks. Without --force --yes it is inspection-only.",
-            "With --force --yes it removes only confirmed stale index locks; daemon and SQLite locks are preserved.",
+            "With --force --yes it removes confirmed stale index locks and legacy pre-host-format index",
+            "locks (printing their best-effort provenance); daemon and SQLite locks are preserved, and a",
+            "new-format lock whose owner cannot be confirmed stays refused.",
             "",
             "Options:",
             "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
-            "  --force                            Request stale index-lock removal.",
+            "  --force                            Request stale or legacy index-lock removal.",
             "  --yes                              Confirm --force removal.",
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
@@ -857,7 +875,7 @@ pub fn command_usage(command: &str) -> Option<String> {
         "check" => Some(query_usage(
             "check",
             "repogrammar check [target] [options]",
-            "Return advisory conformance context; runtime equivalence remains UNKNOWN in this slice.",
+            "Report a source-backed static-alignment certificate for a target; runtime equivalence stays UNKNOWN.",
         )),
         "files" => Some(help_text(&[
             "Usage: repogrammar files [--project <path>] [--json]",
@@ -1017,6 +1035,7 @@ fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
         "  --project <path>                    Repository root. Defaults to the current directory.",
         "  --token-budget <n>                  Positive budget up to 200000; implies --mode evidence unless mode is explicit.",
         "  --mode compact|evidence|deep        Select metadata detail. Deep still omits source unless source spans are requested.",
+        "  --verbosity minimal|standard|full   Select response field density. Default standard; additive under product-schemas.v1. Orthogonal to --mode.",
         "  --json                             Emit machine-readable output.",
         "  --include-variations               Request variation evidence coverage metadata.",
         "  --include-exceptions               Request exception evidence coverage metadata.",
@@ -1411,7 +1430,10 @@ fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
     match command {
         "family" => FamilyLookupMode::ExactFamilyId,
         "member" => FamilyLookupMode::ExactMemberId,
-        "find" | "explain" | "check" => FamilyLookupMode::FuzzyQuery,
+        // `check` runs the static-alignment flow; `find`/`explain` stay on the
+        // shared fuzzy family-resolution pipeline.
+        "check" => FamilyLookupMode::Conformance,
+        "find" | "explain" => FamilyLookupMode::FuzzyQuery,
         _ => FamilyLookupMode::FuzzyQuery,
     }
 }
@@ -1434,6 +1456,8 @@ fn prepare_family_output(
         FamilyLookupReport::Found(family) => build_read_plan(family, target, mode, options),
         FamilyLookupReport::PartialContext(report) => report.read_plan.clone(),
         FamilyLookupReport::Unknown(_) => return Ok(None),
+        // The certificate already carries its comparison-family read plan.
+        FamilyLookupReport::Alignment(certificate) => certificate.read_plan.clone(),
     };
     let mut read_plan = runtime.enrich_read_plan_line_ranges(request.clone(), &base_read_plan)?;
     let source_spans = if include_source_spans {
@@ -1458,15 +1482,68 @@ fn record_family_query_estimated_potential_token_savings(
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
 ) {
-    let FamilyLookupReport::Found(family) = report else {
-        return;
-    };
-    let output_components =
-        family_output_components(family, target, mode, options, prepared_output);
-    let _ = record_estimated_potential_token_savings(
-        request,
-        &output_components.estimated_potential_token_savings,
-    );
+    if let Some(savings) =
+        family_query_outcome_token_savings(report, target, mode, options, prepared_output)
+    {
+        let _ = record_estimated_potential_token_savings(
+            request,
+            &savings.metric,
+            savings.shape.as_str(),
+            savings.language,
+        );
+    }
+}
+
+/// The single all-scope potential-token-savings event for a lookup outcome, or
+/// `None` for an abstention (Unknown), a PARTIAL_CONTEXT with no stored file
+/// size, or an abstaining certificate. Delegates every estimate to the query
+/// authority; surfaces never reimplement the accounting from raw fields.
+fn family_query_outcome_token_savings(
+    report: &FamilyLookupReport,
+    target: Option<&str>,
+    mode: FamilyLookupMode,
+    options: FamilyOutputOptions,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> Option<OutcomeTokenSavings> {
+    match report {
+        FamilyLookupReport::Found(family) => {
+            let output_components =
+                family_output_components(family, target, mode, options, prepared_output);
+            Some(found_outcome_token_savings(
+                family,
+                output_components.estimated_potential_token_savings,
+            ))
+        }
+        FamilyLookupReport::PartialContext(report) => {
+            let read_plan = prepared_output
+                .map(|prepared| &prepared.read_plan)
+                .unwrap_or(&report.read_plan);
+            let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+            estimate_partial_context_potential_token_savings(report, read_plan, source_spans)
+        }
+        FamilyLookupReport::Alignment(certificate) => {
+            let read_plan = prepared_output
+                .map(|prepared| &prepared.read_plan)
+                .unwrap_or(&certificate.read_plan);
+            let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+            estimate_alignment_potential_token_savings(certificate, read_plan, source_spans)
+        }
+        FamilyLookupReport::Unknown(_) => None,
+    }
+}
+
+/// The shared `estimated_potential_token_savings` output block every
+/// context-delivering surface renders, carrying the ESTIMATED caveat verbatim.
+fn estimated_potential_token_savings_json(savings: &OutcomeTokenSavings) -> serde_json::Value {
+    json!({
+        "outcome_shape": savings.shape.as_str(),
+        "language": savings.language,
+        "estimated_baseline_tokens": savings.metric.estimated_baseline_tokens,
+        "estimated_returned_tokens": savings.metric.estimated_returned_tokens,
+        "estimated_potential_token_savings": savings.metric.estimated_potential_token_savings,
+        "estimated_potential_token_savings_kind": savings.metric.measurement_kind.as_str(),
+        "estimated_potential_token_savings_caveat": savings.metric.caveat,
+    })
 }
 
 fn record_cli_family_query_outcome(
@@ -1487,6 +1564,7 @@ fn record_cli_family_query_outcome(
         command_category,
         lookup_mode: family_query_lookup_mode(mode),
         unknowns: &unknowns,
+        abstention_reason: family_query_abstention_reason(report),
         read_plan_item_count: prepared_output.map(|output| output.read_plan.items.len()),
         source_spans_requested,
         source_spans_included: prepared_output
@@ -1513,6 +1591,7 @@ fn record_cli_family_query_fallback(
         command_category,
         lookup_mode: family_query_lookup_mode(mode),
         unknowns: &[],
+        abstention_reason: None,
         read_plan_item_count: None,
         source_spans_requested,
         source_spans_included: false,
@@ -1536,7 +1615,10 @@ fn family_query_lookup_mode(mode: FamilyLookupMode) -> FamilyQueryLookupMode {
     match mode {
         FamilyLookupMode::ExactFamilyId => FamilyQueryLookupMode::ExactFamily,
         FamilyLookupMode::ExactMemberId => FamilyQueryLookupMode::ExactMember,
-        FamilyLookupMode::FuzzyQuery => FamilyQueryLookupMode::Fuzzy,
+        // The conformance check runs on the shared fuzzy resolution pipeline.
+        FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+            FamilyQueryLookupMode::Fuzzy
+        }
     }
 }
 
@@ -1545,6 +1627,26 @@ fn family_query_outcome_status(report: &FamilyLookupReport) -> FamilyQueryOutcom
         FamilyLookupReport::Found(_) => FamilyQueryOutcomeStatus::Found,
         FamilyLookupReport::PartialContext(_) => FamilyQueryOutcomeStatus::PartialContext,
         FamilyLookupReport::Unknown(_) => FamilyQueryOutcomeStatus::Unknown,
+        // Telemetry follows the alignment status, not the presence of a family:
+        // a committed certificate (STATICALLY_ALIGNED/STATIC_DEVIATION) is Found,
+        // a PARTIAL_ALIGNMENT is partial context, and every abstaining certificate
+        // (INSUFFICIENT_EVIDENCE/UNKNOWN) is Unknown — abstentions are never Found.
+        FamilyLookupReport::Alignment(certificate) => {
+            alignment_outcome_status(certificate.alignment_status)
+        }
+    }
+}
+
+/// Map an alignment status onto the query-outcome telemetry bucket via the core
+/// commitment-class authority, so an abstaining certificate is never Found.
+fn alignment_outcome_status(
+    status: crate::core::policy::alignment::AlignmentStatus,
+) -> FamilyQueryOutcomeStatus {
+    use crate::core::policy::alignment::AlignmentOutcomeClass;
+    match status.outcome_class() {
+        AlignmentOutcomeClass::Committed => FamilyQueryOutcomeStatus::Found,
+        AlignmentOutcomeClass::Partial => FamilyQueryOutcomeStatus::PartialContext,
+        AlignmentOutcomeClass::Abstained => FamilyQueryOutcomeStatus::Unknown,
     }
 }
 
@@ -1562,6 +1664,7 @@ fn family_query_report_unknowns(report: &FamilyLookupReport) -> &[FamilyQueryUnk
         FamilyLookupReport::Found(report) => &report.unknowns,
         FamilyLookupReport::PartialContext(report) => &report.unknowns,
         FamilyLookupReport::Unknown(report) => &report.unknowns,
+        FamilyLookupReport::Alignment(certificate) => &certificate.unknowns,
     }
 }
 
@@ -1580,6 +1683,7 @@ fn query_fallback(
                 "reason": reason,
                 "guidance": guidance,
                 "command": command,
+                "schema_version": PRODUCT_SCHEMA_VERSION,
                 "implemented": implemented,
             })),
         );
@@ -1750,6 +1854,23 @@ fn families_human(report: &FamilyListReport, show_all: bool) -> String {
         report.families.len(),
         report.active_generation
     );
+    if let Some(counts) = &report.freshness_counts {
+        // Lead with the freshness rollup so stale/unverifiable families never
+        // read as unqualified usable claims.
+        output.push_str(&freshness_summary_line(counts));
+        if counts.stale_count > 0 {
+            output.push_str(&format!(
+                "stale evidence: {} group(s) reference changed or missing source; run repogrammar resync\n",
+                counts.stale_count
+            ));
+        }
+        if counts.cannot_verify_count > 0 {
+            output.push_str(&format!(
+                "unverified: {} group(s) could not be checked (source too large or unreadable)\n",
+                counts.cannot_verify_count
+            ));
+        }
+    }
     for ((language, role), (family_count, support)) in groups.iter().take(MAX_VISIBLE_GROUPS) {
         output.push_str(&format!(
             "- {language} · {role} — {family_count} group(s), {support} implementation(s)\n"
@@ -1788,11 +1909,34 @@ fn families_detailed_human(report: &FamilyListReport) -> String {
         report.active_generation,
         report.families.len()
     );
+    if let Some(counts) = &report.freshness_counts {
+        output.push_str(&freshness_summary_line(counts));
+    }
     for family in &report.families {
-        output.push_str(&format!(
-            "family: {}\tclassification: {}\tsupport: {}\n",
-            family.family_id, family.classification, family.support
-        ));
+        match family.freshness {
+            Some(freshness) => output.push_str(&format!(
+                "family: {}\tclassification: {}\tsupport: {}\tfreshness: {}\tprevalence: {}\n",
+                family.family_id,
+                family.classification,
+                family.support,
+                freshness.as_str(),
+                family.prevalence.classification_reason
+            )),
+            None => output.push_str(&format!(
+                "family: {}\tclassification: {}\tsupport: {}\tprevalence: {}\n",
+                family.family_id,
+                family.classification,
+                family.support,
+                family.prevalence.classification_reason
+            )),
+        }
+    }
+    // Surface the report-level stale-evidence signal in the detailed view; the
+    // freshness-free variant renders no extra unknowns here, as before.
+    if report.freshness_counts.is_some() {
+        for unknown in &report.unknowns {
+            push_unknown_human(&mut output, unknown);
+        }
     }
     output
 }
@@ -1842,21 +1986,115 @@ fn humanize_family_token(token: &str) -> String {
         .join(" ")
 }
 
+/// Metadata-only prevalence object shared by every family output surface.
+fn family_prevalence_json(prevalence: &FamilyPrevalence) -> serde_json::Value {
+    json!({
+        "eligible_peer_count": prevalence.eligible_peer_count,
+        "supported_member_count": prevalence.supported_member_count,
+        "coverage_ratio": prevalence.coverage_ratio,
+        "competing_ready_family_count": prevalence.competing_ready_family_count,
+        "largest_competing_support": prevalence.largest_competing_support,
+        "blocked_peer_count": prevalence.blocked_peer_count,
+        "unsupported_peer_count": prevalence.unsupported_peer_count,
+        "classification_reason": prevalence.classification_reason,
+    })
+}
+
+/// Metadata-only view of a family's hydrated constraint profile, or `null` when
+/// the active generation persisted none. Every field is a RepoGrammar-owned
+/// typed token or count in the profile's own deterministic order; no repository
+/// source text is emitted.
+fn family_constraint_profile_json(profile: Option<&FamilyConstraintProfile>) -> serde_json::Value {
+    let Some(profile) = profile else {
+        return serde_json::Value::Null;
+    };
+    json!({
+        "required_equal_features": profile
+            .required_equal_features
+            .iter()
+            .map(feature_constraint_json)
+            .collect::<Vec<_>>(),
+        "allowed_variations": profile
+            .allowed_variations
+            .iter()
+            .map(|variation| json!({
+                "dimension": variation.dimension,
+                "observed_profiles": variation.observed_profiles,
+                "observed_profiles_truncated": variation.observed_profiles_truncated,
+                "includes_absent_profile": variation.includes_absent_profile,
+                "representative_member_ids": variation.representative_member_ids,
+                "observed_only": variation.observed_only,
+            }))
+            .collect::<Vec<_>>(),
+        "prohibited_or_blocking_features": profile
+            .prohibited_or_blocking_features
+            .iter()
+            .map(feature_constraint_json)
+            .collect::<Vec<_>>(),
+        "unresolved_obligations": profile
+            .unresolved_obligations
+            .iter()
+            .map(|obligation| json!({
+                "class": obligation.class.as_protocol_str(),
+                "reason": obligation.reason.as_protocol_str(),
+                "affected_claim": obligation.affected_claim,
+                "recovery": obligation.recovery,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn feature_constraint_json(
+    constraint: &crate::core::model::FeatureConstraint,
+) -> serde_json::Value {
+    json!({
+        "prefix": constraint.prefix,
+        "values": constraint.values,
+        "origin": constraint.origin.as_token(),
+        "semantics": constraint.semantics.as_token(),
+    })
+}
+
 fn families_json(command: &str, report: &FamilyListReport) -> String {
-    json_line(json!({
+    let mut value = json!({
         "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": if report.families.is_empty() { "UNKNOWN" } else { "ok" },
         "implemented": true,
         "active_generation": report.active_generation,
         "families": report.families.iter().map(|family| {
-            json!({
+            let mut entry = json!({
                 "family_id": family.family_id,
                 "classification": family.classification,
                 "support": family.support,
-            })
+                "prevalence": family_prevalence_json(&family.prevalence),
+            });
+            // The freshness-verified listing carries a per-family verdict; the
+            // freshness-free variant omits the field entirely.
+            if let Some(freshness) = family.freshness {
+                entry["freshness"] = json!(freshness.as_str());
+            }
+            entry
         }).collect::<Vec<_>>(),
         "unknowns": unknowns_json(&report.unknowns),
-    }))
+    });
+    if let (Some(counts), Some(object)) = (&report.freshness_counts, value.as_object_mut()) {
+        object.insert("fresh_count".to_string(), json!(counts.fresh_count));
+        object.insert("stale_count".to_string(), json!(counts.stale_count));
+        object.insert(
+            "cannot_verify_count".to_string(),
+            json!(counts.cannot_verify_count),
+        );
+    }
+    json_line(value)
+}
+
+/// One-line freshness rollup shared by the compact and detailed human surfaces.
+fn freshness_summary_line(counts: &FamilyFreshnessCounts) -> String {
+    format!(
+        "freshness: {} fresh · {} stale · {} cannot verify\n",
+        counts.fresh_count, counts.stale_count, counts.cannot_verify_count
+    )
 }
 
 fn family_lookup_human(
@@ -1867,7 +2105,13 @@ fn family_lookup_human(
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
 ) -> String {
-    if matches!(command, "find" | "explain" | "check")
+    // The static-alignment certificate has its own actionable, result-first
+    // rendering and never falls back to the family-context human surface.
+    if let FamilyLookupReport::Alignment(certificate) = report {
+        let route = family_query_route_report(report, mode);
+        return alignment_certificate_human(command, certificate, &route, options, prepared_output);
+    }
+    if matches!(command, "find" | "explain")
         && options.evidence_mode == FamilyEvidenceMode::Compact
         && !options.include_variations
         && !options.include_exceptions
@@ -1891,29 +2135,20 @@ fn family_lookup_human(
             } else {
                 "not_included"
             };
-            let mut output = if command == "check" {
-                format!(
-                    "{command}: CONTEXT_ONLY\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
-                    family.active_generation,
-                    family.family_id,
-                    family.classification,
-                    family.support,
-                    selected_evidence.mode.as_str(),
-                    selected_evidence.estimated_tokens,
-                    snippets
-                )
-            } else {
-                format!(
-                    "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
-                    family.active_generation,
-                    family.family_id,
-                    family.classification,
-                    family.support,
-                    selected_evidence.mode.as_str(),
-                    selected_evidence.estimated_tokens,
-                    snippets
-                )
-            };
+            let mut output = format!(
+                "{command}: evidence-backed family\nactive_generation: {}\nfamily: {}\nclassification: {}\nsupport: {}\nevidence_mode: {}\nestimated_evidence_tokens: {}\nsource_snippets: {}\n",
+                family.active_generation,
+                family.family_id,
+                family.classification,
+                family.support,
+                selected_evidence.mode.as_str(),
+                selected_evidence.estimated_tokens,
+                snippets
+            );
+            output.push_str(&format!(
+                "prevalence: {}\n",
+                family.prevalence.classification_reason
+            ));
             push_query_route_human(&mut output, &route);
             output.push_str(&format!(
                 "evidence_selection: {}\n",
@@ -1959,14 +2194,20 @@ fn family_lookup_human(
             if let Some(source_spans) = source_spans {
                 push_source_spans_human(&mut output, source_spans);
             }
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-                output.push_str("reason: runtime equivalence remains unproven\n");
-            }
-            for member in &family.members {
+            let (rendered_members, members_truncated) =
+                bounded_family_members(family, options.evidence_mode);
+            output.push_str(&format!("member_count: {}\n", family.members.len()));
+            for member in rendered_members {
                 output.push_str(&format!(
                     "member: {}\trole: {}\n",
                     member.code_unit_id, member.role
+                ));
+            }
+            if members_truncated {
+                output.push_str(&format!(
+                    "members_truncated: {} of {} shown; use --mode deep for the full list\n",
+                    rendered_members.len(),
+                    family.members.len()
                 ));
             }
             for evidence in &selected_evidence.evidence {
@@ -1997,7 +2238,115 @@ fn family_lookup_human(
             family_partial_context_human(command, report, &route, options, prepared_output)
         }
         FamilyLookupReport::Unknown(report) => family_unknown_human(command, report, &route),
+        FamilyLookupReport::Alignment(_) => unreachable!("alignment handled above"),
     }
+}
+
+/// Actionable, result-first human rendering of a static-alignment certificate.
+/// It leads with the alignment status and explicitly separates static alignment
+/// from runtime conformance, which stays UNKNOWN.
+fn alignment_certificate_human(
+    command: &str,
+    certificate: &AlignmentCertificateReport,
+    route: &FamilyQueryRouteReport,
+    options: FamilyOutputOptions,
+    prepared_output: Option<&PreparedFamilyOutput>,
+) -> String {
+    let read_plan = prepared_output
+        .map(|prepared| &prepared.read_plan)
+        .unwrap_or(&certificate.read_plan);
+    let mut output = format!(
+        "{command}: {}\nresult: static alignment only; runtime conformance is NOT proven\nactive_generation: {}\n",
+        certificate.alignment_status.as_token(),
+        certificate.active_generation
+    );
+    output.push_str(&format!(
+        "alignment_status: {}\n",
+        certificate.alignment_status.as_token()
+    ));
+    output.push_str("runtime_equivalence: UNKNOWN\n");
+    if let Some(relationship) = certificate.target_relationship {
+        output.push_str(&format!(
+            "target_relationship: {}\n",
+            relationship.as_token()
+        ));
+    }
+    if let Some(family_id) = &certificate.selected_family_id {
+        output.push_str(&format!("selected_family: {family_id}\n"));
+    }
+    output.push_str(&format!(
+        "target: {}\tcode_unit_id: {}\tbyte_range: {}\n",
+        certificate.resolved_target.path,
+        certificate
+            .resolved_target
+            .code_unit_id
+            .as_deref()
+            .unwrap_or("none"),
+        certificate
+            .resolved_target
+            .byte_range
+            .map(|(start, end)| format!("{start}-{end}"))
+            .unwrap_or_else(|| "none".to_string()),
+    ));
+    push_query_route_human(&mut output, route);
+    if let Some(computation) = certificate.computation.as_deref() {
+        output.push_str(&format!("outcome_reason: {}\n", computation.outcome_reason));
+        for matched in &computation.required_features_matched {
+            output.push_str(&format!(
+                "required_matched: {}\tsemantics: {}\texpected: {}\tsatisfied: {}\n",
+                matched.prefix,
+                matched.semantics.as_token(),
+                matched.expected_summary,
+                matched.satisfied_summary
+            ));
+        }
+        for deviation in &computation.static_deviations {
+            output.push_str(&format!(
+                "static_deviation: {}\tkind: {}\tsemantics: {}\texpected: {}\tobserved: {}\n",
+                deviation.prefix,
+                deviation.kind.as_token(),
+                deviation.semantics_token,
+                deviation.expected_summary,
+                deviation.observed_summary
+            ));
+        }
+        for variation in &computation.legal_observed_variations {
+            output.push_str(&format!(
+                "legal_observed_variation: {}\tobserved_profile: {}\n",
+                variation.dimension, variation.observed_profile
+            ));
+        }
+        for unknown in &computation.blocking_unknowns {
+            output.push_str(&format!(
+                "blocking_unknown: {}\treason: {}\taffected_claim: {}\n",
+                unknown.class.as_protocol_str(),
+                unknown.reason.as_protocol_str(),
+                unknown.affected_claim
+            ));
+        }
+        for obligation in &computation.unresolved_runtime_obligations {
+            output.push_str(&format!(
+                "unresolved_runtime_obligation: {}\treason: {}\taffected_claim: {}\n",
+                obligation.class.as_protocol_str(),
+                obligation.reason.as_protocol_str(),
+                obligation.affected_claim
+            ));
+        }
+    }
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
+    push_estimated_potential_token_savings_human(&mut output, savings.as_ref());
+    push_read_plan_human(&mut output, read_plan, options.evidence_mode);
+    if let Some(source_spans) = source_spans {
+        push_source_spans_human(&mut output, source_spans);
+    }
+    for unknown in &certificate.unknowns {
+        push_unknown_human(&mut output, unknown);
+    }
+    output.push_str(
+        "next: read the contrast witness before applying; static alignment does not prove runtime behavior\n",
+    );
+    output
 }
 
 fn family_lookup_compact_human(
@@ -2008,11 +2357,7 @@ fn family_lookup_compact_human(
     match report {
         FamilyLookupReport::Found(family) => {
             let read_plan = prepared_output.map(|prepared| &prepared.read_plan);
-            let mut output = if command == "check" {
-                "check: CONTEXT_ONLY\n".to_string()
-            } else {
-                format!("{command}: pattern family found\n")
-            };
+            let mut output = format!("{command}: pattern family found\n");
             output.push_str(&format!(
                 "pattern: {}\n",
                 human_family_label(&family.family_id, &family.classification)
@@ -2023,10 +2368,7 @@ fn family_lookup_compact_human(
             ));
             output.push_str("why: compatible indexed evidence supports this pattern group\n");
             push_compact_read_plan_human(&mut output, read_plan);
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-                output.push_str("reason: runtime equivalence remains unproven\n");
-            } else if !family.unknowns.is_empty() {
+            if !family.unknowns.is_empty() {
                 output.push_str("unverified: some dynamic or runtime behavior remains unproven\n");
             }
             output.push_str(
@@ -2039,16 +2381,11 @@ fn family_lookup_compact_human(
                 .map(|prepared| &prepared.read_plan)
                 .unwrap_or(&report.read_plan);
             let mut output = format!(
-                "{command}: PARTIAL_CONTEXT\nresult: local read plan only; no family or conformance conclusion\ntarget: {}\n",
+                "{command}: PARTIAL_CONTEXT\nresult: local read plan only; no family conclusion\ntarget: {}\n",
                 report.resolved_target.path
             );
             push_compact_read_plan_human(&mut output, Some(read_plan));
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-                output.push_str("reason: runtime equivalence remains unproven\n");
-            } else {
-                output.push_str("unverified: pattern-family evidence is insufficient\n");
-            }
+            output.push_str("unverified: pattern-family evidence is insufficient\n");
             output.push_str("next: read the suggested span, then narrow the target if needed\n");
             output
         }
@@ -2064,12 +2401,10 @@ fn family_lookup_compact_human(
             let mut output = format!(
                 "{command}: Cannot verify safely\nreason: available evidence is insufficient for a supported pattern claim\n"
             );
-            if command == "check" {
-                output.push_str("advisory_status: UNKNOWN\n");
-            }
             output.push_str(&format!("next: {next}\n"));
             output
         }
+        FamilyLookupReport::Alignment(_) => unreachable!("alignment handled by the full renderer"),
     }
 }
 
@@ -2132,21 +2467,41 @@ fn family_partial_context_human(
         snippets,
         read_plan.requires_source_before_edit
     );
+    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
+    push_estimated_potential_token_savings_human(&mut output, savings.as_ref());
     push_query_route_human(&mut output, route);
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
     if let Some(source_spans) = source_spans {
         push_source_spans_human(&mut output, source_spans);
     }
-    if command == "check" {
-        output.push_str("advisory_status: UNKNOWN\n");
-        // Use the same `reason:` key as the Found branch and the JSON output so
-        // scraping `check` text is consistent across match and partial-context.
-        output.push_str("reason: runtime equivalence remains unproven\n");
-    }
     for unknown in &report.unknowns {
         push_unknown_human(&mut output, unknown);
     }
     output
+}
+
+/// The shared human `estimated_potential_token_savings` block every
+/// context-delivering surface renders, carrying the ESTIMATED caveat verbatim.
+/// `None` renders an explicit `unavailable` (never a guessed number).
+fn push_estimated_potential_token_savings_human(
+    output: &mut String,
+    savings: Option<&OutcomeTokenSavings>,
+) {
+    match savings {
+        Some(savings) => output.push_str(&format!(
+            "estimated_potential_token_savings: {}\nestimated_potential_token_savings_outcome_shape: {}\nestimated_potential_token_savings_language: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\n",
+            savings.metric.estimated_potential_token_savings,
+            savings.shape.as_str(),
+            savings.language,
+            savings.metric.measurement_kind.as_str(),
+            savings.metric.caveat,
+        )),
+        None => output.push_str(&format!(
+            "estimated_potential_token_savings: unavailable\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\n",
+            MeasurementKind::Estimated.as_str(),
+            ESTIMATED_TOKEN_SAVING_CAVEAT,
+        )),
+    }
 }
 
 fn family_unknown_human(
@@ -2192,6 +2547,56 @@ fn push_query_route_human(output: &mut String, route: &FamilyQueryRouteReport) {
         ));
     }
     output.push_str(&format!("query_why_selected: {}\n", route.why_selected));
+    if let Some(term) = &route.term_retrieval {
+        push_term_retrieval_human(output, term, &route.candidate_family_ids);
+    }
+}
+
+fn push_term_retrieval_human(
+    output: &mut String,
+    term: &TermRetrievalRoute,
+    candidate_family_ids: &[String],
+) {
+    output.push_str(&format!("query_term_route: {}\n", term.route));
+    match (&term.abstention_reason, &term.matched_signals) {
+        (None, Some(signals)) => {
+            // Found: name the concept/framework signal that anchored the match.
+            let mut matched = Vec::new();
+            if signals.framework_filter {
+                matched.push("framework");
+            }
+            if signals.concept {
+                matched.push("concept");
+            }
+            if signals.language_filter {
+                matched.push("language");
+            }
+            if signals.residue_hits > 0 {
+                matched.push("term");
+            }
+            output.push_str(&format!(
+                "query_term_matched_signal: {}\n",
+                if matched.is_empty() {
+                    "none".to_string()
+                } else {
+                    matched.join("+")
+                }
+            ));
+        }
+        (Some(reason), _) => {
+            output.push_str(&format!(
+                "query_term_abstention_reason: {}\n",
+                reason.as_str()
+            ));
+            if !candidate_family_ids.is_empty() {
+                output.push_str(&format!(
+                    "query_term_candidate_family_ids: {}\n",
+                    candidate_family_ids.join(",")
+                ));
+            }
+        }
+        (None, None) => {}
+    }
 }
 
 fn push_unknown_human(output: &mut String, unknown: &FamilyQueryUnknown) {
@@ -2232,13 +2637,186 @@ fn family_lookup_json(
         }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
+            "schema_version": PRODUCT_SCHEMA_VERSION,
             "status": "UNKNOWN",
             "implemented": true,
             "active_generation": report.active_generation,
-            "query_route": query_route_json(&route),
+            // Abstention: `candidate_family_ids` is the narrowing recovery handle,
+            // kept even at `minimal` (Minimal tier).
+            "query_route": query_route_json(&route, options.verbosity, VerbosityTier::Minimal),
             "unknowns": unknowns_json(&report.unknowns),
         })),
+        FamilyLookupReport::Alignment(certificate) => json_line(alignment_certificate_json(
+            command,
+            certificate,
+            &route,
+            prepared_output,
+            options.verbosity,
+        )),
     }
+}
+
+/// Source-free JSON for a static-alignment certificate. The top-level `status`
+/// is the alignment status token; `runtime_equivalence` is always `UNKNOWN`. The
+/// `query_route` carries the selected/candidate family ids so downstream tooling
+/// reads the selection exactly as it does for other operations.
+fn alignment_certificate_json(
+    command: &str,
+    certificate: &AlignmentCertificateReport,
+    route: &FamilyQueryRouteReport,
+    prepared_output: Option<&PreparedFamilyOutput>,
+    verbosity: Verbosity,
+) -> serde_json::Value {
+    let read_plan = prepared_output
+        .map(|prepared| &prepared.read_plan)
+        .unwrap_or(&certificate.read_plan);
+    let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
+    let mut value = json!({
+        "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
+        "status": certificate.alignment_status.as_token(),
+        "implemented": true,
+        "active_generation": certificate.active_generation,
+        // A `check` can abstain (INSUFFICIENT_EVIDENCE) with candidate handles, so
+        // `candidate_family_ids` is treated as a recovery handle, kept at `minimal`.
+        "query_route": query_route_json(route, verbosity, VerbosityTier::Minimal),
+        "alignment_status": certificate.alignment_status.as_token(),
+        "runtime_equivalence": "UNKNOWN",
+        "target_relationship": certificate
+            .target_relationship
+            .map(|relationship| relationship.as_token()),
+        "selected_family_id": certificate.selected_family_id,
+        "target": resolved_target_json(&certificate.resolved_target, verbosity),
+        "alignment": certificate
+            .computation
+            .as_deref()
+            .map(alignment_computation_json),
+        "estimated_potential_token_savings": alignment_savings_json(savings.as_ref()),
+        "read_plan": read_plan_json(read_plan, verbosity),
+        "source_spans": source_spans_json(source_spans),
+        "unknowns": unknowns_json(&certificate.unknowns),
+    });
+    // Mirrors `alignment_certificate_value`. `alignment_status` is byte-identical
+    // to the top-level `status` and drops as a duplicate at `minimal`, while
+    // `standard`/`full` stay byte-stable. The top-level `selected_family_id` is
+    // KEPT at every tier as the authoritative carrier of the selected-family
+    // handle: the `query_route.selected_family_id` copy is the one suppressed at
+    // `minimal` (by the route lane), so dropping the certificate top-level copy
+    // too would erase "which family was selected" at `minimal`.
+    // `runtime_equivalence: "UNKNOWN"` is an invariant and is never removed.
+    if !verbosity.renders(VerbosityTier::Standard) {
+        let object = value
+            .as_object_mut()
+            .expect("alignment certificate serializes to a JSON object");
+        object.remove("alignment_status");
+    }
+    drop_unrequested_source_spans(&mut value, source_spans, verbosity);
+    value
+}
+
+/// The alignment certificate's savings block: the full estimate for a committed
+/// or partial certificate, otherwise a no-estimate block (an abstaining
+/// certificate displaces no full read) that still carries the ESTIMATED caveat.
+fn alignment_savings_json(savings: Option<&OutcomeTokenSavings>) -> serde_json::Value {
+    match savings {
+        Some(savings) => estimated_potential_token_savings_json(savings),
+        None => json!({
+            "outcome_shape": "alignment",
+            "estimated_baseline_tokens": null,
+            "estimated_returned_tokens": null,
+            "estimated_potential_token_savings": null,
+            "estimated_potential_token_savings_kind": MeasurementKind::Estimated.as_str(),
+            "estimated_potential_token_savings_caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
+            "unavailable_reason": "abstaining certificate; no full read displaced",
+        }),
+    }
+}
+
+fn alignment_computation_json(computation: &AlignmentComputation) -> serde_json::Value {
+    let mut value = json!({
+        "outcome_reason": computation.outcome_reason,
+        "required_features_matched": computation
+            .required_features_matched
+            .iter()
+            .map(|matched| json!({
+                "prefix": matched.prefix,
+                "semantics": matched.semantics.as_token(),
+                "expected_summary": matched.expected_summary,
+                "satisfied_summary": matched.satisfied_summary,
+            }))
+            .collect::<Vec<_>>(),
+        "static_deviations": computation
+            .static_deviations
+            .iter()
+            .take(ALIGNMENT_DEVIATION_CAP)
+            .map(|deviation| json!({
+                "prefix": deviation.prefix,
+                "kind": deviation.kind.as_token(),
+                "semantics_token": deviation.semantics_token,
+                "expected_summary": deviation.expected_summary,
+                "observed_summary": deviation.observed_summary,
+            }))
+            .collect::<Vec<_>>(),
+        "legal_observed_variations": computation
+            .legal_observed_variations
+            .iter()
+            .take(ALIGNMENT_DEVIATION_CAP)
+            .map(|variation| json!({
+                "dimension": variation.dimension,
+                "observed_profile": variation.observed_profile,
+            }))
+            .collect::<Vec<_>>(),
+        "blocking_unknowns": computation
+            .blocking_unknowns
+            .iter()
+            .map(alignment_typed_unknown_json)
+            .collect::<Vec<_>>(),
+        "unresolved_runtime_obligations": computation
+            .unresolved_runtime_obligations
+            .iter()
+            .map(alignment_typed_unknown_json)
+            .collect::<Vec<_>>(),
+    });
+    insert_deviation_cap_flags_json(
+        value
+            .as_object_mut()
+            .expect("alignment computation serializes to a JSON object"),
+        computation,
+    );
+    value
+}
+
+/// CLI mirror of `insert_deviation_cap_flags`: emit the honest sibling truncation
+/// metadata for the capped deviation-style arrays only when the source array
+/// exceeds [`ALIGNMENT_DEVIATION_CAP`], keeping the object byte-identical to the
+/// pre-cap shape below the cap and byte-parallel with the MCP surface.
+fn insert_deviation_cap_flags_json(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    computation: &AlignmentComputation,
+) {
+    let arrays = [
+        ("static_deviations", computation.static_deviations.len()),
+        (
+            "legal_observed_variations",
+            computation.legal_observed_variations.len(),
+        ),
+    ];
+    for (name, total) in arrays {
+        if total > ALIGNMENT_DEVIATION_CAP {
+            object.insert(format!("{name}_truncated"), json!(true));
+            object.insert(format!("{name}_count"), json!(total));
+        }
+    }
+}
+
+fn alignment_typed_unknown_json(unknown: &crate::core::model::TypedUnknown) -> serde_json::Value {
+    json!({
+        "class": unknown.class.as_protocol_str(),
+        "reason": unknown.reason.as_protocol_str(),
+        "affected_claim": unknown.affected_claim,
+        "recovery": unknown.recovery,
+    })
 }
 
 fn family_partial_context_json(
@@ -2252,13 +2830,17 @@ fn family_partial_context_json(
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&report.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
+    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
     let mut value = json!({
         "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "PARTIAL_CONTEXT",
         "implemented": true,
         "active_generation": report.active_generation,
-        "query_route": query_route_json(route),
-        "resolved_target": resolved_target_json(&report.resolved_target),
+        // PartialContext: `candidate_family_ids` is a narrowing recovery handle,
+        // kept even at `minimal` (Minimal tier).
+        "query_route": query_route_json(route, options.verbosity, VerbosityTier::Minimal),
+        "resolved_target": resolved_target_json(&report.resolved_target, options.verbosity),
         "output": {
             "mode": options.evidence_mode.as_str(),
             "token_budget": options.token_budget,
@@ -2267,14 +2849,31 @@ fn family_partial_context_json(
             "budget_satisfied": read_plan.budget_satisfied,
             "source_snippets_included": read_plan.source_snippets_included,
         },
-        "read_plan": read_plan_json(read_plan),
+        "estimated_potential_token_savings": partial_context_savings_json(savings.as_ref()),
+        "read_plan": read_plan_json(read_plan, options.verbosity),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
     });
-    if command == "check" {
-        value["check"] = check_advisory_json();
-    }
+    drop_unrequested_source_spans(&mut value, source_spans, options.verbosity);
     json_line(value)
+}
+
+/// The PARTIAL_CONTEXT / alignment savings block: the full estimate when a
+/// stored file size was available, otherwise an explicit no-estimate block that
+/// still carries the ESTIMATED caveat (never a guessed number).
+fn partial_context_savings_json(savings: Option<&OutcomeTokenSavings>) -> serde_json::Value {
+    match savings {
+        Some(savings) => estimated_potential_token_savings_json(savings),
+        None => json!({
+            "outcome_shape": "partial_context",
+            "estimated_baseline_tokens": null,
+            "estimated_returned_tokens": null,
+            "estimated_potential_token_savings": null,
+            "estimated_potential_token_savings_kind": MeasurementKind::Estimated.as_str(),
+            "estimated_potential_token_savings_caveat": ESTIMATED_TOKEN_SAVING_CAVEAT,
+            "unavailable_reason": "resolved file size unavailable; no estimate recorded",
+        }),
+    }
 }
 
 fn family_detail_json(
@@ -2292,21 +2891,22 @@ fn family_detail_json(
     let read_plan = &output_components.read_plan;
     let estimated_potential = &output_components.estimated_potential_token_savings;
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let check = if command == "check" {
-        Some(check_advisory_json())
-    } else {
-        None
-    };
-    json_line(json!({
+    let (rendered_members, members_truncated) =
+        bounded_family_members(family, options.evidence_mode);
+    let mut payload = json!({
         "command": command,
-        "status": if command == "check" { "CONTEXT_ONLY" } else { "ok" },
+        "schema_version": PRODUCT_SCHEMA_VERSION,
+        "status": "ok",
         "implemented": true,
         "active_generation": family.active_generation,
-        "query_route": query_route_json(route),
+        // Found: `candidate_family_ids` == the follow-up handle, so it is demoted
+        // out of the `minimal` shape (Standard tier).
+        "query_route": query_route_json(route, options.verbosity, VerbosityTier::Standard),
         "family": {
             "family_id": family.family_id,
             "classification": family.classification,
             "support": family.support,
+            "prevalence": family_prevalence_json(&family.prevalence),
         },
         "output": {
             "mode": selected_evidence.mode.as_str(),
@@ -2324,7 +2924,9 @@ fn family_detail_json(
             "missing_claims": selected_evidence.missing_claims,
             "source_snippets_included": read_plan.source_snippets_included,
         },
-        "members": family.members.iter().map(|member| {
+        "member_count": family.members.len(),
+        "members_truncated": members_truncated,
+        "members": rendered_members.iter().map(|member| {
             json!({
                 "family_id": member.family_id,
                 "code_unit_id": member.code_unit_id,
@@ -2338,6 +2940,7 @@ fn family_detail_json(
                 "description": slot.description,
             })
         }).collect::<Vec<_>>(),
+        "constraint_profile": family_constraint_profile_json(family.constraint_profile.as_deref()),
         "evidence": selected_evidence.evidence.iter().map(|evidence| {
             let record = &evidence.record;
             json!({
@@ -2353,24 +2956,101 @@ fn family_detail_json(
                 "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
-        "read_plan": read_plan_json(read_plan),
+        "read_plan": read_plan_json(read_plan, options.verbosity),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&family.unknowns),
-        "check": check,
-    }))
+    });
+    drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
+    json_line(payload)
 }
 
-fn query_route_json(route: &FamilyQueryRouteReport) -> serde_json::Value {
+/// Source-free JSON for the `query_route` envelope (CLI shape, byte-parallel with
+/// the MCP [`query_route_value`] renderer).
+///
+/// The single serialization authority every family response routes through.
+/// `route` and `follow_up_family_ids` are core (`minimal`); the follow-up handle
+/// is the normalized union of `candidate_family_ids` and `selected_family_id`, so
+/// those two are demoted at `minimal` without losing any id. `candidate_family_ids`
+/// renders at `candidate_family_ids_tier` — `Minimal` when it is a narrowing
+/// recovery handle (abstention / partial / conformance), `Standard` when it
+/// merely duplicates the follow-up handle on a resolved Found route. The static
+/// routing prose and term-retrieval telemetry are diagnostic (`Standard` tier).
+/// `standard` (the byte-stable v1 default) and `full` render every field.
+fn query_route_json(
+    route: &FamilyQueryRouteReport,
+    verbosity: Verbosity,
+    candidate_family_ids_tier: VerbosityTier,
+) -> serde_json::Value {
+    let mut value = serde_json::Map::new();
+    value.insert("route".to_string(), json!(route.route));
+    value.insert(
+        "follow_up_family_ids".to_string(),
+        json!(route.follow_up_family_ids),
+    );
+    if verbosity.renders(candidate_family_ids_tier) {
+        value.insert(
+            "candidate_family_ids".to_string(),
+            json!(route.candidate_family_ids),
+        );
+    }
+    if verbosity.renders(VerbosityTier::Standard) {
+        value.insert(
+            "selected_family_id".to_string(),
+            json!(route.selected_family_id),
+        );
+        value.insert("input_kind".to_string(), json!(route.input_kind));
+        value.insert("pipeline".to_string(), json!(route.pipeline));
+        value.insert(
+            "family_id_policy".to_string(),
+            json!(route.family_id_policy),
+        );
+        value.insert("candidate_limit".to_string(), json!(route.candidate_limit));
+        value.insert("why_selected".to_string(), json!(route.why_selected));
+        // Numeric fields the product-eval harness reads directly; null unless the
+        // deterministic term-retrieval fallback produced this route.
+        value.insert(
+            "hydrated_family_count".to_string(),
+            json!(route
+                .term_retrieval
+                .as_ref()
+                .map(|term| term.hydrated_candidate_count)),
+        );
+        value.insert(
+            "retrieval_stage_count".to_string(),
+            json!(route
+                .term_retrieval
+                .as_ref()
+                .map(|term| term.retrieval_stage_count)),
+        );
+        value.insert(
+            "term_retrieval".to_string(),
+            json!(route.term_retrieval.as_ref().map(term_retrieval_json)),
+        );
+    }
+    serde_json::Value::Object(value)
+}
+
+/// Source-free JSON for a term-retrieval route. Shared shape with the MCP
+/// renderer; carries only enum tokens, counts, and small integer scores.
+pub(crate) fn term_retrieval_json(term: &TermRetrievalRoute) -> serde_json::Value {
     json!({
-        "route": route.route,
-        "input_kind": route.input_kind,
-        "pipeline": route.pipeline,
-        "family_id_policy": route.family_id_policy,
-        "candidate_limit": route.candidate_limit,
-        "selected_family_id": route.selected_family_id,
-        "candidate_family_ids": route.candidate_family_ids,
-        "follow_up_family_ids": route.follow_up_family_ids,
-        "why_selected": route.why_selected,
+        "route": term.route,
+        "retrieved_summary_count": term.retrieved_summary_count,
+        "ranked_candidate_count": term.ranked_candidate_count,
+        "hydrated_candidate_count": term.hydrated_candidate_count,
+        "retrieval_stage_count": term.retrieval_stage_count,
+        "top_score": term.top_score,
+        "margin": term.margin,
+        "top_score_bucket": term.top_score_bucket,
+        "margin_bucket": term.margin_bucket,
+        "truncated": term.truncated,
+        "matched_signals": term.matched_signals.map(|signals| json!({
+            "framework_filter": signals.framework_filter,
+            "concept": signals.concept,
+            "language_filter": signals.language_filter,
+            "residue_hits": signals.residue_hits,
+        })),
+        "abstention_reason": term.abstention_reason.map(|reason| reason.as_str()),
     })
 }
 
@@ -2405,8 +3085,8 @@ fn family_output_components(
     }
 }
 
-fn resolved_target_json(target: &ResolvedQueryTarget) -> serde_json::Value {
-    json!({
+fn resolved_target_json(target: &ResolvedQueryTarget, verbosity: Verbosity) -> serde_json::Value {
+    let mut value = json!({
         "original_target": target.original_target,
         "kind": target.kind,
         "path": target.path,
@@ -2421,14 +3101,42 @@ fn resolved_target_json(target: &ResolvedQueryTarget) -> serde_json::Value {
         "candidate_code_unit_ids": target.candidate_code_unit_ids,
         "confidence": target.confidence,
         "match_kind": target.match_kind,
-    })
+    });
+    thin_resolved_target_json(
+        value
+            .as_object_mut()
+            .expect("resolved target serializes to a JSON object"),
+        target,
+        verbosity,
+    );
+    value
 }
 
-fn check_advisory_json() -> serde_json::Value {
-    json!({
-        "advisory_status": "UNKNOWN",
-        "reason": "runtime equivalence remains unproven",
-    })
+/// CLI mirror of `thin_resolved_target`: trim the shared `resolved_target` object
+/// for the `minimal` tier. Standard and full are byte-stable (no-op); at `minimal`
+/// the input echo (`original_target`) and normalizer internals (`residue_terms`)
+/// always drop, and each `candidate_*` narrowing list drops only when its concrete
+/// counterpart resolved, so a genuinely ambiguous resolution keeps its recovery
+/// handles. Kept byte-parallel with the MCP surface.
+fn thin_resolved_target_json(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    target: &ResolvedQueryTarget,
+    verbosity: Verbosity,
+) {
+    if verbosity.renders(VerbosityTier::Standard) {
+        return;
+    }
+    object.remove("original_target");
+    object.remove("residue_terms");
+    if target.code_unit_id.is_some() {
+        object.remove("candidate_code_unit_ids");
+    }
+    if !target.path.is_empty() {
+        object.remove("candidate_paths");
+    }
+    if target.family_id.is_some() {
+        object.remove("candidate_family_ids");
+    }
 }
 
 fn push_read_plan_human(output: &mut String, read_plan: &ReadPlan, mode: FamilyEvidenceMode) {
@@ -2529,16 +3237,27 @@ fn push_source_spans_human(output: &mut String, source_spans: &SourceSpanRenderR
     }
 }
 
-fn read_plan_json(read_plan: &ReadPlan) -> serde_json::Value {
-    json!({
+fn read_plan_json(read_plan: &ReadPlan, verbosity: Verbosity) -> serde_json::Value {
+    let mut plan = json!({
         "estimated_tokens": read_plan.estimated_tokens,
         "source_snippets_included": read_plan.source_snippets_included,
         "requires_source_before_edit": read_plan.requires_source_before_edit,
         "selection_strategy": read_plan.selection_strategy,
         "budget_satisfied": read_plan.budget_satisfied,
-        "items": read_plan.items.iter().map(read_plan_item_json).collect::<Vec<_>>(),
+        "items": read_plan.items.iter().map(|item| read_plan_item_json(item, verbosity)).collect::<Vec<_>>(),
         "line_range_omissions": read_plan.line_range_omissions.iter().map(read_plan_line_range_omission_json).collect::<Vec<_>>(),
-    })
+    });
+    if !verbosity.renders(VerbosityTier::Standard) {
+        // Minimal-only honesty flags (additive; `standard`/`full` keep the
+        // pre-precision bytes). `item_count` mirrors the member cap's
+        // `member_count`; `truncated` reveals that budget selection dropped
+        // candidate spans so a trimmed plan never hides its own capping.
+        if let Some(object) = plan.as_object_mut() {
+            object.insert("item_count".to_string(), json!(read_plan.items.len()));
+            object.insert("truncated".to_string(), json!(read_plan.truncated));
+        }
+    }
+    plan
 }
 
 fn read_plan_line_range_omission_json(omission: &ReadPlanLineRangeOmission) -> serde_json::Value {
@@ -2552,7 +3271,19 @@ fn read_plan_line_range_omission_json(omission: &ReadPlanLineRangeOmission) -> s
     })
 }
 
-fn read_plan_item_json(item: &ReadPlanItem) -> serde_json::Value {
+fn read_plan_item_json(item: &ReadPlanItem, verbosity: Verbosity) -> serde_json::Value {
+    if !verbosity.renders(VerbosityTier::Standard) && item.source_snippets_included {
+        // Dedup: this item's content is already inlined under `source_spans`
+        // (a strict superset of the item's locus metadata), so at `minimal` the
+        // plan carries only a back-reference stub. The plan still enumerates
+        // what to read; the consumer treats the rendered span as already read
+        // and does not pay for the repeated hash/byte/line locus.
+        return json!({
+            "purpose": item.purpose.as_str(),
+            "path": item.path,
+            "rendered": true,
+        });
+    }
     json!({
         "purpose": item.purpose.as_str(),
         "path": item.path,
@@ -2609,6 +3340,22 @@ fn source_spans_json(source_spans: Option<&SourceSpanRenderReport>) -> serde_jso
                 })
             }).collect::<Vec<_>>(),
         }),
+    }
+}
+
+/// At `minimal` verbosity, omit the `source_spans` key entirely when spans were
+/// not requested rather than shipping the empty `{requested:false, spans:[],
+/// omissions:[]}` stub. `standard`/`full` keep the stub for byte stability; the
+/// key omission is an opt-in `minimal`-only reduction.
+fn drop_unrequested_source_spans(
+    payload: &mut serde_json::Value,
+    source_spans: Option<&SourceSpanRenderReport>,
+    verbosity: Verbosity,
+) {
+    if !verbosity.renders(VerbosityTier::Standard) && source_spans.is_none() {
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("source_spans");
+        }
     }
 }
 
@@ -2679,17 +3426,6 @@ fn push_unknown_inventory_bucket_human(
         output.push_str(&format!(" {}={}", bucket.key, bucket.count));
     }
     output.push('\n');
-}
-
-fn telemetry_count_map_human(counts: &BTreeMap<String, u64>) -> String {
-    if counts.is_empty() {
-        return "none".to_string();
-    }
-    counts
-        .iter()
-        .map(|(key, count)| format!("{key}={count}"))
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 fn unknown_inventory_json(command: &str, report: &UnknownInventoryReport) -> String {
@@ -2813,7 +3549,9 @@ where
         } else if doctor.findings.iter().any(|finding| {
             matches!(
                 finding.code,
-                RepositoryDoctorCode::IndexLockUnknown | RepositoryDoctorCode::IndexLockInvalid
+                RepositoryDoctorCode::IndexLockUnknown
+                    | RepositoryDoctorCode::IndexLockLegacy
+                    | RepositoryDoctorCode::IndexLockInvalid
             )
         }) {
             RecoveryLockState::Unknown
@@ -4746,7 +5484,10 @@ fn parse_stats_options(rest: &[String]) -> Result<StatsOptions, String> {
     Ok(options)
 }
 
-const ESTIMATED_TOKEN_SAVING_CAVEAT: &str = "estimated potential only; not measured token savings";
+// Alias the authoritative caveat from the measurement model so the CLI's
+// estimated-savings surfaces cannot drift a parallel literal from the value the
+// metric and MCP carry.
+const ESTIMATED_TOKEN_SAVING_CAVEAT: &str = EstimatedPotentialTokenSavings::CAVEAT;
 const OFFICIAL_FAMILY_SCOPE: &str = "python_v0_1";
 const REPO_SHAPE_SCOPE: &str = "python_family_eligible_units";
 const PARTIAL_CONTEXT_RECOMMENDED_ACTION: &str =
@@ -4759,6 +5500,7 @@ fn stats_fallback(json: bool, reason: &str, guidance: &str, include_unknowns: bo
             "reason": reason,
             "guidance": guidance,
             "command": "stats",
+            "schema_version": PRODUCT_SCHEMA_VERSION,
             "implemented": true,
             "official_family_scope": OFFICIAL_FAMILY_SCOPE,
             "repo_shape_scope": REPO_SHAPE_SCOPE,
@@ -4801,47 +5543,32 @@ fn stats_human(
     query_outcome_rollup: &FamilyQueryOutcomeRollup,
     unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
+    // Lead with the essentials (~10 lines): readiness, indexed inventory,
+    // family coverage, the all-scope estimated-savings headline, and the scope
+    // note with its next action. Every remaining metric, risk signal, and rollup
+    // stays available under `stats --json` (no JSON field is dropped).
     let mut output = format!(
-        "stats: repo-shape diagnostics\nofficial_family_scope: {}\nrepo_shape_scope: {}\nactive_generation: {}\nindexed_file_count: {}\nindexed_code_unit_count: {}\nsemantic_fact_count: {}\nrepository_readiness_state: {}\nquery_ready: {}\neligible_code_units: {}\nfamily_count: {}\nfamily_member_count: {}\ncovered_code_units: {}\nlocal_pattern_density: {}\nfamily_support_coverage: {}\nabstention_rate: {}\nexternal_dependency_signal: {}\nthin_wrapper_risk: {}\ntoken_saving_risk: {}\ntoken_saving_readiness: {}\nblocking_reasons: {}\nestimated_potential_token_savings: {}\nestimated_potential_token_savings_events: {}\nmeasurement_kind: ESTIMATED\ncaveat: {}\nestimated_potential_token_savings_kind: {}\nestimated_potential_token_savings_caveat: {}\ninterpretation: {}\n",
+        "stats: repo-shape diagnostics\nofficial_family_scope: {}\trepo_shape_scope: {}\nreadiness: {}\tquery_ready: {}\nindexed: {} files\t{} code units\t{} semantic facts\nfamilies: {}\teligible_code_units: {}\tfamily_support_coverage: {}\ntoken_saving_readiness: {}\n",
         OFFICIAL_FAMILY_SCOPE,
         REPO_SHAPE_SCOPE,
-        report.active_generation,
+        readiness_state_value(readiness.state),
+        readiness.query_ready,
         report.indexed_file_count,
         report.indexed_code_unit_count,
         report.semantic_fact_count,
-        readiness_state_value(readiness.state),
-        readiness.query_ready,
-        report.eligible_code_units,
         report.family_count,
-        report.family_member_count,
-        report.covered_code_units,
-        optional_ratio_human(report.local_pattern_density),
+        report.eligible_code_units,
         optional_ratio_human(report.family_support_coverage),
-        optional_ratio_human(report.abstention_rate),
-        report.external_dependency_signal.as_str(),
-        report.thin_wrapper_risk.as_str(),
-        report.token_saving_risk.as_str(),
         report.token_saving_readiness.as_str(),
-        stats_blocking_reasons_human(report.blocking_reasons.iter().copied()),
-        estimated_rollup.total_estimated_potential_token_savings,
-        estimated_rollup.event_count,
-        ESTIMATED_TOKEN_SAVING_CAVEAT,
-        estimated_rollup.measurement_kind.as_str(),
-        estimated_rollup.caveat,
-        report.interpretation
     );
+    output.push_str(&stats_all_scope_savings_human(
+        estimated_rollup,
+        query_outcome_rollup,
+    ));
     output.push_str(&stats_scope_human(report));
-    if query_outcome_rollup.event_count > 0 {
-        output.push_str(&format!(
-            "query_outcome_events: {}\nquery_outcome_by_status: {}\nquery_outcome_by_entrypoint: {}\nquery_outcome_read_plans_returned: {}\nquery_outcome_source_spans_requested: {}\nquery_outcome_source_spans_included: {}\n",
-            query_outcome_rollup.event_count,
-            telemetry_count_map_human(&query_outcome_rollup.by_status),
-            telemetry_count_map_human(&query_outcome_rollup.by_entrypoint),
-            query_outcome_rollup.read_plan_returned_count,
-            query_outcome_rollup.source_spans_requested_count,
-            query_outcome_rollup.source_spans_included_count,
-        ));
-    }
+    output.push_str(
+        "detail: run `repogrammar stats --json` for full metrics, risk signals, blocking reasons, and per-language and per-outcome-shape breakdowns\n",
+    );
     if let Some(unknown_inventory) = unknown_inventory {
         output.push_str(&unknown_inventory_human(
             "stats_unknowns",
@@ -4883,6 +5610,7 @@ fn stats_json(
     );
     let mut value = json!({
         "command": "stats",
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "ok",
         "implemented": true,
         "official_family_scope": OFFICIAL_FAMILY_SCOPE,
@@ -4928,6 +5656,7 @@ fn stats_json(
             "total_estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
             "caveat": estimated_rollup.caveat,
         },
+        "all_scope_token_savings": stats_all_scope_savings_json(estimated_rollup, query_outcome_rollup),
         "query_outcome_rollup": query_outcome_rollup_value(query_outcome_rollup),
         "measurement_status": measurement_status,
         "measurement_reason": measurement.and_then(|measurement| measurement.reason.as_deref()),
@@ -5025,6 +5754,67 @@ fn stats_tsjs_family_support(language: &RepoShapeLanguageDiagnostics) -> &'stati
     }
 }
 
+/// The additive all-scope estimated-potential-token-savings block: totals plus
+/// per-outcome-shape and per-language breakdowns, and the honest denominator
+/// `savings_events / total_queries` (savings events over every recorded query).
+/// Every value is ESTIMATED; the paired-experiment recorder remains the only
+/// path to a MEASURED claim. This block covers all indexed languages and all
+/// context-delivering outcome shapes; the `python_family_eligible_units`
+/// repo-shape block is the official-scope subset.
+fn stats_all_scope_savings_json(
+    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+    query_outcome_rollup: &FamilyQueryOutcomeRollup,
+) -> Value {
+    json!({
+        "measurement_kind": estimated_rollup.measurement_kind.as_str(),
+        "caveat": estimated_rollup.caveat,
+        "scope": "all_languages_all_outcome_shapes",
+        "savings_events": estimated_rollup.event_count,
+        "total_queries": query_outcome_rollup.event_count,
+        "estimated_baseline_tokens": estimated_rollup.total_estimated_baseline_tokens,
+        "estimated_returned_tokens": estimated_rollup.total_estimated_returned_tokens,
+        "estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
+        "by_outcome_shape": savings_breakdown_map_json(&estimated_rollup.by_outcome_shape),
+        "by_language": savings_breakdown_map_json(&estimated_rollup.by_language),
+        "note": "all-scope estimated potential across every indexed language and context-delivering outcome shape (found, partial_context, alignment); the python_family_eligible_units repo-shape block is the official-scope subset",
+    })
+}
+
+/// The compact all-scope estimated-savings headline for the concise human
+/// summary: the total (labeled ESTIMATED, never measured), the honest
+/// `savings_events / total_queries` denominator, and the per-outcome-shape and
+/// per-language breakdowns on one continuation line. The full block is in JSON.
+fn stats_all_scope_savings_human(
+    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
+    query_outcome_rollup: &FamilyQueryOutcomeRollup,
+) -> String {
+    format!(
+        "estimated_potential_token_savings: {}\tmeasurement_kind: {}\tsavings_events: {} / queries: {}\tcaveat: {}\nall_scope_by_outcome_shape: {}\tby_language: {}\n",
+        estimated_rollup.total_estimated_potential_token_savings,
+        estimated_rollup.measurement_kind.as_str(),
+        estimated_rollup.event_count,
+        query_outcome_rollup.event_count,
+        estimated_rollup.caveat,
+        savings_breakdown_map_human(&estimated_rollup.by_outcome_shape),
+        savings_breakdown_map_human(&estimated_rollup.by_language),
+    )
+}
+
+fn savings_breakdown_map_human(map: &BTreeMap<String, SavingsBreakdown>) -> String {
+    if map.is_empty() {
+        return "none".to_string();
+    }
+    map.iter()
+        .map(|(key, breakdown)| {
+            format!(
+                "{key}=events:{},potential:{}",
+                breakdown.event_count, breakdown.estimated_potential_token_savings
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn query_outcome_rollup_value(rollup: &FamilyQueryOutcomeRollup) -> Value {
     json!({
         "schema_version": crate::application::telemetry::FAMILY_QUERY_OUTCOMES_SCHEMA_VERSION,
@@ -5105,18 +5895,6 @@ where
         output.push("no_paired_experiment");
     }
     output
-}
-
-fn stats_blocking_reasons_human<I>(reasons: I) -> String
-where
-    I: IntoIterator<Item = &'static str>,
-{
-    let reasons = stats_blocking_reasons(reasons, false);
-    if reasons.is_empty() {
-        "none".to_string()
-    } else {
-        reasons.join(",")
-    }
 }
 
 fn diagnostic_signal_json(signal: DiagnosticSignal) -> serde_json::Value {
@@ -6519,9 +7297,12 @@ where
         state_dir_override: state_dir_override(env_lookup),
     };
 
+    // The decomposed readiness report is independent of the classic status view;
+    // runtimes that do not implement it (deferred/test runtimes) leave it absent.
+    let readiness = runtime.product_readiness(request.clone()).ok();
     match runtime.repository_status(request) {
-        Ok(report) if options.json => CliOutput::success(status_json(&report)),
-        Ok(report) => CliOutput::success(status_human(&report)),
+        Ok(report) if options.json => CliOutput::success(status_json(&report, readiness.as_ref())),
+        Ok(report) => CliOutput::success(status_human(&report, readiness.as_ref())),
         Err(error) => lifecycle_error("status", options.json, error),
     }
 }
@@ -6539,10 +7320,18 @@ where
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
     };
+    let readiness = runtime
+        .product_readiness(RepositoryStatusRequest {
+            path: request.path.clone(),
+            state_dir_override: request.state_dir_override.clone(),
+        })
+        .ok();
 
     match runtime.repository_doctor(request) {
-        Ok(report) if options.json => CliOutput::success(doctor_json(&report, env_lookup)),
-        Ok(report) => CliOutput::success(doctor_human(&report)),
+        Ok(report) if options.json => {
+            CliOutput::success(doctor_json(&report, env_lookup, readiness.as_ref()))
+        }
+        Ok(report) => CliOutput::success(doctor_human(&report, readiness.as_ref())),
         Err(error) => lifecycle_error("doctor", options.json, error),
     }
 }
@@ -6873,6 +7662,7 @@ struct QueryOptions {
     include_variations: bool,
     include_exceptions: bool,
     include_source_spans: bool,
+    verbosity: Verbosity,
     all: bool,
 }
 
@@ -6883,6 +7673,7 @@ impl QueryOptions {
             token_budget: self.token_budget,
             include_variations: self.include_variations,
             include_exceptions: self.include_exceptions,
+            verbosity: self.verbosity,
         }
     }
 }
@@ -7561,6 +8352,12 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 options.mode_explicit = true;
                 index += 2;
             }
+            "--verbosity" => {
+                let value = option_value(rest, index, "--verbosity", "minimal, standard, or full")?;
+                options.verbosity = Verbosity::parse(value)
+                    .ok_or_else(|| "--verbosity requires minimal, standard, or full".to_string())?;
+                index += 2;
+            }
             "--json" => {
                 options.json = true;
                 index += 1;
@@ -7974,8 +8771,15 @@ fn index_outcome_human(
         output.push('\n');
     }
     if let Some(sync_report) = &outcome.sync_report {
+        let (families_added, families_removed) = match &sync_report.family_identity_delta {
+            Some(delta) => (
+                delta.added_count.to_string(),
+                delta.removed_count.to_string(),
+            ),
+            None => ("none".to_string(), "none".to_string()),
+        };
         output.push_str(&format!(
-            "sync_mode: {}\nfallback_reason: {}\nbase_generation: {}\nadded_files: {}\nmodified_files: {}\nremoved_files: {}\nunchanged_files: {}\ncopied_forward_files: {}\nreparsed_files: {}\nfamilies_recomputed: {}\ndirty_records_cleared: {}\n",
+            "sync_mode: {}\nfallback_reason: {}\nbase_generation: {}\nadded_files: {}\nmodified_files: {}\nremoved_files: {}\nunchanged_files: {}\ncopied_forward_files: {}\nreparsed_files: {}\nfamilies_recomputed: {}\ndirty_records_cleared: {}\nfamilies_added: {}\nfamilies_removed: {}\n",
             sync_report.sync_mode.as_str(),
             sync_report.fallback_reason.as_deref().unwrap_or("none"),
             sync_report.base_generation.as_deref().unwrap_or("none"),
@@ -7987,6 +8791,8 @@ fn index_outcome_human(
             sync_report.reparsed_files,
             sync_report.families_recomputed,
             sync_report.dirty_records_cleared,
+            families_added,
+            families_removed,
         ));
     }
     output
@@ -8073,6 +8879,15 @@ fn index_outcome_value(
             "dirty_records_cleared".to_string(),
             json!(sync_report.dirty_records_cleared),
         );
+        let (families_added, families_removed) = match &sync_report.family_identity_delta {
+            Some(delta) => (
+                json!({ "count": delta.added_count, "sample": delta.added_sample }),
+                json!({ "count": delta.removed_count, "sample": delta.removed_sample }),
+            ),
+            None => (Value::Null, Value::Null),
+        };
+        object.insert("families_added".to_string(), families_added);
+        object.insert("families_removed".to_string(), families_removed);
     }
     value
 }
@@ -8262,8 +9077,14 @@ fn storage_clean_legacy_reclaimable_bytes(report: &StorageCleanReport) -> u64 {
         .saturating_sub(report.legacy_layout.bytes_after)
 }
 
-fn status_human(report: &RepositoryStatusReport) -> String {
+fn status_human(
+    report: &RepositoryStatusReport,
+    readiness: Option<&ProductReadinessReport>,
+) -> String {
     let mut output = String::new();
+    if let Some(readiness) = readiness {
+        output.push_str(&readiness_human_lead(readiness));
+    }
     let storage_inspection = report.storage_inspection.as_ref();
     output.push_str(report.status.as_human_message());
     output.push('\n');
@@ -8370,7 +9191,10 @@ fn status_human(report: &RepositoryStatusReport) -> String {
     output
 }
 
-fn status_json(report: &RepositoryStatusReport) -> String {
+fn status_json(
+    report: &RepositoryStatusReport,
+    readiness: Option<&ProductReadinessReport>,
+) -> String {
     let active_generation = match &report.status {
         RepositoryStatus::Initialized { active_generation }
             if active_generation != "none" && active_generation != "not implemented" =>
@@ -8382,6 +9206,7 @@ fn status_json(report: &RepositoryStatusReport) -> String {
     let storage_inspection = report.storage_inspection.as_ref();
     json_line(json!({
         "command": "status",
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "initialized": matches!(report.status, RepositoryStatus::Initialized { .. }),
         "state_dir": report.state_dir,
         "status": repository_status_value(&report.status),
@@ -8404,11 +9229,18 @@ fn status_json(report: &RepositoryStatusReport) -> String {
         "storage_error": report.storage_error,
         "missing_subdirs": report.missing_subdirs,
         "readiness": readiness_json(&report.readiness),
+        "product_readiness": readiness.map(product_readiness_value),
     }))
 }
 
-fn doctor_human(report: &RepositoryDoctorReport) -> String {
+fn doctor_human(
+    report: &RepositoryDoctorReport,
+    readiness: Option<&ProductReadinessReport>,
+) -> String {
     let mut output = String::from("doctor: repository lifecycle diagnostics\n");
+    if let Some(readiness) = readiness {
+        output.push_str(&readiness_human_lead(readiness));
+    }
     output.push_str(&format!("state_dir: {}\n", report.status.state_dir));
     output.push_str(&format!(
         "status: {}\n",
@@ -8425,7 +9257,11 @@ fn doctor_human(report: &RepositoryDoctorReport) -> String {
     output
 }
 
-fn doctor_json<F>(report: &RepositoryDoctorReport, env_lookup: &F) -> String
+fn doctor_json<F>(
+    report: &RepositoryDoctorReport,
+    env_lookup: &F,
+    readiness: Option<&ProductReadinessReport>,
+) -> String
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -8441,6 +9277,7 @@ where
         };
     json_line(json!({
         "command": "doctor",
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "initialized": matches!(report.status.status, RepositoryStatus::Initialized { .. }),
         "state_dir": report.status.state_dir,
         "status": repository_status_value(&report.status.status),
@@ -8464,6 +9301,7 @@ where
             "dirty_records": storage_inspection.and_then(|inspection| inspection.dirty_record_count),
         },
         "readiness": readiness_json(&report.status.readiness),
+        "product_readiness": readiness.map(product_readiness_value),
         "findings": findings,
         "optional_providers": optional_providers_json(env_lookup),
     }))
@@ -8478,7 +9316,7 @@ where
 {
     crate::application::providers::optional_provider_report(
         |key| env_lookup(key),
-        |binary| binary_available_on_path(binary, env_lookup),
+        |binary| crate::application::providers::binary_available_on_path(binary, env_lookup),
     )
     .into_iter()
     .map(|status| {
@@ -8493,17 +9331,33 @@ where
     .collect()
 }
 
-/// Whether `binary` is present on the host `PATH`, by scanning `PATH` entries for
-/// a matching file. Reads `PATH` through the injected env lookup and never
-/// executes anything, so detection stays pure, testable, and side-effect-free.
-fn binary_available_on_path<F>(binary: &str, env_lookup: &F) -> bool
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let Some(path) = env_lookup("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(binary).is_file())
+/// Human-readable leading block for `status`/`doctor`: the actionable capability
+/// summary and the one canonical next action from the shared recovery classifier.
+/// Family-evidence counts are rendered as facts only; the single command shown is
+/// the classifier's `next_action`. Callers must not infer a second command from
+/// raw freshness counts, so no per-count command hint is printed. Internal
+/// mechanism ids stay in the JSON as follow-up handles rather than crowding the
+/// human lead.
+fn readiness_human_lead(readiness: &ProductReadinessReport) -> String {
+    let mut lead = String::new();
+    lead.push_str(&format!("capability: {}\n", readiness.summary.as_str()));
+    lead.push_str(&format!(
+        "next_action: {}\n",
+        recovery_guidance(readiness.recovery.action)
+    ));
+    if readiness.family_evidence.stale_count > 0 {
+        lead.push_str(&format!(
+            "stale_family_evidence: {}\n",
+            readiness.family_evidence.stale_count
+        ));
+    }
+    if readiness.family_evidence.cannot_verify_count > 0 {
+        lead.push_str(&format!(
+            "unverifiable_family_evidence: {}\n",
+            readiness.family_evidence.cannot_verify_count
+        ));
+    }
+    lead
 }
 
 fn readiness_json(readiness: &RepositoryReadiness) -> Value {
@@ -8569,6 +9423,7 @@ fn lock_check(report: &RepositoryDoctorReport) -> &'static str {
             finding.code,
             RepositoryDoctorCode::IndexLockActive
                 | RepositoryDoctorCode::IndexLockUnknown
+                | RepositoryDoctorCode::IndexLockLegacy
                 | RepositoryDoctorCode::IndexLockInvalid
         )
     }) {
@@ -8819,6 +9674,7 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::IndexLockActive => "INDEX_LOCK_ACTIVE",
         RepositoryDoctorCode::IndexLockStale => "INDEX_LOCK_STALE",
         RepositoryDoctorCode::IndexLockUnknown => "INDEX_LOCK_UNKNOWN",
+        RepositoryDoctorCode::IndexLockLegacy => "INDEX_LOCK_LEGACY",
         RepositoryDoctorCode::IndexLockInvalid => "INDEX_LOCK_INVALID",
         RepositoryDoctorCode::StorageNotImplemented => "STORAGE_NOT_IMPLEMENTED",
         RepositoryDoctorCode::StorageReady => "STORAGE_READY",
@@ -8846,6 +9702,7 @@ fn lifecycle_error(command: &str, json: bool, error: RepoGrammarError) -> CliOut
             2,
             json_line(json!({
                 "command": command,
+                "schema_version": PRODUCT_SCHEMA_VERSION,
                 "status": "error",
                 "reason": error.to_string(),
             })),
@@ -8927,10 +9784,13 @@ mod tests {
         index_repository_with_discovery_parser_frameworks_and_store,
         sync_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
+    use crate::application::query::TermRetrievalAbstention;
     use crate::application::query::{
-        list_code_units, list_families, list_indexed_files, lookup_family_with_local_context,
-        FamilySummary,
+        list_code_units, list_families, list_indexed_files,
+        lookup_family_with_freshness_and_local_context, lookup_family_with_local_context,
+        FamilyFreshness, FamilySummary,
     };
+    use crate::application::query_terms::MatchedSignals;
     use crate::application::repository::{acquire_index_lock, DEFAULT_STATE_DIR};
     use crate::application::repository::{
         repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -8943,6 +9803,311 @@ mod tests {
     use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
+
+    fn resolved_unit_target() -> ResolvedQueryTarget {
+        ResolvedQueryTarget {
+            original_target: "src/api/routes.py get_users".to_string(),
+            kind: "code_unit",
+            path: "src/api/routes.py".to_string(),
+            line: Some(12),
+            byte_range: Some((0, 40)),
+            family_id: Some("family:python:fastapi_route:framework_fastapi_route".to_string()),
+            code_unit_id: Some("unit:src/api/routes.py#fastapi_route:get:0-40:1".to_string()),
+            symbol_hints: vec!["get_users".to_string()],
+            residue_terms: vec!["get".to_string(), "users".to_string()],
+            candidate_paths: vec!["src/api/routes.py".to_string()],
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            candidate_code_unit_ids: vec![
+                "unit:src/api/routes.py#fastapi_route:get:0-40:1".to_string()
+            ],
+            confidence: "high",
+            match_kind: "exact_path",
+        }
+    }
+
+    /// Golden byte-parity: the CLI `resolved_target` mirror reproduces the
+    /// pre-precision shape byte-for-byte at `standard` and `full` (v1 discipline).
+    #[test]
+    fn resolved_target_json_standard_and_full_are_byte_stable() {
+        let target = resolved_unit_target();
+        let standard = resolved_target_json(&target, Verbosity::Standard);
+        let full = resolved_target_json(&target, Verbosity::Full);
+        let golden = json!({
+            "original_target": "src/api/routes.py get_users",
+            "kind": "code_unit",
+            "path": "src/api/routes.py",
+            "line": 12,
+            "byte_range": {"start": 0, "end": 40},
+            "family_id": "family:python:fastapi_route:framework_fastapi_route",
+            "code_unit_id": "unit:src/api/routes.py#fastapi_route:get:0-40:1",
+            "symbol_hints": ["get_users"],
+            "residue_terms": ["get", "users"],
+            "candidate_paths": ["src/api/routes.py"],
+            "candidate_family_ids": ["family:python:fastapi_route:framework_fastapi_route"],
+            "candidate_code_unit_ids": ["unit:src/api/routes.py#fastapi_route:get:0-40:1"],
+            "confidence": "high",
+            "match_kind": "exact_path",
+        });
+        assert_eq!(
+            serde_json::to_string(&standard).unwrap(),
+            serde_json::to_string(&golden).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string(&full).unwrap(),
+            serde_json::to_string(&golden).unwrap()
+        );
+    }
+
+    /// CLI mirror of the MCP `minimal` thinning: input echo, normalizer internals,
+    /// and redundant `candidate_*` echoes drop only at `minimal`.
+    #[test]
+    fn resolved_target_json_minimal_thins_echo_and_redundant_candidates() {
+        let target = resolved_unit_target();
+        let minimal = resolved_target_json(&target, Verbosity::Minimal);
+        let object = minimal.as_object().expect("resolved_target object");
+        for dropped in [
+            "original_target",
+            "residue_terms",
+            "candidate_code_unit_ids",
+            "candidate_paths",
+            "candidate_family_ids",
+        ] {
+            assert!(!object.contains_key(dropped), "minimal must drop {dropped}");
+        }
+        for kept in ["kind", "path", "code_unit_id", "family_id", "confidence"] {
+            assert!(object.contains_key(kept), "minimal must keep {kept}");
+        }
+    }
+
+    /// CLI mirror: an ambiguous resolution keeps the `candidate_*` recovery handles
+    /// at `minimal`.
+    #[test]
+    fn resolved_target_json_minimal_retains_candidates_when_ambiguous() {
+        let mut target = resolved_unit_target();
+        target.code_unit_id = None;
+        target.family_id = None;
+        target.path = String::new();
+        target.candidate_code_unit_ids = vec!["unit:a".to_string(), "unit:b".to_string()];
+        target.candidate_paths = vec!["a.py".to_string(), "b.py".to_string()];
+        target.candidate_family_ids = vec!["family:a".to_string(), "family:b".to_string()];
+        let minimal = resolved_target_json(&target, Verbosity::Minimal);
+        let object = minimal.as_object().expect("resolved_target object");
+        assert!(!object.contains_key("original_target"));
+        assert!(object.contains_key("candidate_code_unit_ids"));
+        assert!(object.contains_key("candidate_paths"));
+        assert!(object.contains_key("candidate_family_ids"));
+    }
+
+    fn deviation_computation(count: usize) -> AlignmentComputation {
+        use crate::application::conformance::{LegalVariation, StaticDeviation};
+        use crate::core::policy::alignment::{AlignmentStatus, StaticDeviationKind};
+        AlignmentComputation {
+            status: AlignmentStatus::StaticDeviation,
+            required_features_matched: Vec::new(),
+            static_deviations: (0..count)
+                .map(|index| StaticDeviation {
+                    prefix: format!("prefix_{index}"),
+                    kind: StaticDeviationKind::RequiredMismatch,
+                    semantics_token: "equal".to_string(),
+                    expected_summary: "expected".to_string(),
+                    observed_summary: "observed".to_string(),
+                })
+                .collect(),
+            legal_observed_variations: (0..count)
+                .map(|index| LegalVariation {
+                    dimension: format!("dimension_{index}"),
+                    observed_profile: "profile".to_string(),
+                })
+                .collect(),
+            blocking_unknowns: Vec::new(),
+            unresolved_runtime_obligations: Vec::new(),
+            outcome_reason: "a required feature deviated".to_string(),
+        }
+    }
+
+    /// CLI mirror of the S8 deviation cap: over-cap arrays truncate to the cap and
+    /// carry honest `<name>_truncated`/`<name>_count` siblings.
+    #[test]
+    fn alignment_computation_json_caps_deviation_arrays_with_honest_flags() {
+        let total = ALIGNMENT_DEVIATION_CAP + 3;
+        let value = alignment_computation_json(&deviation_computation(total));
+        assert_eq!(
+            value["static_deviations"].as_array().unwrap().len(),
+            ALIGNMENT_DEVIATION_CAP
+        );
+        assert_eq!(value["static_deviations_truncated"], json!(true));
+        assert_eq!(value["static_deviations_count"], json!(total));
+        assert_eq!(
+            value["legal_observed_variations"].as_array().unwrap().len(),
+            ALIGNMENT_DEVIATION_CAP
+        );
+        assert_eq!(value["legal_observed_variations_truncated"], json!(true));
+        assert_eq!(value["legal_observed_variations_count"], json!(total));
+    }
+
+    /// Below the cap the CLI mirror emits no truncation metadata (v1 additivity).
+    #[test]
+    fn alignment_computation_json_below_cap_emits_no_truncation_metadata() {
+        let value = alignment_computation_json(&deviation_computation(2));
+        let object = value.as_object().expect("computation object");
+        assert_eq!(object["static_deviations"].as_array().unwrap().len(), 2);
+        for absent in [
+            "static_deviations_truncated",
+            "static_deviations_count",
+            "legal_observed_variations_truncated",
+            "legal_observed_variations_count",
+        ] {
+            assert!(!object.contains_key(absent), "{absent} must be absent");
+        }
+    }
+
+    fn empty_conformance_read_plan() -> ReadPlan {
+        ReadPlan {
+            items: Vec::new(),
+            estimated_tokens: 0,
+            source_snippets_included: false,
+            requires_source_before_edit: false,
+            selection_strategy: "greedy_marginal_coverage_v1",
+            budget_satisfied: true,
+            line_range_omissions: Vec::new(),
+            truncated: false,
+        }
+    }
+
+    fn member_certificate() -> AlignmentCertificateReport {
+        use crate::core::policy::alignment::{AlignmentStatus, TargetRelationship};
+        AlignmentCertificateReport {
+            active_generation: "gen-000001".to_string(),
+            alignment_status: AlignmentStatus::StaticallyAligned,
+            target_relationship: Some(TargetRelationship::Member),
+            selected_family_id: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            resolved_target: resolved_unit_target(),
+            computation: None,
+            read_plan: empty_conformance_read_plan(),
+            unknowns: Vec::new(),
+            resolved_target_file_size_bytes: None,
+            resolved_target_language: String::new(),
+            family_evidence_baseline_tokens: 0,
+        }
+    }
+
+    fn member_route() -> FamilyQueryRouteReport {
+        FamilyQueryRouteReport {
+            route: "conformance_member",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["resolve_target", "select_family", "align"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            follow_up_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            why_selected: "resolved unit is a member of its family",
+            term_retrieval: None,
+        }
+    }
+
+    /// CLI mirror of the S8 dedup + `runtime_equivalence` invariant.
+    #[test]
+    fn alignment_certificate_json_dedups_duplicates_only_at_minimal() {
+        let certificate = member_certificate();
+        let route = member_route();
+        let render =
+            |verbosity| alignment_certificate_json("check", &certificate, &route, None, verbosity);
+
+        let standard = render(Verbosity::Standard);
+        let full = render(Verbosity::Full);
+        assert_eq!(standard["status"], "STATICALLY_ALIGNED");
+        assert_eq!(standard["alignment_status"], "STATICALLY_ALIGNED");
+        assert_eq!(
+            standard["selected_family_id"],
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert_eq!(standard["runtime_equivalence"], "UNKNOWN");
+        assert_eq!(
+            serde_json::to_string(&standard).unwrap(),
+            serde_json::to_string(&full).unwrap()
+        );
+
+        let minimal = render(Verbosity::Minimal);
+        let object = minimal.as_object().expect("certificate object");
+        assert!(!object.contains_key("alignment_status"));
+        assert_eq!(object["status"], "STATICALLY_ALIGNED");
+        assert_eq!(
+            object["runtime_equivalence"], "UNKNOWN",
+            "runtime_equivalence is an invariant and is never removed"
+        );
+        // The top-level `selected_family_id` is retained at every tier as the
+        // authoritative selected-family handle (the route lane suppresses the
+        // `query_route.selected_family_id` copy at `minimal`).
+        assert_eq!(
+            object["selected_family_id"],
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+    }
+
+    #[test]
+    fn constraint_profile_json_is_metadata_only_and_null_when_absent() {
+        assert_eq!(family_constraint_profile_json(None), Value::Null);
+        let profile = crate::test_support::sample_family_constraint_profile();
+        let value = family_constraint_profile_json(Some(&profile));
+        // Required-equal features carry typed origin/semantics tokens, never source.
+        let required = value["required_equal_features"]
+            .as_array()
+            .expect("required_equal_features");
+        assert!(required.iter().any(|constraint| {
+            constraint["origin"] == "framework_role_identity" && constraint["semantics"] == "equal"
+        }));
+        // The observed-only variation dimension is surfaced verbatim.
+        assert_eq!(
+            value["allowed_variations"][0]["dimension"],
+            "python_import_context"
+        );
+        assert_eq!(value["allowed_variations"][0]["observed_only"], true);
+        // The prohibited-presence blocker and the runtime obligation are present.
+        assert_eq!(
+            value["prohibited_or_blocking_features"][0]["semantics"],
+            "prohibited_presence"
+        );
+        assert_eq!(
+            value["unresolved_obligations"][0]["affected_claim"],
+            "family:example:runtime_equivalence"
+        );
+        // The serializer echoes the profile's typed fields verbatim and adds no
+        // others; the profile model itself carries only RepoGrammar-owned tokens
+        // (source-freedom is enforced by the storage-side hydration validators, not
+        // re-litigated here). Assert the emitted object has exactly the four
+        // documented keys.
+        let mut keys = value
+            .as_object()
+            .expect("constraint_profile object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "allowed_variations".to_string(),
+                "prohibited_or_blocking_features".to_string(),
+                "required_equal_features".to_string(),
+                "unresolved_obligations".to_string(),
+            ]
+        );
+    }
 
     fn current_lock_host_json() -> String {
         let host = ["HOSTNAME", "COMPUTERNAME"]
@@ -9555,6 +10720,7 @@ mod tests {
                 family_id: "family:typescript:express_route:express".to_string(),
                 classification: "DOMINANT_PATTERN".to_string(),
                 support: 2,
+                prevalence: crate::test_support::sample_family_prevalence(),
                 members: vec![crate::ports::family_store::IndexedFamilyMemberRecord {
                     family_id: "family:typescript:express_route:express".to_string(),
                     code_unit_id: "unit:src/routes/a.ts#express_route:get:0-20:1".to_string(),
@@ -9584,6 +10750,8 @@ mod tests {
                     affected_claim: "runtime_equivalence".to_string(),
                     recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
                 }],
+                constraint_profile: None,
+                term_retrieval: None,
             }
         }
 
@@ -9713,13 +10881,12 @@ mod tests {
                     },
                 ],
                 by_recovery_code: vec![
+                    // Both mechanisms (fastapi_dependency_graph, python_import_graph)
+                    // belong to the registered-but-not-integrated python provider
+                    // slot, so both recover via not_implemented_in_current_version.
                     UnknownInventoryBucket {
-                        key: "enable_provider".to_string(),
-                        count: 1,
-                    },
-                    UnknownInventoryBucket {
-                        key: "resolve_import_graph".to_string(),
-                        count: 1,
+                        key: "not_implemented_in_current_version".to_string(),
+                        count: 2,
                     },
                 ],
             }
@@ -9759,7 +10926,10 @@ mod tests {
                     family_id: "family:typescript:express_route:express".to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 2,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: None,
                 }],
+                freshness_counts: None,
                 unknowns: Vec::new(),
             })
         }
@@ -9771,7 +10941,9 @@ mod tests {
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let matched = match mode {
-                FamilyLookupMode::FuzzyQuery => target == Some("src/routes/a.ts"),
+                FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
+                    target == Some("src/routes/a.ts")
+                }
                 FamilyLookupMode::ExactFamilyId => {
                     target == Some("family:typescript:express_route:express")
                 }
@@ -9794,6 +10966,7 @@ mod tests {
                                 .to_string(),
                         ),
                     }],
+                    term_retrieval: None,
                 }))
             }
         }
@@ -10291,6 +11464,21 @@ mod tests {
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
+            // The conformance check needs the freshness gate and a source store,
+            // exactly like production; other modes keep the source-store-free path.
+            if mode == FamilyLookupMode::Conformance {
+                return lookup_family_with_freshness_and_local_context(
+                    crate::application::query::FamilyEvidenceFreshnessRequest {
+                        repository_root: request.path.clone(),
+                        max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                    },
+                    &store,
+                    &store,
+                    &FilesystemSourceStore,
+                    target,
+                    mode,
+                );
+            }
             lookup_family_with_local_context(&store, &store, target, mode)
         }
 
@@ -11601,6 +12789,7 @@ mod tests {
         let report = FamilyListReport {
             active_generation: "gen-000001".to_string(),
             families: Vec::new(),
+            freshness_counts: None,
             unknowns: vec![FamilyQueryUnknown {
                 class: crate::core::model::UnknownClass::Blocking,
                 reason: crate::core::model::UnknownReasonCode::StaleEvidence,
@@ -11632,14 +12821,19 @@ mod tests {
                         .to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 3,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: None,
                 },
                 FamilySummary {
                     family_id: "family:python:route:framework_fastapi_route:cluster_beta"
                         .to_string(),
                     classification: "DOMINANT_PATTERN".to_string(),
                     support: 4,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: None,
                 },
             ],
+            freshness_counts: None,
             unknowns: Vec::new(),
         };
 
@@ -11661,7 +12855,10 @@ mod tests {
                 family_id: "family:python:route:framework_fastapi_route:cluster_alpha".to_string(),
                 classification: "DOMINANT_PATTERN".to_string(),
                 support: 3,
+                prevalence: crate::test_support::sample_family_prevalence(),
+                freshness: None,
             }],
+            freshness_counts: None,
             unknowns: Vec::new(),
         };
 
@@ -11670,12 +12867,85 @@ mod tests {
 
         let value: Value =
             serde_json::from_str(families_json("families", &report).trim()).expect("families JSON");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(
             value["families"][0]["family_id"],
             "family:python:route:framework_fastapi_route:cluster_alpha"
         );
         assert_eq!(value["families"][0]["classification"], "DOMINANT_PATTERN");
         assert_eq!(value["families"][0]["support"], 3);
+        // The list surface exposes the metadata-only prevalence object.
+        let prevalence = &value["families"][0]["prevalence"];
+        assert_eq!(prevalence["eligible_peer_count"], 2);
+        assert_eq!(prevalence["supported_member_count"], 2);
+        assert_eq!(prevalence["coverage_ratio"], 1.0);
+        assert_eq!(prevalence["competing_ready_family_count"], 0);
+        assert_eq!(prevalence["largest_competing_support"], 0);
+        assert_eq!(prevalence["blocked_peer_count"], 0);
+        assert_eq!(prevalence["unsupported_peer_count"], 0);
+        assert_eq!(
+            prevalence["classification_reason"],
+            "coverage 2/2 with no competing ready family"
+        );
+    }
+
+    #[test]
+    fn families_freshness_fields_surface_in_json_and_human() {
+        let report = FamilyListReport {
+            active_generation: "gen-000001".to_string(),
+            families: vec![
+                FamilySummary {
+                    family_id: "family:python:route:framework_fastapi_route:cluster_fresh"
+                        .to_string(),
+                    classification: "DOMINANT_PATTERN".to_string(),
+                    support: 3,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: Some(FamilyFreshness::Fresh),
+                },
+                FamilySummary {
+                    family_id: "family:python:route:framework_fastapi_route:cluster_stale"
+                        .to_string(),
+                    classification: "DOMINANT_PATTERN".to_string(),
+                    support: 2,
+                    prevalence: crate::test_support::sample_family_prevalence(),
+                    freshness: Some(FamilyFreshness::Stale),
+                },
+            ],
+            freshness_counts: Some(FamilyFreshnessCounts {
+                fresh_count: 1,
+                stale_count: 1,
+                cannot_verify_count: 0,
+            }),
+            unknowns: vec![FamilyQueryUnknown {
+                class: crate::core::model::UnknownClass::Blocking,
+                reason: crate::core::model::UnknownReasonCode::StaleEvidence,
+                affected_claim: "repository pattern families:evidence_freshness".to_string(),
+                recovery: Some("run repogrammar resync".to_string()),
+            }],
+        };
+
+        // JSON carries the verbatim per-family field and the report-level counts.
+        let value: Value =
+            serde_json::from_str(families_json("families", &report).trim()).expect("families JSON");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["families"][0]["freshness"], "fresh");
+        assert_eq!(value["families"][1]["freshness"], "stale");
+        assert_eq!(value["fresh_count"], 1);
+        assert_eq!(value["stale_count"], 1);
+        assert_eq!(value["cannot_verify_count"], 0);
+        assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
+
+        // Compact human leads with the counts and the resync guidance.
+        let compact = families_human(&report, false);
+        assert!(compact.contains("freshness: 1 fresh · 1 stale · 0 cannot verify\n"));
+        assert!(compact.contains("run repogrammar resync"));
+
+        // Detailed human annotates each family and surfaces the stale unknown.
+        let detailed = families_human(&report, true);
+        assert!(detailed.contains("freshness: 1 fresh · 1 stale · 0 cannot verify\n"));
+        assert!(detailed.contains("\tfreshness: stale\t"));
+        assert!(detailed.contains("blocking_unknown:StaleEvidence"));
     }
 
     #[test]
@@ -11690,6 +12960,7 @@ mod tests {
                     "family:python:pytest_test:framework_pytest_test:evidence_freshness".to_string(),
                 recovery: Some("run repogrammar resync".to_string()),
             }],
+            term_retrieval: None,
         };
 
         let lookup = FamilyLookupReport::Unknown(report.clone());
@@ -12398,6 +13669,36 @@ mod tests {
     }
 
     #[test]
+    fn query_options_parse_verbosity_default_valid_and_invalid() {
+        // Absent `--verbosity` defaults to the byte-stable `standard` shape.
+        assert_eq!(
+            parse_query_options(&[])
+                .expect("default query options")
+                .verbosity,
+            Verbosity::Standard
+        );
+
+        // Each documented value parses on the CLI surface.
+        for (value, expected) in [
+            ("minimal", Verbosity::Minimal),
+            ("standard", Verbosity::Standard),
+            ("full", Verbosity::Full),
+        ] {
+            assert_eq!(
+                parse_query_options(&["--verbosity".to_string(), value.to_string()])
+                    .expect("verbosity query options")
+                    .verbosity,
+                expected
+            );
+        }
+
+        // Unknown value and a missing value are rejected, never silently
+        // defaulted.
+        assert!(parse_query_options(&["--verbosity".to_string(), "loud".to_string()]).is_err());
+        assert!(parse_query_options(&["--verbosity".to_string()]).is_err());
+    }
+
+    #[test]
     fn inventory_commands_reject_inapplicable_flags() {
         let strings = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         // Only --json and --project/--path are accepted.
@@ -12506,6 +13807,7 @@ mod tests {
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("stats JSON");
         assert_eq!(value["command"], "stats");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "ok");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["official_family_scope"], "python_v0_1");
@@ -12591,9 +13893,47 @@ mod tests {
         );
         assert_eq!(value["by_language"][1]["indexed_code_unit_count"], 0);
         assert!(value.get("unknown_inventory").is_none());
+        // The additive all-scope savings block is present with the ESTIMATED
+        // discipline intact, the savings_events / total_queries denominator, and
+        // the per-outcome-shape and per-language breakdown maps (empty here since
+        // no query has run in this repo yet).
+        let all_scope = &value["all_scope_token_savings"];
+        assert_eq!(all_scope["measurement_kind"], "ESTIMATED");
+        assert_eq!(all_scope["scope"], "all_languages_all_outcome_shapes");
+        assert_eq!(all_scope["savings_events"], 0);
+        assert_eq!(all_scope["total_queries"], 0);
+        assert_eq!(all_scope["estimated_potential_token_savings"], 0);
+        assert!(all_scope["by_outcome_shape"].is_object());
+        assert!(all_scope["by_language"].is_object());
+        assert!(all_scope["caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
+        assert!(all_scope["note"]
+            .as_str()
+            .expect("note")
+            .contains("official-scope subset"));
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+
+        // The human rendering leads with a concise summary (~10 lines): it keeps
+        // the readiness, inventory, family, scope, and all-scope savings
+        // essentials but drops the verbose per-metric dump behind `--json`.
+        let human = run_with_context_and_runtime(["stats"], workspace.path(), &env, &runtime);
+        assert_eq!(human.status, 0);
+        assert!(human.stdout.contains("stats: repo-shape diagnostics"));
+        assert!(human.stdout.contains("official_family_scope: python_v0_1"));
+        assert!(human
+            .stdout
+            .contains("estimated_potential_token_savings: 0"));
+        assert!(human.stdout.contains("all_scope_by_outcome_shape:"));
+        assert!(human.stdout.contains("run `repogrammar stats --json`"));
+        // Verbose per-metric lines moved behind --json.
+        assert!(!human.stdout.contains("local_pattern_density:"));
+        assert!(!human.stdout.contains("thin_wrapper_risk:"));
+        assert!(!human.stdout.contains("interpretation:"));
+        assert!(human.stdout.lines().count() <= 14);
     }
 
     #[test]
@@ -12666,7 +14006,7 @@ mod tests {
         );
         assert_eq!(
             value["unknown_inventory"]["by_recovery_code"][0]["recovery_code"],
-            "enable_provider"
+            "not_implemented_in_current_version"
         );
         assert!(value["unknown_inventory"].get("by_recovery").is_none());
         assert!(!output
@@ -12708,8 +14048,12 @@ mod tests {
             "framework:fastapi.route"
         );
         assert_eq!(
-            value["unknown_inventory"]["by_recovery_code"][1]["recovery_code"],
-            "resolve_import_graph"
+            value["unknown_inventory"]["by_recovery_code"][0]["recovery_code"],
+            "not_implemented_in_current_version"
+        );
+        assert_eq!(
+            value["unknown_inventory"]["by_recovery_code"][0]["count"],
+            2
         );
         assert_eq!(value["by_language"][0]["blocking_unknowns"], 1);
         assert_eq!(
@@ -12986,6 +14330,7 @@ mod tests {
         let value: Value =
             serde_json::from_str(output.stdout.trim()).expect("partial context JSON");
         assert_eq!(value["command"], "find");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "PARTIAL_CONTEXT");
         assert_eq!(value["query_route"]["route"], "partial_context_read_plan");
         assert_eq!(
@@ -13006,6 +14351,21 @@ mod tests {
             value["unknowns"][0]["affected_claim"],
             "pattern family evidence for resolved target"
         );
+        // A PARTIAL_CONTEXT response now carries the ESTIMATED savings block with
+        // its caveat verbatim (never omitted), attributed to the resolved file's
+        // language and the partial_context outcome shape.
+        let savings = &value["estimated_potential_token_savings"];
+        assert_eq!(savings["outcome_shape"], "partial_context");
+        assert_eq!(savings["language"], "typescript/javascript");
+        assert!(savings["estimated_potential_token_savings"].is_number());
+        assert_eq!(
+            savings["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(savings["estimated_potential_token_savings_caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
@@ -13024,6 +14384,28 @@ mod tests {
         assert_eq!(rollup["read_plan_returned_count"], 1);
         assert_eq!(rollup["read_plan_item_count_bucket"]["1-2"], 1);
         assert_eq!(rollup["by_reason_code"]["InsufficientSupport"], 1);
+        // The all-scope savings rollup recorded this PARTIAL_CONTEXT as an event
+        // under the partial_context outcome shape (proving partial-context read
+        // plans now accrue savings accounting, not just found families).
+        let savings_rollup_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("telemetry")
+            .join("local-metrics")
+            .join("estimated_potential_token_savings.json");
+        let savings_rollup: Value = serde_json::from_str(
+            &fs::read_to_string(savings_rollup_path).expect("savings rollup JSON"),
+        )
+        .expect("savings rollup");
+        assert_eq!(savings_rollup["event_count"], 1);
+        assert_eq!(
+            savings_rollup["by_outcome_shape"]["partial_context"]["event_count"],
+            1
+        );
+        assert_eq!(
+            savings_rollup["by_language"]["typescript/javascript"]["event_count"],
+            1
+        );
     }
 
     #[test]
@@ -13076,16 +14458,254 @@ mod tests {
         );
 
         assert_eq!(output.status, 0);
-        let value: Value = serde_json::from_str(output.stdout.trim()).expect("partial check JSON");
-        assert_eq!(value["status"], "PARTIAL_CONTEXT");
-        assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
+        let value: Value =
+            serde_json::from_str(output.stdout.trim()).expect("check certificate JSON");
+        // A target with no comparison family abstains with a static-alignment
+        // certificate: INSUFFICIENT_EVIDENCE, no selected family, runtime
+        // equivalence explicitly UNKNOWN, and never a legacy advisory block.
+        assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
+        assert_eq!(value["alignment_status"], "INSUFFICIENT_EVIDENCE");
+        assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+        assert!(value["selected_family_id"].is_null());
+        assert!(value["alignment"].is_null());
+        assert!(value.get("check").is_none());
+        assert!(value["query_route"]["selected_family_id"].is_null());
+    }
+
+    /// The exact stdout JSON line (trailing newline appended in the assertion)
+    /// the Found `find` response produced at commit 8337c1a, captured before any
+    /// precision slice landed. Anchoring `standard`/`full` to this literal proves
+    /// the query_route rewrite is byte-neutral above `minimal`.
+    const FIND_FOUND_JSON_PREGOLDEN_V0: &str = r#"{"active_generation":"gen-000001","command":"find","constraint_profile":null,"evidence":[],"family":{"classification":"DOMINANT_PATTERN","family_id":"family:typescript:express_route:express","prevalence":{"blocked_peer_count":0,"classification_reason":"coverage 2/2 with no competing ready family","competing_ready_family_count":0,"coverage_ratio":1.0,"eligible_peer_count":2,"largest_competing_support":0,"supported_member_count":2,"unsupported_peer_count":0},"support":2},"implemented":true,"member_count":1,"members":[{"code_unit_id":"unit:src/routes/a.ts#express_route:get:0-20:1","family_id":"family:typescript:express_route:express","role":"framework:express.route_handler"}],"members_truncated":false,"output":{"budget_satisfied":true,"covered_claims":[],"estimated_baseline_tokens":135,"estimated_evidence_tokens":0,"estimated_potential_token_savings":65,"estimated_potential_token_savings_caveat":"estimated potential only; not measured token savings","estimated_potential_token_savings_kind":"ESTIMATED","estimated_read_plan_tokens":70,"estimated_returned_tokens":70,"missing_claims":[],"mode":"compact","selection_strategy":"greedy_marginal_coverage_v1","source_snippets_included":false,"token_budget":null},"query_route":{"candidate_family_ids":["family:typescript:express_route:express"],"candidate_limit":5,"family_id_policy":"family_ids_are_returned_follow_up_handles_not_required_initial_inputs","follow_up_family_ids":["family:typescript:express_route:express"],"hydrated_family_count":null,"input_kind":"path_symbol_role_or_pattern_target","pipeline":["discover_candidates","hydrate_bounded_candidates","select_single_fresh_family","compose_context_bundle"],"retrieval_stage_count":null,"route":"discover_hydrate_compose","selected_family_id":"family:typescript:express_route:express","term_retrieval":null,"why_selected":"target resolved to one fresh candidate family; RepoGrammar hydrated that family and composed bounded context"},"read_plan":{"budget_satisfied":true,"estimated_tokens":70,"items":[{"content_hash":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","end_byte":20,"end_line":2,"estimated_tokens":70,"path":"src/routes/a.ts","purpose":"target_body_required_for_edit","source_required_before_edit":true,"source_snippets_included":false,"start_byte":0,"start_line":1,"why":"read this target body before editing; family metadata is context only"}],"line_range_omissions":[],"requires_source_before_edit":true,"selection_strategy":"deterministic_read_plan_v1","source_snippets_included":false},"schema_version":"product-schemas.v1","source_spans":{"omissions":[],"requested":false,"source_snippets_included":false,"spans":[]},"status":"ok","unknowns":[{"affected_claim":"runtime_equivalence","class":"non_blocking_unknown","reason":"FrameworkMagic","recovery":"add semantic-worker or framework adapter evidence"}],"variation_slots":[{"description":"non_blocking_unknown:FrameworkMagic:runtime equivalence remains unproven","family_id":"family:typescript:express_route:express","slot_id":"slot:runtime_unknown"}]}"#;
+
+    #[test]
+    fn find_standard_and_full_match_pregolden_byte_for_byte() {
+        let workspace = TempWorkspace::new("cli-verbosity-byte-parity");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
         assert_eq!(
-            value["check"]["reason"],
-            "runtime equivalence remains unproven"
+            run_with_context(["init", "--state-only"], workspace.path(), &env).status,
+            0
         );
-        assert!(value["check"].get("fail_on").is_none());
-        assert!(value["check"].get("pass").is_none());
-        assert!(value["check"].get("conforms").is_none());
+        let golden = format!("{}\n", FIND_FOUND_JSON_PREGOLDEN_V0);
+
+        let default = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(default.status, 0);
+        let default_value: Value =
+            serde_json::from_str(default.stdout.trim()).expect("default family JSON");
+        assert_eq!(default_value["status"], "ok");
+        // v1 must not echo `verbosity` into the structured payload.
+        assert!(default_value.get("verbosity").is_none());
+        assert_eq!(
+            default.stdout, golden,
+            "default (implicit standard) stdout drifted from the pre-precision golden",
+        );
+
+        // v1 discipline: `standard` (the default) and `full` reproduce the
+        // pre-precision stdout exactly. All minimal-tier reductions are opt-in;
+        // see the dedicated minimal-shape tests below.
+        for verbosity in ["standard", "full"] {
+            let output = run_with_context_and_runtime(
+                [
+                    "find",
+                    "src/routes/a.ts",
+                    "--verbosity",
+                    verbosity,
+                    "--json",
+                ],
+                workspace.path(),
+                &env,
+                &runtime,
+            );
+            assert_eq!(output.status, 0);
+            assert_eq!(
+                output.stdout, golden,
+                "--verbosity {verbosity} must match the pre-precision golden byte-for-byte",
+            );
+        }
+
+        // `minimal` must genuinely diverge (a regression that silently made it
+        // equal `standard` would mean the precision reductions stopped firing).
+        let minimal = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--verbosity",
+                "minimal",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(minimal.status, 0);
+        assert_ne!(
+            minimal.stdout, golden,
+            "--verbosity minimal must diverge from the standard default output",
+        );
+    }
+
+    #[test]
+    fn find_minimal_adds_honest_truncation_flags_and_drops_source_spans_stub() {
+        let workspace = TempWorkspace::new("cli-minimal-read-plan-shape");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let minimal = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--verbosity",
+                "minimal",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(minimal.status, 0);
+        let value: Value =
+            serde_json::from_str(minimal.stdout.trim()).expect("minimal family JSON");
+        assert_eq!(value["status"], "ok");
+        // Honest truncation flag always present at minimal; item_count consistent
+        // with items. The concrete `truncated: true` capping path is covered by
+        // the domain-level `build_read_plan` truncation test.
+        assert!(value["read_plan"]["truncated"].is_boolean());
+        assert_eq!(
+            value["read_plan"]["item_count"]
+                .as_u64()
+                .expect("item_count"),
+            value["read_plan"]["items"].as_array().expect("items").len() as u64
+        );
+        // Empty source_spans stub omitted when spans are not requested.
+        assert!(value.get("source_spans").is_none());
+
+        // Standard keeps the pre-precision shape.
+        let standard = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        let standard_value: Value =
+            serde_json::from_str(standard.stdout.trim()).expect("standard family JSON");
+        assert!(standard_value["read_plan"].get("truncated").is_none());
+        assert!(standard_value["read_plan"].get("item_count").is_none());
+        assert_eq!(standard_value["source_spans"]["requested"], false);
+    }
+
+    #[test]
+    fn find_minimal_dedups_rendered_read_plan_items_into_source_spans() {
+        let workspace = TempWorkspace::new("cli-minimal-read-plan-dedup");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+
+        let minimal = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--include-source-spans",
+                "--verbosity",
+                "minimal",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(minimal.status, 0);
+        let value: Value =
+            serde_json::from_str(minimal.stdout.trim()).expect("minimal family JSON");
+        // The rendered item collapses to a back-reference stub.
+        let item = &value["read_plan"]["items"][0];
+        assert_eq!(item["rendered"], true);
+        assert!(item.get("path").is_some());
+        assert!(item.get("purpose").is_some());
+        assert!(item.get("content_hash").is_none());
+        assert!(item.get("start_byte").is_none());
+        // Content lives only under source_spans.
+        assert_eq!(value["source_spans"]["source_snippets_included"], true);
+        assert!(value["source_spans"]["spans"][0]["content_hash"].is_string());
+        assert!(value["source_spans"]["spans"][0]["text"].is_string());
+
+        // Standard keeps the full item metadata (no dedup).
+        let standard = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--include-source-spans",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        let standard_value: Value =
+            serde_json::from_str(standard.stdout.trim()).expect("standard family JSON");
+        let standard_item = &standard_value["read_plan"]["items"][0];
+        assert_eq!(standard_item["source_snippets_included"], true);
+        assert!(standard_item["content_hash"].is_string());
+        assert!(standard_item.get("rendered").is_none());
+    }
+
+    #[test]
+    fn find_minimal_slims_query_route_only() {
+        let workspace = TempWorkspace::new("cli-verbosity-minimal-shape");
+        let env = |_: &str| None;
+        let runtime = FamilyQueryRuntime;
+        assert_eq!(
+            run_with_context(["init", "--state-only"], workspace.path(), &env).status,
+            0
+        );
+
+        let baseline = run_with_context_and_runtime(
+            ["find", "src/routes/a.ts", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(baseline.status, 0);
+        let baseline_value: Value =
+            serde_json::from_str(baseline.stdout.trim()).expect("baseline family JSON");
+
+        // `minimal` on a resolved Found route collapses `query_route` to the two
+        // core fields while leaving the rest of the payload untouched.
+        let minimal = run_with_context_and_runtime(
+            [
+                "find",
+                "src/routes/a.ts",
+                "--verbosity",
+                "minimal",
+                "--json",
+            ],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(minimal.status, 0);
+        assert_ne!(
+            minimal.stdout, baseline.stdout,
+            "--verbosity minimal must slim the Found query_route",
+        );
+        let minimal_value: Value =
+            serde_json::from_str(minimal.stdout.trim()).expect("minimal family JSON");
+        let route_keys: Vec<&String> = minimal_value["query_route"]
+            .as_object()
+            .expect("query_route object")
+            .keys()
+            .collect();
+        assert_eq!(
+            route_keys,
+            vec!["follow_up_family_ids", "route"],
+            "minimal Found query_route keeps only route + follow_up_family_ids",
+        );
+        assert_eq!(minimal_value["family"], baseline_value["family"]);
+        assert_eq!(minimal_value["members"], baseline_value["members"]);
     }
 
     #[test]
@@ -13113,6 +14733,7 @@ mod tests {
         assert!(!output.stdout.contains("res.json"));
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
         assert_eq!(value["command"], "find");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "ok");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["query_route"]["route"], "discover_hydrate_compose");
@@ -13127,6 +14748,13 @@ mod tests {
             value["family"]["family_id"],
             "family:typescript:express_route:express"
         );
+        // The detail surface exposes the metadata-only prevalence object.
+        assert_eq!(
+            value["family"]["prevalence"]["classification_reason"],
+            "coverage 2/2 with no competing ready family"
+        );
+        assert_eq!(value["family"]["prevalence"]["eligible_peer_count"], 2);
+        assert_eq!(value["family"]["prevalence"]["coverage_ratio"], 1.0);
         assert_eq!(value["output"]["mode"], "compact");
         assert_eq!(value["output"]["estimated_evidence_tokens"], 0);
         assert!(
@@ -13536,65 +15164,45 @@ mod tests {
         }
     }
 
-    #[test]
-    fn family_check_json_is_context_only_when_conformance_is_unproven() {
-        let workspace = TempWorkspace::new("cli-family-check-json");
-        let env = |_: &str| None;
-        let runtime = FamilyQueryRuntime;
-
-        let output = run_with_context_and_runtime(
-            ["check", "src/routes/a.ts", "--json"],
-            workspace.path(),
-            &env,
-            &runtime,
-        );
-
-        assert_eq!(output.status, 0);
-        assert!(output.stderr.is_empty());
-        let value: Value = serde_json::from_str(output.stdout.trim()).expect("check JSON");
-        assert_eq!(value["command"], "check");
-        assert_eq!(value["status"], "CONTEXT_ONLY");
-        assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
-        assert_eq!(value["read_plan"]["source_snippets_included"], false);
-        assert_eq!(value["check"]["advisory_status"], "UNKNOWN");
-        assert_eq!(
-            value["check"]["reason"],
-            "runtime equivalence remains unproven"
-        );
-        assert!(value["check"].get("fail_on").is_none());
-        assert!(value["check"].get("pass").is_none());
-        assert!(value["check"].get("conforms").is_none());
-    }
+    // The static-alignment check JSON surface is covered end-to-end by
+    // `family_check_json_partial_context_remains_advisory_without_proof_fields`
+    // (abstaining certificate) and the binary integration tests
+    // (STATICALLY_ALIGNED members). `check` never returns the legacy
+    // `CONTEXT_ONLY` advisory, so the former advisory-shape test was removed.
 
     #[test]
-    fn family_check_human_remains_advisory_when_runtime_equivalence_is_unknown() {
+    fn family_check_human_reports_static_alignment_certificate_not_advisory() {
         let workspace = TempWorkspace::new("cli-family-check-human");
         let env = |_: &str| None;
-        let runtime = FamilyQueryRuntime;
-
-        let output = run_with_context_and_runtime(
-            ["check", "src/routes/a.ts"],
-            workspace.path(),
-            &env,
-            &runtime,
+        let runtime = TestRuntime;
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
+        assert_eq!(
+            run_with_context(["init", "--state-only"], workspace.path(), &env).status,
+            0
         );
+        assert_eq!(
+            run_with_context_and_runtime(["index"], workspace.path(), &env, &runtime).status,
+            0
+        );
+
+        let output =
+            run_with_context_and_runtime(["check", "a.ts"], workspace.path(), &env, &runtime);
 
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
-        assert!(output.stdout.lines().count() <= 20);
-        assert!(output.stdout.contains("check: CONTEXT_ONLY"));
-        assert!(output.stdout.contains("advisory_status: UNKNOWN"));
+        // The check leads with the static-alignment result and explicitly
+        // separates static alignment from runtime conformance.
+        assert!(output.stdout.contains("check: INSUFFICIENT_EVIDENCE"));
         assert!(output
             .stdout
+            .contains("result: static alignment only; runtime conformance is NOT proven"));
+        assert!(output.stdout.contains("runtime_equivalence: UNKNOWN"));
+        // The legacy advisory vocabulary is gone.
+        assert!(!output.stdout.contains("CONTEXT_ONLY"));
+        assert!(!output.stdout.contains("advisory_status"));
+        assert!(!output
+            .stdout
             .contains("runtime equivalence remains unproven"));
-        for internal in [
-            "cluster_",
-            "query_pipeline:",
-            "query_candidate_family_ids:",
-            "query_candidate_limit:",
-        ] {
-            assert!(!output.stdout.contains(internal), "leaked {internal}");
-        }
         assert!(!output
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
@@ -14269,7 +15877,7 @@ mod tests {
         let value: Value = serde_json::from_str(json.stdout.trim()).expect("status JSON");
         assert_eq!(value["initialized"], false);
         assert_eq!(value["state_dir"], DEFAULT_STATE_DIR);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], Value::Null);
         assert_eq!(value["storage_schema_version"], Value::Null);
 
@@ -14291,7 +15899,7 @@ mod tests {
         let initialized = run_with_context(["status", "--json"], workspace.path(), &env);
         let value: Value = serde_json::from_str(initialized.stdout.trim()).expect("status JSON");
         assert_eq!(value["initialized"], true);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["indexing"], "not_implemented");
@@ -14852,6 +16460,16 @@ mod tests {
         assert_eq!(value["reparsed_files"], 0);
         assert_eq!(value["dirty_records_cleared"], 0);
         assert!(value["families_recomputed"].is_u64());
+        // The interactive `sync` path recomputes code units and framework roles
+        // but does not rebuild families (no family store), so the family-identity
+        // delta fields are always present yet null here, mirroring the zero
+        // `families_recomputed`. The populated delta is covered by the
+        // family-recomputing sync test in `application::indexing`.
+        let sync_object = value.as_object().expect("sync JSON object");
+        assert!(sync_object.contains_key("families_added"));
+        assert!(sync_object.contains_key("families_removed"));
+        assert_eq!(value["families_added"], Value::Null);
+        assert_eq!(value["families_removed"], Value::Null);
         assert!(value["indexed_units"].as_u64().expect("indexed unit count") >= 3);
         assert!(workspace
             .path()
@@ -15128,7 +16746,7 @@ mod tests {
         assert_eq!(status.status, 0);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage_layout"], "empty");
@@ -15320,7 +16938,7 @@ mod tests {
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage_layout"], Value::Null);
@@ -15592,7 +17210,7 @@ mod tests {
             .contains(workspace.path().to_string_lossy().as_ref()));
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], "gen-000001");
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], STORAGE_SCHEMA_VERSION);
         assert_eq!(value["storage_layout"], "mutable");
@@ -15787,7 +17405,7 @@ mod tests {
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage"], "unhealthy");
@@ -18766,5 +20384,136 @@ mod tests {
 
         assert_eq!(output.status, 2);
         assert!(output.stderr.contains("unknown stats option: --mystery"));
+    }
+
+    #[test]
+    fn query_route_json_serializes_term_retrieval_metadata() {
+        let route = FamilyQueryRouteReport {
+            route: "discover_hydrate_compose",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["discover_candidates", "hydrate_bounded_candidates"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            follow_up_family_ids: vec![],
+            why_selected: "target resolved to one fresh candidate family",
+            term_retrieval: Some(TermRetrievalRoute {
+                route: "term_retrieval_hydrate",
+                retrieved_summary_count: 8,
+                ranked_candidate_count: 1,
+                hydrated_candidate_count: 1,
+                retrieval_stage_count: 5,
+                top_score: Some(10),
+                margin: None,
+                top_score_bucket: "at_or_above_min",
+                margin_bucket: "none",
+                matched_signals: Some(MatchedSignals {
+                    framework_filter: true,
+                    concept: true,
+                    language_filter: false,
+                    residue_hits: 0,
+                }),
+                truncated: false,
+                abstention_reason: None,
+            }),
+        };
+        let value = query_route_json(&route, Verbosity::Standard, VerbosityTier::Minimal);
+        assert_eq!(value["hydrated_family_count"], 1);
+        assert_eq!(value["retrieval_stage_count"], 5);
+        let term = &value["term_retrieval"];
+        assert_eq!(term["route"], "term_retrieval_hydrate");
+        assert_eq!(term["abstention_reason"], serde_json::Value::Null);
+        assert_eq!(term["top_score"], 10);
+        assert_eq!(term["matched_signals"]["framework_filter"], true);
+        assert_eq!(term["matched_signals"]["concept"], true);
+    }
+
+    #[test]
+    fn query_route_json_omits_term_retrieval_for_exact_routes() {
+        let route = FamilyQueryRouteReport {
+            route: "exact_family_hydrate",
+            input_kind: "family_id_follow_up_handle",
+            pipeline: vec!["hydrate_exact_family", "compose_context_bundle"],
+            family_id_policy: "show_family_requires_exact_family_id",
+            candidate_limit: None,
+            selected_family_id: Some("family:python:fastapi_route".to_string()),
+            candidate_family_ids: vec!["family:python:fastapi_route".to_string()],
+            follow_up_family_ids: vec![],
+            why_selected: "exact family id was used as a follow-up handle",
+            term_retrieval: None,
+        };
+        let value = query_route_json(&route, Verbosity::Standard, VerbosityTier::Standard);
+        assert_eq!(value["hydrated_family_count"], serde_json::Value::Null);
+        assert_eq!(value["retrieval_stage_count"], serde_json::Value::Null);
+        assert_eq!(value["term_retrieval"], serde_json::Value::Null);
+        // The abstention enum vocabulary is exhaustive and stable.
+        assert_eq!(TermRetrievalAbstention::ALL.len(), 7);
+    }
+
+    #[test]
+    fn query_route_json_minimal_slims_by_candidate_tier() {
+        let route = FamilyQueryRouteReport {
+            route: "discover_hydrate_compose",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["discover_candidates", "hydrate_bounded_candidates"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: Some("family:python:fastapi_route".to_string()),
+            candidate_family_ids: vec!["family:python:fastapi_route".to_string()],
+            follow_up_family_ids: vec!["family:python:fastapi_route".to_string()],
+            why_selected: "target resolved to one fresh candidate family",
+            term_retrieval: None,
+        };
+        const ALL_FIELDS: [&str; 12] = [
+            "route",
+            "input_kind",
+            "pipeline",
+            "family_id_policy",
+            "candidate_limit",
+            "selected_family_id",
+            "candidate_family_ids",
+            "follow_up_family_ids",
+            "why_selected",
+            "hydrated_family_count",
+            "retrieval_stage_count",
+            "term_retrieval",
+        ];
+
+        // v1 discipline: `standard` and `full` render every field regardless of
+        // the candidate tier, so both stay byte-identical to the prior shape.
+        for verbosity in [Verbosity::Standard, Verbosity::Full] {
+            for tier in [VerbosityTier::Minimal, VerbosityTier::Standard] {
+                let value = query_route_json(&route, verbosity, tier);
+                let object = value.as_object().expect("query_route object");
+                assert_eq!(object.len(), ALL_FIELDS.len());
+                for key in ALL_FIELDS {
+                    assert!(object.contains_key(key), "{verbosity:?} must render {key}");
+                }
+            }
+        }
+
+        // Minimal on a resolved Found route (candidate tier Standard): only the
+        // two core fields survive.
+        let found = query_route_json(&route, Verbosity::Minimal, VerbosityTier::Standard);
+        let found_keys: Vec<&String> = found.as_object().unwrap().keys().collect();
+        assert_eq!(found_keys, vec!["follow_up_family_ids", "route"]);
+
+        // Minimal on a recovery route (candidate tier Minimal): the narrowing
+        // candidate handle survives alongside the two core fields.
+        let recovery = query_route_json(&route, Verbosity::Minimal, VerbosityTier::Minimal);
+        let recovery_keys: Vec<&String> = recovery.as_object().unwrap().keys().collect();
+        assert_eq!(
+            recovery_keys,
+            vec!["candidate_family_ids", "follow_up_family_ids", "route"],
+        );
+        assert!(found.get("selected_family_id").is_none());
+        assert!(recovery.get("selected_family_id").is_none());
     }
 }

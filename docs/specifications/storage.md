@@ -480,7 +480,17 @@ freshness gates and unavailable through CLI/MCP.
 Schema migrations are versioned by `schema_migrations`. Before writing a new
 generation, the adapter must refuse to open a database whose stored maximum
 schema version is newer than the running build supports, so an older binary
-cannot corrupt an index written by a newer one.
+cannot corrupt an index written by a newer one. A stored version *older* than
+the current build is handled explicitly rather than silently reused: read paths
+return a typed schema-outdated error whose recovery is `run repogrammar resync`
+(routed through the recovery classifier vocabulary, `RecoveryAction::Resync`),
+and the read leaves the active generation untouched. Because the DDL batch is
+`CREATE TABLE IF NOT EXISTS` and cannot add columns to an existing table, the
+full-rebuild path (`init`, `index`, `resync`) recreates the repo-local mutable
+database when the stored version is older than current: it deletes only the
+`repogrammar.sqlite` file and its `-wal`/`-shm` sidecars under `.repogrammar`,
+then rebuilds a fresh current-version database. Nothing outside the mutable
+database is removed.
 
 Required PRAGMAs:
 
@@ -548,8 +558,8 @@ adapter enforces foreign keys, repo-relative paths at the Rust port boundary,
 matching file/code-unit content hashes, code-unit byte ranges bounded by indexed
 file size, IR node references to same-generation code units, IR edge references
 to same-generation IR nodes, family/member/slot/evidence generation binding,
-family-evidence presence for non-`UNKNOWN` family classifications, and
-validation before activation.
+family-evidence presence for every emitted family (all four prevalence
+classifications are evidence-backed), and validation before activation.
 The lifecycle report's `dirty_records_cleared` count covers persisted dirty
 marker rows actually cleared in the building generation. Incremental
 generation-by-replacement omission of claim-bearing records is a copy-forward
@@ -564,9 +574,59 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `7`. Existing pre-release schema `1`,
-`2`, `3`, `4`, `5`, and `6` generation databases are treated as stale and must be
-rebuilt rather than silently upgraded in place.
+The current storage schema version is `10`. Existing pre-release schema `1`
+through `9` generation databases are treated as stale: reads refuse them with a
+typed schema-outdated error recommending `repogrammar resync`, and the
+full-rebuild path recreates the mutable database rather than upgrading it in
+place.
+Schema `10` adds the `python_module_interfaces` table, which persists one Python
+module interface hash per indexed `.py` module for the incremental-sync
+interface-hash gate (see `docs/specifications/indexing-pipeline.md`). Each row is
+path-keyed and generation-scoped with `PRIMARY KEY (generation_id, path)` and
+cascades from both `index_generations` and `indexed_files`:
+
+- `generation_id` `TEXT NOT NULL`;
+- `path` `TEXT NOT NULL` — the module's repo-relative path;
+- `interface_hash` `TEXT NOT NULL` (`CHECK <> ''`) — the `sha256:`-prefixed hash
+  of the module's interface projection (top-level symbols, literal `__all__`,
+  `__init__` re-exports), computed by the frontend worker's `extract_interface`
+  mode. A full build stores one row per discovered `.py` module (including
+  `conftest.py`); an incremental sync copies unchanged modules' rows forward and
+  rewrites reparsed modules' rows, converging on the full-rebuild table. A module
+  whose hash could not be computed during a build simply has no row, and the next
+  sync treats the gap as `python_interface_unverified`. Like `v9`, this is a
+  constants-only migration: `CREATE TABLE IF NOT EXISTS` plus a version stamp, so
+  the mutable database is recreated on the first full rebuild rather than altered.
+
+Schema `9` adds the `family_constraint_profiles` table, which persists one
+`FamilyConstraintProfile` per family (see the domain model). Each row is
+family-keyed and generation-scoped with `PRIMARY KEY (generation_id, family_id)`
+and cascades from both `index_generations` and `families`:
+
+- `generation_id` `TEXT NOT NULL`;
+- `family_id` `TEXT NOT NULL`;
+- `profile_json` `TEXT NOT NULL` (`CHECK <> ''`) — a validated, deterministic,
+  source-free structured column. The adapter serializes the typed profile
+  (required-equal features, allowed variations, prohibited/blocking features, and
+  unresolved obligations) with a stored `version` tag; hydration re-validates
+  every value (source-free, known origin/class/reason tokens, matching version)
+  and rejects any malformed row. Object keys serialize in sorted order, so the
+  encoding is deterministic. The production indexing pipeline persists profiles
+  in a later slice, so a valid generation may legitimately carry no rows yet.
+
+Schema `8` replaces the legacy classification vocabulary with the four
+prevalence classifications and adds the `FamilyPrevalence` columns to the
+`families` table:
+
+- `classification` `CHECK` now accepts exactly `DOMINANT_PATTERN`,
+  `SUPPORTED_PATTERN`, `MINORITY_PATTERN`, and `UNKNOWN_PREVALENCE`.
+- `eligible_peer_count`, `supported_member_count`,
+  `competing_ready_family_count`, `largest_competing_support`,
+  `blocked_peer_count`, and `unsupported_peer_count` are `INTEGER NOT NULL`
+  (each `CHECK >= 0`).
+- `coverage_ratio` is a nullable `REAL`.
+- `classification_reason` is `TEXT NOT NULL` (`CHECK <> ''`).
+
 Schema `7` adds bounded read-path indexes for agent-loop queries:
 
 - `idx_evidence_generation_family_order` on
@@ -606,6 +666,7 @@ Schema work should keep separate tables for:
 - unified IR summaries;
 - fingerprints and candidate groups;
 - pattern families and templates;
+- family constraint profiles;
 - variations, exceptions, and counterexamples;
 - derived record dependencies and dirty-record markers;
 - source evidence.
@@ -643,6 +704,80 @@ content; it may rely on the same idempotent SQLite schema/index migration path
 used by read-model queries when an initialized mutable database predates the
 current storage schema. Indexing is the only writer of repository analysis
 records.
+
+### Generation Write Session
+
+A build persists a generation through a single **generation write session**, not
+through one connection per record. The session is opened once against the
+`building` generation, owns exactly one writable SQLite connection with the
+write pragmas applied a single time, and routes every `record_*` call through
+bounded-batch transactions on that connection. The build finishes the session
+(commit and seal) before the generation is validated and activated through the
+unchanged `building -> validated -> active` state machine, so validation and
+activation always observe fully committed data on their own connections. The
+granular per-record store methods remain for tests and the storage boundary and
+delegate to one one-shot session each; production builds open exactly one
+session for the whole build.
+
+- **Transaction boundaries.** Writes accumulate in a batch opened with
+  `BEGIN IMMEDIATE`; the batch commits when it reaches a bounded row capacity
+  (2000 rows) and at explicit pipeline phase checkpoints. Both production build
+  pipelines checkpoint after the file/code-unit/IR write phase, after the
+  semantic-fact phase, and after the family phase; each checkpoint commits the
+  open batch and passively checkpoints the write-ahead log. `BEGIN IMMEDIATE`
+  takes the write lock up front, and the session re-reads the generation status
+  under that lock at every batch open, so a status flip landing between batches
+  is rejected before the next write. The row-capacity bound targets transaction
+  size and lock-hold time rather than partial-work durability: a `building`
+  generation is never readable and never resumed, so a crash discards the open
+  batch and the next build supersedes the leftover.
+- **Referential validation.** Each record reproduces the field-level and
+  referential checks of the historical per-record path, reading referenced
+  files, code units, and families on the session's own connection. That
+  connection sees both committed batches and the current open batch, so the
+  checks are at least as strong as the previous per-record reads against the
+  committed database. Statements are issued directly (`execute`/`query_row`);
+  per-statement prepared-statement caching is a deferred optimization gated on
+  enabling the SQLite driver's statement-cache feature and is not required for
+  the single-connection win.
+- **Terminal `failed` status.** The `failed` stamp is written only for a build
+  abandoned **before the session is sealed** and only when it already committed
+  at least one batch — a record error propagated out of the pipeline while the
+  session is still open, an explicit `abandon`, or a dropped unsealed session —
+  which rolls back the open batch and stamps the generation `failed`. A session
+  that committed nothing (for example a lone field- or referential-validation
+  rejection through a granular store method) rolls back and leaves a pristine,
+  reusable `building` row instead of stamping `failed`. Errors raised **after**
+  the session is sealed — a generation-validation rejection or an activation
+  failure — do not stamp anything: the fully committed generation stays
+  `building` (unchanged from the historical behavior) and is reclaimed by prune,
+  exactly like the previous active generation which remains readable throughout.
+  The schema already permits `failed`, validation refuses it, and retention
+  deletes any non-active generation, so both a `failed` and a leftover
+  `building` row are inert and reclaimable. Finishing a session after it was
+  abandoned (or finishing twice) is a typed error, so a build that gave up on
+  one path can never silently seal and activate on another.
+- **Validation once per activation.** Activation validates the generation
+  exactly once. The pipeline validates immediately before activating under the
+  held index lock, leaving the generation `validated`; activation then accepts
+  that status without re-running the whole-database integrity check, so the
+  full-database `PRAGMA integrity_check` runs once per sync rather than twice.
+  Only a not-yet-validated (`building`) generation handed straight to activation
+  is validated inline. The generation-scoped violation scans — family evidence,
+  semantic evidence, derived dependencies, dirty records, the IR graph, and a
+  code-unit/indexed-file conformance scan that re-proves every code unit's hash
+  and byte range against its file — run during validation and make the
+  activation gate a strict superset of per-record enforcement.
+- **WAL behavior and maintenance.** Batch commits alone do not truncate the
+  write-ahead log, so WAL growth is bounded by the phase checkpoints — each runs
+  a passive `wal_checkpoint`, holding the WAL to roughly one phase rather than
+  the whole build. Sealing runs `PRAGMA optimize` plus a passive WAL checkpoint
+  once for a whole-build `finish`; it is sealed **before** that best-effort
+  maintenance so a transient maintenance failure over already-committed rows can
+  never fail or `failed`-stamp the build. The granular one-shot record methods
+  run no post-commit maintenance (matching the historical per-record path), with
+  the sole exception of `remove_indexed_file`, which retains its historical
+  maintenance.
 
 Generation retention may remove inactive generation rows after an active
 generation is readable and storage health checks pass. The default retention

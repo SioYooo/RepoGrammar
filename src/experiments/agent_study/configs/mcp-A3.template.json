@@ -1,0 +1,9 @@
+{
+  "$comment": "A3 (full product) MCP config template. The driver substitutes {{REPOGRAMMAR_BIN}} with the built product-core binary and {{PROJECT_DIR}} with the per-run worktree, then writes a concrete per-run mcp config whose sha256 is recorded. The ONLY per-arm differing input byte-for-byte is this file vs mcp-A0.json (design §3).",
+  "mcpServers": {
+    "repogrammar": {
+      "command": "{{REPOGRAMMAR_BIN}}",
+      "args": ["serve", "--project", "{{PROJECT_DIR}}"]
+    }
+  }
+}

@@ -119,6 +119,8 @@ context lives under `.agents/memories/`.
   one no-follow handle-relative authority for discovery, source reads, and
   autosync fingerprinting; it adds no dependency or runtime fix by itself.
 - MCP tool intent: `specifications/mcp-api.md`.
+- Deterministic query normalization and family retrieval substrate (not yet
+  routed into the production lookup path): `specifications/query-resolution.md`.
 - Metrics taxonomy: `specifications/metrics.md`.
 - Telemetry policy: `specifications/telemetry.md`.
 - Language-native semantic workers: `specifications/semantic-workers.md`.

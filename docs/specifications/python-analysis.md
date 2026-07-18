@@ -92,6 +92,24 @@ The current implementation covers a bounded static CPython `ast` slice only:
   the same release, without source, paths, environment values, or raw worker
   payloads. This tuple does not version the separate project-config mode or
   public semantic-worker-compatible mode;
+- a single-file `extract_interface` worker mode used by the incremental-sync
+  preflight. Given one module's path and text (no whole-project context), it
+  returns exactly one bounded, source-free response carrying a deterministic
+  `interface_hash`: the `sha256:`-prefixed hash of the module's *interface
+  projection* — its top-level symbol surface (`ClassDef`/`FunctionDef`/
+  `AsyncFunctionDef`/assignment targets other than `__all__`, name → `TYPE`|
+  `SYMBOL`), its literal `__all__` set or a non-literal/absent marker, and, for a
+  package `__init__`, its top-level re-export `ImportFrom` items in source order.
+  This projection is exactly the cross-module surface `build_module_symbol_index`
+  exposes to other files, so two files with an equal hash are interchangeable to
+  every other module's parse. A syntactically invalid module projects to a
+  distinct unparseable marker (the symbol indexer skips it, so it contributes
+  nothing). The mode shares the `contract_revision=1` tuple: an old host never
+  sends it, and a mismatched revision receives the same low-cardinality rejection
+  as parse-document so the Rust caller treats the probe as unverified and rebuilds
+  fully rather than guessing. Build-time storage of these hashes and the preflight
+  gate that consumes them are specified in
+  `docs/specifications/indexing-pipeline.md`;
 - source-ordered per-name module-scope event histories and immutable AST range
   caching for bounded large-module analysis. Point-in-source framework alias
   and assignment-role queries use read-only history views instead of rescanning
@@ -820,9 +838,14 @@ multiple ready support-family clusters, the first cluster preserves the stable
 base family id and later clusters receive sanitized cluster suffixes; no suffix
 contains source text or absolute paths.
 
-Output remains one of `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or
-`UNKNOWN`. Syntax-only or framework-heuristic-only Python observations can rank
-candidates but cannot prove a family.
+Output is one of the four prevalence classifications `DOMINANT_PATTERN`,
+`SUPPORTED_PATTERN`, `MINORITY_PATTERN`, or `UNKNOWN_PREVALENCE`; when one coarse
+bucket splits into several ready support-family clusters, each cluster is
+classified by its own coverage of the shared eligible-peer denominator, so equal
+competing clusters are `SUPPORTED_PATTERN` rather than all `DOMINANT_PATTERN`.
+Syntax-only or framework-heuristic-only Python observations can rank candidates
+but cannot prove a family, and remain typed `UNKNOWN`s. See `domain-model.md`
+for the classification rule.
 
 ### Layer 9: Optional Runtime Trace Refinement
 

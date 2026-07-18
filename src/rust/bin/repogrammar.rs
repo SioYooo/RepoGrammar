@@ -1,4 +1,7 @@
-use repogrammar::adapters::filesystem::change_fingerprint::repository_change_fingerprint;
+use repogrammar::adapters::filesystem::change_fingerprint::{
+    repository_change_fingerprint, repository_change_fingerprint_report,
+    RepositoryChangeFingerprint,
+};
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
@@ -7,8 +10,9 @@ use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::rust::CargoMetadataRustProvider;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::autosync::{
-    acquire_autosync_daemon, autosync_status, classify_autosync_repository_status, daemon_log_path,
-    disable_autosync, enable_autosync, inspect_autosync_startup, record_autosync_run,
+    acquire_autosync_daemon, autosync_daemon_superseded_by, autosync_status,
+    classify_autosync_repository_status, daemon_log_path, disable_autosync, enable_autosync,
+    inspect_autosync_startup, reclaim_autosync_daemon_version, record_autosync_run,
     record_autosync_startup_failure, record_autosync_startup_ready, stop_autosync,
     AutosyncDaemonState, AutosyncReport, AutosyncRepositoryUnavailable, AutosyncRequest,
     AutosyncRunResult, AutosyncSettings, AutosyncStartupFailureCode, AutosyncStartupReadiness,
@@ -28,11 +32,13 @@ use repogrammar::application::install::{
     NativeMcpServerState, MCP_SERVER_NAME,
 };
 use repogrammar::application::progress::ProgressEvent;
+use repogrammar::application::providers::optional_provider_report;
 use repogrammar::application::query::{
     enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
-    list_indexed_files, lookup_family_with_freshness_and_local_context, render_source_spans,
-    repo_shape_diagnostics, unknown_inventory, FamilyEvidenceFreshnessRequest, FamilyListReport,
-    FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan,
+    list_indexed_files, lookup_family_with_freshness_and_local_context,
+    product_readiness_from_stores, render_source_spans, repo_shape_diagnostics, unknown_inventory,
+    FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, ProductReadinessReport, ReadPlan,
     RepoShapeDiagnosticsReport, SourceSpanRenderReport, SourceSpanRenderRequest,
     UnknownInventoryReport,
 };
@@ -235,6 +241,32 @@ fn append_autosync_daemon_log(path: Option<&Path>, line: &str) {
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{line}");
     }
+}
+
+/// Append a bounded, path-free line describing how the latest fingerprint pass
+/// evaluated Git ignore and how many supported files it excluded as ignored.
+/// The line is deduplicated against the last logged observation so the polling
+/// loop cannot spam the daemon log. Surfacing these counters through
+/// `autosync status --json` is a Phase 6 follow-up owned by the interfaces lane.
+fn log_autosync_fingerprint_observation(
+    log_path: &Path,
+    last: &mut Option<String>,
+    fingerprint: &RepositoryChangeFingerprint,
+    quiet: bool,
+) {
+    let line = format!(
+        "autosync: fingerprint git-ignore={} ignored-skipped={}",
+        fingerprint.git_ignore_status.as_str(),
+        fingerprint.git_ignored_skipped
+    );
+    if last.as_deref() == Some(line.as_str()) {
+        return;
+    }
+    append_autosync_daemon_log(Some(log_path), &line);
+    if !quiet {
+        eprintln!("{line}");
+    }
+    *last = Some(line);
 }
 
 fn autosync_semantic_worker_environment_from_lookup<F>(
@@ -569,6 +601,14 @@ impl ProductCliRuntime {
             .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))
     }
 
+    fn repository_fingerprint_report(
+        &self,
+        request: &CliAutosyncRequest,
+    ) -> Result<RepositoryChangeFingerprint, RepoGrammarError> {
+        repository_change_fingerprint_report(&request.repository_root, DEFAULT_MAX_FILE_BYTES)
+            .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))
+    }
+
     fn run_autosync_loop(
         &self,
         request: CliAutosyncRequest,
@@ -627,12 +667,60 @@ impl ProductCliRuntime {
             persist_startup_failure(&autosync_request, startup_nonce.as_deref(), code);
             return Err(AutosyncStartupFailure::Classified(code).into_error());
         }
+        // An explicit start is the operator's intent to run THIS engine, so
+        // reclaim any higher version stamp a previously-run newer engine left in
+        // the run state. Without this, a deliberate downgrade would read the
+        // persistent high-water version and refuse to run forever. After the
+        // reset, only a newer stamp written *after* startup steps this daemon
+        // down. Best-effort: a write failure is logged, not fatal.
+        if reclaim_autosync_daemon_version(&autosync_request).is_err() {
+            append_autosync_daemon_log(
+                Some(&log_path),
+                "autosync: could not reclaim run-state version stamp at startup",
+            );
+        }
         if !request.quiet {
             eprintln!("autosync: watching repository for changes");
         }
         let mut failure_log = AutosyncFailureLogState::default();
+        let mut fingerprint_observation: Option<String> = None;
         loop {
             std::thread::sleep(Duration::from_millis(settings.poll_ms));
+            // Best-effort cross-version step-down. If the run state shows a
+            // strictly newer engine stamped it after this daemon reclaimed the
+            // stamp at startup, step down early to avoid needless cross-version
+            // churn. This is advisory only: the stamp has known best-effort gaps
+            // (a same-poll overwrite race, an unparseable stamp, and a
+            // schema-gated stamp are all invisible here), and because a newer
+            // daemon stamps the version only after its first successful sync
+            // while an older daemon can overwrite it, this never guarantees
+            // single-writer operation. True mutual exclusion on index writes is
+            // enforced by acquire_index_lock, not by this check. The exit does
+            // not record a run, so it preserves the newer version stamp.
+            if let Some(newer) = autosync_daemon_superseded_by(&autosync_request) {
+                let line = format!(
+                    "autosync: stopping because a newer RepoGrammar version {newer} has written this repository's auto-sync state"
+                );
+                append_autosync_daemon_log(Some(&log_path), &line);
+                if !request.quiet {
+                    eprintln!("{line}");
+                }
+                return Ok(AutosyncReport {
+                    state_dir: initial_report.state_dir.clone(),
+                    enabled: initial_report.enabled,
+                    running: false,
+                    daemon_state: AutosyncDaemonState::Stopped,
+                    pid: None,
+                    poll_ms: settings.poll_ms,
+                    debounce_ms: settings.debounce_ms,
+                    last_run: initial_report.last_run.clone(),
+                    startup: initial_report.startup.clone(),
+                    repository_ready: false,
+                    message: format!(
+                        "auto-sync stopped because a newer RepoGrammar version {newer} has written this repository's auto-sync state"
+                    ),
+                });
+            }
             match autosync_status(autosync_request.clone()) {
                 Ok(status) if status.enabled => {}
                 Ok(status) => {
@@ -718,7 +806,7 @@ impl ProductCliRuntime {
             }
             std::thread::sleep(Duration::from_millis(settings.debounce_ms));
             let fingerprint_started = Instant::now();
-            let stable = match self.repository_fingerprint(&request) {
+            let stable = match self.repository_fingerprint_report(&request) {
                 Ok(stable) => stable,
                 Err(_) => {
                     record_autosync_runtime_failure(
@@ -732,10 +820,16 @@ impl ProductCliRuntime {
                     continue;
                 }
             };
-            if stable == current {
+            if stable.digest == current {
                 continue;
             }
-            current = stable;
+            current = stable.digest.clone();
+            log_autosync_fingerprint_observation(
+                &log_path,
+                &mut fingerprint_observation,
+                &stable,
+                request.quiet,
+            );
             if !request.quiet {
                 eprintln!("autosync: change detected; running sync");
             }
@@ -1574,6 +1668,35 @@ impl CliRuntime for ProductCliRuntime {
         unknown_inventory(&store)
     }
 
+    fn product_readiness(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        let report = repository_status_with_storage(request.clone(), &store)?;
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        let providers = optional_provider_report(
+            |key| env_lookup(key),
+            |binary| {
+                repogrammar::application::providers::binary_available_on_path(binary, &env_lookup)
+            },
+        );
+        Ok(product_readiness_from_stores(
+            &report,
+            FamilyEvidenceFreshnessRequest {
+                repository_root: request.path.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &store,
+            &store,
+            &FilesystemSourceStore,
+            providers,
+            // Token-saving measurement stays NOT_MEASURED here: readiness never
+            // claims a paired experiment exists.
+            false,
+        ))
+    }
+
     fn install_agent_integration(
         &self,
         command: &str,
@@ -1696,6 +1819,13 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         <Self as CliRuntime>::family_lookup(self, request, target, mode)
+    }
+
+    fn product_readiness(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        <Self as CliRuntime>::product_readiness(self, request)
     }
 
     fn render_source_spans(
@@ -2402,6 +2532,7 @@ mod tests {
                 reparsed_files: 2,
                 families_recomputed: 0,
                 dirty_records_cleared: 0,
+                family_identity_delta: None,
             }),
             warnings: Vec::new(),
         };
@@ -2436,6 +2567,7 @@ mod tests {
                 reparsed_files: 0,
                 families_recomputed: 0,
                 dirty_records_cleared: 0,
+                family_identity_delta: None,
             }),
             warnings: vec!["parser skipped unsupported language token: go".to_string()],
         };
@@ -3034,6 +3166,59 @@ mod tests {
         assert_ne!(after_modified, after_swiftpm_cross_language);
     }
 
+    #[test]
+    fn autosync_change_fingerprint_honors_gitignore_and_is_deterministic() {
+        let workspace = TempWorkspace::new("autosync-fingerprint-gitignore");
+        let git_ready = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !git_ready {
+            return;
+        }
+        let root = workspace.path().display().to_string();
+        fs::write(workspace.path().join(".gitignore"), "secret.ts\n").expect("write gitignore");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const tracked = 1;\n",
+        )
+        .expect("write tracked source");
+
+        let baseline =
+            repository_change_fingerprint_report(&root, 1_048_576).expect("baseline fingerprint");
+        assert_eq!(baseline.git_ignore_status.as_str(), "applied");
+        assert_eq!(baseline.git_ignored_skipped, 0);
+        // Two passes over the same tree are identical.
+        let repeat =
+            repository_change_fingerprint_report(&root, 1_048_576).expect("repeat fingerprint");
+        assert_eq!(repeat, baseline);
+
+        // Adding a Git-ignored supported file does not move the digest, so the
+        // daemon would not trigger a sync discovery then excludes.
+        fs::write(
+            workspace.path().join("secret.ts"),
+            "export const secret = true;\n",
+        )
+        .expect("write git-ignored source");
+        let after_ignored = repository_change_fingerprint_report(&root, 1_048_576)
+            .expect("fingerprint after ignored add");
+        assert_eq!(after_ignored.digest, baseline.digest);
+        assert_eq!(after_ignored.git_ignored_skipped, 1);
+
+        // Adding an unignored supported file still moves the digest.
+        fs::write(
+            workspace.path().join("feature.ts"),
+            "export const feature = 2;\n",
+        )
+        .expect("write tracked source");
+        let after_tracked = repository_change_fingerprint_report(&root, 1_048_576)
+            .expect("fingerprint after tracked add");
+        assert_ne!(after_tracked.digest, baseline.digest);
+        assert_eq!(after_tracked.git_ignored_skipped, 1);
+    }
+
     fn release_fixture_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
@@ -3498,7 +3683,19 @@ mod tests {
 
     fn assert_unknown_query_json(command: &str, value: &Value) {
         assert_eq!(value["command"], command);
-        if matches!(command, "find" | "explain" | "check") && value["status"] == "PARTIAL_CONTEXT" {
+        if command == "check" {
+            // The static-alignment check never returns UNKNOWN/PARTIAL_CONTEXT; a
+            // target with no comparison family abstains with INSUFFICIENT_EVIDENCE
+            // and never surfaces a selected family or a runtime-equivalence claim.
+            assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
+            assert_eq!(value["implemented"], true);
+            assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+            assert!(value["selected_family_id"].is_null());
+            assert!(value["alignment"].is_null());
+            assert!(value.get("check").is_none());
+            return;
+        }
+        if matches!(command, "find" | "explain") && value["status"] == "PARTIAL_CONTEXT" {
             assert_eq!(value["implemented"], true);
             assert_eq!(value["read_plan"]["source_snippets_included"], false);
             assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
@@ -3513,6 +3710,34 @@ mod tests {
         assert_eq!(value["unknowns"][0]["reason"], "InsufficientSupport");
     }
 
+    /// Assert a static-alignment certificate for a target that is a clean member
+    /// of its comparison family: statically aligned, MEMBER relationship, the
+    /// selected family surfaced on the route, no deviations, and the
+    /// runtime-equivalence obligation carried but never discharged.
+    fn assert_member_statically_aligned(value: &Value, family_id: &str) {
+        assert_eq!(value["command"], "check");
+        assert_eq!(value["schema_version"], "product-schemas.v1");
+        assert_eq!(value["implemented"], true);
+        assert_eq!(value["status"], "STATICALLY_ALIGNED");
+        assert_eq!(value["alignment_status"], "STATICALLY_ALIGNED");
+        assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+        assert_eq!(value["target_relationship"], "MEMBER");
+        assert_eq!(value["selected_family_id"], family_id);
+        assert_eq!(value["query_route"]["selected_family_id"], family_id);
+        // No runtime-conformance verdict leaks.
+        assert!(value.get("check").is_none());
+        assert!(value["alignment"]["pass"].is_null());
+        assert!(value["alignment"]["conforms"].is_null());
+        assert!(value["alignment"]["static_deviations"]
+            .as_array()
+            .expect("static deviations")
+            .is_empty());
+        assert!(!value["alignment"]["unresolved_runtime_obligations"]
+            .as_array()
+            .expect("unresolved runtime obligations")
+            .is_empty());
+    }
+
     fn assert_no_claim_payload(command: &str, value: &Value) {
         if let Some(families) = value.get("families") {
             assert!(
@@ -3520,7 +3745,20 @@ mod tests {
                 "{command} UNKNOWN leaked families: {value}"
             );
         }
-        let forbidden_fields: &[&str] = if value["status"] == "PARTIAL_CONTEXT" {
+        let forbidden_fields: &[&str] = if command == "check" {
+            // A static-alignment certificate is always structured (read_plan,
+            // resolved target locator) but never carries a family claim, an
+            // evidence bundle, or a runtime-conformance verdict.
+            &[
+                "family",
+                "member",
+                "members",
+                "variation_slots",
+                "evidence",
+                "output",
+                "check",
+            ]
+        } else if value["status"] == "PARTIAL_CONTEXT" {
             &["family", "member", "members", "variation_slots", "evidence"]
         } else {
             &[
@@ -3996,6 +4234,27 @@ mod tests {
 
     fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
         assert_eq!(value["command"], command);
+        if command == "check" {
+            // A stale target must abstain: the static-alignment check verifies the
+            // target file's freshness first and reports INSUFFICIENT_EVIDENCE with a
+            // StaleEvidence reason, never fabricating an alignment from stale facts.
+            // The affected claim names the stale target file, not the family.
+            let _ = family_id;
+            assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
+            assert_eq!(value["implemented"], true);
+            assert_eq!(value["runtime_equivalence"], "UNKNOWN");
+            assert!(value["selected_family_id"].is_null());
+            assert!(value["alignment"].is_null());
+            assert!(value.get("check").is_none());
+            assert_eq!(value["unknowns"][0]["class"], "blocking_unknown");
+            assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
+            assert!(value["unknowns"][0]["affected_claim"]
+                .as_str()
+                .expect("affected claim")
+                .ends_with(":evidence_freshness"));
+            assert_eq!(value["unknowns"][0]["recovery"], "run repogrammar resync");
+            return;
+        }
         assert_eq!(value["status"], "UNKNOWN");
         assert_eq!(value["implemented"], true);
         assert!(
@@ -4917,8 +5176,8 @@ mod tests {
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_json["status"], "CONTEXT_ONLY");
-        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+        // users.ts is a member of the express family, so it statically aligns.
+        assert_member_statically_aligned(&check_json, &family_id);
 
         fs::write(
             workspace.path().join("users.ts"),
@@ -4937,6 +5196,156 @@ mod tests {
             stale_json["unknowns"][0]["recovery"],
             "run repogrammar resync"
         );
+    }
+
+    #[test]
+    fn families_listing_verifies_evidence_freshness_per_family() {
+        let workspace = TempWorkspace::new("families-freshness-stale");
+        // Two independent framework families in one repository, each backed by
+        // its own single evidence file, so one file's mutation isolates to one
+        // family while the other stays verifiable.
+        copy_python_release_v0_2_fixture("django_exact_models", &workspace.path().join("alpha"));
+        copy_python_release_v0_2_fixture("flask_exact_routes", &workspace.path().join("beta"));
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        // Freshly indexed: every family verifies fresh against the tree.
+        let fresh = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let fresh_json = parse_machine_output("families", &fresh, &workspace);
+        assert_eq!(fresh_json["status"], "ok");
+        let fresh_families = fresh_json["families"].as_array().expect("families array");
+        assert!(fresh_families.iter().any(|family| family["family_id"]
+            .as_str()
+            .is_some_and(|id| id.contains("django_model"))));
+        assert!(fresh_families.iter().any(|family| family["family_id"]
+            .as_str()
+            .is_some_and(|id| id.contains("flask_route"))));
+        assert!(fresh_families
+            .iter()
+            .all(|family| family["freshness"] == "fresh"));
+        assert_eq!(fresh_json["fresh_count"], fresh_families.len());
+        assert_eq!(fresh_json["stale_count"], 0);
+        assert_eq!(fresh_json["cannot_verify_count"], 0);
+
+        // Mutate only the django family's evidence file.
+        fs::write(
+            workspace.path().join("alpha").join("models.py"),
+            "from django.db import models\n\n\nclass Changed(models.Model):\n    name = models.CharField(max_length=1)\n",
+        )
+        .expect("mutate django evidence");
+
+        let stale = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let stale_json = parse_machine_output("families", &stale, &workspace);
+        // The listing stays served (not turned into UNKNOWN) and qualifies the
+        // stale family while keeping the untouched family fresh.
+        assert_eq!(stale_json["status"], "ok");
+        assert_eq!(stale_json["stale_count"], 1);
+        let stale_families = stale_json["families"].as_array().expect("families array");
+        let django = stale_families
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("django_model"))
+            })
+            .expect("django family present");
+        let flask = stale_families
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("flask_route"))
+            })
+            .expect("flask family present");
+        assert_eq!(django["freshness"], "stale");
+        assert_eq!(flask["freshness"], "fresh");
+        assert_eq!(stale_json["unknowns"][0]["reason"], "StaleEvidence");
+        assert_eq!(
+            stale_json["unknowns"][0]["recovery"],
+            "run repogrammar resync"
+        );
+    }
+
+    #[test]
+    fn families_listing_ignores_non_evidence_file_changes() {
+        let workspace = TempWorkspace::new("families-freshness-unrelated");
+        copy_python_release_v0_2_fixture("django_exact_models", &workspace.path().join("alpha"));
+        copy_python_release_v0_2_fixture("flask_exact_routes", &workspace.path().join("beta"));
+        // An indexed-but-non-evidence module: plain functions form no family.
+        fs::write(
+            workspace.path().join("util.py"),
+            "def add(left, right):\n    return left + right\n\n\ndef sub(left, right):\n    return left - right\n",
+        )
+        .expect("write unrelated module");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        // Change a file that is not any family's evidence.
+        fs::write(
+            workspace.path().join("util.py"),
+            "def add(left, right):\n    return left + right + 1\n",
+        )
+        .expect("mutate unrelated module");
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        let listed = families_json["families"]
+            .as_array()
+            .expect("families array");
+        assert!(listed.iter().all(|family| family["freshness"] == "fresh"));
+        assert_eq!(families_json["fresh_count"], listed.len());
+        assert_eq!(families_json["stale_count"], 0);
+        assert_eq!(families_json["cannot_verify_count"], 0);
     }
 
     const PYTHON_V0_2_PREVIEW_SMOKE_CASES: &[PythonExactAnchorSmokeCase] = &[
@@ -5132,6 +5541,99 @@ mod tests {
     }
 
     #[test]
+    fn term_retrieval_resolves_natural_language_fastapi_query_end_to_end() {
+        let workspace = TempWorkspace::new("term-retrieval-fastapi-nl");
+        copy_python_release_fixture("positive-strong-evidence", workspace.path());
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("index", &index, &workspace)["status"],
+            "complete"
+        );
+
+        // A natural-language target that names a framework and a pattern concept
+        // resolves to the single FastAPI route family via deterministic term
+        // retrieval, not through any exact-anchor layer.
+        let found = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["How are FastAPI routes implemented?", "--json"],
+            ),
+            &runtime,
+        );
+        let value = parse_machine_output("find", &found, &workspace);
+        assert_eq!(value["status"], "ok");
+        assert_eq!(
+            value["family"]["family_id"],
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        let route = &value["query_route"];
+        assert_eq!(route["hydrated_family_count"], 1);
+        assert!(
+            route["retrieval_stage_count"]
+                .as_u64()
+                .expect("stage count")
+                >= 3
+        );
+        let term = &route["term_retrieval"];
+        assert_eq!(term["route"], "term_retrieval_hydrate");
+        assert_eq!(term["abstention_reason"], Value::Null);
+        assert_eq!(term["matched_signals"]["concept"], true);
+        assert_eq!(term["matched_signals"]["framework_filter"], true);
+        assert!(
+            term["hydrated_candidate_count"]
+                .as_u64()
+                .expect("hydrated count")
+                <= 5
+        );
+
+        // Determinism: the same query twice yields byte-identical output.
+        let found_again = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["How are FastAPI routes implemented?", "--json"],
+            ),
+            &runtime,
+        );
+        assert_eq!(found, found_again, "term retrieval must be deterministic");
+
+        // A bare framework name is not a locatable pattern concept: it abstains
+        // with a low-cardinality route reason and never selects a family.
+        let bare = run_with_runtime(
+            cli_args("find", workspace.path(), &["fastapi", "--json"]),
+            &runtime,
+        );
+        let bare_value = parse_machine_output("find", &bare, &workspace);
+        assert_eq!(bare_value["status"], "UNKNOWN");
+        assert_eq!(bare_value["query_route"]["selected_family_id"], Value::Null);
+        let bare_reason = bare_value["query_route"]["term_retrieval"]["abstention_reason"]
+            .as_str()
+            .expect("abstention reason");
+        assert!(
+            ["below_min_score", "unsupported_target", "no_candidate"].contains(&bare_reason),
+            "unexpected abstention reason {bare_reason}"
+        );
+    }
+
+    #[test]
     fn python_release_fixture_exact_anchors_produce_family_without_worker() {
         for case in PYTHON_EXACT_ANCHOR_SMOKE_CASES {
             let workspace =
@@ -5305,21 +5807,15 @@ mod tests {
                 assert_python_exact_anchor_family_detail(command, &value, *case);
             }
 
+            // A check target must pin exactly one code unit; the member evidence
+            // file holds several member units, so certify a specific member by its
+            // unit id. The pinned member statically aligns with its own family.
             let check = run_with_runtime(
-                cli_args("check", workspace.path(), &[case.evidence_path, "--json"]),
+                cli_args("check", workspace.path(), &[&member_id, "--json"]),
                 &runtime,
             );
             let check_json = parse_machine_output("check", &check, &workspace);
-            assert_eq!(check_json["status"], "CONTEXT_ONLY");
-            assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
-            assert_eq!(
-                check_json["check"]["reason"],
-                "runtime equivalence remains unproven"
-            );
-            assert!(check_json["check"].get("fail_on").is_none());
-            assert!(check_json["check"].get("pass").is_none());
-            assert!(check_json["check"].get("conforms").is_none());
-            assert_python_exact_anchor_family_detail("check", &check_json, *case);
+            assert_member_statically_aligned(&check_json, case.family_id);
 
             let family_auto_evidence = run_with_runtime(
                 cli_args(
@@ -7180,7 +7676,8 @@ mod tests {
             .iter()
             .all(|member| member["role"] == "framework:express.route_handler"));
 
-        // find resolves the family; check stays advisory CONTEXT_ONLY.
+        // find resolves the family; check statically aligns a pinned member unit
+        // (app.ts holds several member routes, so a path-only check is ambiguous).
         let find = run_with_runtime(
             cli_args("find", workspace.path(), &["app.ts", "--json"]),
             &runtime,
@@ -7188,13 +7685,16 @@ mod tests {
         let find_json = parse_machine_output("find", &find, &workspace);
         assert_eq!(find_json["status"], "ok");
         assert_eq!(find_json["family"]["family_id"], family_id);
+        let member_id = detail_json["members"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let check = run_with_runtime(
-            cli_args("check", workspace.path(), &["app.ts", "--json"]),
+            cli_args("check", workspace.path(), &[&member_id, "--json"]),
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_json["status"], "CONTEXT_ONLY");
-        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+        assert_member_statically_aligned(&check_json, &family_id);
 
         // Default MCP output is also source-free.
         let default_mcp = mcp_context_payload(
@@ -8316,6 +8816,47 @@ mod tests {
                     < record["end_byte"].as_u64().expect("end")
             );
         }
+
+        // End-to-end profile persistence + hydration: real indexing persisted the
+        // co-derived constraint profile, and the family detail now carries it.
+        let profile = &family_json["constraint_profile"];
+        assert!(
+            profile.is_object(),
+            "family detail must carry a hydrated constraint profile: {family_json}"
+        );
+        let required = profile["required_equal_features"]
+            .as_array()
+            .expect("required_equal_features array");
+        assert!(
+            required.iter().any(|constraint| {
+                constraint["origin"] == "framework_role_identity"
+                    && constraint["semantics"] == "equal"
+            }),
+            "the framework-role identity is a required-equal feature: {profile}"
+        );
+        // Python families carry no unknown-blocker prohibition.
+        assert!(profile["prohibited_or_blocking_features"]
+            .as_array()
+            .expect("prohibited array")
+            .is_empty());
+        let obligations = profile["unresolved_obligations"]
+            .as_array()
+            .expect("unresolved_obligations array");
+        assert!(
+            obligations.iter().any(|obligation| {
+                obligation["affected_claim"]
+                    .as_str()
+                    .is_some_and(|claim| claim.ends_with(":runtime_equivalence"))
+            }),
+            "the always-present runtime-equivalence obligation must be listed: {profile}"
+        );
+
+        // The read plan leads with the canonical (medoid) evidence for an exact
+        // family-id lookup with no edit target.
+        let read_plan_items = family_json["read_plan"]["items"]
+            .as_array()
+            .expect("read_plan items array");
+        assert_eq!(read_plan_items[0]["purpose"], "canonical_evidence");
     }
 
     #[test]
@@ -8330,16 +8871,23 @@ mod tests {
                 run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
             let families_json = parse_machine_output("families", &families, workspace);
             assert_eq!(families_json["command"], "families");
+            // The listing stays served, but now qualifies the family as stale and
+            // carries the report-level stale-evidence signal instead of serving it
+            // as an unqualified usable claim.
             assert_eq!(families_json["status"], "ok");
-            assert!(families_json["families"]
+            let stale_family = families_json["families"]
                 .as_array()
                 .expect("families")
                 .iter()
-                .any(|family| family["family_id"] == case.family_id));
+                .find(|family| family["family_id"] == case.family_id)
+                .expect("stale family still listed");
+            assert_eq!(stale_family["freshness"], "stale");
+            assert_eq!(families_json["stale_count"], 1);
             assert!(families_json["unknowns"]
                 .as_array()
                 .expect("unknowns")
-                .is_empty());
+                .iter()
+                .any(|unknown| unknown["reason"] == "StaleEvidence"));
 
             for (command, target) in [
                 ("family", case.family_id),
@@ -8583,13 +9131,18 @@ mod tests {
             serde_json::json!(["canonical", "support"])
         );
 
+        // routes.py holds several member routes; pin one member unit so the check
+        // resolves unambiguously. The pinned member statically aligns.
+        let member_id = evidence_json["evidence"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let check = run_with_runtime(
-            cli_args("check", workspace.path(), &["routes.py", "--json"]),
+            cli_args("check", workspace.path(), &[&member_id, "--json"]),
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_json["status"], "CONTEXT_ONLY");
-        assert_eq!(check_json["check"]["advisory_status"], "UNKNOWN");
+        assert_member_statically_aligned(&check_json, &family_id);
 
         fs::write(
             workspace.path().join("routes.py"),
@@ -8676,6 +9229,24 @@ mod tests {
         assert_eq!(value["readiness"]["query_ready"], true);
         assert_eq!(value["readiness"]["active_generation_available"], true);
         assert_eq!(value["readiness"]["recommended_next_command"], Value::Null);
+        // The decomposed product readiness block is assembled end-to-end by the
+        // real runtime alongside the classic readiness view, under a versioned
+        // schema, and stays source-free.
+        assert_eq!(value["schema_version"], "product-schemas.v1");
+        let product_readiness = &value["product_readiness"];
+        assert_eq!(product_readiness["repository_state"], "initialized");
+        assert_eq!(product_readiness["active_index"]["available"], true);
+        assert_eq!(product_readiness["active_index"]["schema_current"], true);
+        assert!(product_readiness["summary"].is_string());
+        assert_eq!(product_readiness["query_retrieval"]["exact_lookup"], true);
+        assert_eq!(
+            product_readiness["query_retrieval"]["vocabulary_version"],
+            "query-vocabulary.v1"
+        );
+        assert_eq!(
+            product_readiness["measurement"]["token_saving_status"],
+            "NOT_MEASURED"
+        );
         assert!(!status
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
@@ -8865,7 +9436,12 @@ export function HomeScreen() {
             &runtime,
         );
         let check_payload = parse_machine_output("check", &check, &workspace);
-        assert_eq!(check_payload["status"], "PARTIAL_CONTEXT");
+        // An unsupported React Native screen has no comparison family: the
+        // static-alignment check abstains with INSUFFICIENT_EVIDENCE but still
+        // returns a source-reading plan for the resolved target file.
+        assert_eq!(check_payload["status"], "INSUFFICIENT_EVIDENCE");
+        assert_eq!(check_payload["runtime_equivalence"], "UNKNOWN");
+        assert!(check_payload["selected_family_id"].is_null());
         assert_eq!(
             check_payload["read_plan"]["requires_source_before_edit"],
             true
@@ -8874,6 +9450,168 @@ export function HomeScreen() {
             check_payload["read_plan"]["source_snippets_included"],
             false
         );
+    }
+
+    #[test]
+    fn product_runtime_partial_context_records_nonzero_all_scope_token_savings() {
+        // The v0.2.2 field regression: a TypeScript-only repository reported 0
+        // token savings because only Python found-family events accrued. A
+        // PARTIAL_CONTEXT read plan over a substantial TS file displaces a
+        // whole-file read, so it must now record a nonzero ESTIMATED savings
+        // event end to end — across the response, the local rollup, and stats.
+        let workspace = TempWorkspace::new("product-runtime-partial-context-savings");
+        fs::create_dir_all(workspace.path().join("src/service")).expect("create service dir");
+        // A ~900-byte plain TypeScript module: no framework role, so it resolves
+        // to a PARTIAL_CONTEXT read plan rather than any pattern family.
+        fs::write(
+            workspace.path().join("src/service/user_service.ts"),
+            r#"export interface UserRecord {
+  id: string;
+  displayName: string;
+  email: string;
+  createdAtEpochSeconds: number;
+}
+
+export class UserService {
+  private readonly records: Map<string, UserRecord> = new Map();
+
+  public upsert(record: UserRecord): UserRecord {
+    this.records.set(record.id, record);
+    return record;
+  }
+
+  public findById(id: string): UserRecord | undefined {
+    return this.records.get(id);
+  }
+
+  public removeById(id: string): boolean {
+    return this.records.delete(id);
+  }
+
+  public listSortedByName(): UserRecord[] {
+    return Array.from(this.records.values()).sort((left, right) =>
+      left.displayName.localeCompare(right.displayName),
+    );
+  }
+}
+"#,
+        )
+        .expect("write ts module");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let resync = run_with_runtime(
+            cli_args(
+                "resync",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("resync", &resync, &workspace)["status"],
+            "complete"
+        );
+
+        let found = run_with_runtime(
+            cli_args(
+                "find",
+                workspace.path(),
+                &["src/service/user_service.ts", "--json"],
+            ),
+            &runtime,
+        );
+        let value = parse_machine_output("find", &found, &workspace);
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        let savings = &value["estimated_potential_token_savings"];
+        assert_eq!(savings["outcome_shape"], "partial_context");
+        assert_eq!(savings["language"], "typescript/javascript");
+        let potential = savings["estimated_potential_token_savings"]
+            .as_u64()
+            .expect("estimated potential");
+        assert!(
+            potential > 0,
+            "PARTIAL_CONTEXT over a whole TS file must estimate nonzero savings: {value}"
+        );
+        assert_eq!(
+            savings["estimated_potential_token_savings_kind"],
+            "ESTIMATED"
+        );
+        assert!(savings["estimated_potential_token_savings_caveat"]
+            .as_str()
+            .expect("caveat")
+            .contains("not measured token savings"));
+
+        // The local all-scope rollup recorded the event under the partial_context
+        // outcome shape and the typescript/javascript language, with matching
+        // nonzero potential.
+        let rollup_path = workspace
+            .path()
+            .join(".repogrammar")
+            .join("telemetry")
+            .join("local-metrics")
+            .join("estimated_potential_token_savings.json");
+        let rollup: Value =
+            serde_json::from_str(&fs::read_to_string(&rollup_path).expect("savings rollup"))
+                .expect("savings rollup JSON");
+        assert!(rollup["event_count"].as_u64().expect("event count") >= 1);
+        assert_eq!(
+            rollup["by_outcome_shape"]["partial_context"]["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("partial context potential"),
+            potential
+        );
+        assert!(
+            rollup["by_language"]["typescript/javascript"]["event_count"]
+                .as_u64()
+                .expect("tsjs event count")
+                >= 1
+        );
+
+        // Stats surfaces the same all-scope savings totals, proving the panel is
+        // no longer Python-scoped: a TS-only repo now reports nonzero savings.
+        let stats = run_with_runtime(cli_args("stats", workspace.path(), &["--json"]), &runtime);
+        let stats_payload = parse_machine_output("stats", &stats, &workspace);
+        let all_scope = &stats_payload["all_scope_token_savings"];
+        assert_eq!(all_scope["measurement_kind"], "ESTIMATED");
+        assert!(
+            all_scope["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("all-scope potential")
+                > 0
+        );
+        assert!(
+            all_scope["savings_events"]
+                .as_u64()
+                .expect("savings events")
+                >= 1
+        );
+        assert!(
+            all_scope["by_outcome_shape"]["partial_context"]["estimated_potential_token_savings"]
+                .as_u64()
+                .expect("stats partial context potential")
+                > 0
+        );
+
+        // The concise human stats leads with the all-scope savings headline.
+        let stats_human = run_with_runtime(cli_args("stats", workspace.path(), &[]), &runtime);
+        assert_eq!(
+            stats_human.status, 0,
+            "stats stderr: {}",
+            stats_human.stderr
+        );
+        assert!(stats_human
+            .stdout
+            .contains("estimated_potential_token_savings:"));
+        assert!(stats_human.stdout.contains("all_scope_by_outcome_shape: "));
+        assert_no_output_leakage("stats", &stats_human.stdout, &workspace);
     }
 
     #[test]
@@ -11326,8 +12064,10 @@ pythonpath = ["src"]
         let payload: Value = serde_json::from_str(payload_text).expect("tool payload JSON");
 
         assert!(
-            payload["status"] == "UNKNOWN" || payload["status"] == "PARTIAL_CONTEXT",
-            "MCP path query should return UNKNOWN or source-free partial context: {payload}"
+            payload["status"] == "UNKNOWN"
+                || payload["status"] == "PARTIAL_CONTEXT"
+                || payload["status"] == "INSUFFICIENT_EVIDENCE",
+            "MCP path query should return UNKNOWN, source-free partial context, or an abstaining alignment certificate: {payload}"
         );
         assert_eq!(payload["unknowns"][0]["reason"], "InsufficientSupport");
         assert!(!payload_text.contains(workspace.path().to_string_lossy().as_ref()));
@@ -11395,17 +12135,21 @@ pythonpath = ["src"]
         assert_eq!(explain["status"], "ok");
         assert_python_exact_anchor_family_detail("explain", &explain, case);
 
+        // Pin one member unit (the evidence file holds several), so the check
+        // resolves unambiguously to a MEMBER + STATICALLY_ALIGNED certificate.
+        let member_id = show["members"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let check = mcp_context_payload(
             &runtime,
             &workspace,
             serde_json::json!({
                 "operation": "check_conformance",
-                "target": case.evidence_path,
+                "target": member_id,
             }),
         );
-        assert_eq!(check["status"], "CONTEXT_ONLY");
-        assert_eq!(check["check"]["advisory_status"], "UNKNOWN");
-        assert_python_exact_anchor_family_detail("check", &check, case);
+        assert_member_statically_aligned(&check, case.family_id);
 
         let input = format!(
             "{}\n{}\n{}\n",

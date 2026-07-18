@@ -113,9 +113,11 @@ The release build must unpack and execute each exact archive on its native
 runner before upload. The packaged binary smoke enforces Python 3.10+ and runs
 `version`, isolated `setup --dry-run --json`, isolated live setup through the
 product MCP self-test, full and incremental sync of the committed Pydantic
-release fixture, and its bounded `find` plus advisory `check` path. The `check`
-result must remain `CONTEXT_ONLY` with `advisory_status: UNKNOWN` rather than
-being promoted to runtime proof. Exercising only a source-tree binary is
+release fixture, and its bounded `find` plus static-alignment `check` path. The
+`check` result must be a static-alignment token (`STATICALLY_ALIGNED`,
+`STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`, or `UNKNOWN`)
+with `runtime_equivalence: "UNKNOWN"` rather than being promoted to runtime
+proof. Exercising only a source-tree binary is
 insufficient. The published `install.sh` asset must also have a matching
 `.sha256` checksum asset. `install.ps1` is not published for either channel.
 Installers must fail instead of silently installing an artifact that omits the

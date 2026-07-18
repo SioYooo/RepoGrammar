@@ -32,7 +32,7 @@
   `repogrammar-python-derived` step can synthesize support from exact canonical
   anchors for units with one framework role, so narrow Python family rows can be
   produced without claiming provider-backed semantics. Product smoke now covers
-  those exact-anchor families across CLI `member`/`find`/`explain`/advisory
+  those exact-anchor families across CLI `member`/`find`/`explain`/static-alignment
   `check`, token-budget auto evidence, explicit compact/evidence/deep metadata
   modes, supported MCP operations, and stale source mutation/deletion returning
   blocking `StaleEvidence` `UNKNOWN`. Family detail output now supports
@@ -700,9 +700,13 @@ transport are not implemented.
 
 Pattern-family query commands and MCP tool calls still use stable fallback
 behavior before an active index and typed `UNKNOWN` when active evidence is
-insufficient. Advisory `check`/`check_conformance` responses may return matched
-family context as `CONTEXT_ONLY`, but conformance remains nested `UNKNOWN`
-because runtime equivalence is unproven. `files` and `units` can return active
+insufficient. `check`/`check_conformance` responses now emit a static-alignment
+certificate: `status` is one of the five static-alignment tokens
+(`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,
+`INSUFFICIENT_EVIDENCE`, `UNKNOWN`) and `runtime_equivalence` is held
+`UNKNOWN` because runtime equivalence is unproven; the legacy top-level
+`CONTEXT_ONLY` advisory shape (with a nested advisory object) is gone. `files`
+and `units` can return active
 file-manifest-only or syntax-only index metadata, but stored syntax-only units
 must not be described as query-ready family evidence.
 

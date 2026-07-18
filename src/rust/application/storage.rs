@@ -1,12 +1,17 @@
 //! Storage use-case boundary.
 
-use crate::core::model::{FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
+use crate::application::recovery::{recovery_guidance, RecoveryAction};
+use crate::core::model::{
+    FactCertainty, FamilyConstraintProfile, FamilyPrevalenceClass, FeatureConstraint, IrEdgeLabel,
+    IrNodeKind, SemanticFactKind, VariationConstraint,
+};
 use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
-    family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily, FamilyStore,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedVariationSlotRecord, StoreError,
+    family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
+    ActiveFamilySearchSummaries, FamilyConstraintProfileStore, FamilyStore, GenerationWriteSession,
+    GenerationWriteStore, IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceRecord,
+    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     GenerationHandle, GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore,
@@ -24,118 +29,136 @@ pub fn prepare_index_generation(
     store.prepare_next_generation().map_err(index_store_error)
 }
 
-pub fn record_indexed_file(
-    store: &impl IndexStore,
+/// Open the single generation write session for a `building` generation. The
+/// build pipeline routes every record through it so one connection, opened once,
+/// serves the whole build (see the storage write-lifecycle documentation).
+pub fn open_index_write_session<'a>(
+    store: &'a (impl GenerationWriteStore + ?Sized),
     generation: &GenerationHandle,
+) -> Result<Box<dyn GenerationWriteSession + 'a>, RepoGrammarError> {
+    store
+        .open_generation_write_session(generation)
+        .map_err(index_store_error)
+}
+
+/// Commit any open batch at a pipeline phase boundary to bound WAL growth.
+pub fn checkpoint_index_write_session(
+    session: &mut dyn GenerationWriteSession,
+) -> Result<(), RepoGrammarError> {
+    session.checkpoint().map_err(index_store_error)
+}
+
+/// Commit everything and seal the session before the generation is validated and
+/// activated through the [`IndexStore`] state machine.
+pub fn finish_index_write_session(
+    session: &mut dyn GenerationWriteSession,
+) -> Result<(), RepoGrammarError> {
+    session.finish().map_err(index_store_error)
+}
+
+pub fn record_indexed_file(
+    session: &mut dyn GenerationWriteSession,
     file: &IndexedFileRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_indexed_file(file)?;
-    store
-        .record_indexed_file(generation, file)
-        .map_err(index_store_error)
+    session.record_indexed_file(file).map_err(index_store_error)
 }
 
 pub fn remove_indexed_file(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     path: &str,
 ) -> Result<(), RepoGrammarError> {
     validate_repo_relative_path(path)?;
-    store
-        .remove_indexed_file(generation, path)
-        .map_err(index_store_error)
+    session.remove_indexed_file(path).map_err(index_store_error)
 }
 
 pub fn record_code_unit(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     unit: &IndexedCodeUnitRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_code_unit(unit)?;
-    store
-        .record_code_unit(generation, unit)
-        .map_err(index_store_error)
+    session.record_code_unit(unit).map_err(index_store_error)
 }
 
 pub fn record_ir_node(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     node: &IndexedIrNodeRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_ir_node(node)?;
-    store
-        .record_ir_node(generation, node)
-        .map_err(index_store_error)
+    session.record_ir_node(node).map_err(index_store_error)
 }
 
 pub fn record_ir_edge(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     edge: &IndexedIrEdgeRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_ir_edge(edge)?;
-    store
-        .record_ir_edge(generation, edge)
-        .map_err(index_store_error)
+    session.record_ir_edge(edge).map_err(index_store_error)
 }
 
 pub fn record_semantic_fact(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     fact: &IndexedSemanticFactRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_semantic_fact(fact)?;
-    store
-        .record_semantic_fact(generation, fact)
+    session
+        .record_semantic_fact(fact)
         .map_err(index_store_error)
 }
 
 pub fn record_family(
-    store: &(impl FamilyStore + ?Sized),
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     family: &IndexedFamilyRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_family(family)?;
-    store
-        .record_family(generation, family)
-        .map_err(family_store_error)
+    session.record_family(family).map_err(family_store_error)
 }
 
 pub fn record_family_member(
-    store: &(impl FamilyStore + ?Sized),
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     member: &IndexedFamilyMemberRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_family_member(member)?;
-    store
-        .record_family_member(generation, member)
+    session
+        .record_family_member(member)
         .map_err(family_store_error)
 }
 
 pub fn record_variation_slot(
-    store: &(impl FamilyStore + ?Sized),
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     slot: &IndexedVariationSlotRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_variation_slot(slot)?;
-    store
-        .record_variation_slot(generation, slot)
+    session
+        .record_variation_slot(slot)
         .map_err(family_store_error)
 }
 
 pub fn record_family_evidence(
-    store: &(impl FamilyStore + ?Sized),
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     evidence: &IndexedFamilyEvidenceRecord,
 ) -> Result<(), RepoGrammarError> {
     validate_family_evidence(evidence)?;
-    store
-        .record_family_evidence(generation, evidence)
+    session
+        .record_family_evidence(evidence)
         .map_err(family_store_error)
 }
 
-pub fn list_active_families(store: &impl FamilyStore) -> Result<ActiveFamilies, RepoGrammarError> {
+pub fn list_active_families(
+    store: &(impl FamilyStore + ?Sized),
+) -> Result<ActiveFamilies, RepoGrammarError> {
     store.list_active_families().map_err(family_store_error)
+}
+
+/// Read the bounded, source-free searchable-metadata projection of every active
+/// family. Substrate for deterministic term-based retrieval; not yet routed into
+/// the production fuzzy lookup path.
+pub fn list_active_family_search_summaries(
+    store: &(impl FamilyStore + ?Sized),
+) -> Result<ActiveFamilySearchSummaries, RepoGrammarError> {
+    store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)
 }
 
 pub fn show_family(
@@ -144,6 +167,26 @@ pub fn show_family(
 ) -> Result<Option<ActiveFamily>, RepoGrammarError> {
     validate_semantic_text_field("family id", family_id)?;
     store.show_family(family_id).map_err(family_store_error)
+}
+
+pub fn record_family_constraint_profile(
+    session: &mut dyn GenerationWriteSession,
+    record: &IndexedFamilyConstraintProfileRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_constraint_profile(record)?;
+    session
+        .record_family_constraint_profile(record)
+        .map_err(family_store_error)
+}
+
+pub fn show_family_constraint_profile(
+    store: &impl FamilyConstraintProfileStore,
+    family_id: &str,
+) -> Result<Option<FamilyConstraintProfile>, RepoGrammarError> {
+    validate_semantic_text_field("family id", family_id)?;
+    store
+        .show_family_constraint_profile(family_id)
+        .map_err(family_store_error)
 }
 
 pub fn validate_index_generation(
@@ -373,12 +416,85 @@ fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGr
 
 fn validate_family(family: &IndexedFamilyRecord) -> Result<(), RepoGrammarError> {
     validate_family_text_field("family id", &family.family_id)?;
-    match family.classification.as_str() {
-        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
-        _ => Err(RepoGrammarError::InvalidInput(
+    if FamilyPrevalenceClass::parse_token(&family.classification).is_err() {
+        return Err(RepoGrammarError::InvalidInput(
             "family classification is unsupported".to_string(),
-        )),
+        ));
     }
+    if family.prevalence.classification_reason.trim().is_empty() {
+        return Err(RepoGrammarError::InvalidInput(
+            "family classification reason must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_family_constraint_profile(
+    record: &IndexedFamilyConstraintProfileRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_text_field("family constraint profile family id", &record.family_id)?;
+    let profile = &record.profile;
+    for constraint in &profile.required_equal_features {
+        validate_feature_constraint("required-equal feature", constraint, false)?;
+    }
+    for constraint in &profile.prohibited_or_blocking_features {
+        validate_feature_constraint("prohibited feature", constraint, true)?;
+    }
+    for variation in &profile.allowed_variations {
+        validate_variation_constraint(variation)?;
+    }
+    for obligation in &profile.unresolved_obligations {
+        validate_family_text_field(
+            "constraint profile obligation affected claim",
+            &obligation.affected_claim,
+        )?;
+        if let Some(recovery) = &obligation.recovery {
+            validate_family_text_field("constraint profile obligation recovery", recovery)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_feature_constraint(
+    label: &str,
+    constraint: &FeatureConstraint,
+    prohibited_axis: bool,
+) -> Result<(), RepoGrammarError> {
+    validate_family_text_field(&format!("{label} prefix"), &constraint.prefix)?;
+    // The prohibited axis carries only prohibited-presence blockers; the required
+    // axis carries only equality/subset bindings. Reject a cross-axis semantics.
+    if constraint.semantics.is_prohibition() != prohibited_axis {
+        return Err(RepoGrammarError::InvalidInput(format!(
+            "{label} semantics do not belong to its axis"
+        )));
+    }
+    // Empty-set semantics (equal-empty, prohibited-presence) bind an empty value
+    // list; equality and must-contain bind a non-empty one.
+    if constraint.semantics.requires_empty_values() != constraint.values.is_empty() {
+        return Err(RepoGrammarError::InvalidInput(format!(
+            "{label} values are inconsistent with its semantics"
+        )));
+    }
+    for value in &constraint.values {
+        validate_family_text_field(&format!("{label} value"), value)?;
+    }
+    Ok(())
+}
+
+fn validate_variation_constraint(variation: &VariationConstraint) -> Result<(), RepoGrammarError> {
+    if !variation.observed_only {
+        return Err(RepoGrammarError::InvalidInput(
+            "variation constraint must be observed-only".to_string(),
+        ));
+    }
+    validate_family_text_field("variation dimension", &variation.dimension)?;
+    for profile in &variation.observed_profiles {
+        validate_family_text_field("variation observed profile", profile)?;
+    }
+    for member_id in &variation.representative_member_ids {
+        validate_family_text_field("variation representative member id", member_id)?;
+    }
+    Ok(())
 }
 
 fn validate_family_member(member: &IndexedFamilyMemberRecord) -> Result<(), RepoGrammarError> {
@@ -515,8 +631,17 @@ fn validate_repo_relative_path(path: &str) -> Result<(), RepoGrammarError> {
     })
 }
 
+/// Combine an adapter schema-outdated message with the authoritative resync
+/// recovery guidance from the recovery classifier vocabulary.
+fn schema_outdated_message(message: &str) -> String {
+    format!("{message}; {}", recovery_guidance(RecoveryAction::Resync))
+}
+
 fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
+        IndexStoreError::SchemaVersionOutdated(message) => {
+            RepoGrammarError::InvalidInput(schema_outdated_message(&message))
+        }
         IndexStoreError::Unavailable(message)
         | IndexStoreError::InvalidState(message)
         | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -525,6 +650,9 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
 
 fn family_store_error(error: StoreError) -> RepoGrammarError {
     match error {
+        StoreError::SchemaVersionOutdated(message) => {
+            RepoGrammarError::InvalidInput(schema_outdated_message(&message))
+        }
         StoreError::Unavailable(message)
         | StoreError::InvalidState(message)
         | StoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
@@ -536,14 +664,17 @@ mod tests {
     use super::*;
     use crate::core::model::ContentHash;
     use crate::ports::family_store::{
-        ActiveFamilies, ActiveFamily, ActiveFamilyCandidates, ActiveFamilySummaries,
-        IndexedFamilyCandidateRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
-        IndexedFamilyRecord, IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
+        ActiveFamilies, ActiveFamily, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
+        ActiveFamilySearchSummaries, ActiveFamilySummaries, IndexedFamilyCandidateRecord,
+        IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceProjectionRecord,
+        IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+        IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
         ActiveRepoShapeStats, ActiveSemanticFacts, IndexStorageLayout, STORAGE_SCHEMA_VERSION,
     };
+    use crate::test_support::FakeWriteSession;
 
     struct FakeStore;
 
@@ -740,6 +871,39 @@ mod tests {
                     family_id: family().family_id,
                     classification: family().classification,
                     support: 1,
+                    prevalence: family().prevalence,
+                }],
+            })
+        }
+
+        fn list_active_family_evidence_projection(
+            &self,
+        ) -> Result<ActiveFamilyEvidenceProjection, StoreError> {
+            let evidence = family_evidence();
+            Ok(ActiveFamilyEvidenceProjection {
+                generation_id: "gen-000001".to_string(),
+                rows: vec![IndexedFamilyEvidenceProjectionRecord {
+                    family_id: evidence.family_id,
+                    path: evidence.path,
+                    content_hash: evidence.content_hash,
+                }],
+            })
+        }
+
+        fn list_active_family_search_summaries(
+            &self,
+        ) -> Result<ActiveFamilySearchSummaries, StoreError> {
+            Ok(ActiveFamilySearchSummaries {
+                generation_id: "gen-000001".to_string(),
+                families: vec![IndexedFamilySearchSummaryRecord {
+                    family_id: family().family_id,
+                    language: "typescript".to_string(),
+                    code_unit_kind: "module".to_string(),
+                    framework_role: family_member().role,
+                    classification: family().classification,
+                    support: 1,
+                    prevalence: family().prevalence,
+                    evidence_path_components: vec!["a.ts".to_string(), "src".to_string()],
                 }],
             })
         }
@@ -815,6 +979,38 @@ mod tests {
         }
     }
 
+    impl FamilyConstraintProfileStore for FakeStore {
+        fn record_family_constraint_profile(
+            &self,
+            _generation: &GenerationHandle,
+            _record: &IndexedFamilyConstraintProfileRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn show_family_constraint_profile(
+            &self,
+            family_id: &str,
+        ) -> Result<Option<FamilyConstraintProfile>, StoreError> {
+            if family_id == family().family_id {
+                Ok(Some(constraint_profile()))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    fn constraint_profile() -> FamilyConstraintProfile {
+        crate::test_support::sample_family_constraint_profile()
+    }
+
+    fn constraint_profile_record() -> IndexedFamilyConstraintProfileRecord {
+        IndexedFamilyConstraintProfileRecord {
+            family_id: family().family_id,
+            profile: constraint_profile(),
+        }
+    }
+
     fn file(path: &str) -> IndexedFileRecord {
         IndexedFileRecord {
             path: path.to_string(),
@@ -869,6 +1065,7 @@ mod tests {
         IndexedFamilyRecord {
             family_id: "family:routes:read".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
+            prevalence: crate::test_support::sample_family_prevalence(),
         }
     }
 
@@ -906,11 +1103,11 @@ mod tests {
     fn generation_use_cases_delegate_through_storage_port() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
-        record_indexed_file(&store, &generation, &file("src/a.ts")).expect("record file");
-        remove_indexed_file(&store, &generation, "src/removed.ts").expect("remove file");
+        let mut session = FakeWriteSession::new(generation.clone());
+        record_indexed_file(&mut session, &file("src/a.ts")).expect("record file");
+        remove_indexed_file(&mut session, "src/removed.ts").expect("remove file");
         record_code_unit(
-            &store,
-            &generation,
+            &mut session,
             &IndexedCodeUnitRecord {
                 id: "unit:src/a.ts#module:0-1".to_string(),
                 path: "src/a.ts".to_string(),
@@ -922,15 +1119,13 @@ mod tests {
             },
         )
         .expect("record unit");
-        record_ir_node(&store, &generation, &ir_node()).expect("record IR node");
-        record_ir_edge(&store, &generation, &ir_edge()).expect("record IR edge");
-        record_semantic_fact(&store, &generation, &semantic_fact()).expect("record semantic fact");
-        record_family(&store, &generation, &family()).expect("record family");
-        record_family_member(&store, &generation, &family_member()).expect("record family member");
-        record_variation_slot(&store, &generation, &variation_slot())
-            .expect("record variation slot");
-        record_family_evidence(&store, &generation, &family_evidence())
-            .expect("record family evidence");
+        record_ir_node(&mut session, &ir_node()).expect("record IR node");
+        record_ir_edge(&mut session, &ir_edge()).expect("record IR edge");
+        record_semantic_fact(&mut session, &semantic_fact()).expect("record semantic fact");
+        record_family(&mut session, &family()).expect("record family");
+        record_family_member(&mut session, &family_member()).expect("record family member");
+        record_variation_slot(&mut session, &variation_slot()).expect("record variation slot");
+        record_family_evidence(&mut session, &family_evidence()).expect("record family evidence");
         validate_index_generation(&store, &generation).expect("validate generation");
         activate_index_generation(&store, &generation).expect("activate generation");
         let inspection = inspect_index_storage(&store).expect("inspect storage");
@@ -946,21 +1141,41 @@ mod tests {
     }
 
     #[test]
+    fn family_search_summaries_delegate_through_storage_port() {
+        let store = FakeStore;
+        let summaries =
+            list_active_family_search_summaries(&store).expect("list family search summaries");
+
+        assert_eq!(summaries.generation_id, "gen-000001");
+        assert_eq!(summaries.families.len(), 1);
+        let summary = &summaries.families[0];
+        assert_eq!(summary.family_id, family().family_id);
+        assert_eq!(summary.language, "typescript");
+        assert_eq!(summary.framework_role, family_member().role);
+        assert_eq!(summary.support, 1);
+        assert_eq!(
+            summary.evidence_path_components,
+            vec!["a.ts".to_string(), "src".to_string()]
+        );
+    }
+
+    #[test]
     fn indexed_file_validation_rejects_empty_fields_before_store_call() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
 
         let error =
-            record_indexed_file(&store, &generation, &file(" ")).expect_err("empty path must fail");
+            record_indexed_file(&mut session, &file(" ")).expect_err("empty path must fail");
         assert!(error.to_string().contains("path"));
 
         let mut missing_language = file("src/a.ts");
         missing_language.language = " ".to_string();
-        let error = record_indexed_file(&store, &generation, &missing_language)
+        let error = record_indexed_file(&mut session, &missing_language)
             .expect_err("empty language must fail");
         assert!(error.to_string().contains("language"));
 
-        let error = remove_indexed_file(&store, &generation, "../escape.ts")
+        let error = remove_indexed_file(&mut session, "../escape.ts")
             .expect_err("unsafe removal path must fail");
         assert!(error.to_string().contains("path"));
     }
@@ -969,6 +1184,7 @@ mod tests {
     fn code_unit_validation_rejects_invalid_fields_before_store_call() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
         let hash = file("src/a.ts").content_hash;
         let mut unit = IndexedCodeUnitRecord {
             id: "unit:src/a.ts#module:0-1".to_string(),
@@ -982,49 +1198,49 @@ mod tests {
 
         let mut missing_id = unit.clone();
         missing_id.id = " ".to_string();
-        assert!(record_code_unit(&store, &generation, &missing_id)
+        assert!(record_code_unit(&mut session, &missing_id)
             .expect_err("missing id")
             .to_string()
             .contains("id"));
 
         let mut absolute_path = unit.clone();
         absolute_path.path = "/tmp/a.ts".to_string();
-        assert!(record_code_unit(&store, &generation, &absolute_path)
+        assert!(record_code_unit(&mut session, &absolute_path)
             .expect_err("absolute path")
             .to_string()
             .contains("repository-relative"));
 
         let mut windows_absolute = unit.clone();
         windows_absolute.path = "C:\\tmp\\a.ts".to_string();
-        assert!(record_code_unit(&store, &generation, &windows_absolute)
+        assert!(record_code_unit(&mut session, &windows_absolute)
             .expect_err("windows absolute path")
             .to_string()
             .contains("repository-relative"));
 
         let mut traversal = unit.clone();
         traversal.path = "../a.ts".to_string();
-        assert!(record_code_unit(&store, &generation, &traversal)
+        assert!(record_code_unit(&mut session, &traversal)
             .expect_err("traversal path")
             .to_string()
             .contains("outside repository"));
 
         let mut missing_language = unit.clone();
         missing_language.language = " ".to_string();
-        assert!(record_code_unit(&store, &generation, &missing_language)
+        assert!(record_code_unit(&mut session, &missing_language)
             .expect_err("missing language")
             .to_string()
             .contains("language"));
 
         let mut missing_kind = unit.clone();
         missing_kind.kind = " ".to_string();
-        assert!(record_code_unit(&store, &generation, &missing_kind)
+        assert!(record_code_unit(&mut session, &missing_kind)
             .expect_err("missing kind")
             .to_string()
             .contains("kind"));
 
         unit.start_byte = 2;
         unit.end_byte = 1;
-        assert!(record_code_unit(&store, &generation, &unit)
+        assert!(record_code_unit(&mut session, &unit)
             .expect_err("reversed range")
             .to_string()
             .contains("range"));
@@ -1034,32 +1250,33 @@ mod tests {
     fn ir_validation_rejects_invalid_fields_before_store_call() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
         let node = ir_node();
 
         let mut missing_id = node.clone();
         missing_id.id = " ".to_string();
-        assert!(record_ir_node(&store, &generation, &missing_id)
+        assert!(record_ir_node(&mut session, &missing_id)
             .expect_err("missing node id")
             .to_string()
             .contains("id"));
 
         let mut mismatched_id = node.clone();
         mismatched_id.id = "ir:unit:src/other.ts#module:0-1".to_string();
-        assert!(record_ir_node(&store, &generation, &mismatched_id)
+        assert!(record_ir_node(&mut session, &mismatched_id)
             .expect_err("mismatched node id")
             .to_string()
             .contains("derived"));
 
         let mut invalid_kind = node.clone();
         invalid_kind.kind = "tree_sitter_node".to_string();
-        assert!(record_ir_node(&store, &generation, &invalid_kind)
+        assert!(record_ir_node(&mut session, &invalid_kind)
             .expect_err("invalid kind")
             .to_string()
             .contains("unsupported IR node kind"));
 
         let mut non_empty_payload = node;
         non_empty_payload.payload_json = r#"{"snippet":"const x = 1;"}"#.to_string();
-        assert!(record_ir_node(&store, &generation, &non_empty_payload)
+        assert!(record_ir_node(&mut session, &non_empty_payload)
             .expect_err("non-empty payload")
             .to_string()
             .contains("empty JSON object"));
@@ -1067,14 +1284,14 @@ mod tests {
         let edge = ir_edge();
         let mut self_edge = edge.clone();
         self_edge.to_node_id = self_edge.from_node_id.clone();
-        assert!(record_ir_edge(&store, &generation, &self_edge)
+        assert!(record_ir_edge(&mut session, &self_edge)
             .expect_err("self edge")
             .to_string()
             .contains("itself"));
 
         let mut invalid_label = edge;
         invalid_label.label = "calls".to_string();
-        assert!(record_ir_edge(&store, &generation, &invalid_label)
+        assert!(record_ir_edge(&mut session, &invalid_label)
             .expect_err("invalid edge label")
             .to_string()
             .contains("unsupported IR edge label"));
@@ -1084,76 +1301,75 @@ mod tests {
     fn semantic_fact_validation_rejects_invalid_fields_before_store_call() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
         let fact = semantic_fact();
 
         let mut missing_id = fact.clone();
         missing_id.fact_id = " ".to_string();
-        assert!(record_semantic_fact(&store, &generation, &missing_id)
+        assert!(record_semantic_fact(&mut session, &missing_id)
             .expect_err("missing id")
             .to_string()
             .contains("id"));
 
         let mut blank_target = fact.clone();
         blank_target.target = Some(" ".to_string());
-        assert!(record_semantic_fact(&store, &generation, &blank_target)
+        assert!(record_semantic_fact(&mut session, &blank_target)
             .expect_err("blank target")
             .to_string()
             .contains("target"));
 
         let mut absolute_path = fact.clone();
         absolute_path.path = "/tmp/a.ts".to_string();
-        assert!(record_semantic_fact(&store, &generation, &absolute_path)
+        assert!(record_semantic_fact(&mut session, &absolute_path)
             .expect_err("absolute path")
             .to_string()
             .contains("repository-relative"));
 
         let mut traversal = fact.clone();
         traversal.path = "../a.ts".to_string();
-        assert!(record_semantic_fact(&store, &generation, &traversal)
+        assert!(record_semantic_fact(&mut session, &traversal)
             .expect_err("traversal path")
             .to_string()
             .contains("outside repository"));
 
         let mut missing_origin = fact.clone();
         missing_origin.origin_engine = " ".to_string();
-        assert!(record_semantic_fact(&store, &generation, &missing_origin)
+        assert!(record_semantic_fact(&mut session, &missing_origin)
             .expect_err("missing origin")
             .to_string()
             .contains("origin"));
 
         let mut invalid_kind = fact.clone();
         invalid_kind.kind = "CALL".to_string();
-        assert!(record_semantic_fact(&store, &generation, &invalid_kind)
+        assert!(record_semantic_fact(&mut session, &invalid_kind)
             .expect_err("invalid kind")
             .to_string()
             .contains("unsupported semantic fact kind"));
 
         let mut invalid_certainty = fact.clone();
         invalid_certainty.certainty = "LOW_CONFIDENCE".to_string();
-        assert!(
-            record_semantic_fact(&store, &generation, &invalid_certainty)
-                .expect_err("invalid certainty")
-                .to_string()
-                .contains("unsupported fact certainty")
-        );
+        assert!(record_semantic_fact(&mut session, &invalid_certainty)
+            .expect_err("invalid certainty")
+            .to_string()
+            .contains("unsupported fact certainty"));
 
         let mut leaky_target = fact.clone();
         leaky_target.target = Some("file:///tmp/secret".to_string());
-        assert!(record_semantic_fact(&store, &generation, &leaky_target)
+        assert!(record_semantic_fact(&mut session, &leaky_target)
             .expect_err("leaky target")
             .to_string()
             .contains("unsupported content"));
 
         let mut leaky_assumption = fact.clone();
         leaky_assumption.assumptions = vec!["read /tmp/secret".to_string()];
-        assert!(record_semantic_fact(&store, &generation, &leaky_assumption)
+        assert!(record_semantic_fact(&mut session, &leaky_assumption)
             .expect_err("leaky assumption")
             .to_string()
             .contains("unsupported content"));
 
         let mut source_like_note = fact.clone();
         source_like_note.note = "const secret = true;".to_string();
-        assert!(record_semantic_fact(&store, &generation, &source_like_note)
+        assert!(record_semantic_fact(&mut session, &source_like_note)
             .expect_err("source-like note")
             .to_string()
             .contains("unsupported content"));
@@ -1161,7 +1377,7 @@ mod tests {
         let mut reversed = fact.clone();
         reversed.start_byte = 2;
         reversed.end_byte = 1;
-        assert!(record_semantic_fact(&store, &generation, &reversed)
+        assert!(record_semantic_fact(&mut session, &reversed)
             .expect_err("reversed range")
             .to_string()
             .contains("range"));
@@ -1171,11 +1387,12 @@ mod tests {
     fn semantic_fact_validation_accepts_null_target_and_empty_assumptions() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
         let mut fact = semantic_fact();
         fact.target = None;
         fact.assumptions = Vec::new();
 
-        record_semantic_fact(&store, &generation, &fact)
+        record_semantic_fact(&mut session, &fact)
             .expect("null target and empty assumptions remain valid");
     }
 
@@ -1183,89 +1400,141 @@ mod tests {
     fn family_validation_rejects_invalid_fields_before_store_call() {
         let store = FakeStore;
         let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
 
         let mut missing_id = family();
         missing_id.family_id = " ".to_string();
-        assert!(record_family(&store, &generation, &missing_id)
+        assert!(record_family(&mut session, &missing_id)
             .expect_err("missing family id")
             .to_string()
             .contains("family id"));
 
         let mut invalid_classification = family();
         invalid_classification.classification = "SIMILAR".to_string();
-        assert!(record_family(&store, &generation, &invalid_classification)
+        assert!(record_family(&mut session, &invalid_classification)
             .expect_err("invalid classification")
             .to_string()
             .contains("classification"));
 
         let mut leaky_member = family_member();
         leaky_member.role = "see /tmp/secret".to_string();
-        assert!(record_family_member(&store, &generation, &leaky_member)
+        assert!(record_family_member(&mut session, &leaky_member)
             .expect_err("leaky role")
             .to_string()
             .contains("unsupported content"));
 
         let mut source_like_slot = variation_slot();
         source_like_slot.description = "const handler = route;".to_string();
-        assert!(
-            record_variation_slot(&store, &generation, &source_like_slot)
-                .expect_err("source-like variation")
-                .to_string()
-                .contains("unsupported content")
-        );
+        assert!(record_variation_slot(&mut session, &source_like_slot)
+            .expect_err("source-like variation")
+            .to_string()
+            .contains("unsupported content"));
 
         let mut absolute_path = family_evidence();
         absolute_path.path = "/tmp/a.ts".to_string();
-        assert!(record_family_evidence(&store, &generation, &absolute_path)
+        assert!(record_family_evidence(&mut session, &absolute_path)
             .expect_err("absolute path")
             .to_string()
             .contains("repository-relative"));
 
         let mut traversal = family_evidence();
         traversal.path = "../a.ts".to_string();
-        assert!(record_family_evidence(&store, &generation, &traversal)
+        assert!(record_family_evidence(&mut session, &traversal)
             .expect_err("traversal path")
             .to_string()
             .contains("outside repository"));
 
         let mut uri_note = family_evidence();
         uri_note.note = "file:///tmp/secret".to_string();
-        assert!(record_family_evidence(&store, &generation, &uri_note)
+        assert!(record_family_evidence(&mut session, &uri_note)
             .expect_err("URI note")
             .to_string()
             .contains("unsupported content"));
 
         let mut empty_claims = family_evidence();
         empty_claims.covered_claims = Vec::new();
-        assert!(record_family_evidence(&store, &generation, &empty_claims)
+        assert!(record_family_evidence(&mut session, &empty_claims)
             .expect_err("empty covered claims")
             .to_string()
             .contains("covered claims"));
 
         let mut unsupported_claim = family_evidence();
         unsupported_claim.covered_claims = vec!["canonical".to_string(), "runtime".to_string()];
-        assert!(
-            record_family_evidence(&store, &generation, &unsupported_claim)
-                .expect_err("unsupported covered claim")
-                .to_string()
-                .contains("unsupported")
-        );
+        assert!(record_family_evidence(&mut session, &unsupported_claim)
+            .expect_err("unsupported covered claim")
+            .to_string()
+            .contains("unsupported"));
 
         let mut duplicate_claim = family_evidence();
         duplicate_claim.covered_claims = vec!["support".to_string(), "support".to_string()];
-        assert!(
-            record_family_evidence(&store, &generation, &duplicate_claim)
-                .expect_err("duplicate covered claim")
-                .to_string()
-                .contains("unique")
-        );
+        assert!(record_family_evidence(&mut session, &duplicate_claim)
+            .expect_err("duplicate covered claim")
+            .to_string()
+            .contains("unique"));
 
         let mut reversed = family_evidence();
         reversed.start_byte = 2;
         reversed.end_byte = 1;
-        assert!(record_family_evidence(&store, &generation, &reversed)
+        assert!(record_family_evidence(&mut session, &reversed)
             .expect_err("reversed range")
             .to_string()
             .contains("range"));
+    }
+
+    #[test]
+    fn constraint_profile_use_cases_delegate_through_storage_port() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
+
+        record_family_constraint_profile(&mut session, &constraint_profile_record())
+            .expect("record constraint profile");
+        let hydrated = show_family_constraint_profile(&store, &family().family_id)
+            .expect("show constraint profile")
+            .expect("profile exists");
+        assert_eq!(hydrated, constraint_profile());
+        assert!(show_family_constraint_profile(&store, "family:missing")
+            .expect("show missing")
+            .is_none());
+    }
+
+    #[test]
+    fn constraint_profile_validation_rejects_invalid_fields_before_store_call() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+        let mut session = FakeWriteSession::new(generation.clone());
+
+        let mut missing_id = constraint_profile_record();
+        missing_id.family_id = " ".to_string();
+        assert!(record_family_constraint_profile(&mut session, &missing_id)
+            .expect_err("missing family id")
+            .to_string()
+            .contains("family id"));
+
+        let mut leaky_value = constraint_profile_record();
+        leaky_value.profile.required_equal_features[0].values = vec!["see /tmp/secret".to_string()];
+        assert!(record_family_constraint_profile(&mut session, &leaky_value)
+            .expect_err("leaky feature value")
+            .to_string()
+            .contains("unsupported content"));
+
+        let mut not_observed_only = constraint_profile_record();
+        not_observed_only.profile.allowed_variations[0].observed_only = false;
+        assert!(
+            record_family_constraint_profile(&mut session, &not_observed_only)
+                .expect_err("non observed-only variation")
+                .to_string()
+                .contains("observed-only")
+        );
+
+        // A prohibited-presence blocker tampered into the required axis. Index 3
+        // is an empty-valued characteristic, so only the axis check fires.
+        let mut cross_axis = constraint_profile_record();
+        cross_axis.profile.required_equal_features[3].semantics =
+            crate::core::model::FeatureConstraintSemantics::ProhibitedPresence;
+        assert!(record_family_constraint_profile(&mut session, &cross_axis)
+            .expect_err("cross-axis semantics")
+            .to_string()
+            .contains("axis"));
     }
 }

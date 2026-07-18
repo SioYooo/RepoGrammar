@@ -4,6 +4,464 @@
 
 ### Fixed
 
+- Made the Python context-budget gate's escape headroom a provable upper
+  bound. JSON-escaping expands a source byte by at most 6x (a
+  short-escape-less control character becomes `\uXXXX`), so the
+  incremental-sync budget check now multiplies manifest sizes by 6
+  instead of 2 — sealing the channel where control-character-dense
+  Python sources could pass the gate, exceed the frontend request cap,
+  and silently drop whole-project context on the incremental path. The
+  sync-equivalence oracle grows a fourteenth scenario that edits an
+  escape-heavy module across the budget boundary and was adversarially
+  proven to fail under the old 2x coefficient. Projects whose aggregate
+  Python context estimate stays under about 170 KiB (the vast majority)
+  see no change; estimates between 170 KiB and 512 KiB now fall back to
+  a full rebuild on interface-stable Python edits, a performance-only
+  trade for soundness.
+
+- Stopped the Equal constraint axis from fabricating a certain deviation
+  out of uncertainty. A conformance target carrying a strict subset of a
+  multi-value Equal constraint's expected values (missing values, no
+  offending value present) is now classified as absence-driven, so under
+  a blocking unknown it downgrades to `blocking_suppressed_requirement`
+  and `PARTIAL_ALIGNMENT` instead of a fabricated `required_mismatch`
+  `STATIC_DEVIATION` — matching the MustContain axis and the invariant
+  that an UNKNOWN never becomes a definite verdict. Any offending value
+  outside the expected set still deviates, with or without blocking
+  unknowns. Abstaining alignment certificates (`UNKNOWN`,
+  `INSUFFICIENT_EVIDENCE`) are additionally guaranteed by construction
+  to carry no selected family and no computation body.
+
+- Aligned the autosync change fingerprint with the manual discovery
+  manifest. The fingerprint now evaluates gitignore through one batched
+  git check-ignore subprocess per pass (an ad-hoc local measurement
+  observed roughly ten milliseconds for six hundred candidates, a small
+  fraction of the default poll interval, but this is not a committed,
+  reproducible benchmark) with the same warning fallback as discovery,
+  and git-ignored supported files no longer trigger spurious syncs or
+  count toward the
+  fingerprint's accepted-limit ceilings, so autosync and manual sync
+  agree on whether a repository fits the accepted limits. Skipped-path
+  counts are logged as bounded path-free counters, and the remaining
+  metadata-only blind spot (same-size same-mtime edits) is documented
+  explicitly.
+
+### Added
+
+- Hardened cross-version compatibility around locks, daemons, and
+  schema versions. A preview-era index lock whose record lacks the
+  `host` field is now classified as a distinct legacy state (not
+  undecidable): `unlock --force --yes` may remove it, printing every
+  recoverable provenance field plus a prominent warning when a process
+  with the recorded pid still appears alive (host-less ownership can
+  never be soundly proven dead), while doctor reports
+  `INDEX_LOCK_LEGACY` with the exact recovery command and the same
+  caveat; modern locks with undecidable owners remain refused, and
+  acquire never auto-removes any lock. The autosync daemon stamps its
+  version into the run state additively and steps down when a strictly
+  newer version has written the state after its own startup — a
+  best-effort early exit, honestly documented as advisory (index-write
+  mutual exclusion stays with the index lock), with the startup
+  reclaiming the stamp so a deliberate binary downgrade is never
+  permanently locked out. Databases from a future schema version are
+  proven fail-closed by new tests: the read gate reports an invalid
+  state rather than the recoverable-outdated path, and the
+  mutable-store rebuild never deletes them. The MCP spec and
+  limitations now document recovery from consumer-side response
+  truncation: responses are deterministic and stateless for a fixed
+  active generation, so re-issuing the identical call recovers a
+  truncated result, with `follow_up_family_ids` as the persistent
+  handle — re-resolve handles if a resync or background autosync
+  activated a new generation between calls.
+
+- Added a `verbosity` request parameter (`minimal | standard | full`,
+  default `standard`) to the CLI query flags and the MCP
+  `repogrammar_context` input, additive under `product-schemas.v1` and
+  orthogonal to `--mode`: `mode` selects how much evidence the
+  resolver gathers, `verbosity` selects the response field density the
+  serializers emit. `standard` (the default) and `full` are
+  byte-identical to this development line's pre-precision response
+  (golden tests pin them to captured pre-change bytes on both surfaces)
+  — not to v0.2.2, because that pre-precision baseline was captured
+  after the inline-member cap of 20 (a declared v0.2.2 default-shape
+  change; see its own CHANGELOG entry). Relative to v0.2.2 the only
+  default-tier changes are that member cap plus purely additive new
+  fields. Precision slices suppress demoted diagnostic fields only at
+  `minimal`. Invalid values are explicit protocol errors, never a
+  silent fallback.
+
+- Realized the lean `verbosity: minimal` tier across the query
+  serializers, additive under `product-schemas.v1` with `standard` and
+  `full` proven byte-stable by the payload-measure harness (44 of 44
+  standard/full matrix rows byte-identical before vs after). At
+  `minimal`: the `query_route` envelope keeps only `route` and
+  `follow_up_family_ids` (a normalized superset of the candidate and
+  selected ids, so no handle is lost; `candidate_family_ids` stays on
+  `PARTIAL_CONTEXT`/`UNKNOWN`/conformance abstentions as a narrowing
+  recovery handle); `resolved_target` drops the `original_target` input
+  echo, normalizer residue, and pinned-target candidate echoes while
+  retaining candidates whenever resolution was ambiguous; the alignment
+  certificate drops the duplicate `alignment_status` token (the
+  top-level `selected_family_id` is kept at every tier as the
+  authoritative selected-family carrier, and `runtime_equivalence:
+  "UNKNOWN"` is never removed); the read plan gains honest `truncated`
+  and `item_count` flags, items whose content is already rendered into
+  `source_spans` collapse to a back-reference, and the empty
+  `source_spans` stub disappears. Deviation and variation lists on
+  alignment computations are capped at 24 entries at every tier with
+  `_truncated`/`_count` flags on actual truncation only. Measured on
+  the committed payload fixture: the minimal tier is 16,351 bytes
+  (14.2%) smaller than standard across the matrix, with abstention
+  responses 58-67% smaller; savings figures cite the two-run
+  payload-measure byte table.
+
+- Added a `repo-guard payload-measure` subcommand and a committed
+  deterministic payload fixture (a 31-member FastAPI family plus small
+  SQLAlchemy/Pydantic/pytest/Express families and a below-support file)
+  that indexes in an isolated temporary workspace and emits a stable
+  per-operation, per-verbosity response-byte table (67 matrix rows,
+  including source-span variants). Two runs are byte-identical by
+  construction and by test; any payload-savings claim must cite the
+  diff of two runs.
+
+- Extended estimated-potential token-savings accounting to every
+  context-delivering outcome. A single estimator authority records an
+  ESTIMATED event for found, partial-context, and committed-alignment
+  responses (savings = max(0, baseline - returned) under the existing
+  bytes/4 heuristic and caveat); abstentions and targets with no stored
+  size record no event rather than a guess. The local telemetry rollup
+  gains additive `by_outcome_shape` and `by_language` breakdowns behind
+  closed vocabularies (out-of-vocabulary languages coerce explicitly to
+  `unknown`, never dropped silently), `stats --json` reports an
+  `all_scope_token_savings` block with an honest
+  events-over-total-queries coverage ratio, and partial-context and
+  alignment responses now carry the estimate block on CLI and MCP —
+  with an explicit null and `unavailable_reason` when no estimate is
+  possible. Measured-savings claims remain exclusive to paired
+  experiments; nothing in this accounting can produce one.
+
+- Extended dependency-aware incremental sync to Python through stored
+  module interface hashes. Each build records a deterministic interface
+  hash per non-conftest Python module (schema v10
+  `python_module_interfaces` table, `extract_interface` worker mode),
+  and a content-only Python module edit now reparses just the touched
+  files when every modified module's interface hash is unchanged.
+  Interface-affecting edits, conftest/config changes, adds/removes,
+  missing stored hashes (`python_interface_unverified`), and any
+  manifest whose estimated whole-project context payload approaches the
+  frontend request cap on either the base or current side
+  (`python_context_budget`, a conservative sizes-only bound with 2x
+  escaping headroom) fall back to a full rebuild, so copied-forward
+  facts can never diverge from a clean rebuild through the
+  context-omission channel. The interface probe stops at the first
+  unverified module, and the sync-equivalence oracle grows to 13
+  scenarios covering both gate directions.
+
+- Decomposed product readiness and stamped schema versions on every
+  structured payload. A single readiness authority reports
+  independently-truthful dimensions - repository state, active index,
+  family evidence freshness counts, prevalence counts, query retrieval,
+  static alignment, providers, autosync, and measurement status (always
+  NOT_MEASURED without a paired experiment) - plus the top blocking
+  UNKNOWN mechanisms and exactly one recovery action from the shared
+  classifier. The summary token (ready, degraded, not_ready) is a pure
+  projection of the same recovery authority the query path consumes, so
+  a ready summary provably implies query-preflight readiness (a
+  property test enforces it, closing the baseline defect where status
+  reported query_ready while every family claim was stale-blocked);
+  unreadable stores yield null dimensions rather than definite tokens.
+  The MCP surface gains an inspect_readiness operation on the existing
+  single tool, and CLI find/family/families/member/explain/check/
+  status/doctor/stats plus all MCP results carry
+  schema_version product-schemas.v1 under a documented additive
+  pre-1.0 compatibility policy.
+
+### Changed
+
+- Bounded inline family member lists and condensed the human stats
+  output. find/family/check responses now cap the inline `members`
+  array at 20 entries in deterministic order outside `--mode deep`,
+  with an honest `member_count` total and `members_truncated` flag
+  (`--mode deep` restores the full list) — the prior unbounded form
+  returned 75 KB for a 123-member family. The human `stats` panel
+  shrinks to a ~10-line lead block (readiness, inventory, family
+  coverage, the all-scope savings headline, scope note, and a `--json`
+  pointer); every previously emitted field remains available under
+  `stats --json`.
+
+- Narrowed the incremental-sync full-rebuild gate for content-only Rust
+  and TypeScript/JavaScript source edits. Non-Python parser contexts
+  carry no cross-file source text (path sets, nearest Cargo.toml
+  features, and root TS/JS config only), so a content-only modification
+  of a .rs/.ts/.tsx/.js/.jsx source now takes the incremental path with
+  exactly one file reparsed, decided by the discovered-language
+  classifier; adds, removes, renames, config files, and every Python
+  change keep falling back to the full rebuild, and a configured
+  semantic worker still forces a full rebuild. The sync-equivalence
+  oracle grew to eleven scenarios - content-only Rust and TS edits
+  prove EQUAL against clean full rebuilds, and source additions prove
+  the fallback - all passing.
+
+- Rewrote the storage write lifecycle around generation write sessions.
+  A generation build now uses one writer connection with bounded
+  2000-row immediate transactions and explicit phase checkpoints (after
+  the file/unit/IR phase, the semantic-fact phase, and the family
+  phase, each committing the open batch and running a passive WAL
+  checkpoint), replacing the per-record connection-open pattern. Every
+  per-record validation is preserved on the session connection and
+  generation validation gains a set-wide code-unit/file conformance
+  scan; whole-database integrity checking runs once per sync instead of
+  twice; abandoned builds that committed at least one batch are stamped
+  with the terminal failed status while post-finish validation or
+  activation failures truthfully leave a building generation for prune;
+  maintenance errors after sealing are non-fatal and finish after
+  abandon is a typed error. Measured at fixture scale with real
+  instrumentation: one connection open instead of one per record, and
+  a 6,200-record build dropping from 5.2 s on the granular per-record
+  API to 0.26 s in the session, with crash and fault injection tests
+  proving the active generation stays readable and unchanged.
+
+### Added
+
+- Upgraded check/check_conformance from an advisory no-op into
+  source-backed static alignment certificates. The target resolves to
+  exactly one code unit (unit ids and path:line / byte-range locators
+  pin the innermost containing unit; a path-only target with several
+  eligible units abstains with candidate unit ids; there is no silent
+  canonical fallback), its freshness is verified before any
+  certificate, and its features are extracted by the same authority
+  family induction uses. Certificates compare the target against the
+  family constraint profile per semantics token and report
+  STATICALLY_ALIGNED, STATIC_DEVIATION, PARTIAL_ALIGNMENT,
+  INSUFFICIENT_EVIDENCE, or UNKNOWN with matched constraints,
+  deviations, legal observed variations, blocking unknowns, unresolved
+  runtime obligations, and a target relationship (member, near-miss,
+  exception on source-backed negative evidence, blocked-unknown,
+  out-of-scope); absence-driven requirement failures under a blocking
+  unknown report PARTIAL_ALIGNMENT rather than a fabricated deviation,
+  truncated variation enumerations never claim a profile was never
+  observed, abstaining certificates never surface a selected family,
+  and runtime equivalence remains the literal UNKNOWN in every
+  certificate.
+
+### Fixed
+
+- Closed two incremental-sync correctness gaps and added the
+  sync-equivalence oracle that proves incremental builds equal a clean
+  full rebuild. Mocha runner configs (`.mocharc.json/.jsonc/.cjs/.yml/
+  .yaml`) now force the full project-context rebuild their global
+  runner-flag effect requires, and sync preflight compares the base
+  generation's recorded engine version, falling back to a full rebuild
+  with an explicit `engine_version_changed` reason after an upgrade.
+  The new `repo-guard sync-equivalence` harness compares an incremental
+  sync against an independent clean rebuild across ten canonicalized
+  surfaces (files, units, IR graph, families, deep family evidence,
+  unknown inventory, repo-shape stats, local and provider semantic
+  facts) with per-scenario expected outcomes and fallback reasons, so a
+  regressed gate or misfiring preflight fails the suite instead of
+  passing vacuously; all eight committed scenarios pass, proving the
+  currently-incremental java/csharp paths equivalent.
+
+### Added
+
+- Wired constraint-profile persistence into production indexing and
+  replaced storage-order representative selection with deterministic
+  contrastive selection. The canonical member is now the cluster medoid
+  (minimum summed symmetric-difference distance over the member feature
+  map, ties broken by a path-free feature fingerprint so two-member
+  families no longer flip canonical on renames), the
+  farthest-from-medoid member carries a new `contrast` covered-claim
+  label that the read plan's support span prefers, and variation
+  witnesses cover every observed profile per constraint dimension plus
+  the Python anchor-target dimension. Query-time evidence selection
+  requires one witness per variation dimension when a constraint
+  profile is hydrated, letting the canonical satisfy a dimension it
+  solely represents, and family detail on CLI and MCP exposes a
+  metadata-only `constraint_profile` object.
+
+- Derived source-backed family constraint profiles at storage schema v9.
+  Every emitted family now records a FamilyConstraintProfile - required
+  features under a four-token semantics discriminator (Equal,
+  EqualEmpty for equal-but-empty dimensions, MustContain for the
+  support-family core, ProhibitedPresence on the prohibited axis with
+  read-and-write axis validation), observed-only variation constraints
+  that agree dimension-for-dimension with the co-persisted variation
+  slots, and the claim's typed unknown obligations - derived exclusively
+  from the existing compatibility authorities with drift-guard tests on
+  both hand-maintained mirrors. Profiles persist through a dedicated
+  constraint-profile store into a validated deterministic column, are
+  hydration-validated including tampering rejection, and are not yet
+  exposed on query or interface surfaces; production wiring lands with
+  the alignment slice.
+
+- Added evaluation run conditions and an honest naive control to the
+  product-core harness: `repo-guard product-eval` accepts `--condition
+  <token>` and `--baseline token-overlap`, results carry explicit
+  `condition` and `baseline` fields, and a new
+  `selected_on_abstention_gold` safety counter reports selections on
+  queries whose gold outcome is abstention for every condition.
+  Reciprocal rank now scores the committed answer only - abstentions
+  contribute zero for all conditions - and candidate metrics evaluate at
+  most the first five candidates, so cross-condition MRR comparisons no
+  longer credit uncommitted candidate lists. Measured on the corpus
+  after integration: product hit@1 21/42 with mrr 0.500 and zero
+  abstention-gold selections; the token-overlap control reaches hit@1
+  11/42 with 4 abstention-gold selections.
+
+### Changed
+
+- Stabilized semantic family identity (pre-1.0 breaking change to the family-id
+  format for multi-cluster keys). A `FamilyKey` with two or more ready clusters
+  now gives every cluster a `v{hex}` suffix derived from the cluster's
+  characteristic profile (the feature values the role requires equal across
+  members), so no cluster holds the bare base id and adding a path-earlier file
+  can no longer silently re-point it; single-ready-cluster keys keep their bare
+  base id unchanged. Sibling clusters that share a characteristic profile are
+  distinguished by their shared support-family core, then by a deterministic
+  positional ordinal (recorded as classification-independent metadata) for
+  genuinely indistinguishable clusters, and lossy `stable_token` base-id
+  collisions across distinct keys are disambiguated deterministically with
+  uniqueness asserted at build time. The legacy membership-union `cluster_...`
+  suffix is replaced. Run `repogrammar resync` after upgrading so stored family
+  ids for multi-cluster keys are rewritten to the new format. Sync and resync
+  JSON now also report `families_added` and `families_removed` (bounded, sorted
+  samples plus counts) by diffing the base and new generations' family-id sets;
+  they are `null` when there is no base generation or the sync did not recompute
+  families.
+- Separated family support from dominance. Minimum support no longer implies a
+  `DOMINANT_PATTERN` label: every emitted family now carries an evidence-backed
+  `FamilyPrevalence` record (eligible/blocked/unsupported peer counts, coverage
+  ratio, competing ready-family counts, and a deterministic reason) and is
+  classified with the four-token prevalence vocabulary `DOMINANT_PATTERN`,
+  `SUPPORTED_PATTERN`, `MINORITY_PATTERN`, and `UNKNOWN_PREVALENCE`, decided on
+  exact integer thresholds. The prevalence object is exposed on the families
+  list, family detail (CLI JSON, MCP, and human), and find/check payloads.
+- Bumped the storage schema to version `8`: the `families` table gains the
+  prevalence columns and its classification `CHECK` moves to the four-token
+  vocabulary. Reads against a pre-`8` database now fail with a typed
+  schema-outdated error whose recovery is `repogrammar resync`, and the
+  full-rebuild path recreates the repo-local mutable database (deleting only
+  `.repogrammar/repogrammar.sqlite` and its WAL/SHM sidecars) because the
+  create-if-not-exists DDL cannot add columns in place.
+
+### Added
+
+- Routed the deterministic term-retrieval substrate into the production fuzzy
+  lookup path so natural-language, synonym, and framework-plus-concept queries now
+  resolve to a fresh family with calibrated abstention — no LLM, embedding, or
+  network dependency. Term retrieval runs **only** when the exact authority layers
+  (exact family id, `unit:` member id, exact role, exact `//`-suffix path) and the
+  role/evidence fuzzy layer produce **no candidate at all** (a single `query
+  target` `InsufficientSupport` block with empty candidate ids) for a target that
+  is not path-locator-shaped; exact-layer candidate-set and ambiguity abstentions
+  keep their own claim, candidate ids, and narrowing recovery verbatim. A target
+  is path-shaped only when a whitespace token contains `/` or ends in a known
+  source-file extension, so prose with an interior-dotted word (`fastapi.Depends`,
+  `0.100`, `e.g.`) still reaches retrieval. Normalization scores the source-free
+  family search projection and applies named abstention gates
+  (`MIN_RETRIEVAL_SCORE = 10`, `MIN_RETRIEVAL_MARGIN = 1`, hydration bounded by the
+  defensive `MAX_RETRIEVAL_HYDRATIONS = 5`): a selection requires the top candidate
+  to clear the additive absolute floor and carry a pattern-concept signal, and to
+  beat any competing family that also clears the floor. Bare frameworks, bare
+  concepts, typos, truncated ties, stale candidates, and genuinely ambiguous
+  targets abstain with a typed `UNKNOWN` and a low-cardinality `abstention_reason`
+  (`no_candidate`, `below_min_score`, `unsupported_target`, `margin_too_close`,
+  `truncated_tie`, `stale_candidates`, `hydration_ambiguous`). Calibrated on the
+  79-query product-eval corpus (42 retrieval + 25 abstention + 12 context), this
+  raises hit@1 to 21/42 (from the pre-routing 17/43) while holding zero
+  false-family selections, 25/25 correct abstentions, 4/4 unsupported rejections,
+  6/6 ambiguity precision, and 13/14 candidate recall with no regression among
+  previously-matching exact/context queries. The committed retrieval vocabulary
+  also treats `repository` as a data-access concept (previously shadowed by a
+  stopword) and `model` as both a validation-model and a data-access concept, so
+  repository-worded queries resolve and bare `models` stays genuinely ambiguous.
+  The `query_route` report (CLI JSON, MCP, and human) gains source-free
+  term-retrieval metadata (`hydrated_family_count`, `retrieval_stage_count`, and a
+  `term_retrieval` object with route token, counts, bucketed scores, matched
+  signals, truncation flag, and abstention reason), and anonymous telemetry gains
+  the enum-only `by_abstention_reason` rollup dimension (kept in lockstep with the
+  reason enum by a build-time equality test). No raw target text is ever persisted.
+- Committed the deterministic product-core evaluation harness: a report-only
+  `repo-guard product-eval` command that indexes committed fixtures in isolated
+  temporary workspaces and drives the product binary through
+  `src/fixtures/evaluation/query-corpus-v1.json`, writing machine-readable
+  output. The Phase 2 corpus expands to 73 gold-labeled queries (later grown to
+  79 with 12 context queries as alignment and context coverage landed; the
+  committed corpus file is authoritative) over python-v0_1,
+  typescript-v0_2, and a zero-family fixture, each tagged with a measurement
+  `intent` (`retrieval`/`abstention`/`context`) and, where relevant, a
+  `candidates_include` gold set; new coverage adds `path:line`/`path:start-end`
+  local-context locators, bare framework names, concept synonyms, natural-language
+  paraphrases (including TypeScript framework questions), ambiguous route/test
+  questions, unsupported-language questions, and unsafe typo inputs. The corpus
+  schema stays backward-compatible `product-eval-corpus.v1` (new optional fields);
+  the results schema bumps to `product-eval-results.v2`, adding retrieval metrics
+  (`hit_at_1`, `candidate_recall`, `mrr`, `correct_abstention_rate`,
+  `false_family_rate`, `unsupported_rejection_rate`, `ambiguity_precision`) with
+  audit-friendly numerator/denominator counts, per-intent totals, and per-query
+  `intent`/`reciprocal_rank` plus null-tolerant `hydrated_family_count` and
+  `retrieval_stage_count` placeholders for a later wave. The recorded baseline at
+  `docs/experiments/product-core-baseline.md` shows every exact
+  id/member/path/role/locator query and every abstention/context query matching
+  gold (47/73, zero false family selections, `hit@1` 17/43, `mrr` 0.395,
+  `candidate_recall` 10/13, correct abstention 24/24) while all retrieval-intent
+  natural-language and synonym questions abstain — the measured retrieval gap
+  this baseline freezes for Phase 2. No production behavior changed.
+- Added the deterministic metadata-retrieval substrate for term-based family
+  discovery, with no LLM, embedding, or network dependency. A new
+  `application::query_terms` module folds a raw target into a typed, bounded,
+  total `NormalizedQuery` (disjoint language/framework/concept/residue buckets)
+  using small committed vocabulary tables — a stopword set, a singular/plural
+  table, language aliases (including the `c#`/`c++` compound forms), framework
+  aliases, and a concept-alias table — every entry justified by a
+  `framework_role` the index can produce. A new source-free
+  `list_active_family_search_summaries` store projection (one bounded,
+  generation-consistent read of identity, language, code-unit kind, framework
+  role, prevalence classification, support count, prevalence, and bounded
+  repo-relative evidence-path components) backs `score_family_candidates`, which
+  ranks families with explainable additive integer weights, hard
+  language/framework exclusion, a deterministic total order, and a retained-K
+  cap. This substrate is fully tested and documented in
+  `docs/specifications/query-resolution.md` but is NOT yet routed into the
+  production fuzzy lookup path; wiring and abstention calibration land in the
+  next change. No production behavior changed.
+
+### Fixed
+
+- Aligned `UNKNOWN` recovery guidance with the optional-provider registry so it
+  never tells an agent to enable a provider that does not exist. A single
+  cross-check authority (`application::providers::provider_recovery_code`) now
+  decides every provider-related recovery code against the registry instead of
+  hard-coded mechanism lists in the query use case. Mechanisms an *integrated*
+  provider slot resolves recover via `enable_provider` (today the TypeScript
+  compiler slot's `typescript_module_resolver`, `typescript_paths_resolver`,
+  `typescript_package_entry_model`, and `typescript_export_graph`, which moved
+  off `resolve_import_graph`). Mechanisms a *registered-but-not-integrated* slot
+  would resolve (the python and rust slots) and framework/dependency-injection/
+  build models only a future provider could resolve now recover via the new
+  low-cardinality code `not_implemented_in_current_version` instead of an
+  unexecutable `enable_provider`. Genuine import-graph mechanisms in no provider
+  bucket keep `resolve_import_graph`. `stats --unknowns` and `unknowns` output
+  therefore shows `not_implemented_in_current_version` buckets where it
+  previously showed `enable_provider`; `resolve_dependency_metadata` stays a
+  reserved telemetry code but is no longer emitted. `run_sync` keeps its spelling
+  for metric-bucket continuity even though its operator action is
+  `repogrammar resync`.
+- The `families` listing now actually verifies evidence freshness. Previously
+  `families --json` accepted a freshness request and source store but ignored
+  both, serving the family inventory with zero freshness qualification even when
+  the same runtime's single-family lookups returned `StaleEvidence`. The listing
+  now reads one bounded projection of the active generation's family evidence and
+  hash-verifies each distinct evidence path at most once (never once per family),
+  so source reads stay bounded by the distinct evidence paths. Each family entry
+  gains a three-state `freshness` verdict — `fresh`, `stale`, or `cannot_verify`
+  (a family with zero evidence rows abstains as `cannot_verify`) — and the report
+  gains `fresh_count`/`stale_count`/`cannot_verify_count`. Stale and
+  `cannot_verify` families stay listed but are qualified distinctly (the human
+  surface leads with the counts; JSON carries the fields verbatim), and a stale
+  listing raises one low-cardinality report-level `StaleEvidence` unknown
+  recovering via `run repogrammar resync` without collapsing the whole listing
+  into `UNKNOWN`. The freshness-free `list_families` variant is unchanged.
 - Isolated every public npm launcher finalizer lane in its own external working
   directory. Post-public finalizer run `29587973589` verified the immutable
   GitHub release, public npm metadata and provenance, the packaged native

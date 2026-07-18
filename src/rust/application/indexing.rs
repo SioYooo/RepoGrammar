@@ -5,13 +5,16 @@ use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
-use crate::adapters::parsing::python::python_project_config_parser_method;
+use crate::adapters::parsing::python::{
+    python_project_config_parser_method, MAX_PYTHON_FRONTEND_INPUT_BYTES,
+};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, cpp_support_target_is_role_compatible,
-    csharp_support_target_is_role_compatible, family_eligible_kind, family_storage_records,
-    family_unknown_blocks_claim, java_support_target_is_role_compatible, min_family_support,
+    csharp_support_target_is_role_compatible, family_constraint_profile_record,
+    family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
+    java_support_target_is_role_compatible, min_family_support,
     python_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
     CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
     CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
@@ -27,20 +30,24 @@ use crate::core::model::{
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
-use crate::ports::family_store::FamilyStore;
+use crate::ports::family_store::{
+    FamilyConstraintProfileStore, FamilyStore, FamilyStoreWithProfiles, GenerationWriteSession,
+    GenerationWriteStore,
+};
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
 };
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
-    ActiveClaimInputSnapshot, GenerationHandle, IndexStorageLayout, IndexStore, IndexStoreError,
-    IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord,
-    IndexedSemanticFactRecord, STORAGE_SCHEMA_VERSION,
+    ActiveClaimInputSnapshot, GenerationEngineStampStore, IndexStorageLayout, IndexStore,
+    IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    IndexedIrNodeRecord, IndexedSemanticFactRecord, PythonModuleInterfaceStore,
+    STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
-    SourceDocument, SourceParser,
+    PythonInterfaceProbe, SourceDocument, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -148,6 +155,43 @@ pub struct IndexingSyncReport {
     pub reparsed_files: usize,
     pub families_recomputed: usize,
     pub dirty_records_cleared: usize,
+    /// Cross-generation family-identity change versus the base generation, or
+    /// `None` when there is no base generation to diff against (first build).
+    pub family_identity_delta: Option<FamilyIdentityDelta>,
+}
+
+/// Family-id set difference between the base generation and the newly recorded
+/// generation. Ids are deterministic follow-up handles: a family that is
+/// re-clustered under a different characteristic profile appears as one removed
+/// and one added id, not as an in-place rename. Samples are sorted and bounded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyIdentityDelta {
+    pub added_count: usize,
+    pub removed_count: usize,
+    pub added_sample: Vec<String>,
+    pub removed_sample: Vec<String>,
+}
+
+/// Maximum family ids listed in each bounded `FamilyIdentityDelta` sample.
+const FAMILY_IDENTITY_DELTA_SAMPLE_CAP: usize = 20;
+
+impl FamilyIdentityDelta {
+    fn from_id_sets(base_ids: &BTreeSet<String>, new_ids: &BTreeSet<String>) -> Self {
+        let added: Vec<String> = new_ids.difference(base_ids).cloned().collect();
+        let removed: Vec<String> = base_ids.difference(new_ids).cloned().collect();
+        FamilyIdentityDelta {
+            added_count: added.len(),
+            removed_count: removed.len(),
+            added_sample: added
+                .into_iter()
+                .take(FAMILY_IDENTITY_DELTA_SAMPLE_CAP)
+                .collect(),
+            removed_sample: removed
+                .into_iter()
+                .take(FAMILY_IDENTITY_DELTA_SAMPLE_CAP)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,7 +269,7 @@ pub fn index_repository_with_discovery(
 pub fn index_repository_with_discovery_and_store(
     request: IndexingRequest,
     discovery: &impl FileDiscovery,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let _index_lock = crate::application::repository::acquire_index_lock(
         &request.repository_root,
@@ -233,17 +277,21 @@ pub fn index_repository_with_discovery_and_store(
     )?;
     let report = discover_repository_files(request.clone(), discovery)?;
     let generation = crate::application::storage::prepare_index_generation(store)?;
-    for file in &report.files {
-        crate::application::storage::record_indexed_file(
-            store,
-            &generation,
-            &IndexedFileRecord {
-                path: file.path.clone(),
-                content_hash: file.content_hash.clone(),
-                size_bytes: file.size_bytes,
-                language: file.language.as_str().to_string(),
-            },
-        )?;
+    {
+        let mut session =
+            crate::application::storage::open_index_write_session(store, &generation)?;
+        for file in &report.files {
+            crate::application::storage::record_indexed_file(
+                session.as_mut(),
+                &IndexedFileRecord {
+                    path: file.path.clone(),
+                    content_hash: file.content_hash.clone(),
+                    size_bytes: file.size_bytes,
+                    language: file.language.as_str().to_string(),
+                },
+            )?;
+        }
+        crate::application::storage::finish_index_write_session(session.as_mut())?;
     }
     crate::application::storage::validate_index_generation(store, &generation)?;
     crate::application::storage::activate_index_generation(store, &generation)?;
@@ -267,7 +315,7 @@ pub fn index_repository_with_discovery_parser_and_store(
     discovery: &impl FileDiscovery,
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -292,7 +340,7 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -317,7 +365,10 @@ pub fn sync_repository_with_discovery_parser_frameworks_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &impl IndexStore,
+    store: &(impl IndexStore
+          + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
+          + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     sync_repository_with_optional_semantic_worker(
@@ -342,7 +393,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -367,7 +418,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store_with
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     index_repository_with_optional_semantic_worker(
@@ -392,7 +443,7 @@ pub fn index_repository_with_discovery_parser_frameworks_rust_provider_families_
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -418,7 +469,7 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     semantic_worker: &dyn SemanticWorker,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -444,7 +495,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
     semantic_worker: &dyn SemanticWorker,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_optional_semantic_worker(
@@ -470,7 +521,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     parser: &impl SourceParser,
     framework_roles: &dyn FrameworkRoleDetector,
     semantic_worker: &dyn SemanticWorker,
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let mut progress = |_event: ProgressEvent| {};
     index_repository_with_discovery_parser_frameworks_semantic_worker_families_and_store_with_progress(
@@ -490,7 +541,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_worker: (&dyn FrameworkRoleDetector, &dyn SemanticWorker),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker) = framework_and_worker;
@@ -520,7 +571,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_rust_pr
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -546,7 +597,12 @@ pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_a
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     framework_and_rust_provider: (&dyn FrameworkRoleDetector, &dyn RustSemanticProvider),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore
+          + FamilyStore
+          + FamilyConstraintProfileStore
+          + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
+          + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, rust_provider) = framework_and_rust_provider;
@@ -576,7 +632,12 @@ pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_pro
         &dyn SemanticWorker,
         &dyn RustSemanticProvider,
     ),
-    store: &(impl IndexStore + FamilyStore),
+    store: &(impl IndexStore
+          + FamilyStore
+          + FamilyConstraintProfileStore
+          + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
+          + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     let (framework_roles, semantic_worker, rust_provider) = framework_worker_and_rust_provider;
@@ -602,7 +663,7 @@ fn index_repository_with_optional_semantic_worker(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
-    store: &impl IndexStore,
+    store: &(impl IndexStore + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     emit_progress(
@@ -641,7 +702,7 @@ fn index_repository_full_after_discovery<SourceStoreImpl, SourceParserImpl, Inde
 where
     SourceStoreImpl: SourceStore,
     SourceParserImpl: SourceParser,
-    IndexStoreImpl: IndexStore,
+    IndexStoreImpl: IndexStore + GenerationWriteStore,
 {
     let source_store = runtime.source_store;
     let parser = runtime.parser;
@@ -655,10 +716,15 @@ where
         known_work_units(report.files.len(), report.files.len()),
     );
     let generation = crate::application::storage::prepare_index_generation(store)?;
+    // One write session serves the whole build: a single connection with pragmas
+    // applied once and bounded-batch transactions replaces the historical
+    // per-record connection opens. It is finished (committed and sealed) before
+    // validation; an early return drops it, which rolls back the open batch and
+    // stamps the terminal `failed` status.
+    let mut session = crate::application::storage::open_index_write_session(store, &generation)?;
     for (index, file) in report.files.iter().enumerate() {
         crate::application::storage::record_indexed_file(
-            store,
-            &generation,
+            session.as_mut(),
             &IndexedFileRecord {
                 path: file.path.clone(),
                 content_hash: file.content_hash.clone(),
@@ -748,14 +814,14 @@ where
             }
         };
         let parse_outcome = record_parse_report(
-            store,
-            &generation,
+            session.as_mut(),
             file,
             &source.text,
             parse_report,
             options.framework_roles,
             &mut warnings,
         )?;
+        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
         indexed_units += parse_outcome.indexed_units;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
@@ -773,12 +839,14 @@ where
         "stored code units",
         known_work_units(indexed_units, indexed_units),
     );
+    // Phase boundary: the file, code-unit, and IR write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
 
     sort_semantic_facts(&mut parser_semantic_facts);
-    let parser_fact_count = record_semantic_facts(store, &generation, 0, &parser_semantic_facts)?;
+    let parser_fact_count = record_semantic_facts(session.as_mut(), 0, &parser_semantic_facts)?;
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
-        record_semantic_facts(store, &generation, parser_fact_count, &framework_role_facts)?;
+        record_semantic_facts(session.as_mut(), parser_fact_count, &framework_role_facts)?;
     let mut derived_python_support_facts = derive_python_framework_support_facts(
         &indexed_code_units,
         &parser_semantic_facts,
@@ -786,8 +854,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_python_support_facts);
     let derived_python_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count + framework_fact_count,
         &derived_python_support_facts,
     )?;
@@ -798,8 +865,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_tsjs_support_facts);
     let derived_tsjs_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count + framework_fact_count + derived_python_support_fact_count,
         &derived_tsjs_support_facts,
     )?;
@@ -810,8 +876,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_java_support_facts);
     let derived_java_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -825,8 +890,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_csharp_support_facts);
     let derived_csharp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -841,8 +905,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_cpp_support_facts);
     let derived_cpp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -858,8 +921,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_rust_support_facts);
     let derived_rust_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         parser_fact_count
             + framework_fact_count
             + derived_python_support_fact_count
@@ -887,9 +949,8 @@ where
     let rust_provider_facts = record_rust_provider_facts(
         &request,
         &indexed_code_units,
-        &generation,
         options.rust_provider,
-        store,
+        session.as_mut(),
         &mut warnings,
         local_support_fact_count,
     )?;
@@ -923,11 +984,10 @@ where
             request: &request,
             discovery_report: &report,
             parser_semantic_facts: &parser_semantic_facts,
-            generation: &generation,
             semantic_worker: options.semantic_worker,
             fact_id_offset: local_support_fact_count + rust_provider_fact_count,
         },
-        store,
+        session.as_mut(),
         &mut warnings,
     )?;
     let worker_semantic_facts = worker_facts.len();
@@ -948,8 +1008,7 @@ where
         )?;
     sort_semantic_facts(&mut derived_tsjs_provider_support_facts);
     let derived_tsjs_provider_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         local_support_fact_count + rust_provider_fact_count + worker_semantic_facts,
         &derived_tsjs_provider_support_facts,
     )?;
@@ -965,6 +1024,8 @@ where
         );
     }
 
+    // Phase boundary: the semantic-fact write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     if let Some(family_store) = options.family_store {
         emit_progress(
             progress,
@@ -996,14 +1057,23 @@ where
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
-        let family_count = record_family_claims(
-            family_store,
-            &generation,
-            &indexed_code_units,
-            &family_facts,
-        )?;
+        // Capture the base generation's family ids before the new generation is
+        // activated, but only when there is a base generation to diff against.
+        let base_family_ids = sync_report
+            .as_ref()
+            .filter(|report| report.base_generation.is_some())
+            .map(|_| base_generation_family_ids(family_store))
+            .transpose()?;
+        let (family_count, new_family_ids) =
+            record_family_claims(session.as_mut(), &indexed_code_units, &family_facts)?;
         if let Some(sync_report) = sync_report.as_mut() {
             sync_report.families_recomputed = family_count;
+            if let Some(base_family_ids) = &base_family_ids {
+                sync_report.family_identity_delta = Some(FamilyIdentityDelta::from_id_sets(
+                    base_family_ids,
+                    &new_family_ids,
+                ));
+            }
         }
         emit_progress(
             progress,
@@ -1011,8 +1081,13 @@ where
             "stored eligible family claims",
             WorkUnits::Unknown,
         );
+        // Phase boundary: the family recomputation and write phase is complete.
+        crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     }
 
+    // Commit and seal the write session so validation and activation observe the
+    // fully committed generation on their own connections.
+    crate::application::storage::finish_index_write_session(session.as_mut())?;
     emit_progress(
         progress,
         ProgressStage::PersistenceValidation,
@@ -1057,7 +1132,10 @@ fn sync_repository_with_optional_semantic_worker(
     source_store: &impl SourceStore,
     parser: &impl SourceParser,
     options: IndexingPipelineOptions<'_>,
-    store: &impl IndexStore,
+    store: &(impl IndexStore
+          + GenerationEngineStampStore
+          + PythonModuleInterfaceStore
+          + GenerationWriteStore),
     progress: &mut dyn FnMut(ProgressEvent),
 ) -> Result<IndexingOutcome, RepoGrammarError> {
     emit_progress(
@@ -1085,7 +1163,15 @@ fn sync_repository_with_optional_semantic_worker(
         store,
         progress,
     };
-    let preflight = incremental_sync_preflight(runtime.store, semantic_worker_configured)?;
+    let base_engine_version = runtime
+        .store
+        .active_generation_engine_version()
+        .map_err(index_store_error)?;
+    let preflight = incremental_sync_preflight(
+        runtime.store,
+        semantic_worker_configured,
+        base_engine_version.as_deref(),
+    )?;
     let Some(base_generation) = preflight.base_generation.clone() else {
         let sync_report = sync_fallback_report(None, &report, None, "missing_active_generation");
         return index_repository_full_after_discovery(
@@ -1120,22 +1206,36 @@ fn sync_repository_with_optional_semantic_worker(
         .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
     let delta = compute_sync_delta(&snapshot, &report);
-    if sync_delta_touches_project_context(&delta) {
-        let sync_report = sync_fallback_report(
-            Some(snapshot.generation_id.clone()),
-            &report,
-            Some(&delta),
-            "project_context_changed",
-        );
-        return index_repository_full_after_discovery(
-            request,
-            report,
-            &mut runtime,
-            Some(sync_report),
-        );
+    let decision = classify_sync_context_gate(
+        &request,
+        &delta,
+        &snapshot.files,
+        &report.files,
+        runtime.source_store,
+        runtime.parser,
+        runtime.store,
+    )?;
+    match decision {
+        SyncContextDecision::FullRebuild(reason) => {
+            let sync_report = sync_fallback_report(
+                Some(snapshot.generation_id.clone()),
+                &report,
+                Some(&delta),
+                reason,
+            );
+            index_repository_full_after_discovery(request, report, &mut runtime, Some(sync_report))
+        }
+        SyncContextDecision::Incremental(base_interfaces) => {
+            index_repository_incremental_after_discovery(
+                request,
+                report,
+                snapshot,
+                delta,
+                base_interfaces,
+                &mut runtime,
+            )
+        }
     }
-
-    index_repository_incremental_after_discovery(request, report, snapshot, delta, &mut runtime)
 }
 
 struct IncrementalSyncPreflight {
@@ -1146,6 +1246,7 @@ struct IncrementalSyncPreflight {
 fn incremental_sync_preflight(
     store: &impl IndexStore,
     semantic_worker_configured: bool,
+    base_engine_version: Option<&str>,
 ) -> Result<IncrementalSyncPreflight, RepoGrammarError> {
     let inspection = store.inspect().map_err(index_store_error)?;
     let mut fallback_reason = None;
@@ -1162,6 +1263,13 @@ fn incremental_sync_preflight(
         fallback_reason = Some("active_dirty_records".to_string());
     } else if semantic_worker_configured {
         fallback_reason = Some("semantic_worker_requires_full_rebuild".to_string());
+    } else if base_engine_version != Some(env!("CARGO_PKG_VERSION")) {
+        // The active generation was produced by a different RepoGrammar engine
+        // version than the running binary. Copy-forward would relabel its facts
+        // with the new version without reparsing, so rebuild instead. A missing
+        // stamp (`None`) is treated as a mismatch: never copy forward facts of
+        // unknown provenance.
+        fallback_reason = Some("engine_version_changed".to_string());
     }
     Ok(IncrementalSyncPreflight {
         base_generation: inspection.active_generation,
@@ -1260,6 +1368,7 @@ fn sync_fallback_report(
         reparsed_files: 0,
         families_recomputed: 0,
         dirty_records_cleared: 0,
+        family_identity_delta: None,
     }
 }
 
@@ -1268,12 +1377,13 @@ fn index_repository_incremental_after_discovery<SourceStoreImpl, SourceParserImp
     report: FileDiscoveryReport,
     snapshot: ActiveClaimInputSnapshot,
     delta: SyncDelta,
+    base_python_interfaces: BTreeMap<String, String>,
     runtime: &mut IndexingRuntime<'_, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>,
 ) -> Result<IndexingOutcome, RepoGrammarError>
 where
     SourceStoreImpl: SourceStore,
     SourceParserImpl: SourceParser,
-    IndexStoreImpl: IndexStore,
+    IndexStoreImpl: IndexStore + GenerationWriteStore,
 {
     let source_store = runtime.source_store;
     let parser = runtime.parser;
@@ -1287,6 +1397,9 @@ where
         known_work_units(report.files.len(), report.files.len()),
     );
     let generation = crate::application::storage::prepare_index_generation(store)?;
+    // One write session serves the whole incremental build, including the
+    // copy-forward of unchanged rows; see the full-build path for the lifecycle.
+    let mut session = crate::application::storage::open_index_write_session(store, &generation)?;
     let changed_files = delta.changed_files();
     let inventory_only_paths = inventory_only_paths(&report);
     let unchanged_paths = delta
@@ -1297,7 +1410,22 @@ where
 
     let mut stored_files = 0usize;
     for file in &delta.unchanged_files {
-        crate::application::storage::record_indexed_file(store, &generation, file)?;
+        crate::application::storage::record_indexed_file(session.as_mut(), file)?;
+        // Copy the Python interface hash forward for every unchanged `.py` module.
+        // Reaching this path guaranteed every modified module's interface was
+        // unchanged and no `.py` was added or removed, so an unchanged module's
+        // stored hash equals what a full rebuild would recompute (identical
+        // content, identical engine). A module with no stored hash (its build-time
+        // probe failed) is simply skipped; the next sync treats the gap as
+        // `python_interface_unverified` and rebuilds.
+        if file.language == DiscoveredLanguage::Python.as_str() {
+            if let Some(interface_hash) = base_python_interfaces.get(&file.path) {
+                session
+                    .as_mut()
+                    .record_python_module_interface(&file.path, interface_hash)
+                    .map_err(index_store_error)?;
+            }
+        }
         stored_files += 1;
         emit_progress(
             progress,
@@ -1308,8 +1436,7 @@ where
     }
     for file in &changed_files {
         crate::application::storage::record_indexed_file(
-            store,
-            &generation,
+            session.as_mut(),
             &IndexedFileRecord {
                 path: file.path.clone(),
                 content_hash: file.content_hash.clone(),
@@ -1332,7 +1459,7 @@ where
         if !unchanged_paths.contains(&unit.path) || inventory_only_paths.contains(&unit.path) {
             continue;
         }
-        crate::application::storage::record_code_unit(store, &generation, unit)?;
+        crate::application::storage::record_code_unit(session.as_mut(), unit)?;
         copied_unit_ids.insert(unit.id.clone());
         indexed_code_units.push(unit.clone());
     }
@@ -1342,14 +1469,14 @@ where
         if !copied_unit_ids.contains(&node.code_unit_id) {
             continue;
         }
-        crate::application::storage::record_ir_node(store, &generation, node)?;
+        crate::application::storage::record_ir_node(session.as_mut(), node)?;
         copied_node_ids.insert(node.id.clone());
     }
     for edge in &snapshot.ir_edges {
         if copied_node_ids.contains(&edge.from_node_id)
             && copied_node_ids.contains(&edge.to_node_id)
         {
-            crate::application::storage::record_ir_edge(store, &generation, edge)?;
+            crate::application::storage::record_ir_edge(session.as_mut(), edge)?;
         }
     }
 
@@ -1369,7 +1496,7 @@ where
         {
             continue;
         }
-        crate::application::storage::record_semantic_fact(store, &generation, record)?;
+        crate::application::storage::record_semantic_fact(session.as_mut(), record)?;
         let fact = semantic_fact_from_index_record(record)?;
         if fact.kind == SemanticFactKind::FrameworkRole
             && fact.certainty == FactCertainty::FrameworkHeuristic
@@ -1456,14 +1583,19 @@ where
             }
         };
         let parse_outcome = record_parse_report(
-            store,
-            &generation,
+            session.as_mut(),
             file,
             &source.text,
             parse_report,
             options.framework_roles,
             &mut warnings,
         )?;
+        // A reparsed `.py` module stores its freshly probed interface hash, exactly
+        // as a full rebuild would. Modified modules reached here only with an
+        // unchanged interface, so the fresh hash equals the copied-forward base
+        // hash of an unchanged module — both paths converge on the full-rebuild
+        // interface table.
+        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
@@ -1480,15 +1612,17 @@ where
         "stored code units",
         known_work_units(indexed_code_units.len(), indexed_code_units.len()),
     );
+    // Phase boundary: the file, code-unit, and IR write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
 
     let mut next_fact_offset = next_semantic_fact_offset(&copied_semantic_records);
     sort_semantic_facts(&mut parser_semantic_facts);
     let parser_fact_count =
-        record_semantic_facts(store, &generation, next_fact_offset, &parser_semantic_facts)?;
+        record_semantic_facts(session.as_mut(), next_fact_offset, &parser_semantic_facts)?;
     next_fact_offset += parser_fact_count;
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
-        record_semantic_facts(store, &generation, next_fact_offset, &framework_role_facts)?;
+        record_semantic_facts(session.as_mut(), next_fact_offset, &framework_role_facts)?;
     next_fact_offset += framework_fact_count;
 
     let mut all_parser_facts = copied_parser_facts;
@@ -1503,8 +1637,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_python_support_facts);
     let derived_python_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_python_support_facts,
     )?;
@@ -1516,8 +1649,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_tsjs_support_facts);
     let derived_tsjs_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_tsjs_support_facts,
     )?;
@@ -1529,8 +1661,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_java_support_facts);
     let derived_java_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_java_support_facts,
     )?;
@@ -1542,8 +1673,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_csharp_support_facts);
     let derived_csharp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_csharp_support_facts,
     )?;
@@ -1555,8 +1685,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_cpp_support_facts);
     let derived_cpp_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_cpp_support_facts,
     )?;
@@ -1568,8 +1697,7 @@ where
     )?;
     sort_semantic_facts(&mut derived_rust_support_facts);
     let derived_rust_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_rust_support_facts,
     )?;
@@ -1586,8 +1714,7 @@ where
         )?;
     sort_semantic_facts(&mut derived_tsjs_provider_support_facts);
     let derived_tsjs_provider_support_fact_count = record_semantic_facts(
-        store,
-        &generation,
+        session.as_mut(),
         next_fact_offset,
         &derived_tsjs_provider_support_facts,
     )?;
@@ -1626,8 +1753,11 @@ where
         reparsed_files: parser_attempted_files,
         families_recomputed: 0,
         dirty_records_cleared: 0,
+        family_identity_delta: None,
     };
 
+    // Phase boundary: the semantic-fact write phase is complete.
+    crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     if let Some(family_store) = options.family_store {
         emit_progress(
             progress,
@@ -1655,20 +1785,29 @@ where
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
-        sync_report.families_recomputed = record_family_claims(
-            family_store,
-            &generation,
-            &indexed_code_units,
-            &family_facts,
-        )?;
+        // The incremental path always resyncs from an active base generation, so
+        // its family ids are always available to diff against.
+        let base_family_ids = base_generation_family_ids(family_store)?;
+        let (family_count, new_family_ids) =
+            record_family_claims(session.as_mut(), &indexed_code_units, &family_facts)?;
+        sync_report.families_recomputed = family_count;
+        sync_report.family_identity_delta = Some(FamilyIdentityDelta::from_id_sets(
+            &base_family_ids,
+            &new_family_ids,
+        ));
         emit_progress(
             progress,
             ProgressStage::FamilyConstruction,
             "stored eligible family claims",
             WorkUnits::Unknown,
         );
+        // Phase boundary: the family recomputation and write phase is complete.
+        crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     }
 
+    // Commit and seal the write session so validation and activation observe the
+    // fully committed generation on their own connections.
+    crate::application::storage::finish_index_write_session(session.as_mut())?;
     emit_progress(
         progress,
         ProgressStage::PersistenceValidation,
@@ -1723,19 +1862,255 @@ fn next_semantic_fact_offset(records: &[IndexedSemanticFactRecord]) -> usize {
         .map_or(records.len(), |index| index.saturating_add(1))
 }
 
-fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
-    delta
+/// The incremental-sync context gate decision. Either the delta only touches
+/// file-local and interface-stable inputs and the incremental path is safe
+/// (carrying the base generation's Python interface hashes for copy-forward), or
+/// some change forces a full rebuild with a specific, observable reason.
+enum SyncContextDecision {
+    /// Proceed incrementally. Holds the base generation's `path -> interface_hash`
+    /// map so unchanged Python modules copy their hash forward unchanged.
+    Incremental(BTreeMap<String, String>),
+    /// Rebuild fully. The reason string flows verbatim into
+    /// `IndexingSyncReport.fallback_reason`.
+    FullRebuild(&'static str),
+}
+
+/// Decide whether a computed delta can take the incremental path.
+///
+/// Ordering (first hit wins):
+/// 1. Any add/remove of a project-context path, or any modified config /
+///    `conftest.py` / non-file-local change other than an interface-eligible
+///    Python module edit, forces a full rebuild (`project_context_changed`) —
+///    unchanged from the pre-existing gate.
+/// 2. Otherwise, when the delta modifies any interface-eligible Python module,
+///    the Python context-payload regime is checked: if the whole-project
+///    `parse_document` context could cross the worker's per-request cap (and be
+///    silently dropped) on either the base or the current manifest, a full
+///    rebuild is forced (`python_context_budget`). See
+///    `python_context_budget_is_safe`.
+/// 3. Then every modified interface-eligible Python module is probed: its current
+///    interface hash is compared against the base generation's stored hash. A
+///    missing stored hash or an unverifiable probe yields
+///    `python_interface_unverified`; a differing hash yields
+///    `python_interface_changed`; all-unchanged proceeds incrementally.
+///
+/// `python_interface_unverified` is checked before `python_interface_changed` so
+/// an unprovable module dominates a provably-changed one; both force a full
+/// rebuild, so the precedence is diagnostic only. The probe loop short-circuits
+/// on the first unverified module, since that outcome is already fixed.
+fn classify_sync_context_gate(
+    request: &IndexingRequest,
+    delta: &SyncDelta,
+    base_files: &[IndexedFileRecord],
+    current_files: &[DiscoveredFile],
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    store: &impl PythonModuleInterfaceStore,
+) -> Result<SyncContextDecision, RepoGrammarError> {
+    if sync_delta_forces_full_context_excluding_python_modules(delta) {
+        return Ok(SyncContextDecision::FullRebuild("project_context_changed"));
+    }
+    // The base generation's stored interface hashes are both the comparison
+    // baseline for modified modules and the copy-forward source for unchanged
+    // modules on the incremental path, so load them once here.
+    let base_interfaces = store
+        .active_python_module_interfaces()
+        .map_err(index_store_error)?
+        .into_iter()
+        .map(|record| (record.path, record.interface_hash))
+        .collect::<BTreeMap<_, _>>();
+    let eligible_modules = delta
+        .modified_files
+        .iter()
+        .filter(|file| is_interface_eligible_python_module(file))
+        .collect::<Vec<_>>();
+    // Only a Python *module* modification changes the Python context-payload
+    // sizes; adds/removes and conftest/config edits already fell back above, and a
+    // delta with no modified Python module leaves the sizes byte-identical, so the
+    // budget need only be checked when there is at least one eligible module.
+    if !eligible_modules.is_empty()
+        && !python_context_budget_is_safe(
+            base_files,
+            current_files,
+            MAX_PYTHON_FRONTEND_INPUT_BYTES,
+        )
+    {
+        return Ok(SyncContextDecision::FullRebuild("python_context_budget"));
+    }
+    let mut saw_unverified = false;
+    let mut saw_changed = false;
+    for file in eligible_modules {
+        let Some(base_hash) = base_interfaces.get(&file.path) else {
+            // No stored interface: a build-time probe failed for this module (a
+            // base generation on an older schema is rejected earlier by the
+            // preflight `unsupported_storage_schema` gate, so it never reaches
+            // here). The edit cannot be proven file-local.
+            saw_unverified = true;
+            break;
+        };
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        match parser.extract_python_interface(&file.path, &source.text) {
+            PythonInterfaceProbe::Computed(current_hash) => {
+                if &current_hash != base_hash {
+                    saw_changed = true;
+                }
+            }
+            PythonInterfaceProbe::Unverified => {
+                // Unverified dominates; the decision is fixed, so stop probing.
+                saw_unverified = true;
+                break;
+            }
+        }
+    }
+    if saw_unverified {
+        return Ok(SyncContextDecision::FullRebuild(
+            "python_interface_unverified",
+        ));
+    }
+    if saw_changed {
+        return Ok(SyncContextDecision::FullRebuild("python_interface_changed"));
+    }
+    Ok(SyncContextDecision::Incremental(base_interfaces))
+}
+
+/// Whether the Python whole-project `parse_document` context stays safely under
+/// the worker's per-request byte cap on *both* the base and the current manifest.
+///
+/// The worker ships every `.py` module's text (`module_files`, and every
+/// `conftest.py` again in `conftest_files`) alongside each target document.
+/// `serialize_parse_request` silently drops that context when the serialized
+/// request exceeds [`MAX_PYTHON_FRONTEND_INPUT_BYTES`], so a target parsed near
+/// the cap loses cross-module resolution. A size-changing `.py` edit — even an
+/// interface-stable one — can flip that regime, which would make an incremental
+/// sync's copied-forward sibling facts (parsed under the base regime) diverge
+/// from a clean rebuild's (parsed under the current regime). Requiring both
+/// manifests safely under the cap keeps every module's parse context-complete in
+/// both regimes, so copy-forward matches a clean rebuild.
+///
+/// The estimate is a conservative upper bound from manifest sizes only (no file
+/// reads): raw byte sizes plus fixed per-entry and envelope overhead, then a
+/// `PYTHON_CONTEXT_ESCAPE_HEADROOM`x factor bounding JSON string escaping. Because
+/// the gate never reads file contents it cannot assume the bytes are valid Python,
+/// so the multiplier must bound the *worst-case* escaping of any byte. `serde_json`
+/// (the frontend request serializer) escapes each control character
+/// `U+0000..=U+001F` that lacks a short escape as `\uXXXX` — six output bytes for
+/// one source byte, the largest per-byte expansion any input can incur (`"`, `\`,
+/// and `\b\t\n\f\r` cost two bytes; every byte `>= 0x20` other than `"`/`\`,
+/// including all UTF-8 continuation bytes, is emitted verbatim). A `.py` file dense
+/// in control characters therefore escapes up to 6x, not the ~2x of ordinary
+/// source, so a 6x headroom is the smallest provable bound and `raw * 6 < cap`
+/// implies the real serialized request is under the cap on *every* input. A tighter
+/// 2x factor was unsound: a control-char-dense module with `raw` in `(cap/6, cap/2)`
+/// passes a 2x gate yet can serialize past the cap, reopening the silent
+/// context-drop divergence channel this gate exists to close.
+fn python_context_budget_is_safe(
+    base_files: &[IndexedFileRecord],
+    current_files: &[DiscoveredFile],
+    max_request_bytes: usize,
+) -> bool {
+    let cap = max_request_bytes as u128;
+    let base = python_context_request_raw_estimate(
+        base_files
+            .iter()
+            .filter(|file| file.language == DiscoveredLanguage::Python.as_str())
+            .map(|file| {
+                (
+                    file.path.as_str(),
+                    file.size_bytes,
+                    is_python_conftest_path(&file.path),
+                )
+            }),
+    );
+    let current = python_context_request_raw_estimate(
+        current_files
+            .iter()
+            .filter(|file| file.language == DiscoveredLanguage::Python)
+            .map(|file| {
+                (
+                    file.path.as_str(),
+                    file.size_bytes,
+                    is_python_conftest_path(&file.path),
+                )
+            }),
+    );
+    base.saturating_mul(PYTHON_CONTEXT_ESCAPE_HEADROOM) < cap
+        && current.saturating_mul(PYTHON_CONTEXT_ESCAPE_HEADROOM) < cap
+}
+
+/// Fixed overhead (bytes) of a `parse_document` request envelope minus the
+/// Python context payload: protocol/contract/mode/path/content-hash/revision keys
+/// and the surrounding JSON structure. Generously over-estimated.
+const PYTHON_CONTEXT_ENVELOPE_OVERHEAD: u128 = 4096;
+/// Fixed JSON overhead (bytes) charged per `.py` module for its `module_files`
+/// object braces, keys, and quotes.
+const PYTHON_CONTEXT_PER_FILE_OVERHEAD: u128 = 64;
+/// Worst-case JSON string-escape expansion for any source byte, applied to the raw
+/// estimate before comparing against the request cap. Six bytes (`\uXXXX`) is the
+/// largest expansion `serde_json` produces for a single byte — a short-escape-less
+/// control character `U+0000..=U+001F` — so this is a provable upper bound that
+/// holds even for content the size-only gate cannot inspect. It supersedes an
+/// earlier 2x factor that under-counted control-char-dense modules and could admit
+/// a request that serialized past the cap.
+const PYTHON_CONTEXT_ESCAPE_HEADROOM: u128 = 6;
+
+/// Conservative raw byte estimate of the largest `parse_document` request over a
+/// Python file set (each item is `(path, size_bytes, is_conftest)`). Sums the
+/// `module_files` payload (every text once), the `conftest_files` payload
+/// (conftest text a second time), the `module_paths` list, one target document's
+/// text, and fixed overhead. Escaping headroom is applied by the caller.
+fn python_context_request_raw_estimate<'a>(
+    files: impl Iterator<Item = (&'a str, u64, bool)>,
+) -> u128 {
+    let mut total = PYTHON_CONTEXT_ENVELOPE_OVERHEAD;
+    let mut max_file = 0u128;
+    for (path, size, is_conftest) in files {
+        let size = u128::from(size);
+        let path_len = path.len() as u128;
+        // `module_files` entry {"path":...,"text":...} plus the `module_paths`
+        // entry: the text once, the path twice, and per-file structural overhead.
+        total = total.saturating_add(size + 2 * path_len + 2 * PYTHON_CONTEXT_PER_FILE_OVERHEAD);
+        if is_conftest {
+            // conftest text is shipped a second time in `conftest_files`.
+            total = total.saturating_add(size + path_len + PYTHON_CONTEXT_PER_FILE_OVERHEAD);
+        }
+        max_file = max_file.max(size);
+    }
+    // The target document's own text is shipped once more in the envelope.
+    total.saturating_add(max_file)
+}
+
+/// A modified file is interface-eligible only when it is a discovered Python
+/// module (`DiscoveredLanguage::Python`, so not a `*Config` classification such
+/// as root `setup.py`/`setup.cfg`/`pyproject.toml`) and not a `conftest.py`.
+/// `conftest.py` alters ancestor fixture context for a whole subtree, and root
+/// configs alter source roots — neither is captured by a module's interface
+/// projection, so both keep full-rebuild behavior regardless of interface.
+fn is_interface_eligible_python_module(file: &DiscoveredFile) -> bool {
+    file.language == DiscoveredLanguage::Python && !is_python_conftest_path(&file.path)
+}
+
+/// The syntactic half of the context gate: every project-context change that
+/// forces a full rebuild *except* an interface-eligible Python module edit
+/// (which the caller resolves with an interface probe). This is the pre-existing
+/// `sync_delta_touches_project_context` behavior with modified Python modules
+/// carved out for the interface check.
+fn sync_delta_forces_full_context_excluding_python_modules(delta: &SyncDelta) -> bool {
+    // Adds and removes of a project-context path change that language's discovered
+    // path set (Python module index, Rust `mod` candidates, TS/JS import
+    // resolution), which can alter how *other* files parse, so they always force a
+    // full rebuild.
+    let added_or_removed = delta
         .added_files
         .iter()
         .filter(|file| !discovered_language_is_inventory_only(file.language))
         .map(|file| file.path.as_str())
-        .chain(
-            delta
-                .modified_files
-                .iter()
-                .filter(|file| !discovered_language_is_inventory_only(file.language))
-                .map(|file| file.path.as_str()),
-        )
         .chain(
             delta
                 .removed_files
@@ -1743,7 +2118,61 @@ fn sync_delta_touches_project_context(delta: &SyncDelta) -> bool {
                 .filter(|file| !indexed_language_is_inventory_only(&file.language))
                 .map(|file| file.path.as_str()),
         )
-        .any(sync_path_requires_full_project_context)
+        .any(sync_path_requires_full_project_context);
+    // A content-only modification (same path present in both manifests, changed
+    // hash) forces a full rebuild when the edit could still change another file's
+    // parse (see `modified_file_requires_full_project_context`), unless it is an
+    // interface-eligible Python module — those defer to the interface probe.
+    let modified = delta
+        .modified_files
+        .iter()
+        .filter(|file| !discovered_language_is_inventory_only(file.language))
+        .any(|file| {
+            modified_file_requires_full_project_context(file)
+                && !is_interface_eligible_python_module(file)
+        });
+    added_or_removed || modified
+}
+
+/// Whether a content-only modification of `file` must force a full rebuild.
+///
+/// Rust and TS/JS parsers consume only their own discovered path set plus root
+/// configuration (Rust: `rust_module_paths` + the nearest `Cargo.toml`'s feature
+/// names; TS/JS: `tsjs_module_paths` + the root tsconfig/jsconfig/package.json
+/// projections and the test-runner flag) — never another file's source text
+/// (`docs/specifications/indexing-pipeline.md`). A content-only edit (this is the
+/// modified bucket: the path exists in both the base and the current manifest,
+/// only its hash changed) leaves every language path set and every root
+/// configuration byte-identical, so it cannot change how any *other* file parses.
+/// Exactly the edited file must be reparsed — the file-local fast path.
+///
+/// Python is deliberately excluded: its parser consumes `python_module_files`
+/// and `python_conftest_files` (the text of every module and `conftest.py`), so a
+/// Python content edit can change another file's parse. Configuration files are
+/// excluded because discovery classifies them as `*Config` languages, not as
+/// `language_is_file_local_source`, and they feed project-wide context. Adds and
+/// removes are handled separately above because they change the path set.
+fn modified_file_requires_full_project_context(file: &DiscoveredFile) -> bool {
+    if language_is_file_local_source(file.language) {
+        return false;
+    }
+    sync_path_requires_full_project_context(file.path.as_str())
+}
+
+/// Languages whose parser output for one file is independent of every other
+/// file's source text, so a content-only edit is provably file-local. Rust and
+/// TS/JS join the already-incremental Java/C#/C/C++ family, which is excluded
+/// from the project-context gate entirely because those parsers ignore context.
+/// Python and all `*Config` classifications are intentionally absent.
+fn language_is_file_local_source(language: DiscoveredLanguage) -> bool {
+    matches!(
+        language,
+        DiscoveredLanguage::Rust
+            | DiscoveredLanguage::TypeScript
+            | DiscoveredLanguage::TypeScriptReact
+            | DiscoveredLanguage::JavaScript
+            | DiscoveredLanguage::JavaScriptReact
+    )
 }
 
 fn sync_path_requires_full_project_context(path: &str) -> bool {
@@ -1769,6 +2198,18 @@ fn sync_path_requires_full_project_context(path: &str) -> bool {
             | "vitest.config.mjs"
             | "next.config.cjs"
             | "next.config.mjs"
+            // Mocha runner configs are discovered as TsJsConfig at the repository
+            // root (discovery.rs) and flip the global TS/JS test-runner flag in
+            // the parser project context (tsjs_has_test_runner_context). Adding,
+            // removing, or editing one changes how every TS/JS file is parsed, so
+            // it must force a full rebuild. `.mocharc.js` is already covered by
+            // the `.js` extension branch above; the remaining names are listed
+            // here explicitly so the gate mirrors the runner-flag consumption.
+            | ".mocharc.json"
+            | ".mocharc.jsonc"
+            | ".mocharc.cjs"
+            | ".mocharc.yml"
+            | ".mocharc.yaml"
             | "pyproject.toml"
             | "setup.cfg"
             | "Cargo.toml"
@@ -1803,7 +2244,7 @@ struct IndexingPipelineOptions<'a> {
     framework_roles: Option<&'a dyn FrameworkRoleDetector>,
     rust_provider: Option<&'a dyn RustSemanticProvider>,
     semantic_worker: Option<&'a dyn SemanticWorker>,
-    family_store: Option<&'a dyn FamilyStore>,
+    family_store: Option<&'a dyn FamilyStoreWithProfiles>,
 }
 
 struct IndexingRuntime<'a, SourceStoreImpl, SourceParserImpl, IndexStoreImpl>
@@ -2267,9 +2708,34 @@ fn extract_python_source_roots_from_project_config_facts(facts: &[SemanticFact])
     roots.into_iter().collect()
 }
 
+/// Record the interface hash of a just-parsed `.py` module (schema v10
+/// `python_module_interfaces`), so a later sync can decide whether an edit to it
+/// is file-local. Uses the same worker probe the preflight uses, so build-time
+/// and preflight hashes are computed by identical code. Non-Python files store
+/// nothing. An `Unverified` probe during a build is not fatal — the module keeps
+/// no stored hash and the next sync conservatively rebuilds — so a transient
+/// worker hiccup can never corrupt the build.
+fn record_python_module_interface_if_python(
+    session: &mut dyn GenerationWriteSession,
+    parser: &impl SourceParser,
+    file: &DiscoveredFile,
+    text: &str,
+) -> Result<(), RepoGrammarError> {
+    if file.language != DiscoveredLanguage::Python {
+        return Ok(());
+    }
+    if let PythonInterfaceProbe::Computed(interface_hash) =
+        parser.extract_python_interface(&file.path, text)
+    {
+        session
+            .record_python_module_interface(&file.path, &interface_hash)
+            .map_err(index_store_error)?;
+    }
+    Ok(())
+}
+
 fn record_parse_report(
-    store: &impl IndexStore,
-    generation: &crate::ports::index_store::GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     file: &DiscoveredFile,
     text: &str,
     mut parse_report: ParseReport,
@@ -2333,14 +2799,13 @@ fn record_parse_report(
             end_byte: unit.range.end_byte,
             content_hash: unit.provenance.content_hash.clone(),
         };
-        crate::application::storage::record_code_unit(store, generation, &record)?;
+        crate::application::storage::record_code_unit(session, &record)?;
         code_units.push(record);
         count += 1;
     }
     for node in &parse_report.ir_nodes {
         crate::application::storage::record_ir_node(
-            store,
-            generation,
+            session,
             &IndexedIrNodeRecord {
                 id: node.id.as_str().to_string(),
                 code_unit_id: node.code_unit_id.as_str().to_string(),
@@ -2351,8 +2816,7 @@ fn record_parse_report(
     }
     for edge in &parse_report.ir_edges {
         crate::application::storage::record_ir_edge(
-            store,
-            generation,
+            session,
             &IndexedIrEdgeRecord {
                 from_node_id: edge.from_node_id.as_str().to_string(),
                 to_node_id: edge.to_node_id.as_str().to_string(),
@@ -2368,35 +2832,59 @@ fn record_parse_report(
     })
 }
 
+/// Records the recomputed family claims and returns their count plus the sorted
+/// set of family ids recorded into `generation`, so callers can diff it against
+/// the base generation for cross-generation identity reporting.
 fn record_family_claims(
-    store: &dyn FamilyStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     code_units: &[IndexedCodeUnitRecord],
     framework_role_facts: &[SemanticFact],
-) -> Result<usize, RepoGrammarError> {
+) -> Result<(usize, BTreeSet<String>), RepoGrammarError> {
     let report = build_family_claims(code_units, framework_role_facts);
+    let mut family_ids = BTreeSet::new();
     for claim in &report.claims {
         let records = family_storage_records(claim);
-        crate::application::storage::record_family(store, generation, &records.family)?;
+        crate::application::storage::record_family(session, &records.family)?;
         for member in &records.members {
-            crate::application::storage::record_family_member(store, generation, member)?;
+            crate::application::storage::record_family_member(session, member)?;
         }
         for slot in &records.variation_slots {
-            crate::application::storage::record_variation_slot(store, generation, slot)?;
+            crate::application::storage::record_variation_slot(session, slot)?;
         }
         for evidence in &records.evidence {
-            crate::application::storage::record_family_evidence(store, generation, evidence)?;
+            crate::application::storage::record_family_evidence(session, evidence)?;
         }
+        // Persist the co-derived constraint profile alongside the family it
+        // specifies, in the same generation, so query surfaces can hydrate the
+        // source-backed implementation specification the claim already carries.
+        crate::application::storage::record_family_constraint_profile(
+            session,
+            &family_constraint_profile_record(claim),
+        )?;
+        family_ids.insert(claim.family_id.clone());
     }
-    Ok(report.claims.len())
+    Ok((report.claims.len(), family_ids))
+}
+
+/// The active generation's family-id set, captured before a new generation is
+/// activated so it represents the base generation for identity diffing.
+fn base_generation_family_ids(
+    family_store: &dyn FamilyStoreWithProfiles,
+) -> Result<BTreeSet<String>, RepoGrammarError> {
+    Ok(
+        crate::application::storage::list_active_families(family_store)?
+            .families
+            .into_iter()
+            .map(|family| family.family_id)
+            .collect(),
+    )
 }
 
 fn record_rust_provider_facts(
     request: &IndexingRequest,
     code_units: &[IndexedCodeUnitRecord],
-    generation: &GenerationHandle,
     rust_provider: Option<&dyn RustSemanticProvider>,
-    store: &impl IndexStore,
+    session: &mut dyn GenerationWriteSession,
     warnings: &mut Vec<String>,
     fact_id_offset: usize,
 ) -> Result<Vec<SemanticFact>, RepoGrammarError> {
@@ -2433,7 +2921,7 @@ fn record_rust_provider_facts(
         ));
     }
     sort_semantic_facts(&mut facts);
-    record_semantic_facts(store, generation, fact_id_offset, &facts)?;
+    record_semantic_facts(session, fact_id_offset, &facts)?;
     Ok(facts)
 }
 
@@ -4049,14 +4537,13 @@ struct SemanticWorkerFactRecording<'a> {
     request: &'a IndexingRequest,
     discovery_report: &'a FileDiscoveryReport,
     parser_semantic_facts: &'a [SemanticFact],
-    generation: &'a GenerationHandle,
     semantic_worker: Option<&'a dyn SemanticWorker>,
     fact_id_offset: usize,
 }
 
 fn record_semantic_worker_facts(
     input: SemanticWorkerFactRecording<'_>,
-    store: &impl IndexStore,
+    session: &mut dyn GenerationWriteSession,
     warnings: &mut Vec<String>,
 ) -> Result<(SemanticWorkerRunStatus, Vec<SemanticFact>), RepoGrammarError> {
     let Some(semantic_worker) = input.semantic_worker else {
@@ -4094,7 +4581,7 @@ fn record_semantic_worker_facts(
     };
 
     sort_semantic_facts(&mut facts);
-    record_semantic_facts(store, input.generation, input.fact_id_offset, &facts)?;
+    record_semantic_facts(session, input.fact_id_offset, &facts)?;
     Ok((SemanticWorkerRunStatus::Complete, facts))
 }
 
@@ -4247,15 +4734,13 @@ fn fact_assumption_value<'a>(fact: &'a SemanticFact, prefix: &str) -> Option<&'a
 }
 
 fn record_semantic_facts(
-    store: &impl IndexStore,
-    generation: &GenerationHandle,
+    session: &mut dyn GenerationWriteSession,
     fact_id_offset: usize,
     facts: &[SemanticFact],
 ) -> Result<usize, RepoGrammarError> {
     for (index, fact) in facts.iter().enumerate() {
         crate::application::storage::record_semantic_fact(
-            store,
-            generation,
+            session,
             &indexed_semantic_fact_record(fact_id_offset + index, fact),
         )?;
     }
@@ -4687,7 +5172,10 @@ fn index_store_error(error: IndexStoreError) -> RepoGrammarError {
     match error {
         IndexStoreError::Unavailable(message)
         | IndexStoreError::InvalidState(message)
-        | IndexStoreError::InvalidRecord(message) => RepoGrammarError::InvalidInput(message),
+        | IndexStoreError::InvalidRecord(message)
+        | IndexStoreError::SchemaVersionOutdated(message) => {
+            RepoGrammarError::InvalidInput(message)
+        }
     }
 }
 
@@ -4934,6 +5422,1117 @@ mod tests {
     }
 
     #[test]
+    fn indexing_pipelines_checkpoint_at_phase_boundaries() {
+        use std::sync::atomic::Ordering;
+        // Both production build pipelines route every record through one write
+        // session and commit + WAL-checkpoint at phase boundaries. This asserts,
+        // through the store's real write instrumentation, that the full and
+        // incremental pipelines each open exactly one connection and checkpoint
+        // at the file/unit/IR and semantic-fact phase boundaries (the family
+        // phase adds a third checkpoint when families recompute).
+        let workspace = TempWorkspace::new("indexing-pipeline-checkpoints");
+        let source = include_str!("../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
+        fs::write(workspace.path().join("schemas.py"), source).expect("write fixture source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let instrumentation = store.write_instrumentation();
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("full index");
+        let after_full = instrumentation.checkpoints.load(Ordering::Relaxed);
+        assert!(
+            after_full >= 2,
+            "full pipeline must checkpoint at phase boundaries, saw {after_full}"
+        );
+        assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 1);
+
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("incremental sync");
+        assert_eq!(
+            synced.sync_report.expect("sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        let after_sync = instrumentation.checkpoints.load(Ordering::Relaxed);
+        assert!(
+            after_sync >= after_full + 2,
+            "incremental pipeline must checkpoint at phase boundaries, saw {} more",
+            after_sync - after_full
+        );
+        assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn mocharc_edit_forces_full_rebuild_fallback() {
+        // Regression: `.mocharc.*` runner configs are discovered as TsJsConfig
+        // and flip the global TS/JS test-runner flag, but they were absent from
+        // the incremental project-context gate. Editing one used to take the
+        // incremental path, copying forward facts parsed under the old runner
+        // flag while the changed file parsed under the new one. The edit must
+        // now force a full rebuild.
+        let workspace = TempWorkspace::new("indexing-mocharc-gate-sync");
+        fs::write(workspace.path().join("app.ts"), "export const value = 1;\n")
+            .expect("write TS source");
+        fs::write(
+            workspace.path().join(".mocharc.json"),
+            "{\"spec\": \"test/**/*.spec.ts\"}\n",
+        )
+        .expect("write mocharc runner config");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index TS + mocharc fixture");
+
+        fs::write(
+            workspace.path().join(".mocharc.json"),
+            "{\"spec\": \"spec/**/*.spec.ts\"}\n",
+        )
+        .expect("edit mocharc runner config");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after mocharc edit");
+        let report = synced.sync_report.expect("mocharc sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.modified_files, 1);
+    }
+
+    fn gate_discovered_file(path: &str, language: DiscoveredLanguage) -> DiscoveredFile {
+        DiscoveredFile {
+            path: path.to_string(),
+            language,
+            content_hash: crate::core::model::ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            size_bytes: 1,
+        }
+    }
+
+    struct GateStubSourceStore;
+    impl SourceStore for GateStubSourceStore {
+        fn read_source(
+            &self,
+            request: SourceReadRequest,
+        ) -> Result<crate::ports::source_store::SourceText, SourceStoreError> {
+            Ok(crate::ports::source_store::SourceText {
+                path: request.path,
+                content_hash: request.expected_content_hash,
+                text: String::new(),
+            })
+        }
+    }
+
+    struct GateStubParser {
+        probes: BTreeMap<String, PythonInterfaceProbe>,
+    }
+    impl SourceParser for GateStubParser {
+        fn parse(&self, _document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            unreachable!("the context gate never calls parse")
+        }
+        fn extract_python_interface(&self, path: &str, _text: &str) -> PythonInterfaceProbe {
+            self.probes
+                .get(path)
+                .cloned()
+                .unwrap_or(PythonInterfaceProbe::Unverified)
+        }
+    }
+
+    struct GateStubInterfaceStore {
+        records: Vec<crate::ports::index_store::PythonModuleInterfaceRecord>,
+    }
+    impl PythonModuleInterfaceStore for GateStubInterfaceStore {
+        fn active_python_module_interfaces(
+            &self,
+        ) -> Result<Vec<crate::ports::index_store::PythonModuleInterfaceRecord>, IndexStoreError>
+        {
+            Ok(self.records.clone())
+        }
+    }
+
+    fn gate_interface_record(
+        path: &str,
+        hash: &str,
+    ) -> crate::ports::index_store::PythonModuleInterfaceRecord {
+        crate::ports::index_store::PythonModuleInterfaceRecord {
+            path: path.to_string(),
+            interface_hash: hash.to_string(),
+        }
+    }
+
+    fn indexed_from_discovered(file: &DiscoveredFile) -> IndexedFileRecord {
+        IndexedFileRecord {
+            path: file.path.clone(),
+            content_hash: file.content_hash.clone(),
+            size_bytes: file.size_bytes,
+            language: file.language.as_str().to_string(),
+        }
+    }
+
+    fn run_gate(
+        modified: Vec<DiscoveredFile>,
+        added: Vec<DiscoveredFile>,
+        base: Vec<crate::ports::index_store::PythonModuleInterfaceRecord>,
+        probes: BTreeMap<String, PythonInterfaceProbe>,
+    ) -> SyncContextDecision {
+        // The synthetic manifests keep the Python context payload tiny (the stub
+        // files default to 1 byte), so the budget gate is trivially safe and these
+        // cases exercise the interface logic only. The near-cap regime is covered
+        // separately by the `python_context_budget_*` tests.
+        let current_files: Vec<DiscoveredFile> =
+            modified.iter().chain(added.iter()).cloned().collect();
+        let base_files: Vec<IndexedFileRecord> =
+            modified.iter().map(indexed_from_discovered).collect();
+        let delta = SyncDelta {
+            added_files: added,
+            modified_files: modified,
+            removed_files: Vec::new(),
+            unchanged_files: Vec::new(),
+        };
+        classify_sync_context_gate(
+            &IndexingRequest::new("/repo"),
+            &delta,
+            &base_files,
+            &current_files,
+            &GateStubSourceStore,
+            &GateStubParser { probes },
+            &GateStubInterfaceStore { records: base },
+        )
+        .expect("gate classification")
+    }
+
+    fn probe_map(
+        entries: &[(&str, PythonInterfaceProbe)],
+    ) -> BTreeMap<String, PythonInterfaceProbe> {
+        entries
+            .iter()
+            .map(|(path, probe)| ((*path).to_string(), probe.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn gate_python_body_edit_stable_interface_is_incremental() {
+        // A modified `.py` whose probed interface equals its stored base hash is a
+        // body-only edit: file-local, incremental.
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(decision, SyncContextDecision::Incremental(_)));
+    }
+
+    #[test]
+    fn gate_python_interface_edit_falls_back_changed() {
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:def".into()),
+            )]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_changed")
+        ));
+    }
+
+    #[test]
+    fn gate_python_unverifiable_probe_falls_back_unverified() {
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[("app.py", PythonInterfaceProbe::Unverified)]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_unverified")
+        ));
+    }
+
+    #[test]
+    fn gate_python_missing_base_hash_falls_back_unverified() {
+        // No stored interface (base predates schema v10): cannot prove file-local.
+        let decision = run_gate(
+            vec![gate_discovered_file("app.py", DiscoveredLanguage::Python)],
+            Vec::new(),
+            Vec::new(),
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_unverified")
+        ));
+    }
+
+    #[test]
+    fn gate_modified_conftest_falls_back_without_probing_interface() {
+        // A conftest edit is excluded from the interface fast path and forces a
+        // full rebuild even though its interface hash would be probed as stable.
+        // The stub parser would panic-return `Unverified` for an unmapped path, so
+        // an `Incremental`/`unverified` outcome here would prove the conftest was
+        // wrongly interface-probed; `project_context_changed` proves it was not.
+        let decision = run_gate(
+            vec![gate_discovered_file(
+                "pkg/conftest.py",
+                DiscoveredLanguage::Python,
+            )],
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("project_context_changed")
+        ));
+    }
+
+    #[test]
+    fn gate_added_python_module_falls_back_project_context() {
+        let decision = run_gate(
+            Vec::new(),
+            vec![gate_discovered_file(
+                "new_module.py",
+                DiscoveredLanguage::Python,
+            )],
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("project_context_changed")
+        ));
+    }
+
+    #[test]
+    fn gate_mixed_python_body_and_rust_content_edit_is_incremental() {
+        // A stable-interface `.py` edit plus a file-local Rust content edit are
+        // both incremental; the Rust file never reaches the interface probe.
+        let decision = run_gate(
+            vec![
+                gate_discovered_file("app.py", DiscoveredLanguage::Python),
+                gate_discovered_file("lib.rs", DiscoveredLanguage::Rust),
+            ],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(decision, SyncContextDecision::Incremental(_)));
+    }
+
+    #[test]
+    fn gate_mixed_unverified_dominates_changed() {
+        // With one unverifiable module and one provably-changed module, the
+        // unverified reason wins (documented precedence); both force a full
+        // rebuild.
+        let decision = run_gate(
+            vec![
+                gate_discovered_file("a.py", DiscoveredLanguage::Python),
+                gate_discovered_file("b.py", DiscoveredLanguage::Python),
+            ],
+            Vec::new(),
+            vec![
+                gate_interface_record("a.py", "sha256:aaa"),
+                gate_interface_record("b.py", "sha256:bbb"),
+            ],
+            probe_map(&[
+                ("a.py", PythonInterfaceProbe::Unverified),
+                (
+                    "b.py",
+                    PythonInterfaceProbe::Computed("sha256:changed".into()),
+                ),
+            ]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_interface_unverified")
+        ));
+    }
+
+    fn gate_discovered_file_sized(
+        path: &str,
+        language: DiscoveredLanguage,
+        size_bytes: u64,
+    ) -> DiscoveredFile {
+        DiscoveredFile {
+            size_bytes,
+            ..gate_discovered_file(path, language)
+        }
+    }
+
+    #[test]
+    fn gate_python_modification_over_context_budget_falls_back_before_probing() {
+        // A Python module large enough to push the whole-project `parse_document`
+        // context across the real 1 MiB cap forces a full rebuild on the budget
+        // gate, before the interface is even probed (the stub parser would report a
+        // matching hash, which must not win). This closes the context-omission
+        // channel where a size change flips how sibling modules parse.
+        let decision = run_gate(
+            vec![gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                2 * 1024 * 1024,
+            )],
+            Vec::new(),
+            vec![gate_interface_record("app.py", "sha256:abc")],
+            probe_map(&[(
+                "app.py",
+                PythonInterfaceProbe::Computed("sha256:abc".into()),
+            )]),
+        );
+        assert!(matches!(
+            decision,
+            SyncContextDecision::FullRebuild("python_context_budget")
+        ));
+    }
+
+    fn budget_base(path: &str, size: u64) -> IndexedFileRecord {
+        IndexedFileRecord {
+            path: path.to_string(),
+            content_hash: crate::core::model::ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            size_bytes: size,
+            language: DiscoveredLanguage::Python.as_str().to_string(),
+        }
+    }
+
+    #[test]
+    fn python_context_budget_is_safe_under_and_over_an_injected_cap() {
+        let cap = 300_000usize;
+        // Both manifests under the cap after the 6x worst-case escaping headroom.
+        assert!(python_context_budget_is_safe(
+            &[budget_base("app.py", 20_000)],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                20_000
+            )],
+            cap,
+        ));
+        // The current manifest grew past the cap: the current-regime parses could
+        // drop context, so a size-stable copy-forward would diverge — unsafe.
+        assert!(!python_context_budget_is_safe(
+            &[budget_base("app.py", 20_000)],
+            &[
+                gate_discovered_file_sized("app.py", DiscoveredLanguage::Python, 20_000),
+                gate_discovered_file_sized("extra.py", DiscoveredLanguage::Python, 20_000),
+            ],
+            cap,
+        ));
+        // Regime flip the other way: the base manifest was over the cap while the
+        // current one is under — also unsafe (the copied base facts were parsed
+        // context-omitted).
+        assert!(!python_context_budget_is_safe(
+            &[
+                budget_base("app.py", 20_000),
+                budget_base("extra.py", 20_000),
+            ],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                20_000
+            )],
+            cap,
+        ));
+    }
+
+    #[test]
+    fn python_context_budget_ignores_non_python_manifest_bytes() {
+        // A large Rust or config file does not enter the Python context payload, so
+        // it must not trip the Python budget.
+        let cap = 300_000usize;
+        assert!(python_context_budget_is_safe(
+            &[budget_base("app.py", 10_000)],
+            &[
+                gate_discovered_file_sized("app.py", DiscoveredLanguage::Python, 10_000),
+                gate_discovered_file_sized("huge.rs", DiscoveredLanguage::Rust, 10_000_000),
+            ],
+            cap,
+        ));
+    }
+
+    #[test]
+    fn python_context_budget_counts_conftest_text_twice() {
+        // conftest text ships in both `module_files` and `conftest_files`, so a
+        // conftest of a given size consumes more budget than a plain module of the
+        // same size. At a cap tuned between the two (after the 6x escaping
+        // headroom), the module is safe and the conftest is not.
+        let cap = 700_000usize;
+        assert!(python_context_budget_is_safe(
+            &[budget_base("pkg/app.py", 50_000)],
+            &[gate_discovered_file_sized(
+                "pkg/app.py",
+                DiscoveredLanguage::Python,
+                50_000
+            )],
+            cap,
+        ));
+        assert!(!python_context_budget_is_safe(
+            &[budget_base("pkg/conftest.py", 50_000)],
+            &[gate_discovered_file_sized(
+                "pkg/conftest.py",
+                DiscoveredLanguage::Python,
+                50_000
+            )],
+            cap,
+        ));
+    }
+
+    #[test]
+    fn python_context_budget_rejects_control_char_escape_worst_case() {
+        // The size-only gate cannot read the bytes, so the headroom must bound the
+        // worst-case escape (6x for a `\uXXXX` control character), not the ~2x of
+        // ordinary source. A 150 KB module of control characters escapes to ~900 KB;
+        // its raw estimate sits in `(cap/6, cap/2)`, so the retired 2x factor would
+        // pass a 1.2 MB cap while the real request could approach 6x and cross it —
+        // the exact silent-truncation hole the gate must fail closed on. The 6x
+        // factor rejects it.
+        let cap = 1_200_000usize;
+        assert!(!python_context_budget_is_safe(
+            &[budget_base("app.py", 150_000)],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                150_000
+            )],
+            cap,
+        ));
+        // The same manifest under a cap generous enough to absorb the 6x headroom is
+        // still admitted: the fix tightens the bound, it does not blanket-reject.
+        assert!(python_context_budget_is_safe(
+            &[budget_base("app.py", 150_000)],
+            &[gate_discovered_file_sized(
+                "app.py",
+                DiscoveredLanguage::Python,
+                150_000
+            )],
+            2_000_000,
+        ));
+    }
+
+    #[test]
+    fn language_is_file_local_source_covers_rust_and_tsjs_only() {
+        for language in [
+            DiscoveredLanguage::Rust,
+            DiscoveredLanguage::TypeScript,
+            DiscoveredLanguage::TypeScriptReact,
+            DiscoveredLanguage::JavaScript,
+            DiscoveredLanguage::JavaScriptReact,
+        ] {
+            assert!(
+                language_is_file_local_source(language),
+                "{}",
+                language.as_str()
+            );
+        }
+        // Python (cross-file module/conftest text) and every `*Config`
+        // classification feed project-wide context and must never be treated as
+        // file-local by the modified-file fast path.
+        for language in [
+            DiscoveredLanguage::Python,
+            DiscoveredLanguage::PythonConfig,
+            DiscoveredLanguage::TsJsConfig,
+            DiscoveredLanguage::RustConfig,
+            DiscoveredLanguage::Java,
+            DiscoveredLanguage::CSharp,
+        ] {
+            assert!(
+                !language_is_file_local_source(language),
+                "{}",
+                language.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn content_only_rust_edit_takes_incremental_fast_path() {
+        // A content-only edit of a Rust source file leaves `rust_module_paths`
+        // and the nearest `Cargo.toml` byte-identical, so exactly the edited file
+        // is reparsed on the incremental path instead of forcing a full rebuild.
+        let workspace = TempWorkspace::new("indexing-rust-content-edit-fast-path");
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    1\n}\n",
+        )
+        .expect("write Rust source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Rust fixture");
+
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    2\n}\n",
+        )
+        .expect("edit Rust body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Rust content edit");
+        let report = synced.sync_report.expect("Rust edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    #[test]
+    fn content_only_typescript_edit_takes_incremental_fast_path() {
+        // TS/JS parsing consumes only the discovered path set and root config, not
+        // other files' text, so a content-only TS edit is file-local: one file is
+        // reparsed and the sync stays incremental.
+        let workspace = TempWorkspace::new("indexing-ts-content-edit-fast-path");
+        fs::write(
+            workspace.path().join("service.ts"),
+            "export const value = 1;\n",
+        )
+        .expect("write TS source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index TS fixture");
+
+        fs::write(
+            workspace.path().join("service.ts"),
+            "export const value = 2;\n",
+        )
+        .expect("edit TS body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after TS content edit");
+        let report = synced.sync_report.expect("TS edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    const PY_APP_BODY_DEFAULT: &str =
+        "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n";
+
+    #[test]
+    fn python_body_edit_stable_interface_takes_incremental_fast_path() {
+        // A Python function-body edit that leaves the module's top-level symbol
+        // surface unchanged has a stable interface hash, so the preflight keeps it
+        // on the file-local incremental path: only the edited module is reparsed
+        // and its sibling module copies forward.
+        let workspace = TempWorkspace::new("indexing-python-body-edit-fast-path");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        fs::write(
+            workspace.path().join("helpers.py"),
+            "def helper() -> int:\n    return 1\n",
+        )
+        .expect("write sibling Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"primary\"\n\n\ndef list_ids() -> list[int]:\n    return []\n",
+        )
+        .expect("edit Python body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Python body edit");
+        let report = synced.sync_report.expect("Python body edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    #[test]
+    fn python_interface_edit_forces_full_rebuild_fallback() {
+        // Adding a top-level function changes the module's exported symbol surface,
+        // so its interface hash changes and the preflight falls back to a full
+        // rebuild with the specific `python_interface_changed` reason.
+        let workspace = TempWorkspace::new("indexing-python-interface-edit-fallback");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n\n\ndef added_public() -> int:\n    return 2\n",
+        )
+        .expect("add a top-level Python function");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Python interface edit");
+        let report = synced
+            .sync_report
+            .expect("Python interface edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("python_interface_changed")
+        );
+    }
+
+    #[test]
+    fn python_conftest_edit_forces_full_rebuild_fallback() {
+        // A `conftest.py` edit alters ancestor fixture context for its subtree,
+        // which the module interface projection does not model, so it always forces
+        // a full rebuild regardless of interface hash.
+        let workspace = TempWorkspace::new("indexing-python-conftest-edit-fallback");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        fs::write(
+            workspace.path().join("conftest.py"),
+            "import pytest\n\n\n@pytest.fixture\ndef tenant() -> str:\n    return \"default\"\n",
+        )
+        .expect("write conftest");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture with conftest");
+
+        fs::write(
+            workspace.path().join("conftest.py"),
+            "import pytest\n\n\n@pytest.fixture\ndef tenant() -> str:\n    return \"primary\"\n",
+        )
+        .expect("edit conftest body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after conftest edit");
+        let report = synced.sync_report.expect("conftest edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+    }
+
+    #[test]
+    fn repeated_python_body_edits_stay_incremental() {
+        // The interface hash is copied forward for unchanged modules and rewritten
+        // for reparsed modules, so a second body edit still finds a stored base
+        // hash and stays incremental — the fast path does not decay after one sync.
+        let workspace = TempWorkspace::new("indexing-python-repeated-body-edit");
+        fs::write(workspace.path().join("app.py"), PY_APP_BODY_DEFAULT)
+            .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        for body in ["one", "two"] {
+            fs::write(
+                workspace.path().join("app.py"),
+                format!(
+                    "def current_tenant() -> str:\n    return \"{body}\"\n\n\ndef list_ids() -> list[int]:\n    return []\n"
+                ),
+            )
+            .expect("edit Python body");
+            let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+                request(),
+                &FilesystemFileDiscovery,
+                &FilesystemSourceStore,
+                &parser,
+                &detector,
+                &store,
+            )
+            .expect("sync after Python body edit");
+            let report = synced.sync_report.expect("Python body edit sync report");
+            assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+            assert_eq!(report.fallback_reason, None);
+            assert_eq!(report.reparsed_files, 1);
+        }
+    }
+
+    #[test]
+    fn added_rust_source_forces_full_rebuild() {
+        // Adding a Rust source file grows `rust_module_paths`, which can change how
+        // other files' `mod` candidates resolve, so an add still forces a full
+        // rebuild even though a content-only edit would not.
+        let workspace = TempWorkspace::new("indexing-rust-add-fallback");
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    1\n}\n",
+        )
+        .expect("write Rust source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Rust fixture");
+
+        fs::write(
+            workspace.path().join("helper.rs"),
+            "fn helper() -> i32 {\n    3\n}\n",
+        )
+        .expect("add Rust source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Rust add");
+        let report = synced.sync_report.expect("Rust add sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.added_files, 1);
+    }
+
+    #[test]
+    fn removed_rust_source_forces_full_rebuild() {
+        // Removing a Rust source file shrinks `rust_module_paths`, so it forces a
+        // full rebuild for the same reason an add does.
+        let workspace = TempWorkspace::new("indexing-rust-remove-fallback");
+        fs::write(
+            workspace.path().join("compute.rs"),
+            "fn compute() -> i32 {\n    1\n}\n",
+        )
+        .expect("write Rust source");
+        fs::write(
+            workspace.path().join("helper.rs"),
+            "fn helper() -> i32 {\n    3\n}\n",
+        )
+        .expect("write second Rust source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Rust fixture");
+
+        fs::remove_file(workspace.path().join("helper.rs")).expect("remove Rust source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Rust remove");
+        let report = synced.sync_report.expect("Rust remove sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
+        assert_eq!(
+            report.fallback_reason.as_deref(),
+            Some("project_context_changed")
+        );
+        assert_eq!(report.removed_files, 1);
+    }
+
+    #[test]
+    fn python_stable_interface_content_edit_takes_incremental_fast_path() {
+        // S2b narrows the S2 rule that any Python edit forces a full rebuild: a
+        // content-only edit whose module interface projection (top-level symbols,
+        // `__all__`, `__init__` re-exports) is unchanged is provably file-local,
+        // because the interface is the only channel by which the module's text
+        // reaches another file's parse. The same edit that S2 rebuilt fully now
+        // stays incremental under the interface gate.
+        let workspace = TempWorkspace::new("indexing-python-content-edit-incremental");
+        fs::write(
+            workspace.path().join("app.py"),
+            "def value():\n    return \"default\"\n",
+        )
+        .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python fixture");
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def value():\n    return \"primary\"\n",
+        )
+        .expect("edit Python body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("sync after Python content edit");
+        let report = synced.sync_report.expect("Python edit sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.fallback_reason, None);
+        assert_eq!(report.modified_files, 1);
+        assert_eq!(report.reparsed_files, 1);
+    }
+
+    #[test]
+    fn sync_after_engine_version_change_forces_full_rebuild_fallback() {
+        // Regression: preflight never compared the base generation's producing
+        // engine version against the running binary, so after an upgrade a delta
+        // that avoids the project-context gate (here: a no-op) copied forward
+        // facts produced by the older engine and relabeled them with the new
+        // version. A matching version must stay incremental; a mismatch must
+        // force a full rebuild.
+        let workspace = TempWorkspace::new("indexing-engine-version-gate");
+        fs::write(
+            workspace.path().join("App.java"),
+            "class App { void run() {} }\n",
+        )
+        .expect("write Java source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Java fixture");
+
+        // Same engine version: an unchanged repository stays on the incremental
+        // path.
+        let same_version = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("no-op sync with matching engine version");
+        let same_report = same_version.sync_report.expect("same-version sync report");
+        assert_eq!(same_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(same_report.fallback_reason, None);
+
+        // Simulate an engine upgrade by rewriting the stored producing version on
+        // the now-active generation.
+        let connection =
+            Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
+        connection
+            .execute(
+                "UPDATE index_generations SET repogrammar_version = ?1 WHERE status = 'active'",
+                params!["0.0.0-older-engine"],
+            )
+            .expect("rewrite stored engine version");
+        drop(connection);
+
+        let after_upgrade = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("no-op sync after simulated engine upgrade");
+        let upgrade_report = after_upgrade.sync_report.expect("post-upgrade sync report");
+        assert_eq!(
+            upgrade_report.sync_mode,
+            IndexingSyncMode::FullRebuildFallback
+        );
+        assert_eq!(
+            upgrade_report.fallback_reason.as_deref(),
+            Some("engine_version_changed")
+        );
+    }
+
+    #[test]
     fn sync_project_context_gate_covers_root_and_nested_config_paths() {
         for path in [
             "package.json",
@@ -4947,6 +6546,12 @@ mod tests {
             "vitest.config.mjs",
             "next.config.cjs",
             "next.config.mjs",
+            ".mocharc.json",
+            ".mocharc.jsonc",
+            ".mocharc.js",
+            ".mocharc.cjs",
+            ".mocharc.yml",
+            ".mocharc.yaml",
             "pyproject.toml",
             "src/app.py",
             "src/conftest_helper.py",
@@ -4967,6 +6572,10 @@ mod tests {
         for path in [
             "Cargo.locked",
             "docs/Cargo.toml.md",
+            // Mocha runner configs are discovered only at the repository root, so
+            // a nested lookalike is an ordinary undiscovered file, not a gate hit.
+            "packages/app/.mocharc.json",
+            "docs/.mocharc.yaml.md",
             "src/main.go",
             "go.mod",
             "go.work",
@@ -6439,8 +8048,13 @@ mod tests {
             .expect("seed legacy Go fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:go:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:go:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy Go family");
@@ -6614,8 +8228,13 @@ mod tests {
             .expect("seed legacy Ruby fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:ruby:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:ruby:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy Ruby family");
@@ -6813,8 +8432,13 @@ mod tests {
             .expect("seed legacy PHP config fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:php:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:php:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy PHP family");
@@ -7035,8 +8659,13 @@ mod tests {
             .expect("seed legacy Swift config fact");
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, 'family:swift:legacy', 'DOMINANT_PATTERN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, 'family:swift:legacy', 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![active.generation_id],
             )
             .expect("seed legacy Swift family");
@@ -12093,6 +13722,17 @@ mod tests {
         let sync_report = outcome.sync_report.clone().expect("sync report");
         assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(sync_report.fallback_reason, None);
+        // A family-recomputing incremental sync with no file changes reproduces
+        // the base generation's family ids exactly, so the cross-generation
+        // identity delta is present and empty (not null, and not a rename).
+        let delta = sync_report
+            .family_identity_delta
+            .clone()
+            .expect("family identity delta present when families are recomputed against a base");
+        assert_eq!(delta.added_count, 0);
+        assert_eq!(delta.removed_count, 0);
+        assert!(delta.added_sample.is_empty());
+        assert!(delta.removed_sample.is_empty());
         assert_eq!(
             provider_resolved_tsjs_support_fact_count(&state, "gen-000002"),
             3
@@ -13692,6 +15332,18 @@ extraPaths = ["src/lib", "C:/secret"]
             }
         }
 
+        impl GenerationWriteStore for FailingStore {
+            fn open_generation_write_session<'a>(
+                &'a self,
+                generation: &GenerationHandle,
+            ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError> {
+                Ok(Box::new(
+                    crate::test_support::FakeWriteSession::new(generation.clone())
+                        .failing_indexed_file("record rejected"),
+                ))
+            }
+        }
+
         let workspace = TempWorkspace::new("indexing-store-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
         create_index_state(&workspace.path().join(".repogrammar"));
@@ -13709,10 +15361,11 @@ extraPaths = ["src/lib", "C:/secret"]
     #[test]
     fn failed_generation_validation_preserves_previous_active_generation() {
         use std::cell::RefCell;
+        use std::rc::Rc;
 
         struct ValidationFailingStore {
             active_generation: RefCell<String>,
-            recorded_generations: RefCell<Vec<String>>,
+            recorded_generations: Rc<RefCell<Vec<String>>>,
         }
 
         impl IndexStore for ValidationFailingStore {
@@ -13849,12 +15502,24 @@ extraPaths = ["src/lib", "C:/secret"]
             }
         }
 
+        impl GenerationWriteStore for ValidationFailingStore {
+            fn open_generation_write_session<'a>(
+                &'a self,
+                generation: &GenerationHandle,
+            ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError> {
+                Ok(Box::new(crate::test_support::FakeWriteSession::with_log(
+                    generation.clone(),
+                    Rc::clone(&self.recorded_generations),
+                )))
+            }
+        }
+
         let workspace = TempWorkspace::new("indexing-validation-fail");
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write a");
         create_index_state(&workspace.path().join(".repogrammar"));
         let store = ValidationFailingStore {
             active_generation: RefCell::new("gen-000001".to_string()),
-            recorded_generations: RefCell::new(Vec::new()),
+            recorded_generations: Rc::new(RefCell::new(Vec::new())),
         };
 
         let error = index_repository_with_discovery_and_store(

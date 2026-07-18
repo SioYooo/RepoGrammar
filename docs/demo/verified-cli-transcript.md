@@ -1,7 +1,11 @@
 # Verified CLI Transcript
 
 This transcript backs the terminal visual in the root README. It was captured
-on 2026-07-16 from commit `73770e6` with the current debug binary:
+on 2026-07-16 from commit `73770e6` with the current debug binary. It is a
+historical record: no result line has been rewritten since capture, so the
+`check` output shows the legacy `CONTEXT_ONLY` advisory form that later
+releases replaced with static-alignment certificates (an alignment-status
+token plus `runtime_equivalence: "UNKNOWN"`).
 
 ```text
 repogrammar 0.2.0-preview.0
@@ -79,16 +83,16 @@ query_follow_up_family_ids: family:python:fastapi_route:framework_fastapi_route
 query_why_selected: target resolved to one fresh candidate family; RepoGrammar hydrated that family and composed bounded context
 evidence_selection: greedy_marginal_coverage_v1
 budget_satisfied: true
-estimated_read_plan_tokens: 140
+estimated_read_plan_tokens: 150
 estimated_potential_token_savings: 254
 estimated_potential_token_savings_kind: ESTIMATED
 estimated_potential_token_savings_caveat: estimated potential only; not measured token savings
 read_plan_requires_source_before_edit: true
 covered_claims: canonical,support
 Suggested source spans to read
-read_plan: items: 2	estimated_tokens: 140	source_snippets: not_included
+read_plan: items: 2	estimated_tokens: 150	source_snippets: not_included
 read: target_body_required_for_edit	path: app/routes.py	range: 55-107	lines: 6-8	content_hash: sha256:316b921a32e0dcd09918f37a7f4916a2e3b9f0f8e367450372488f01af9321aa	estimated_tokens: 71	requires_source_before_edit: true	why: read this target body before editing; family metadata is context only
-read: support_evidence	path: experimental/dynamic.py	range: 905-1034	lines: 46-48	content_hash: sha256:cc5625ade08142027085adf749e4b9da0853da3383e2cd78aed56a4a611df774	estimated_tokens: 69	requires_source_before_edit: false	why: additional supporting source span for contrast
+read: support_evidence	path: experimental/dynamic.py	range: 905-1034	lines: 46-48	content_hash: sha256:cc5625ade08142027085adf749e4b9da0853da3383e2cd78aed56a4a611df774	estimated_tokens: 79	requires_source_before_edit: false	why: farthest-contrast supporting source span; verify before applying the family blindly
 member: unit:app/routes.py#fastapi_route:list_users:55-107:1	role: framework:fastapi.route
 member: unit:app/routes.py#fastapi_route:list_accounts:111-169:2	role: framework:fastapi.route
 member: unit:app/routes.py#fastapi_route:list_teams:173-225:3	role: framework:fastapi.route
@@ -135,16 +139,16 @@ query_follow_up_family_ids: family:python:fastapi_route:framework_fastapi_route
 query_why_selected: target resolved to one fresh candidate family; RepoGrammar hydrated that family and composed bounded context
 evidence_selection: greedy_marginal_coverage_v1
 budget_satisfied: true
-estimated_read_plan_tokens: 140
+estimated_read_plan_tokens: 150
 estimated_potential_token_savings: 254
 estimated_potential_token_savings_kind: ESTIMATED
 estimated_potential_token_savings_caveat: estimated potential only; not measured token savings
 read_plan_requires_source_before_edit: true
 covered_claims: canonical,support
 Suggested source spans to read
-read_plan: items: 2	estimated_tokens: 140	source_snippets: not_included
+read_plan: items: 2	estimated_tokens: 150	source_snippets: not_included
 read: target_body_required_for_edit	path: app/routes.py	range: 55-107	lines: 6-8	content_hash: sha256:316b921a32e0dcd09918f37a7f4916a2e3b9f0f8e367450372488f01af9321aa	estimated_tokens: 71	requires_source_before_edit: true	why: read this target body before editing; family metadata is context only
-read: support_evidence	path: experimental/dynamic.py	range: 905-1034	lines: 46-48	content_hash: sha256:cc5625ade08142027085adf749e4b9da0853da3383e2cd78aed56a4a611df774	estimated_tokens: 69	requires_source_before_edit: false	why: additional supporting source span for contrast
+read: support_evidence	path: experimental/dynamic.py	range: 905-1034	lines: 46-48	content_hash: sha256:cc5625ade08142027085adf749e4b9da0853da3383e2cd78aed56a4a611df774	estimated_tokens: 79	requires_source_before_edit: false	why: farthest-contrast supporting source span; verify before applying the family blindly
 advisory_status: UNKNOWN
 reason: runtime equivalence remains unproven
 member: unit:app/routes.py#fastapi_route:list_users:55-107:1	role: framework:fastapi.route

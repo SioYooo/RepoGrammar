@@ -22,7 +22,9 @@ Do not record or publish until all applicable boxes are true:
       current binary; no result is pasted into the terminal.
 - [ ] `find` shows the `ESTIMATED` kind and its not-measured caveat whenever the
       estimate is visible.
-- [ ] `check` remains `CONTEXT_ONLY` with `advisory_status: UNKNOWN`.
+- [ ] `check` returns a static-alignment token with
+      `runtime_equivalence: "UNKNOWN"` (this demo predates the certificate
+      rename from the legacy `CONTEXT_ONLY` advisory).
 - [ ] The final query returns typed `UNKNOWN` and the recovery action.
 - [ ] Codex shows `repogrammar` connected under `/mcp` before making an MCP
       claim. Select an actually available GPT-5.6 family model with `/model`;
@@ -72,7 +74,7 @@ That command is a recording option only after publication proof exists.
 | 08–22s | Run `repogrammar setup --project "$DEMO_REPO" --target auto --yes --no-autosync --progress never`. Keep the separate repository, product-MCP, and agent-MCP lines visible. | “One setup command builds the local index, safely wires a supported agent when available, and self-tests the read-only MCP server. Here no agent CLI is present, so repository CLI readiness succeeds without pretending agent wiring is active.” |
 | 22–40s | Run `repogrammar find --project "$DEMO_REPO" --token-budget 8000 app/routes.py`. Highlight `DOMINANT_PATTERN`, `support: 4`, `source_snippets: not_included`, and the two-item read plan. | “Find discovers a FastAPI route family backed by four compatible members. The default response is metadata, not a source dump, and it tells the agent which exact spans still need reading before an edit.” |
 | 40–52s | Hold on `estimated_potential_token_savings_kind: ESTIMATED` and its caveat. | “The read-displacement number is explicitly estimated potential. It is not presented as measured token savings.” |
-| 52–67s | Run `repogrammar check --project "$DEMO_REPO" --token-budget 8000 app/routes.py`. Highlight `CONTEXT_ONLY`, `advisory_status: UNKNOWN`, and the runtime-equivalence reason. | “Check can supply useful conformance context, but static family evidence does not prove runtime equivalence. RepoGrammar keeps that conclusion advisory and unknown.” |
+| 52–67s | Run `repogrammar check --project "$DEMO_REPO" --token-budget 8000 app/routes.py`. Highlight the static-alignment `status` token, `runtime_equivalence: UNKNOWN`, and the runtime-equivalence reason (recorded before the certificate rename, the transcript shows the legacy `CONTEXT_ONLY` form). | “Check can supply useful conformance context, but static family evidence does not prove runtime equivalence. RepoGrammar keeps that conclusion unknown.” |
 | 67–79s | Run `repogrammar find --project "$DEMO_REPO" --token-budget 8000 registered_router`. Highlight `UNKNOWN`, `InsufficientSupport`, and `use source fallback`. | “When the target cannot be supported, it abstains by type and sends the agent back to source instead of guessing from the nearby FastAPI code.” |
 | 79–91s | Cut to Codex. Show `/model` with an available GPT-5.6 family selection, `/mcp` with `repogrammar`, then a `repogrammar_context` result/read plan. | “ChatGPT on GPT-5.6 helped plan and review the product. Codex on GPT-5.6 implemented and tested it. RepoGrammar itself stays local: no model, cloud call, or OpenAI API key is required.” |
 | 91–96s | End card: repository URL, `Local-first · Source-backed · Typed UNKNOWN`. | “RepoGrammar helps coding agents read what matters—and admit what the repository has not proved.” |
@@ -99,7 +101,9 @@ support: 4
 estimated_potential_token_savings_kind: ESTIMATED
 estimated_potential_token_savings_caveat: estimated potential only; not measured token savings
 
-check: CONTEXT_ONLY
+check: CONTEXT_ONLY   # legacy pre-certificate form as recorded; current
+                      # builds emit a static-alignment status token with
+                      # runtime_equivalence: UNKNOWN
 advisory_status: UNKNOWN
 reason: runtime equivalence remains unproven
 

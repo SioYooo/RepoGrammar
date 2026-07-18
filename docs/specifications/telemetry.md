@@ -92,12 +92,22 @@ upload would open a network connection.
 telemetry is effectively enabled it may update one allowlisted bucketed rollup
 under `.repogrammar/telemetry/rollups/` without creating an upload queue or
 opening a network connection.
-Successful family query and MCP context responses may update
+Context-delivering family query and MCP responses may update
 `.repogrammar/telemetry/local-metrics/estimated_potential_token_savings.json`
-even when anonymous telemetry is disabled. This file is not an anonymous upload
-payload and must store only aggregate event count, estimated baseline/returned
-token totals, aggregate `estimated_potential_token_savings`, `ESTIMATED`
-measurement kind, and caveat text.
+even when anonymous telemetry is disabled. Found families, PARTIAL_CONTEXT read
+plans, and committed or partial alignment certificates each record one event
+under their outcome shape; abstentions record none. This file is not an
+anonymous upload payload and must store only aggregate event count, estimated
+baseline/returned token totals, aggregate `estimated_potential_token_savings`,
+`ESTIMATED` measurement kind, caveat text, and the additive `by_outcome_shape`
+(`found`/`partial_context`/`alignment`) and `by_language` breakdown objects.
+Each breakdown value carries only the four aggregate token/count numbers; the
+low-cardinality outcome-shape and language keys are restricted to their closed
+vocabularies (the language keys are the indexed language scopes plus `mixed` and
+`unknown`). The additive breakdowns are tolerated when absent in files written
+before they existed and keep the `estimated-potential-token-savings.v1` schema
+token. The file must never store code, source snippets, paths, repository names,
+symbols, raw targets, query text, content hashes, or byte ranges.
 Family query and MCP context calls may also best-effort update the local-only
 `.repogrammar/telemetry/local-metrics/family_query_outcomes.json` rollup with
 schema `family-query-outcomes.v1`. This file is separate from anonymous

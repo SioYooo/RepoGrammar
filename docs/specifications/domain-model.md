@@ -283,18 +283,138 @@ family. It is not implemented in the bootstrap.
 A `VariationPoint` is an allowed slot where implementations can differ while
 remaining inside the same family.
 
+## FamilyConstraintProfile
+
+A `FamilyConstraintProfile` is the source-backed implementation specification a
+family record carries. It turns a family claim into a set of typed obligations an
+agent can conform to. Every field is derived during family building from the same
+family-membership decision authorities that admitted the members — never from
+notes, storage order, or free text. The profile has four parts:
+
+- `required_equal_features`: the features every member is bound to. Each is a
+  typed `FeatureConstraint { prefix, values, origin, semantics }`, and the
+  `semantics` field states how the values bind — the membership rules are not
+  uniform:
+  - the framework-role identity and the role's characteristic-profile prefixes
+    (the `characteristic_profile_prefixes` authority, including the pytest
+    fixture-context special case) bind by `Equal`, and by `EqualEmpty` when the
+    shared value is the empty set. `EqualEmpty` is a real "must be empty"
+    constraint because the characteristic prefixes are equality-enforced: a
+    candidate carrying any value there is rejected, so the empty case must be
+    recorded, not dropped. `EqualEmpty` is distinct from the prohibited-presence
+    wildcard below.
+  - the shared support-family core binds by `MustContain` (a subset rule):
+    membership requires only pairwise overlap, so members may carry additional
+    support families and equality would be false. Complete-link clustering can
+    yield an empty global core, in which case there is no shared core and the
+    entry is omitted. When a role's characteristic prefixes already bind
+    `support_family:` by equality, that stronger `Equal` constraint takes
+    precedence and the redundant `MustContain` intersection entry is dropped.
+- `allowed_variations`: dimensions along which members legally differ, derived
+  from the same per-language variation-slot prefix tables the emitted variation
+  slots use, using exactly the slot detection rule so the two co-persisted
+  artifacts never contradict. Each `VariationConstraint` enumerates only the
+  non-empty profiles actually observed among the current members (`observed_only`
+  is always `true`; unobserved values are never claimed legal) and records
+  `includes_absent_profile` when at least one member carried no value under the
+  dimension (the absent profile the slot rule also counts). The enumeration is
+  bounded to `CONSTRAINT_OBSERVED_PROFILE_CAP` (8) with an
+  `observed_profiles_truncated` flag, plus bounded `representative_member_ids`
+  (capped at `CONSTRAINT_REPRESENTATIVE_MEMBER_CAP`, 8).
+- `prohibited_or_blocking_features`: feature values whose presence excludes
+  membership for the family key, bound by `ProhibitedPresence` semantics with an
+  empty `values` wildcard. The only such rule the per-language compatibility
+  functions apply is the `unknown_blocker:` rejection, and only for the languages
+  whose rule checks it (TS/JS, Java, C#, C/C++, Rust). Python's refinement has no
+  such guard, so Python families carry no prohibition.
+- `unresolved_obligations`: the claim's own typed unknowns — the always-present
+  runtime-equivalence obligation followed by any non-blocking unknowns, in claim
+  order. `UnknownObligation` reuses the typed `UNKNOWN` vocabulary verbatim
+  (`class`/`reason`/`affected_claim`/`recovery`); the profile never opens a
+  second, free-text obligation channel.
+
+The derivation reuses the compatibility, characteristic-profile, variation-slot,
+and typed-`UNKNOWN` authorities directly rather than reconstructing constraints
+from raw fields. Two small predicates — `language_excludes_on_unknown_blocker`
+and the pytest fixture-context dispatch — are hand-maintained mirrors of the
+per-language compatibility functions; they are cross-referenced to those
+authorities in the code and guarded by drift tests that assert the mirror matches
+`evidence_pair_is_compatible`'s actual accept/reject behavior. The profile is
+derived during family building, persisted alongside the family in the same
+generation, and hydrated onto the family detail read surfaces (see
+`query-resolution.md`, `cli.md`, and `mcp-api.md`) as a metadata-only
+`constraint_profile` object.
+
 ## Evidence
 
 Evidence links a conclusion to a code unit, source range, provenance record, and
 note. Every future family conclusion must carry auditable source evidence.
 Family evidence storage must remain linked to a family and same-generation code
 unit and must carry explicit covered-claim labels. The current allowlist is
-`canonical`, `support`, `variation`, and `exception`. Current builders emit
-`canonical` and `support`, and they may emit one narrow Python `variation`
-evidence label when an already-ready family has multiple exact-compatible
-framework-anchor support targets. Exception evidence and broader medoid,
-template, or counterexample evidence links remain deferred. Semantic-fact
-evidence must not be treated as family evidence by itself.
+`canonical`, `support`, `contrast`, `variation`, and `exception`. A stored
+evidence row must carry at least one label, so every member carries `support`;
+the canonical medoid additionally carries `canonical`, the support witness
+additionally carries `contrast`, and variation witnesses additionally carry
+`variation` (see Representative selection). Exception evidence remains deferred.
+Semantic-fact evidence must not be treated as family evidence by itself.
+
+## Representative selection
+
+Representative selection assigns the `canonical`, `contrast`, and `variation`
+covered-claim labels by coverage, not storage order. It is deterministic and
+runs for every language.
+
+The **objective** is to let a budgeted read plan cover, under its token /
+read-plan budget, the maximum number of required constraints (the canonical and
+support witnesses) plus one witness per observed variation dimension. The
+build-time labelling and the query-time greedy selection share this objective.
+
+- **Distance.** The distance between two members is the symmetric-difference
+  cardinality of their full family feature sets — the number of features present
+  on exactly one member.
+- **Canonical = the cluster medoid.** The medoid is the member minimizing the sum
+  of distances to every other member. The choice is deterministic on the members'
+  features: the decision key is `(cost, feature_fingerprint, index)`, where
+  `feature_fingerprint` is a path-free stable hash of the member's feature set, so
+  ties on cost are broken by features before any index resort. A pure path rename
+  — one that only reorders members — therefore leaves the canonical unchanged,
+  including for two-member families, which always tie on cost. The single
+  exception is deliberate: the feature set includes a `path_context:` bucket
+  feature, so a rename that crosses that bucket boundary is a genuine feature
+  change and may move the medoid. This replaces the former storage-order canonical
+  (the first member in path order).
+- **Support witness = the farthest member from the medoid** (maximum distance;
+  ties broken by lowest `feature_fingerprint`, then lowest index). Every member
+  shares the required-equal feature profile by construction, so no separate
+  profile filter is needed; the farthest member maximizes contrast. Storage order
+  is **not** the carrier of this choice — hydration re-sorts evidence by
+  `(path, start, end, id)`, erasing the medoid-first write order — so the support
+  witness is marked with the `contrast` covered-claim label instead. The read
+  plan's support span prefers the `contrast`-labelled row and falls back to the
+  first distinct-path `support` member when no contrast label survives.
+- **Variation witnesses = one representative per observed profile, per dimension.**
+  The dimensions are the constraint profile's `allowed_variations` (the
+  per-language variation-slot feature prefixes) plus the Python
+  framework-anchor-target dimension (which is a variation slot rather than a
+  feature-prefix dimension). The canonical medoid is excluded from the witness
+  set: it already exhibits one observed profile, so the witnesses cover the other
+  observed profiles for contrast. This profile-driven general rule replaces the
+  former Python-only single-witness anchor-target special case.
+
+At query time the greedy marginal-coverage-per-token loop covers the required
+canonical and support constraints and, when the profile is hydrated, one target
+per `allowed_variations` dimension plus one for the anchor-target dimension when
+its slot exists. A dimension is witnessed by a member listed among its
+representatives; a `variation`-labelled member that represents no profile
+dimension witnesses the anchor-target dimension. When the sole representative of a
+dimension is the canonical medoid (one observed non-empty profile plus absent
+members), the canonical itself satisfies that dimension — it legitimately
+witnesses the profile it exhibits — so the requirement is never permanently
+unsatisfiable. Without hydrated profile dimensions the loop falls back to a single
+variation target from the variation-slot signal. Tie-breaking is deterministic:
+higher marginal-coverage-per-token, then higher marginal coverage, then lower
+cost, then lower source order. The mandatory canonical seed may exceed the budget
+so a family is never returned without its canonical member.
 
 ## Provenance
 
@@ -308,10 +428,44 @@ provenance must not be treated as fresh evidence.
 A counterexample is a source-backed implementation that resembles a family but
 violates a meaningful rule. Counterexample storage is deferred.
 
-## CompatibilityResult
+## Static alignment
 
-Compatibility expresses whether a target can be compared to a family:
-compatible, incompatible with reason, or unknown with reason.
+Static alignment expresses how a target code unit relates to a pattern family's
+source-backed `FamilyConstraintProfile`. It is a *structural* comparison over
+indexed feature tokens and never a runtime-conformance verdict; the
+runtime-equivalence obligation is always reported as an unresolved obligation and
+the certificate keeps `runtime_equivalence: UNKNOWN`. The vocabulary lives in
+`core::policy::alignment` and the decision authority is
+`application::conformance::compute_alignment`.
+
+`AlignmentStatus` (the certificate's top-level status): `STATICALLY_ALIGNED`
+(every required constraint matched, no deviation, no blocking unknown),
+`STATIC_DEVIATION` (a required-feature violation or a prohibited-presence match),
+`PARTIAL_ALIGNMENT` (no violation, but a blocking unknown, an unobserved
+variation, or degraded extraction), `INSUFFICIENT_EVIDENCE` (no or ambiguous
+comparison family), and `UNKNOWN`. It is never `PASS`/`FAIL`/`CONFORMS`.
+
+`TargetRelationship` (membership standing, orthogonal to the status): `MEMBER`,
+`NEAR_MISS` (a non-member that satisfies every required constraint but was not
+admitted, e.g. sub-support), `BLOCKED_UNKNOWN` (a blocking unknown prevented
+membership), `OUT_OF_SCOPE` (an unsupported kind or role), and `EXCEPTION`
+(source-backed negative evidence — a required-feature violation against the only
+ready family of the target's key). `COMPETING_PATTERN` (a member of a competing
+ready family of the same key) is a reserved token: a member always compares
+against its own family, so no current path emits it.
+
+`StaticDeviationKind` (per deviation): the required-feature *violations* that
+force `STATIC_DEVIATION` are `required_mismatch`, `must_be_empty_violation`,
+`missing_required_core`, and `prohibited_presence`. Three further kinds are
+non-violating partial-alignment signals: `unobserved_variation` (a value never
+observed among an untruncated enumeration — deliberately *not* illegal),
+`truncated_observation` (not among an enumeration truncated at the cap, so "never
+observed" cannot be proven), and `blocking_suppressed_requirement` (an
+absence-driven required check that a target blocking unknown plausibly
+suppressed — the static view is incomplete, so it must not fabricate a
+deviation). Presence-driven violations still deviate under a blocking unknown;
+absence-driven checks do not. Every deviation's observed and expected summaries
+are RepoGrammar feature tokens, never repository source text.
 
 ## Measurement
 
@@ -372,8 +526,151 @@ freshness are still deferred.
 
 ## Classification vocabulary
 
-- `DOMINANT_PATTERN`: a high-support family pattern with sufficient evidence.
-- `VARIATION`: a known allowed slot inside a family.
-- `EXCEPTION`: a source-backed deviation or counterexample.
-- `UNKNOWN`: insufficient evidence, competing families, dynamic behavior, or
-  unsupported target.
+Minimum support only qualifies a cluster for emission; it does not by itself
+prove dominance. Every emitted family carries an evidence-backed
+`FamilyPrevalence` record and is classified with one of four tokens:
+
+- `DOMINANT_PATTERN`: high coverage of eligible peers with a reliable
+  denominator and no competing ready family that rivals it.
+- `SUPPORTED_PATTERN`: meets minimum support but does not dominate its eligible
+  peers.
+- `MINORITY_PATTERN`: covers less than one third of eligible peers, or is
+  smaller than a competing ready family of the same key.
+- `UNKNOWN_PREVALENCE`: the denominator is unreliable because blocking unknowns
+  dominate the peer group.
+
+Insufficient support, competing families below minimum support, dynamic
+behavior, and unsupported targets remain typed `UNKNOWN`s that are never emitted
+as families. Variation slots and source-backed exceptions are recorded on the
+family record itself, not as separate top-level classification tokens.
+
+### `FamilyPrevalence` record
+
+Each emitted family stores metadata-only prevalence counters (never source
+text):
+
+- `eligible_peer_count`: the denominator — units of the same `FamilyKey` whose
+  supported evidence survived the blocking filter (this cluster, a competing
+  cluster, or a sub-support cluster).
+- `supported_member_count`: this cluster's support.
+- `coverage_ratio`: `supported_member_count / eligible_peer_count`, `None` only
+  when the denominator is zero (impossible for an emitted claim; kept for schema
+  honesty).
+- `competing_ready_family_count`: other ready clusters of the same key.
+- `largest_competing_support`: the largest support among those competitors, `0`
+  if none.
+- `blocked_peer_count`: peers whose support was emptied by a blocking `UNKNOWN`,
+  excluded from the denominator but recorded for reliability.
+- `unsupported_peer_count`: peers with no role-compatible support facts,
+  excluded from the denominator but recorded for reliability.
+- `classification_reason`: one deterministic sentence from a fixed template set.
+
+Denominator rule: only peers that could in principle claim membership count
+toward `eligible_peer_count`. Blocked and unsupported peers are excluded but
+recorded separately; difficult eligible peers are never dropped to inflate a
+family's coverage.
+
+### Classification rule
+
+Classification is decided on exact integers (cross-multiplied thresholds) so the
+edges are deterministic and float-free. Let `support = supported_member_count`,
+`eligible = eligible_peer_count`, and `competitor = largest_competing_support`:
+
+1. `UNKNOWN_PREVALENCE` when `blocked_peer_count > eligible` (unreliable
+   denominator).
+2. `MINORITY_PATTERN` when `3 * support < eligible` (coverage below one third)
+   or `support < competitor`.
+3. `DOMINANT_PATTERN` when `5 * support >= 3 * eligible` (coverage at least
+   0.6), `support >= 2 * competitor`, and `support >= 2`.
+4. `SUPPORTED_PATTERN` otherwise.
+
+Reason templates are fixed sentences such as `coverage 30/30 with no competing
+ready family`, `coverage 3/6 without dominant margin`, `support 3 below
+competing ready support 6`, `coverage 2/9 below one-third of eligible peers`, or
+`blocked peers 4 exceed eligible peers 3`.
+
+## Family identity
+
+A `FamilyKey` is `(language, code_unit_kind, framework_role, normalized_shape)`.
+A single key can produce several ready clusters after complete-link clustering,
+and each ready cluster is emitted as one family that needs a stable,
+human-auditable id.
+
+### Base id
+
+The base id is `family:{language}:{code_unit_kind}:{framework_role}`, where each
+segment is lowercased and every non-alphanumeric character is folded to `_`
+(`stable_token`).
+
+### Suffix rule
+
+- A key with at most one ready cluster keeps the bare base id. This is the
+  common, stable case and must never change for unrelated repository edits.
+- A key with two or more ready clusters gives every ready cluster a suffix, so
+  no cluster holds the bare base id. This removes base-id rebinding: adding a
+  file whose path sorts earlier can no longer silently re-point the base id at a
+  different cluster.
+
+Suffixed ids are `family:{language}:{code_unit_kind}:{framework_role}:v{hex}`.
+The `v` prefix plus twelve lowercase hex characters cannot collide with the
+legacy `cluster_...` suffix token space.
+
+### Suffix hash derivation
+
+`v{hex}` is the literal `v` followed by the first twelve lowercase hex
+characters (six bytes) of the SHA-256 digest of a canonical, newline-terminated
+serialization:
+
+```
+repogrammar.family-suffix.v1
+key={language}:{code_unit_kind}:{framework_role}
+profile={characteristic feature}   (one line per feature, sorted)
+support-family-core={value}        (only when a profile tie is broken; sorted)
+ordinal={n}                        (only for a positional tie)
+```
+
+The characteristic profile is exactly the feature values that the role's
+compatibility rule (`evidence_pair_is_compatible` and its per-language
+refinements) requires to be equal across every cluster member — for example
+`decorator_shape:` for FastAPI routes, `http_method:` plus `route_path_shape:`
+for Flask and axum routes, or `http_method:` plus `route_template_shape:` for
+ASP.NET Core routes. Those values are identical across members by construction,
+so the suffix is stable under member addition or removal as long as the
+cluster's characteristic profile is unchanged.
+
+### Tie handling
+
+Two sibling ready clusters of the same key can share an identical characteristic
+profile when the role is constrained only by the universal preconditions (a
+shared support family and an equal role). Ties are broken deterministically:
+
+1. Extend the hashed input with the cluster's support-family core — the
+   `support_family` values shared by every member. Two distinct clusters can
+   only share a non-empty core if they would already have merged, so this
+   distinguishes every pair whose cores differ.
+2. If two clusters still tie (identical profile and an identical, necessarily
+   empty, core), append a positional ordinal by emission order. The ordinal is
+   also recorded on the family as classification-independent metadata
+   (`slot:family_positional_discriminator`) so its use is observable rather than
+   silent. Positional fallback fires only for genuinely indistinguishable
+   clusters.
+
+### Collision disambiguation
+
+`stable_token` is lossy, so two distinct keys (for example the roles
+`framework:a.b` and `framework:a_b`) can fold onto the same bare base id. Only
+single-ready-cluster keys mint a bare base id, so after emission any such
+collision is resolved by giving every key in the colliding group a deterministic
+`v{hex}` suffix derived from the full raw `FamilyKey` (domain tag
+`repogrammar.family-key.v1`); non-colliding keys keep the bare base id. The
+build asserts that all emitted family ids are unique.
+
+### Cross-generation identity
+
+Family ids are deterministic for a fixed input set and stable under unrelated
+file changes, but they are follow-up handles, not permanent identities: a
+cluster re-clustered under a different characteristic profile appears as one
+removed id and one added id, not as an in-place rename. Sync and resync JSON
+report this as `families_added` and `families_removed` (see
+`specifications/cli.md`); consumers must resync and re-resolve family handles
+rather than assume an id refers to the same membership across generations.

@@ -73,6 +73,17 @@ validated request envelopes, including from active-generation snapshot records;
 it is not worker execution, provider support, storage ingestion, or a
 family-claim upgrade.
 
+The checked-in CPython frontend worker also serves a single-file
+`extract_interface` mode for the incremental-sync interface-hash gate (see
+`docs/specifications/python-analysis.md` and
+`docs/specifications/indexing-pipeline.md`). This is a *frontend* parse-worker
+mode, distinct from the streaming semantic worker: it takes one module's
+path and text with no whole-project context and returns one bounded, source-free
+`interface_hash`. Because the probe reuses the frontend worker and never the
+semantic worker, the `semantic_worker_requires_full_rebuild` preflight rule is
+unaffected — a configured semantic worker still forces a full rebuild every run,
+and that fallback fires before the interface gate is ever reached.
+
 Pyrefly and Pyright agreement may support a future cross-checked certainty tier
 only after Rust domain, protocol schemas, storage, CLI, MCP, and tests define
 that token. Until then, worker output must use current certainty tokens and keep

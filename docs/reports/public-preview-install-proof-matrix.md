@@ -7,6 +7,10 @@
 - Integrated dogfood commit tested locally: `d64f861799d0fa77bcceb66f2c3d9428fbebf1e1`
 - Release checklist: `../release/public-preview-release-checklist.md`
 
+Recorded results reflect the candidate version as tested; the `check` row shows
+the legacy `CONTEXT_ONLY` advisory form that later releases replaced with
+static-alignment certificates.
+
 This report is a pre-tag evidence snapshot, not a current availability or
 publication claim. Availability must always be rechecked for the exact version
 with the commands in `../quickstart.md`. The recorded run proves one native

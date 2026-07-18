@@ -10,3 +10,11 @@ NEXT_STEP.md
 
 # Transient coding-agent worktrees and session state
 .claude/
+
+# Agent-study (RQ5) local run artifacts — the driver refuses a --work-base
+# inside the repo tree, but ignore any raw transcripts / per-run worktrees /
+# scratch that ever land here as defense in depth (they carry source excerpts
+# and must never be committed; only the derived agent-study-run.v1 records are).
+src/experiments/agent_study/runs/
+src/experiments/agent_study/**/transcript*.jsonl
+src/experiments/agent_study/**/stderr.log

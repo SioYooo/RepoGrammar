@@ -28,6 +28,23 @@ const COUNT_BUCKETS: &[&str] = &["0", "1-2", "3-9", "10-49", "50-199", "200+"];
 const RATIO_BUCKETS: &[&str] = &["unknown", "0", "0-25", "25-50", "50-75", "75-100"];
 const RISK_BUCKETS: &[&str] = &["unknown", "low", "medium", "high"];
 const FAMILY_QUERY_OUTCOMES_METRIC_NAME: &str = "family_query_outcomes";
+/// Context-delivering outcome shapes an estimated-potential-token-savings event
+/// can be attributed to. A closed vocabulary, additive to the
+/// `estimated-potential-token-savings.v1` rollup (tolerated-when-absent).
+pub const SAVINGS_OUTCOME_SHAPE_KEYS: &[&str] = &["found", "partial_context", "alignment"];
+/// Low-cardinality language scope tokens a savings event can be attributed to.
+/// Mirrors the query-layer inventory language scopes plus `mixed` (a found family
+/// spanning several languages). A closed vocabulary; unknown tokens are rejected.
+pub const SAVINGS_LANGUAGE_KEYS: &[&str] = &[
+    "python",
+    "typescript/javascript",
+    "c/cpp",
+    "rust",
+    "java",
+    "csharp",
+    "mixed",
+    "unknown",
+];
 const FAMILY_QUERY_OUTCOME_STATUS_KEYS: &[&str] =
     &["found", "partial_context", "unknown", "fallback", "error"];
 const FAMILY_QUERY_ENTRYPOINT_KEYS: &[&str] = &["cli", "mcp"];
@@ -108,12 +125,27 @@ const FAMILY_QUERY_RECOVERY_CODE_KEYS: &[&str] = &[
     "run_sync",
     "add_project_config",
     "enable_provider",
+    "not_implemented_in_current_version",
     "resolve_import_graph",
     "resolve_fixture_graph",
+    // Retained for historical rollups: no live mechanism emits it since
+    // provider-bucket mechanisms recover via not_implemented_in_current_version.
     "resolve_dependency_metadata",
     "runtime_trace_required",
     "manual_review_required",
     "unknown",
+];
+/// Low-cardinality term-retrieval abstention vocabulary. Every value is a stable
+/// enum token; none carries raw target text. Kept in sync with
+/// [`crate::application::query::TermRetrievalAbstention`].
+const FAMILY_QUERY_ABSTENTION_REASON_KEYS: &[&str] = &[
+    "no_candidate",
+    "below_min_score",
+    "unsupported_target",
+    "margin_too_close",
+    "truncated_tie",
+    "stale_candidates",
+    "hydration_ambiguous",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,12 +298,45 @@ pub struct TelemetryExportReport {
     pub queued: bool,
 }
 
+/// A per-dimension estimated-potential-token-savings breakdown: the same four
+/// accumulated numbers as the top-level totals, scoped to one outcome shape or
+/// one language token. Every value is ESTIMATED, never negative (baseline and
+/// returned accumulate independently; potential is the saturating difference).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SavingsBreakdown {
+    pub event_count: u64,
+    pub estimated_baseline_tokens: u64,
+    pub estimated_returned_tokens: u64,
+    pub estimated_potential_token_savings: u64,
+}
+
+impl SavingsBreakdown {
+    fn accumulate(&mut self, metric: &EstimatedPotentialTokenSavings) {
+        self.event_count = self.event_count.saturating_add(1);
+        self.estimated_baseline_tokens = self
+            .estimated_baseline_tokens
+            .saturating_add(metric.estimated_baseline_tokens);
+        self.estimated_returned_tokens = self
+            .estimated_returned_tokens
+            .saturating_add(metric.estimated_returned_tokens);
+        self.estimated_potential_token_savings = self
+            .estimated_potential_token_savings
+            .saturating_add(metric.estimated_potential_token_savings);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EstimatedPotentialTokenSavingsRollup {
     pub event_count: u64,
     pub total_estimated_baseline_tokens: u64,
     pub total_estimated_returned_tokens: u64,
     pub total_estimated_potential_token_savings: u64,
+    /// Additive all-scope breakdown by outcome shape (`found`, `partial_context`,
+    /// `alignment`). Empty for rollup files written before the breakdown existed.
+    pub by_outcome_shape: BTreeMap<String, SavingsBreakdown>,
+    /// Additive all-scope breakdown by low-cardinality language token. Empty for
+    /// rollup files written before the breakdown existed.
+    pub by_language: BTreeMap<String, SavingsBreakdown>,
     pub measurement_kind: MeasurementKind,
     pub caveat: &'static str,
 }
@@ -283,6 +348,8 @@ impl Default for EstimatedPotentialTokenSavingsRollup {
             total_estimated_baseline_tokens: 0,
             total_estimated_returned_tokens: 0,
             total_estimated_potential_token_savings: 0,
+            by_outcome_shape: BTreeMap::new(),
+            by_language: BTreeMap::new(),
             measurement_kind: MeasurementKind::Estimated,
             caveat: EstimatedPotentialTokenSavings::CAVEAT,
         }
@@ -383,6 +450,9 @@ pub struct FamilyQueryOutcomeRollup {
     pub by_required_mechanism: BTreeMap<String, u64>,
     pub by_obligation: BTreeMap<String, u64>,
     pub by_recovery_code: BTreeMap<String, u64>,
+    /// Term-retrieval abstention reasons (source-free enum tokens). Empty for
+    /// rollups whose queries never reached the term-retrieval fallback.
+    pub by_abstention_reason: BTreeMap<String, u64>,
     pub read_plan_returned_count: u64,
     pub read_plan_item_count_bucket: BTreeMap<String, u64>,
     pub source_spans_requested_count: u64,
@@ -397,6 +467,10 @@ pub struct FamilyQueryOutcomeRecord<'a> {
     pub command_category: FamilyQueryCommandCategory,
     pub lookup_mode: FamilyQueryLookupMode,
     pub unknowns: &'a [FamilyQueryUnknownMetric],
+    /// Term-retrieval abstention reason token, when the query abstained through
+    /// the term-retrieval fallback. Must be a `FAMILY_QUERY_ABSTENTION_REASON_KEYS`
+    /// value; never raw target text.
+    pub abstention_reason: Option<&'a str>,
     pub read_plan_item_count: Option<usize>,
     pub source_spans_requested: bool,
     pub source_spans_included: bool,
@@ -739,10 +813,37 @@ where
     Ok(true)
 }
 
+/// Normalize a savings language token against the single authoritative
+/// vocabulary [`SAVINGS_LANGUAGE_KEYS`]. An out-of-vocabulary token maps to
+/// `unknown` — an explicit low-cardinality bucket — so a producer that drifts
+/// from the vocabulary never silently drops the savings event or writes an
+/// out-of-vocabulary rollup key.
+fn normalize_savings_language(language: &str) -> &str {
+    if SAVINGS_LANGUAGE_KEYS.contains(&language) {
+        language
+    } else {
+        "unknown"
+    }
+}
+
 pub fn record_estimated_potential_token_savings(
     request: RepositoryStatusRequest,
     metric: &EstimatedPotentialTokenSavings,
+    outcome_shape: &str,
+    language: &str,
 ) -> Result<EstimatedPotentialTokenSavingsRollup, RepoGrammarError> {
+    if !SAVINGS_OUTCOME_SHAPE_KEYS.contains(&outcome_shape) {
+        return Err(invalid_input(
+            "estimated potential token savings outcome shape is not in the allowlist",
+        ));
+    }
+    // `SAVINGS_LANGUAGE_KEYS` is the single authority for the savings language
+    // vocabulary. A token outside it (a producer that drifted from this list) is
+    // mapped explicitly to `unknown` rather than dropping the event silently or
+    // widening the rollup vocabulary. `savings_language_producers_stay_in_vocab`
+    // pins the producers to this constant so the coercion is a defensive backstop,
+    // never the normal path.
+    let language = normalize_savings_language(language);
     let path = estimated_potential_token_savings_file(request)?;
     let mut rollup = read_estimated_potential_token_savings_file(&path)?;
     rollup.event_count = rollup.event_count.saturating_add(1);
@@ -755,6 +856,16 @@ pub fn record_estimated_potential_token_savings(
     rollup.total_estimated_potential_token_savings = rollup
         .total_estimated_potential_token_savings
         .saturating_add(metric.estimated_potential_token_savings);
+    rollup
+        .by_outcome_shape
+        .entry(outcome_shape.to_string())
+        .or_default()
+        .accumulate(metric);
+    rollup
+        .by_language
+        .entry(language.to_string())
+        .or_default()
+        .accumulate(metric);
     write_estimated_potential_token_savings_file(&path, &rollup)?;
     Ok(rollup)
 }
@@ -790,6 +901,14 @@ pub fn record_family_query_outcome(
         );
         increment_rollup_count(&mut rollup.by_obligation, unknown.obligation);
         increment_rollup_count(&mut rollup.by_recovery_code, unknown.recovery_code);
+    }
+    if let Some(reason) = record.abstention_reason {
+        if !FAMILY_QUERY_ABSTENTION_REASON_KEYS.contains(&reason) {
+            return Err(invalid_input(
+                "family query abstention reason is not in the allowlist",
+            ));
+        }
+        increment_rollup_count(&mut rollup.by_abstention_reason, reason);
     }
     if let Some(item_count) = record.read_plan_item_count {
         rollup.read_plan_returned_count = rollup.read_plan_returned_count.saturating_add(1);
@@ -1568,8 +1687,31 @@ fn write_estimated_potential_token_savings_file(
             "total_estimated_baseline_tokens": rollup.total_estimated_baseline_tokens,
             "total_estimated_returned_tokens": rollup.total_estimated_returned_tokens,
             "total_estimated_potential_token_savings": rollup.total_estimated_potential_token_savings,
+            "by_outcome_shape": savings_breakdown_map_json(&rollup.by_outcome_shape),
+            "by_language": savings_breakdown_map_json(&rollup.by_language),
             "caveat": rollup.caveat,
         }),
+    )
+}
+
+/// The single authoritative serializer for a savings-breakdown map. Both the
+/// rollup file and the `stats --json` `all_scope_token_savings` block render
+/// through this one function so their shapes cannot drift apart.
+pub(crate) fn savings_breakdown_map_json(map: &BTreeMap<String, SavingsBreakdown>) -> Value {
+    Value::Object(
+        map.iter()
+            .map(|(key, breakdown)| {
+                (
+                    key.clone(),
+                    json!({
+                        "event_count": breakdown.event_count,
+                        "estimated_baseline_tokens": breakdown.estimated_baseline_tokens,
+                        "estimated_returned_tokens": breakdown.estimated_returned_tokens,
+                        "estimated_potential_token_savings": breakdown.estimated_potential_token_savings,
+                    }),
+                )
+            })
+            .collect(),
     )
 }
 
@@ -1602,6 +1744,7 @@ fn write_family_query_outcomes_file(
             "by_required_mechanism": &rollup.by_required_mechanism,
             "by_obligation": &rollup.by_obligation,
             "by_recovery_code": &rollup.by_recovery_code,
+            "by_abstention_reason": &rollup.by_abstention_reason,
             "read_plan_returned_count": rollup.read_plan_returned_count,
             "read_plan_item_count_bucket": &rollup.read_plan_item_count_bucket,
             "source_spans_requested_count": rollup.source_spans_requested_count,
@@ -2179,9 +2322,63 @@ fn parse_estimated_potential_token_savings_rollup(
             object,
             "total_estimated_potential_token_savings",
         )?,
+        // `by_outcome_shape` and `by_language` are additive breakdowns; tolerate
+        // their absence in rollup files written before they existed while still
+        // validating the closed vocabularies when present.
+        by_outcome_shape: parse_savings_breakdown_map(
+            object,
+            "by_outcome_shape",
+            SAVINGS_OUTCOME_SHAPE_KEYS,
+        )?,
+        by_language: parse_savings_breakdown_map(object, "by_language", SAVINGS_LANGUAGE_KEYS)?,
         measurement_kind: MeasurementKind::Estimated,
         caveat: EstimatedPotentialTokenSavings::CAVEAT,
     })
+}
+
+fn parse_savings_breakdown_map(
+    object: &Map<String, Value>,
+    field: &str,
+    allowed_keys: &[&str],
+) -> Result<BTreeMap<String, SavingsBreakdown>, RepoGrammarError> {
+    let invalid_message = "estimated potential token savings rollup is invalid";
+    let Some(value) = object.get(field) else {
+        return Ok(BTreeMap::new());
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| invalid_input(invalid_message))?;
+    let mut output = BTreeMap::new();
+    for (key, entry) in map {
+        if !allowed_keys.contains(&key.as_str()) {
+            return Err(invalid_input(invalid_message));
+        }
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| invalid_input(invalid_message))?;
+        output.insert(
+            key.clone(),
+            SavingsBreakdown {
+                event_count: rollup_u64_named(entry, "event_count", invalid_message)?,
+                estimated_baseline_tokens: rollup_u64_named(
+                    entry,
+                    "estimated_baseline_tokens",
+                    invalid_message,
+                )?,
+                estimated_returned_tokens: rollup_u64_named(
+                    entry,
+                    "estimated_returned_tokens",
+                    invalid_message,
+                )?,
+                estimated_potential_token_savings: rollup_u64_named(
+                    entry,
+                    "estimated_potential_token_savings",
+                    invalid_message,
+                )?,
+            },
+        );
+    }
+    Ok(output)
 }
 
 fn parse_family_query_outcome_rollup(
@@ -2252,6 +2449,19 @@ fn parse_family_query_outcome_rollup(
             FAMILY_QUERY_RECOVERY_CODE_KEYS,
             invalid_message,
         )?,
+        // `by_abstention_reason` is a later addition; tolerate its absence in
+        // rollup files written before it existed while still validating the
+        // fixed vocabulary when present.
+        by_abstention_reason: if object.contains_key("by_abstention_reason") {
+            rollup_allowed_count_map(
+                object,
+                "by_abstention_reason",
+                FAMILY_QUERY_ABSTENTION_REASON_KEYS,
+                invalid_message,
+            )?
+        } else {
+            BTreeMap::new()
+        },
         read_plan_returned_count: rollup_u64_named(
             object,
             "read_plan_returned_count",
@@ -2617,8 +2827,26 @@ fn invalid_input(message: impl Into<String>) -> RepoGrammarError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::query::TermRetrievalAbstention;
     use crate::test_support::TempWorkspace;
     use std::cell::Cell;
+
+    #[test]
+    fn abstention_reason_allowlist_matches_enum_exactly() {
+        // The telemetry allowlist is a hand-written mirror of the term-retrieval
+        // abstention enum. Assert element-wise correspondence so any future drift
+        // fails the build instead of silently dropping whole outcome records
+        // (an unlisted reason makes record_family_query_outcome return Err).
+        let enum_tokens: Vec<&str> = TermRetrievalAbstention::ALL
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect();
+        assert_eq!(
+            enum_tokens.as_slice(),
+            FAMILY_QUERY_ABSTENTION_REASON_KEYS,
+            "TermRetrievalAbstention::ALL and FAMILY_QUERY_ABSTENTION_REASON_KEYS drifted"
+        );
+    }
 
     #[derive(Default)]
     struct FakeTransport {
@@ -2797,11 +3025,15 @@ mod tests {
         let first = record_estimated_potential_token_savings(
             request.clone(),
             &EstimatedPotentialTokenSavings::new(120, 80),
+            "found",
+            "python",
         )
         .expect("record first estimate");
         let second = record_estimated_potential_token_savings(
             request.clone(),
             &EstimatedPotentialTokenSavings::new(40, 70),
+            "partial_context",
+            "typescript/javascript",
         )
         .expect("record second estimate");
 
@@ -2811,6 +3043,51 @@ mod tests {
         assert_eq!(second.total_estimated_returned_tokens, 150);
         assert_eq!(second.total_estimated_potential_token_savings, 40);
         assert_eq!(second.measurement_kind, MeasurementKind::Estimated);
+
+        // The additive by-shape and by-language breakdowns attribute each event.
+        let found_shape = second
+            .by_outcome_shape
+            .get("found")
+            .copied()
+            .expect("found shape breakdown");
+        assert_eq!(found_shape.event_count, 1);
+        assert_eq!(found_shape.estimated_potential_token_savings, 40);
+        let partial_shape = second
+            .by_outcome_shape
+            .get("partial_context")
+            .copied()
+            .expect("partial_context shape breakdown");
+        assert_eq!(partial_shape.event_count, 1);
+        assert_eq!(partial_shape.estimated_potential_token_savings, 0);
+        assert_eq!(
+            second
+                .by_language
+                .get("typescript/javascript")
+                .map(|breakdown| breakdown.event_count),
+            Some(1)
+        );
+
+        // An out-of-vocabulary outcome shape is rejected outright (the shape
+        // vocabulary is a closed enum), never recorded under a drifted key.
+        assert!(record_estimated_potential_token_savings(
+            request.clone(),
+            &EstimatedPotentialTokenSavings::new(10, 5),
+            "renamed_shape",
+            "python",
+        )
+        .is_err());
+        // An out-of-vocabulary language never drops the event: it is mapped
+        // explicitly to `unknown` so the savings still accrue under a valid key.
+        let coerced = record_estimated_potential_token_savings(
+            request.clone(),
+            &EstimatedPotentialTokenSavings::new(10, 5),
+            "found",
+            "cobol",
+        )
+        .expect("out-of-vocab language coerces rather than dropping the event");
+        assert_eq!(coerced.event_count, 3);
+        assert_eq!(coerced.by_language["unknown"].event_count, 1);
+        assert!(!coerced.by_language.contains_key("cobol"));
 
         let path = estimated_potential_token_savings_file(request).expect("rollup path");
         let serialized = fs::read_to_string(path).expect("rollup JSON");
@@ -2833,6 +3110,57 @@ mod tests {
     }
 
     #[test]
+    fn estimated_savings_rollup_parses_legacy_file_without_breakdowns() {
+        // A rollup file written before the additive by-shape/by-language
+        // breakdowns existed parses with empty breakdown maps (tolerated-when
+        // absent), then accepts new events on top.
+        let workspace = TempWorkspace::new("estimated-savings-legacy");
+        let repository_root = workspace.path().join("repo");
+        fs::create_dir_all(repository_root.join(".repogrammar")).expect("state dir");
+        let request = RepositoryStatusRequest {
+            path: repository_root.display().to_string(),
+            state_dir_override: None,
+        };
+        let path = estimated_potential_token_savings_file(request.clone()).expect("rollup path");
+        fs::create_dir_all(path.parent().expect("parent")).expect("metrics dir");
+        fs::write(
+            &path,
+            json!({
+                "schema_version": ESTIMATED_POTENTIAL_TOKEN_SAVINGS_SCHEMA_VERSION,
+                "metric_name": EstimatedPotentialTokenSavings::METRIC_NAME,
+                "measurement_kind": MeasurementKind::Estimated.as_str(),
+                "event_count": 1,
+                "total_estimated_baseline_tokens": 120,
+                "total_estimated_returned_tokens": 80,
+                "total_estimated_potential_token_savings": 40,
+                "caveat": EstimatedPotentialTokenSavings::CAVEAT,
+            })
+            .to_string(),
+        )
+        .expect("write legacy rollup");
+
+        let legacy =
+            estimated_potential_token_savings_rollup(request.clone()).expect("parse legacy");
+        assert_eq!(legacy.event_count, 1);
+        assert!(legacy.by_outcome_shape.is_empty());
+        assert!(legacy.by_language.is_empty());
+
+        let updated = record_estimated_potential_token_savings(
+            request,
+            &EstimatedPotentialTokenSavings::new(1000, 30),
+            "partial_context",
+            "typescript/javascript",
+        )
+        .expect("record onto legacy rollup");
+        assert_eq!(updated.event_count, 2);
+        assert_eq!(updated.by_outcome_shape["partial_context"].event_count, 1);
+        assert_eq!(
+            updated.by_outcome_shape["partial_context"].estimated_potential_token_savings,
+            970
+        );
+    }
+
+    #[test]
     fn family_query_outcome_rollup_records_repeated_source_free_events() {
         let workspace = TempWorkspace::new("family-query-outcome-rollup");
         let request = repository_request(&workspace);
@@ -2842,6 +3170,7 @@ mod tests {
             command_category: FamilyQueryCommandCategory::Find,
             lookup_mode: FamilyQueryLookupMode::Fuzzy,
             unknowns: &[],
+            abstention_reason: None,
             read_plan_item_count: Some(3),
             source_spans_requested: false,
             source_spans_included: false,
@@ -2899,6 +3228,7 @@ mod tests {
             command_category: FamilyQueryCommandCategory::ExplainDeviation,
             lookup_mode: FamilyQueryLookupMode::Fuzzy,
             unknowns: &unknown_metrics,
+            abstention_reason: Some("margin_too_close"),
             read_plan_item_count: None,
             source_spans_requested: false,
             source_spans_included: false,
@@ -2910,6 +3240,7 @@ mod tests {
             command_category: FamilyQueryCommandCategory::FindAnalogues,
             lookup_mode: FamilyQueryLookupMode::Fuzzy,
             unknowns: &unknown_metrics,
+            abstention_reason: None,
             read_plan_item_count: Some(1),
             source_spans_requested: true,
             source_spans_included: true,
@@ -2931,11 +3262,33 @@ mod tests {
         );
         assert_eq!(rollup.by_obligation["governance"], 2);
         assert_eq!(rollup.by_recovery_code["manual_review_required"], 2);
+        // The term-retrieval abstention reason is rolled up as an enum token and
+        // survives a round trip through the on-disk rollup file.
+        assert_eq!(rollup.by_abstention_reason["margin_too_close"], 1);
         assert_eq!(rollup.read_plan_returned_count, 1);
         assert_eq!(rollup.read_plan_item_count_bucket["1-2"], 1);
         assert_eq!(rollup.source_spans_requested_count, 1);
         assert_eq!(rollup.source_spans_included_count, 1);
         assert_eq!(rollup.source_span_omission_count_bucket["1-2"], 1);
+
+        // The persisted rollup carries only enum tokens; no raw target text — the
+        // natural-language phrase that produced the abstention never appears.
+        let path = family_query_outcomes_file(request).expect("rollup path");
+        let serialized = fs::read_to_string(path).expect("rollup JSON");
+        assert!(serialized.contains("margin_too_close"));
+        for forbidden in [
+            "How are",
+            "routes",
+            "raw_target",
+            "query_text",
+            "endpoint",
+            "fastapi",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "abstention rollup leaked forbidden token {forbidden}"
+            );
+        }
     }
 
     #[test]

@@ -91,15 +91,25 @@ It is exact-family-id only and is intended for family ids returned by earlier
 operation.
 
 `repogrammar check` is the CLI equivalent of the `check_conformance` operation.
-Because this slice does not prove runtime equivalence, a matched `check`
-response must use `CONTEXT_ONLY` for machine-readable context success and keep
-the conformance result advisory `UNKNOWN`.
+It is a source-backed *static-alignment* check, not a runtime-conformance
+verdict. It resolves the target to a specific indexed code unit, selects a
+comparison pattern family (the unit's own family when it is a member, otherwise
+the single fresh ready family of the unit's `(language, kind, role)` key), and
+compares the target's indexed feature profile against that family's constraint
+profile. The top-level `status` is one of the static-alignment tokens
+`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,
+`INSUFFICIENT_EVIDENCE`, or `UNKNOWN` — never `PASS`/`FAIL`/`CONFORMS` and never
+the legacy `CONTEXT_ONLY` advisory. Every certificate carries
+`runtime_equivalence: "UNKNOWN"`; static alignment never proves runtime
+equivalence. A stale, ambiguous, unindexed, or family-less target abstains with
+`INSUFFICIENT_EVIDENCE` and never surfaces a selected family.
 
 All query commands must support:
 
 - `--project <path>`
 - `--token-budget <n>` where `n` is positive and no greater than 200000
 - `--mode compact|evidence|deep`
+- `--verbosity minimal|standard|full`
 - `--json`
 - `--include-variations`
 - `--include-exceptions`
@@ -343,8 +353,11 @@ storage layout, mutable-database presence, legacy generation-layout presence,
 mutable WAL/SHM sidecar byte counts, active derived dependency count, active
 dirty-record count, storage/indexing implementation status, missing
 subdirectories, and relevant warning states. Status JSON must use
-`manifest_schema_version` and `storage_schema_version`; it must not use an
-ambiguous top-level `schema_version` field. When storage is wired, it must also
+`manifest_schema_version` and `storage_schema_version` for the index and storage
+schema versions, and must never collapse them into the top-level `schema_version`
+field. The top-level `schema_version` field is reserved for the shared product
+payload schema token (`product-schemas.v1`); see the product schema versioning
+paragraph below. When storage is wired, it must also
 report SQLite integrity status and unhealthy storage states without exposing
 absolute paths. When mutable and legacy layouts coexist, status must report the
 mixed layout while retaining the mutable database as the active read source.
@@ -368,6 +381,47 @@ as `.codegraph/` only when present or tracked-risk is detected, with
 `managed_by_repogrammar: false`. Readiness output must not expose source text,
 absolute paths, repo names, file lists, raw Git output, or raw errors.
 
+Status and doctor JSON must also include a source-free `product_readiness`
+object: the shared decomposed capability model that replaces reliance on the
+single optimistic `query_ready` boolean. It reports a deterministic
+low-cardinality `summary` token (`ready`, `degraded`, or `not_ready`) plus
+independently truthful dimensions — `repository_state`, `active_index` (with
+`available`, `active_generation`, `manifest_schema_version`, `schema_current`),
+`family_evidence` (`state` and `fresh_count`/`stale_count`/`cannot_verify_count`
+from the bounded freshness machinery, plus `evidence_unreadable`),
+`family_prevalence` (counts by classification, or `null` when the family store is
+unreadable), `query_retrieval` (exact and term-retrieval modes and the
+`vocabulary_version`), `static_alignment` (`available`/`unavailable`/
+`not_applicable`, or `cannot_verify` when the family store is unreadable),
+`providers` (per-slot integration and availability), `autosync`, and
+`measurement` (the NOT_MEASURED token-saving discipline). It also carries
+`top_blocking_unknowns` (the bounded top-five required-mechanism buckets, `null`
+when that inventory is unreadable versus `[]` for genuinely none) and one
+`recovery` object from the shared recovery classifier (`action`, `reason`,
+`recommended_command` — null unless the action is an executable RepoGrammar
+command — `guidance`, and `executable`). A store-read error must yield no definite
+dimension token: prevalence and the top-unknown list report unreadable (`null`)
+and static alignment `cannot_verify`, never a false zero/not-applicable.
+
+The summary is a pure projection of the one combined recovery decision, derived
+from the same authoritative repository recovery the query preflight consumes (so
+it already folds in the repository dirty-record freshness signal) layered with the
+hash-checked family-evidence freshness; it is never more optimistic than the query
+path. An unservable index is `not_ready`; a servable index that is stale (family
+evidence stale/unverifiable, or the repository index carries dirty derived
+records) or whose autosync is recommended-but-stopped is `degraded` with the stale
+count visible; only a fully clean, fresh servable index is `ready`. A
+stale-families-while-`query_ready` checkout therefore reports `degraded`, never a
+bare `ready`, and `summary: ready` guarantees `query_ready` is true in the same
+payload. Assembling the block performs bounded stats-scale reads (a family-evidence
+freshness scan plus an unknown-inventory read), so `status`/`doctor`/
+`inspect_readiness` are readiness-triage commands, not routine per-query loops.
+Because the classic `readiness` object and `product_readiness` are computed from
+independent repository-status snapshots within one invocation, they can describe
+slightly different points in time under concurrent modification. The block is
+present only when the runtime can assemble it (it is absent/null for deferred
+runtimes).
+
 `repogrammar doctor` must support human and `--json` output. It must check
 manifest status, required lifecycle subdirectories, storage/indexing
 implementation status, lock state, Git hygiene, and state directory
@@ -382,7 +436,9 @@ rather than silently repaired. JSON output must expose this as
 `checks.locks` with `pass`, `warning`, `fail`, or `not_applicable`.
 Doctor JSON must use `checks.manifest_schema_version` and
 `checks.storage_schema_version`; it must not expose an ambiguous
-`checks.schema_version` field. When storage can be inspected, doctor JSON also
+`checks.schema_version` field. The product payload schema token stays at the
+top-level `schema_version`, never inside `checks`. When storage can be inspected,
+doctor JSON also
 reports `checks.dependency_records` and `checks.dirty_records` so stale/dirty
 storage diagnostics are machine-readable. It must also report
 `checks.storage_layout`, `checks.mutable_database_present`,
@@ -390,10 +446,28 @@ storage diagnostics are machine-readable. It must also report
 `checks.shm_bytes`. Legacy-only storage and mixed mutable-plus-legacy storage
 must produce explicit doctor findings without treating the legacy files as
 authoritative when a mutable database is present.
-Doctor JSON must include the same `readiness` object as status JSON. Doctor may
-recommend commands such as `repogrammar init`, `repogrammar resync`,
-`repogrammar doctor`, or `repogrammar autosync start`, but it must not perform
-those actions implicitly.
+Doctor JSON must include the same `readiness` and `product_readiness` objects as
+status JSON. Doctor may recommend commands such as `repogrammar init`,
+`repogrammar resync`, `repogrammar doctor`, or `repogrammar autosync start`, but
+it must not perform those actions implicitly. Doctor and status human output must
+lead with the actionable capability summary and the one canonical next action from
+the recovery classifier (a `capability:` line and a `next_action:` line). Family
+evidence counts (`stale_family_evidence`, `unverifiable_family_evidence`) are
+rendered as facts only: the single command shown is the classifier's `next_action`,
+and callers must not infer a second command from raw freshness counts. Internal
+mechanism ids stay in the JSON as follow-up handles.
+
+Every primary structured CLI payload — the pattern-family query commands (`find`,
+`family`, `member`, `explain`, `check`, which share the same stamped serializers),
+plus `families`, `status`, `doctor`, and `stats` JSON, including their fallback and
+lifecycle-error payloads — carries a top-level `schema_version` product payload
+token (`product-schemas.v1`), shared with the MCP result objects
+(`docs/specifications/mcp-api.md`). This is the wire contract version and is
+distinct from the index/storage `manifest_schema_version` and
+`storage_schema_version`. The pre-1.0 compatibility policy is additive: fields may
+be added within a version; removing or renaming a field, or changing its meaning,
+requires a version bump and a CHANGELOG entry. Consumers must ignore unknown
+fields.
 During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.
@@ -516,11 +590,21 @@ before generation preparation, an over-limit repository cannot activate a new
 generation. During `init`, the same failure remains an initialization
 `failed_step: "resync"`; state initialization may have succeeded, but the
 `resync` sub-result is null and autosync is not started.
-Autosync polling does not evaluate Git ignore. Supported Git-ignored candidates
-count toward its aggregate fingerprint file/byte ceilings, so `autosync run`
-may fail conservatively even when a manual Git-aware `sync` would fit. Narrow
-the watched root or exclude dependency/build/cache trees by layout when this
-occurs; `sync` remains the authoritative Git-aware indexing operation.
+Autosync polling evaluates Git ignore with the same accepted-manifest policy as
+manual discovery, batching every supported candidate through one
+`git check-ignore -z --stdin` subprocess per fingerprint pass (about 10 ms for a
+few hundred paths, roughly one percent of the default 1000 ms poll) rather than
+one process per file. Supported Git-ignored candidates are excluded before the
+aggregate fingerprint file/byte ceilings are charged, so `autosync run` and a
+manual Git-aware `sync` no longer disagree about whether a repository is within
+accepted limits. When Git is absent or errors, the pass falls back to safe
+no-ignore filtering exactly as discovery does. The fingerprint stays
+metadata-only, so a same-size, same-modification-time edit is invisible to
+polling until another change or a manual `sync`; `sync` remains the
+authoritative Git-aware indexing operation and always recomputes content hashes.
+Each pass counts the Git-ignored supported files it excluded and records that
+bounded, path-free count with the Git-ignore status to the daemon log on change;
+surfacing it through `autosync status --json` is a deferred follow-up.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -571,8 +655,9 @@ error and remains alive when a later polling fingerprint transiently fails;
 such a post-ready runtime failure is not retroactively presented as an
 unverified startup success.
 lightweight detector must skip RepoGrammar state directories, default excluded
-directories, unsupported extensions, oversized files, symlinks, and paths
-outside the repository; the following `sync` remains the authoritative
+directories, unsupported extensions, oversized files, symlinks, Git-ignored
+supported files (with the same fallback discovery uses when Git is unavailable),
+and paths outside the repository; the following `sync` remains the authoritative
 content-hash, Git-ignore, parsing, semantic-fact, and generation-activation
 step, whether it completes incrementally or reports a full-rebuild fallback. It
 must not scan repositories that have not explicitly run `init`, and it must not
@@ -829,9 +914,13 @@ snippets, query text, repository names, absolute paths, code-unit ids, or fact
 ids by default. `by_recovery_code` is a stable low-cardinality code bucket,
 never the free-text recovery guidance stored on individual facts. Recovery
 codes include `run_sync`, `add_project_config`, `enable_provider`,
-`resolve_import_graph`, `resolve_fixture_graph`,
-`resolve_dependency_metadata`, `runtime_trace_required`,
-`manual_review_required`, and `unknown`. `by_role_state` uses
+`not_implemented_in_current_version`, `resolve_import_graph`,
+`resolve_fixture_graph`, `resolve_dependency_metadata`,
+`runtime_trace_required`, `manual_review_required`, and `unknown`.
+`enable_provider` names only mechanisms an integrated optional provider (today
+the TypeScript compiler slot) can resolve; mechanisms a registered-but-not-
+integrated slot or a future provider would resolve report
+`not_implemented_in_current_version`. `by_role_state` uses
 `none`, `single`, or `ambiguous`; ambiguous framework roles are reported as
 support-risk because they block confident family-support interpretation.
 `by_language_detail` is a source-free readiness-scoped language rollup. It may
@@ -875,14 +964,28 @@ full claim-input snapshots, or per-family detail. `stats` may report the
 repo-local aggregate
 `estimated_potential_token_savings` with event count, estimated baseline and
 returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
-It must also include `query_outcome_rollup`, a local-only source-free object
+This aggregate is all-scope: it sums savings events across every indexed
+language and every context-delivering outcome shape (found, PARTIAL_CONTEXT, and
+committed/partial alignment certificates), not only Python found families.
+`stats --json` must also include an `all_scope_token_savings` block with the
+same totals, `measurement_kind: ESTIMATED`, the caveat, the honest
+`savings_events` / `total_queries` denominator, and `by_outcome_shape` and
+`by_language` breakdown objects (each key mapping to `event_count` plus the
+estimated baseline/returned/potential token counts). All existing Python-scoped
+repo-shape fields are unchanged and remain the official-scope subset; the block
+carries a note pointing to that relationship. It must also include
+`query_outcome_rollup`, a local-only source-free object
 with `rollup_scope: local_query_outcomes`, aggregate event count, status,
 entrypoint, CLI command/MCP operation category, lookup-mode, typed UNKNOWN
 class/reason/mechanism/recovery buckets, read-plan count buckets, and
-source-span request/inclusion/omission buckets. `UNKNOWN`,
-`PARTIAL_CONTEXT`, and fallback query outcomes may be counted there, but they
-must not increment `estimated_potential_token_savings` events or be presented
-as successful family hits.
+source-span request/inclusion/omission buckets. `query_outcome_rollup` counts
+every outcome (including `UNKNOWN`, `PARTIAL_CONTEXT`, and fallback) and is the
+`total_queries` denominator; its counts are a distinct metric from
+`estimated_potential_token_savings` events and are not presented as successful
+family hits. The human `stats` output leads with a concise summary (readiness,
+indexed inventory, family coverage, the all-scope savings headline, and the
+scope note) and moves the full per-metric detail behind `--json`; no `--json`
+field is dropped.
 Measured `token_savings` remains `null` unless a comparable paired experiment
 exists. When only estimates exist, top-level `measurement_kind` must be
 `ESTIMATED`, `blocking_reasons` must include `no_paired_experiment`, and
@@ -1112,11 +1215,24 @@ hashes. Neither command may include source snippets or absolute paths.
 For active pattern-family commands, `families --json` returns `status: ok` and a
 `families` array when family rows exist; otherwise it returns `status: UNKNOWN`,
 `implemented: true`, and a typed `InsufficientSupport` unknown on stdout.
-`families --json` is a source-free family inventory: it must use summary rows
-and member counts, must not hydrate family evidence or source freshness, and
-must not imply any current-source claim beyond the existence of active family
-records. Freshness checks are reserved for family detail and target-specific
-claim outputs.
+`families --json` verifies evidence freshness before serving the listing. It
+reads one bounded projection of the active generation's family evidence, then
+hash-verifies each distinct evidence path at most once (never once per family),
+so the number of source reads is bounded by the distinct evidence paths rather
+than the sum over families. Each family entry carries a `freshness` field with
+one of three values — `fresh` (every evidence path verified with a matching
+hash), `stale` (at least one evidence path is missing or its hash changed), or
+`cannot_verify` (no stale path, but at least one path failed verification for a
+non-content reason, or the family has zero evidence rows). The report adds
+`fresh_count`, `stale_count`, and `cannot_verify_count`. Stale and
+`cannot_verify` families remain listed but must not read as unqualified usable
+claims: the human surface leads with the counts and qualifies them distinctly,
+and the JSON carries the `freshness` field and counts verbatim. When at least
+one family is stale, the report also carries one low-cardinality report-level
+`StaleEvidence` unknown with recovery `run repogrammar resync`; a partially
+stale listing is never turned into `status: UNKNOWN`. The freshness-free
+`list_families` variant (used by internal callers that explicitly do not want
+freshness) omits the `freshness` field and the counts.
 `family`, `member`, `find`, `explain`, and `check` accept the first positional
 operand as their target. `family <target>` is an exact family-id lookup.
 `member <target>` is an exact code-unit/member-id lookup. `find`, `explain`,
@@ -1158,16 +1274,65 @@ but no family evidence supports a claim for that target, the command returns
 resolved target, a single target read-plan item, output metadata, and a typed
 `InsufficientSupport` unknown for `pattern family evidence for resolved target`.
 It is not family evidence, not conformance evidence, and not safe to treat as a
-supported pattern claim. Exact `family` and `member` lookups continue to return
+supported pattern claim. A `PARTIAL_CONTEXT` response also carries the
+`estimated_potential_token_savings` block (never omitted): `outcome_shape:
+partial_context`, the resolved file's `language` scope, the estimated
+baseline/returned/potential token counts, `ESTIMATED` kind, and the not-measured
+caveat. The baseline is the estimated whole-file read the read plan displaces,
+taken from the indexed file inventory's stored size; when that size is
+unavailable the block reports null counts with an `unavailable_reason` rather
+than a guessed number. Alignment (`check`) certificates carry the same block
+with `outcome_shape: alignment`; an abstaining certificate reports the null
+block. Exact `family` and `member` lookups continue to return
 typed `UNKNOWN` when their exact ids are missing. `family`, `member`, `find`,
 `explain`, and `check` JSON outputs must include `query_route` with `route`,
 `input_kind`, `pipeline`, `family_id_policy`, `candidate_limit`,
 `selected_family_id`, `candidate_family_ids`, `follow_up_family_ids`, and
 `why_selected`. Candidate/follow-up family ids are narrowing handles; only
 `selected_family_id` on a matched family response is a supported family claim.
+At `--verbosity minimal` this object is reduced to `route` and
+`follow_up_family_ids`; the duplicate `candidate_family_ids` is dropped on a
+matched family but kept as a recovery handle on `PARTIAL_CONTEXT`, `UNKNOWN`, and
+conformance abstentions, and the remaining diagnostic fields appear only at
+`standard`/`full`.
+When a natural-language, synonym, or framework-plus-concept target is resolved by
+the deterministic term-retrieval fallback, `query_route` additionally carries
+`hydrated_family_count`, `retrieval_stage_count`, and a source-free
+`term_retrieval` object: `route` (`term_retrieval_hydrate` |
+`term_retrieval_unknown`), `retrieved_summary_count`, `ranked_candidate_count`,
+`hydrated_candidate_count`, `retrieval_stage_count`, raw `top_score`/`margin`,
+`top_score_bucket`/`margin_bucket`, `truncated`, `matched_signals`, and
+`abstention_reason`. The `abstention_reason` vocabulary is `no_candidate`,
+`below_min_score`, `unsupported_target`, `margin_too_close`, `truncated_tie`,
+`stale_candidates`, and `hydration_ambiguous` (null when a family was found).
+These fields are null for exact/role/path routes. The human-readable output adds
+`query_term_route`, and either `query_term_matched_signal` (on a match) or
+`query_term_abstention_reason` with the bounded candidate family ids (on an
+abstention). See `docs/specifications/query-resolution.md`.
 Matched family output defaults to `--mode compact`: family
-id, classification, support, members, variation slots, typed unknowns, selected
-output metadata, a `read_plan`, and no evidence records or source snippets.
+id, classification, support, members, variation slots, a metadata-only
+`constraint_profile`, typed unknowns, selected output metadata, a `read_plan`,
+and no evidence records or source snippets. The inline `members` array is
+bounded: outside `--mode deep` it is capped at the first 20 members in unchanged
+deterministic order, and the response always carries the true `member_count` and
+a `members_truncated` flag so a large family (family identity is metadata-first)
+never inflates a single response. `--mode deep` restores the full member list.
+A matched found-family response carries its estimate as scalar fields nested in
+the `output` object, not as a separate block: `estimated_evidence_tokens`,
+`estimated_read_plan_tokens`, `estimated_baseline_tokens`,
+`estimated_returned_tokens`, `estimated_potential_token_savings`,
+`estimated_potential_token_savings_kind` (`ESTIMATED`), and
+`estimated_potential_token_savings_caveat`. The found `output` block does not
+carry `outcome_shape` or `language`; those attribution tokens are recorded only
+in the local savings rollup, and the standalone
+`estimated_potential_token_savings` block that does surface `outcome_shape` and
+`language` appears only on `PARTIAL_CONTEXT` and alignment (`check`) responses.
+The `constraint_profile` object is
+the family's hydrated source-backed specification (`required_equal_features`,
+`allowed_variations`, `prohibited_or_blocking_features`, and
+`unresolved_obligations`, each a typed token or count; see
+`docs/specifications/domain-model.md`), or `null` when the active generation
+persisted none.
 `--mode evidence` adds budgeted repo-relative evidence metadata:
 evidence id, family id, code-unit id, path, content hash, byte range, note,
 estimated token cost, and covered claim labels. The shared read plan is present
@@ -1188,32 +1353,123 @@ read-plan spans through the hash-checked source-store boundary, fills line
 ranges for rendered spans, and places line-numbered text under a separate
 `source_spans` block. Stale, missing, hash-mismatched, too-large, unsupported,
 dynamic, insufficient, or conflicting cases must omit rendered spans and tell
-the user to use normal Read/Grep for the affected file or claim. The read plan
+the user to use normal Read/Grep for the affected file or claim. Read-plan items
+are ordered by purpose priority so a budget-truncated plan keeps the most
+decision-critical prefix. At `--verbosity minimal` the read plan adds an honest
+`truncated` flag and `item_count`; a span rendered into `source_spans` is left
+as a `{purpose, path, rendered: true}` back-reference rather than a repeated full
+item, because the rendered `source_spans` entry is the single source of truth and
+is treated as already read; and the empty `source_spans` stub is omitted when
+spans are not requested. `standard` and `full` keep the full items and the stub
+unchanged, byte-identical to the pre-precision shape. The read plan
 must never include absolute paths or a claim that editing is safe outside
 listed ranges.
 `--token-budget <n>` validates a positive bounded integer and implies
 `--mode evidence` unless an explicit mode is provided. Evidence mode
 uses deterministic greedy marginal coverage per estimated token cost. Stored
 family evidence carries schema-backed `covered_claims` labels from the
-allowlist `canonical`, `support`, `variation`, and `exception`; the selector
-must consume those labels rather than inferring coverage from note text or
-storage order. The current family builder emits `canonical` and `support`
-labels, plus a narrow Python `variation` label when an already-ready family has
-multiple exact-compatible framework-anchor support targets. It may also emit
-metadata-only variation slots when parser-context profiles differ inside an
-already-supported Python family, but those slots do not imply variation
-evidence coverage. `--include-exceptions` and broader variation requests must
-still report missing coverage until later builders explicitly link evidence to
-variation slots or exceptions.
+allowlist `canonical`, `support`, `contrast`, `variation`, and `exception`; the
+selector must consume those labels rather than inferring coverage from note text
+or storage order. The family builder assigns labels by coverage, not storage
+order: the canonical medoid carries `canonical`, every member carries `support`,
+the farthest-from-medoid support witness additionally carries `contrast`, and one
+representative per observed variation profile carries `variation` (the canonical
+medoid is excluded from `contrast` and variation witnesses). Hydration re-sorts
+evidence by path, so the medoid-first write order is not the carrier — the
+`contrast` label is. See the Representative selection rule in
+`docs/specifications/domain-model.md`. When the hydrated `constraint_profile`
+enumerates variation dimensions, evidence-mode selection covers one witness per
+dimension plus the anchor-target dimension when its slot exists; otherwise a
+single variation witness is requested from the variation-slot signal. Read-plan
+purposes follow the same labels: `canonical_evidence` names the medoid,
+`support_evidence` prefers the `contrast`-labelled witness (falling back to the
+first distinct-path `support` member), and `variation_guard` names a variation
+witness. `--include-exceptions` still reports missing coverage; a variation
+dimension can only be missing under a real budget shortfall, since the canonical
+covers any dimension it solely represents. `exception` evidence remains unlinked
+in this slice.
 `--mode deep` is accepted as an explicit detail request, but it remains
 metadata-first and does not imply source output without `--include-source-spans`.
-None of these modes may include absolute paths. `check` is advisory in this
-slice: it may return matched family context as `CONTEXT_ONLY` or resolved local
-context as `PARTIAL_CONTEXT`, but the check-specific conformance status remains
-`UNKNOWN` with reason `runtime equivalence remains unproven`. The advisory
-`check` object must not contain proof-like fields such as `pass`, `conforms`, or
-`fail_on`. Matched family detail unknowns scope the runtime-equivalence gap to
-the concrete family id, for example `<family_id>:runtime_equivalence`.
+`--verbosity minimal|standard|full` selects response field density and is
+orthogonal to `--mode`, which selects evidence detail; the two never interact.
+It defaults to `standard`, the current byte-stable structured payload, and is
+additive under `product-schemas.v1`: `minimal` opts into the lean shape and
+`full` retains every diagnostic field. `standard` and `full` emit byte-identical
+output (equal to this development line's pre-precision response, which already
+carries the inline-member cap — byte-stable against the pre-precision shape, not
+identical to v0.2.2); each precision slice suppresses its demoted fields only at
+`minimal`, and every removal is a demotion `full` restores. An unrecognized value
+is rejected rather than silently defaulted. At
+`minimal` the `query_route` object keeps only `route` and `follow_up_family_ids`
+(dropping the duplicate `candidate_family_ids` on a matched family, retaining it
+as a recovery handle on `PARTIAL_CONTEXT`/`UNKNOWN`/conformance abstentions) and
+suppresses the diagnostic routing fields; the `read_plan`/`source_spans`
+reductions (honest truncation flags, read-plan/span dedup, and the dropped empty
+`source_spans` stub) also apply only at `minimal`, and further per-field
+reductions are documented with their output contracts. This CLI flag stays
+byte-parallel with the MCP `verbosity` request field.
+None of these modes may include absolute paths. `check` returns a static
+alignment certificate. Its top-level `status` is the alignment status token
+(`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,
+`INSUFFICIENT_EVIDENCE`, or `UNKNOWN`) and the JSON carries these fields:
+
+- `alignment_status` — the same token as `status`; dropped at
+  `verbosity: minimal` as a duplicate, retained byte-for-byte at `standard`/`full`.
+- `runtime_equivalence` — always the literal `"UNKNOWN"`; static alignment
+  never proves runtime equivalence. This invariant is emitted at every verbosity
+  and is never suppressed.
+- `target_relationship` — `MEMBER`, `NEAR_MISS`, `BLOCKED_UNKNOWN`,
+  `OUT_OF_SCOPE`, or `EXCEPTION` (null while abstaining before a family is
+  compared). `COMPETING_PATTERN` is a reserved token that no current path emits
+  (a member always compares against its own family).
+- `selected_family_id` and `query_route.selected_family_id` — the comparison
+  family, present only when one was confidently selected; `null` for every
+  abstaining outcome. The top-level `selected_family_id` is the authoritative
+  carrier of the selected-family handle and is retained at every tier, including
+  `minimal`; the `query_route.selected_family_id` copy is the one suppressed at
+  `minimal` (by the route lane), so the certificate top-level copy is what keeps
+  the selection determinable in the lean shape.
+- `target` — the resolved code-unit locator (id, path, byte range). It shares the
+  `resolved_target` serializer, so at `verbosity: minimal` it drops the input echo
+  (`original_target`), normalizer internals (`residue_terms`), and the
+  `candidate_*` lists that only echo an already-resolved locus, while retaining
+  those candidate lists when resolution stayed genuinely ambiguous.
+- `alignment` — the computation, or `null` when abstaining: `outcome_reason`,
+  `required_features_matched[]` (`prefix`, `semantics`, `expected_summary`,
+  `satisfied_summary`), `static_deviations[]` (`prefix`, `kind`,
+  `semantics_token`, `expected_summary`, `observed_summary`),
+  `legal_observed_variations[]`, `blocking_unknowns[]`, and
+  `unresolved_runtime_obligations[]` (always non-empty — it carries the
+  runtime-equivalence obligation verbatim). As a scale guard,
+  `static_deviations[]` and `legal_observed_variations[]` are capped at a fixed
+  bound in every tier; a target that exceeds the cap truncates the array to the
+  bound and the computation gains an honest `<name>_truncated: true` flag and a
+  `<name>_count` total. Below the cap the full arrays are emitted with no
+  truncation metadata.
+- `read_plan` — the comparison family's evidence read plan, leading with the
+  contrast witness.
+
+Deviation `observed_summary` and `expected_summary` values are RepoGrammar
+feature TOKENS, never repository source text. The certificate must not contain
+proof-like fields such as `pass`, `conforms`, or `fail_on`, and must not contain
+the legacy `check` advisory object. The `static_deviations[].kind` vocabulary is
+`required_mismatch`, `must_be_empty_violation`, `missing_required_core`, and
+`prohibited_presence` (required-feature *violations* that force
+`STATIC_DEVIATION`), plus three non-violating partial-alignment signals:
+`unobserved_variation` (a value never observed among an untruncated enumeration —
+explicitly *unobserved*, never *illegal*), `truncated_observation` (not among an
+enumeration that was truncated at the cap, so "never observed" is unprovable), and
+`blocking_suppressed_requirement` (an absence-driven required check that a blocking
+unknown plausibly suppressed). Under a target blocking unknown, absence-driven
+required checks route to `PARTIAL_ALIGNMENT`, while presence-driven violations
+(prohibited presence, a present-but-wrong value, a must-be-empty value) still
+deviate. Resolution is locator-first: a path-only target that names a file with
+more than one family-eligible unit is ambiguous and abstains with
+`INSUFFICIENT_EVIDENCE` and candidate unit ids; narrow it with a `path:line`,
+`path:byte-start-byteend`, or `unit:` locator. The static-alignment computation is
+the single authority for this decision (`application::conformance`); `explain`
+remains on the shared fuzzy family-resolution surface and presents family
+context, while `check` is the operation that emits the alignment certificate.
 
 Before public pattern-family detail or target-specific claim output is returned,
 stored family evidence must be fresh against the current repository source
@@ -1222,8 +1478,10 @@ the active generation, public `family`, `member`, `find`, `explain`, and
 `check` output must refuse or omit the stale claim and return typed
 `StaleEvidence` `UNKNOWN` guidance instead of rendering stale family detail.
 Human and JSON output must preserve the stale reason, affected claim, and
-recovery guidance. `families` remains a source-free summary inventory and does
-not run evidence freshness checks.
+recovery guidance. `families` also verifies evidence freshness, but instead of
+refusing it keeps every family listed and qualifies each with a per-family
+`fresh`/`stale`/`cannot_verify` verdict plus report-level counts; a stale family
+additionally raises one low-cardinality report-level `StaleEvidence` unknown.
 
 ## Current implementation status
 
@@ -1261,9 +1519,18 @@ otherwise. Their JSON output includes `generation_id`, `active_generation`,
 `sync --json` also
 includes `sync_mode`, `fallback_reason`, `base_generation`, `added_files`,
 `modified_files`, `removed_files`, `unchanged_files`, `copied_forward_files`,
-`reparsed_files`, `families_recomputed`, and `dirty_records_cleared`.
+`reparsed_files`, `families_recomputed`, `dirty_records_cleared`,
+`families_added`, and `families_removed`.
 `reparsed_files` is the actual number of parser dispatches in the generation,
-not the number of changed or discovered inventory-only files. The
+not the number of changed or discovered inventory-only files.
+`families_added` and `families_removed` report the cross-generation family
+identity change: each is either `null` (when the sync had no base generation to
+diff against, or did not recompute families) or an object `{ "count": <n>,
+"sample": [<family id>, ...] }` whose bounded `sample` lists up to twenty sorted
+ids. They are computed by diffing the base generation's family-id set against
+the new generation's; family ids are deterministic follow-up handles, so a
+re-clustered family surfaces as one removed and one added id rather than a
+rename (see `specifications/domain-model.md`, "Family identity"). The
 `dirty_records_cleared` field counts persisted dirty-marker rows actually
 cleared while building the new generation. Claim-bearing records deliberately
 omitted during generation-by-replacement copy-forward, including legacy Go
@@ -1305,8 +1572,9 @@ uses compact/evidence/deep output modes. Compact is the default and omits
 evidence records; all modes include a read plan; evidence and deep remain
 metadata-first, include default read-plan line ranges when hashes are fresh,
 and include source snippets only when `--include-source-spans` is explicitly
-requested. `families` uses the active family summary read model and does not
-hydrate family evidence. `stats --json` without `--unknowns` uses the active
+requested. `families` uses the active family summary read model plus one bounded
+family-evidence projection to hash-verify each distinct evidence path once for
+freshness; it does not hydrate full per-family evidence detail. `stats --json` without `--unknowns` uses the active
 repo-shape read model and does not load evidence, semantic facts, IR, full
 claim snapshots, or family detail. `stats` reports local pattern density,
 family support coverage, abstention rate,

@@ -110,8 +110,13 @@ allowed.
   deduplication. Application coverage must prove typed invalid-input mapping and
   that failure precedes generation preparation/activation. Autosync fingerprint
   tests must independently prove its exact/plus-one accepted-file,
-  accepted-byte, visited-entry, and depth gates, intentional Git-ignored
-  supported-file charging, and no-path/source-leak errors.
+  accepted-byte, visited-entry, and depth gates, Git-ignore parity with manual
+  discovery (Git-ignored supported files are excluded from the accepted-file and
+  byte budgets and from the digest, and a lowered accepted ceiling still accepts
+  a repository whose only over-ceiling files are Git-ignored), the safe
+  no-ignore fallback when Git is absent or errors, determinism across repeated
+  passes, and no-path/source-leak errors. The batched `git check-ignore --stdin`
+  helper must be covered against its per-file, index-aware equivalent.
   Python discovery coverage must
   include common virtualenv/cache/dependency/build directories such as
   `.venv`, `venv`, `env`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`,
@@ -164,7 +169,7 @@ allowed.
   families. Mixed repositories retain `syntax_only_code_units`. Incremental
   tests must prove token-based add/modify/remove metadata deltas and purge
   seeded legacy Ruby claims while preserving file metadata; autosync
-  fingerprint tests must preserve its intentional Git-independent charging.
+  fingerprint tests must prove its Git-ignore parity with manual discovery.
   Ruby project-context invalidation remains a later frontend obligation.
 - Swift discovery-only coverage must include stable `swift`/`swift-config`
   tokens; exact case-sensitive `.swift` including basename `.swift`; exact
@@ -220,6 +225,23 @@ allowed.
   `compact --dry-run --json` size reporting without writes, `compact --yes`
   active-generation preservation and before/after size reporting, and refusal
   of unsafe active database states such as dirty records.
+- Generation write-session tests must cover the single-connection,
+  bounded-batch write lifecycle with deterministic, test-only fault injection.
+  Required cases: a clean build reports one measured connection open, far fewer
+  committed transactions than rows, and the expected phase-checkpoint count; a
+  standalone checkpoint commits the open batch and increments the checkpoint
+  counter; a field- or referential-validation rejection that persisted nothing
+  leaves a reusable `building` generation (never a false `failed`); an abandon or
+  drop after at least one committed batch stamps `failed` and leaves the previous
+  active generation readable and unchanged; a fault injected mid-record (after an
+  evidence insert, before its fact insert) rolls the torn batch back atomically
+  while committed batches survive; a commit-time fault leaves the batch open and
+  discards it on rollback; a reader resolves the previous active generation
+  throughout the build and only flips after activation; a generation status flip
+  landing between batches is rejected at the next batch open; and finishing after
+  an abandon, or finishing twice, is a typed error rather than a silent success.
+  Faults are injected only through a `#[cfg(test)]` seam on the session;
+  production builds neither compile the seam nor construct a fault.
 - Syntax-only `index` and `sync` tests must cover initialized-state
   requirements, human and JSON output, generation activation, positive code-unit
   extraction and storage, source ranges, language/kind/content-hash metadata,
@@ -318,6 +340,28 @@ allowed.
   explicitly with
   `cargo test --lib read_path_benchmark_fixture_measures_bounded_query_paths -- --ignored --nocapture`
   when validating read-path performance work.
+- Write-path performance architecture must keep an ignored reproducible
+  benchmark fixture under `src/rust/integration_tests/`. The
+  `write_path_benchmark_fixture_measures_session_vs_per_record` test builds the
+  same fixture corpus twice — once through one generation write session and once
+  through the granular per-record store methods (each a one-shot session) — and
+  reports elapsed wall-clock plus the adapter-measured connection-open and
+  committed-transaction counts for both arms (read from the store's real write
+  instrumentation, never asserted by construction). It asserts the session path
+  opens exactly one connection and commits far fewer transactions than the
+  record count, and that the granular path opens and commits once per record.
+  The per-record arm is today's granular API, not the deleted historical code
+  (which was bare autocommit inserts); the wall-clock ratio is a
+  same-implementation comparison of one session versus per-record opens, not a
+  before/after of the change. It is intentionally ignored so default gates stay
+  deterministic; run it explicitly with
+  `cargo test --lib write_path_benchmark_fixture_measures_session_vs_per_record -- --ignored --nocapture`
+  when validating write-path performance work. Fixture-scale numbers are
+  hardware-dependent; report them with a machine caveat.
+- Write-session phase checkpointing must have a pipeline-level test that indexes
+  a real repository through both the full and incremental pipelines and asserts,
+  through the store's write instrumentation, that each pipeline opens exactly one
+  write connection and checkpoints at its phase boundaries.
 - Rust self-dogfood tests must cover `.rs` and `Cargo.toml` discovery,
   Tree-sitter Rust code-unit extraction, structural Rust anchors, typed
   `MacroOrPreprocessor`, `BuildVariantAmbiguity`, `FrameworkMagic`, and
@@ -447,9 +491,10 @@ allowed.
 - MCP serve tests must cover the single default `repogrammar_context` tool
   schema, accepted operation enum, unknown tool and operation rejection,
   missing-state fallback without implicit repo-local state creation,
-  no-active-generation fallback, active-generation typed `UNKNOWN`, advisory
-  `check_conformance` with `CONTEXT_ONLY` context success when conformance is
-  unproven, exact `show_family` target handling, compact/evidence/deep output
+  no-active-generation fallback, active-generation typed `UNKNOWN`,
+  static-alignment `check_conformance` certificates (alignment-status tokens
+  with `runtime_equivalence: "UNKNOWN"`; typed abstention when conformance
+  evidence is insufficient), exact `show_family` target handling, compact/evidence/deep output
   mode serialization, target and token-budget validation, metadata-only greedy
   evidence selection, metadata-only default read plans for all supported
   operations, explicit `include_source_spans` validation and rendering, stale
@@ -603,7 +648,8 @@ allowed.
   state, local-only `estimated_potential_token_savings` aggregate recording
   without upload queue entries or source/path/hash/query fields, stats reporting
   that aggregate as `ESTIMATED` while leaving measured `token_savings` null
-  without paired measurements, redacted research export,
+  without paired measurements, all-scope savings accounting (see below),
+  redacted research export,
   redacted experiment export without raw names/session ids/token counts, paired
   baseline/treatment token experiment recording, default-no experiment prompts,
   record-existing prompt no-extra-session wording, controlled-pair
@@ -613,6 +659,38 @@ allowed.
   reporting measured savings only when a valid paired measurement exists.
   Anonymous telemetry schema tests must cover bucketed experiment aggregate
   fields without raw token counts or user-provided experiment names.
+- All-scope estimated-potential-token-savings tests must cover the single
+  estimator authority per context-delivering outcome shape: found families
+  (unchanged), PARTIAL_CONTEXT read plans (whole-file baseline from the stored
+  inventory size, no event when the size is unavailable), committed/partial
+  alignment certificates (target file plus family evidence baseline, no event
+  when abstaining), and the `max(0, baseline - returned)` floor. They must cover
+  the additive local rollup: `by_outcome_shape` and `by_language` breakdown
+  accumulation, tolerated-when-absent parsing of a legacy rollup file written
+  before the breakdowns existed (keeping the `estimated-potential-token-savings.v1`
+  schema token), and an out-of-vocabulary language coercing to `unknown` rather
+  than dropping the event or writing an out-of-vocabulary key. A same-source
+  vocabulary test must pin the query-layer language producers
+  (`inventory_language_scope` plus the found-family `mixed` marker) to the single
+  authoritative `SAVINGS_LANGUAGE_KEYS` allowlist so the two cannot diverge.
+  Surface tests must assert the `estimated_potential_token_savings` block (with
+  `outcome_shape`, `language`, `ESTIMATED` kind, and the not-measured caveat) is
+  present on PARTIAL_CONTEXT and alignment responses on both CLI and MCP, and
+  that `stats --json` reports the additive `all_scope_token_savings` block
+  (`savings_events`/`total_queries` denominator plus `by_outcome_shape` and
+  `by_language`) while the concise human `stats` leads with the summary and moves
+  full detail behind `--json`. An end-to-end binary test must prove a
+  TypeScript-only repository records nonzero PARTIAL_CONTEXT savings where the
+  Python-scoped panel previously reported zero. Run these through
+  `cargo test --workspace --all-features` (unit estimator and telemetry cases,
+  `interfaces::cli::tests`, `interfaces::mcp::tests`, and the
+  `product_runtime_partial_context_records_nonzero_all_scope_token_savings`
+  binary test).
+- Found-family payload member lists must be bounded outside `--mode deep`: tests
+  must assert the inline `members` array is capped at `MAX_RENDERED_FAMILY_MEMBERS`
+  in unchanged deterministic order while `member_count` reports the true total and
+  `members_truncated` flags the cut, on both CLI JSON and MCP, with `--mode deep`
+  restoring the full list.
 - Optional semantic-worker indexing tests must cover explicit opt-in wiring,
   non-empty discovered-file request scope, deterministic fact recording through
   the same-generation storage gate, syntax-only fallback for unavailable,
@@ -948,6 +1026,403 @@ bounded filesystem source reads for discovery hashing and source-store
 hash-checked reads, parent Git worktree ignore handling for subdirectory
 projects, index/sync/resync lock acquisition and doctor lock-state reporting, and
 `repo-guard` sync/path/diff/ADR-0008 required document logic.
+
+## Product evaluation harness
+
+`repo-guard product-eval` is the committed, deterministic product-core
+evaluation harness. It measures what the product runtime actually returns for
+the pattern-family query surface (`find`, `family`, `member`, `explain`,
+`check`) against a fixed committed corpus. It is report-only measurement
+infrastructure and changes no production behavior.
+
+```text
+cargo run --quiet --bin repo-guard -- product-eval \
+  --corpus src/fixtures/evaluation/query-corpus-v1.json \
+  --out <output-dir> [--repetitions <n>] [--bin <path-to-repogrammar>] \
+  [--condition <token>] [--baseline token-overlap]
+```
+
+For each corpus fixture the harness copies the committed fixture root into an
+isolated temporary workspace with an isolated `HOME`/XDG/`CODEX_HOME` and a
+tool-only `PATH`, runs `init` then `resync`, applies any per-query source
+mutation to that copy, and drives the product binary through the query. It
+never modifies the real repository and never enables auto-sync. Workspaces are
+removed on success and retained (path printed to stderr) on a harness error.
+When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
+next to `repo-guard`; both build into the same target directory.
+
+The run writes `<output-dir>/product-eval-results.json`
+(`schema_version: product-eval-results.v2`) with top-level `condition` and
+`baseline` provenance tags
+(see [Run conditions and the token-overlap baseline](#run-conditions-and-the-token-overlap-baseline)),
+per-fixture `resync` latency
+and discovered/stored counts, per-query expected/actual/`match`/mismatch-field
+detail with all repetition latencies, and a summary of matches, per-kind and
+per-intent counts, p50/p95 latency, the `false_family_selections` and
+`selected_on_abstention_gold` safety counters, and a `metrics` object. Each result also carries `intent`, `reciprocal_rank` (retrieval queries
+only), and the actual's null-tolerant `hydrated_family_count` and
+`retrieval_stage_count` placeholders. Mismatches are baseline data, so the
+command exits `0` when the run completes; it exits nonzero only on a genuine
+harness error (missing binary, unparseable corpus, subprocess failure, or
+non-JSON query output). Corpus gold expectations encode product intent, not
+current output, so retrieval-intent natural-language and synonym questions over
+families that exist are recorded as mismatches rather than softened. Latency
+figures are machine-dependent; verdicts, per-kind/per-intent counts,
+`false_family_selections`, and the integer metric numerators/denominators are
+stable for a pinned corpus and product commit. The current baseline reading is
+recorded in [`../experiments/product-core-baseline.md`](../experiments/product-core-baseline.md).
+Harness parsing, matching, hashing, metric math, and result-serialization logic
+are covered by unit tests in `src/rust/bin/repo_guard.rs` that do not depend on
+the product binary or the network.
+
+### Query intent taxonomy
+
+Every corpus query declares a measurement `intent` (a new optional field, so the
+corpus schema stays backward-compatible `product-eval-corpus.v1`):
+
+- `retrieval` — a specific family should be resolved. Gold carries an `ok`
+  outcome and a `family`/`family_prefix`/`family_any_of` target. Exact ids,
+  members, paths, roles, and `path:line`/`path:start-end` locators over a
+  single-family path resolve today; bare framework-name-as-concept, synonyms, and
+  natural-language questions abstain and are recorded as the measured retrieval
+  gap, not softened.
+- `abstention` — the correct behavior is a typed `UNKNOWN`. Covers ambiguous
+  targets, unsupported-language questions, unsafe typo inputs, bare framework
+  tokens (the deterministic resolver must not guess a family from a short
+  substring), stale evidence, and byte-range locators spanning multiple families.
+- `context` — metadata-only local context (`PARTIAL_CONTEXT`) or a zero-family
+  repository, where no family claim is safe but a read plan is.
+
+An optional `expected.candidates_include` lists family-id prefixes that should
+appear in the actual candidate set; it is the Recall@K/MRR gold and is
+independent of which single family (if any) is selected.
+
+### Retrieval metrics
+
+The `summary.metrics` object reports, each as a rate plus its integer
+numerator/denominator (a rate over an empty denominator serializes as `null`):
+
+- `hit_at_1` — over retrieval-intent queries, the fraction whose selected family
+  satisfies the family gold.
+- `candidate_recall` — over queries with `candidates_include`, the fraction where
+  every listed prefix is matched by some candidate family within the first
+  `K = 5` candidates. `candidate_recall` measures list construction and is scored
+  whether or not the run commits a single family.
+- `mrr` — over retrieval-intent queries, mean reciprocal rank of the *committed*
+  answer. Only a run that commits (an `ok`/`partial_context` outcome) scores: its
+  selected family, when it satisfies gold, is rank 1, otherwise the first
+  gold-satisfying id within the first `K = 5` candidates contributes `1/rank`. A
+  run that abstains (`unknown`/`fallback`) scores `0` regardless of what its
+  diagnostic candidate list held — MRR is the committed-answer metric, distinct
+  from `candidate_recall`. The candidate depth `K = 5` is applied identically for
+  every condition (the product's list is truncated to five; the baseline already
+  reports at most five).
+- `correct_abstention_rate` — over abstention-intent queries, the fraction whose
+  actual outcome is `unknown`.
+- `false_family_rate` — `false_family_selections` divided by the number of
+  queries that declare a family constraint; the absolute count is kept. A query
+  whose gold is an abstention carries no family constraint, so a confident wrong
+  selection there is invisible to this metric (see `selected_on_abstention_gold`).
+- `selected_on_abstention_gold` — a safety counter, reported both in `metrics` and
+  at `summary` top level: the number of queries whose gold outcome is `unknown`
+  (no family should be committed) where the run nonetheless selected a family. It
+  is the abstention-side complement of `false_family_selections`; together they
+  cover confident wrong selection on both retrieval and abstention gold. It is not
+  a rate.
+- `unsupported_rejection_rate` — over `unsupported_concept` queries, the fraction
+  that abstain.
+- `ambiguity_precision` — over abstention-intent `ambiguous`/`nl_pattern_question`
+  queries, the fraction that abstain.
+
+`summary.by_intent` reports per-intent `{total, matches}` totals alongside the
+existing `summary.by_kind`. `summary.false_family_selections` and
+`summary.selected_on_abstention_gold` are surfaced at the summary top level as
+the two confident-wrong-selection safety counters.
+
+### Run conditions and the token-overlap baseline
+
+Every results document carries two top-level provenance fields — a `condition`
+string that names what was measured, and a `baseline` field (`"token-overlap"` or
+`null`) that names the control independently of the condition label — so product,
+ablation, and baseline runs over the same corpus are stored distinctly under one
+schema:
+
+- The default condition is `product` (the product runtime drives every query),
+  with `baseline: null`.
+- `--condition <token>` records an explicit condition verbatim. The token is
+  low-cardinality and validated as `[a-z0-9_-]+` up to 40 characters, and must not
+  start with `-` (so a forgotten flag value such as `--condition --baseline` is a
+  hard error, not a silently accepted token). Use it to tag an ablation run (the
+  product built with ablation env/flags); the harness records the tag but does not
+  itself change product behavior.
+- `--baseline token-overlap` runs the naive control described below, sets
+  `baseline: "token-overlap"`, and defaults the condition to
+  `baseline_token_overlap`. An explicit `--condition` still wins, so a labeled
+  baseline ablation is possible — but `--condition product` with a baseline is
+  rejected with a typed error, because a baseline is not the product.
+
+The token-overlap baseline is an honest naive lower bound evaluated on the same
+corpus gold and emitted in the same `product-eval-results.v2` schema. It indexes
+each fixture through the same isolated `init`+`resync` flow, then fetches the
+product's `families --json` listing once per fixture. For each query it does not
+drive the product; instead it:
+
+1. lowercases the query target, splits it on non-ASCII-alphanumeric characters,
+   drops tokens shorter than three characters, and deduplicates them;
+2. scores each family by the count of distinct query tokens that are substrings of
+   its `family_id` (the id embeds language/kind/role tokens);
+3. selects the unique argmax when its score is at least two, abstaining on a strict
+   tie at the maximum or a sub-threshold maximum; and
+4. reports its own candidate ranking (families with a positive score, ordered by
+   score then id, capped at the shared `K = 5`) so the same `hit@1`, `mrr`,
+   `candidate_recall`, abstention, `false_family`, and `selected_on_abstention_gold`
+   metrics are computed against the shared gold.
+
+The baseline has no aliases, concepts, margin calibration, route, or typed unknown
+reason. It also never receives the per-query source mutations: a stale-evidence
+query is graded against gold the baseline cannot observe, which penalizes the
+baseline only — a recorded asymmetry, not a defect. It exists only to contrast the
+product against a deterministic lower bound and must never be tuned to flatter or
+diminish either side; its metric line is recorded exactly as produced.
+
+Tie-abstention does **not** make the baseline safe from confident wrong selection:
+a query whose distinct tokens uniquely clear the threshold is selected even when the
+gold is an abstention — for example the unsafe-typo target `fastapi_rout` scores two
+(`fastapi`, `rout`) against the FastAPI family alone and is selected, which the
+product correctly abstains on. The baseline's weakness therefore surfaces as lower
+`hit_at_1`, `candidate_recall`, and context coverage, as a lower
+`correct_abstention_rate`, and as a nonzero `selected_on_abstention_gold`. A
+`false_family_selections` of `0` is corpus-contingent — the abstention-intent
+queries carry no family constraint, so wrong selections on them land in
+`selected_on_abstention_gold`, not `false_family_selections` — and is not a design
+guarantee of the baseline.
+
+The `matches`/`by_kind`/`by_intent` verdict counts and the latency figures are
+**not** comparable across conditions: verdict counts include route and
+unknown-reason fields the baseline never produces (so its `matches` is
+mechanically lower), and the baseline's per-query latency measures in-process
+scoring rather than a product subprocess (near `0 ms`). Compare conditions on the
+retrieval metrics and the two safety counters, not on `matches` or latency.
+
+## Sync-equivalence oracle
+
+`repo-guard sync-equivalence` is the committed incremental/full-build
+equivalence oracle. It is the mandatory guard for every incremental-`sync`
+project-context gate rule: an incremental sync must produce a semantically
+identical active generation to a clean full rebuild over the same worktree, or
+explicitly fall back to a full rebuild. It changes no production behavior.
+
+```text
+cargo run --quiet --bin repo-guard -- sync-equivalence \
+  --fixture src/fixtures/incremental_equivalence/v1 \
+  [--scenario <id> | --all] [--bin <path-to-repogrammar>] \
+  --out <output-dir>
+```
+
+For each scenario the harness copies the committed fixture root into an
+isolated temporary workspace (isolated `HOME`/XDG/`CODEX_HOME`, tool-only
+`PATH`, telemetry disabled — identical to the product-eval harness). It builds
+state A with `init` then `resync`, applies the scenario's scripted patch, and
+runs `sync` to produce state B (incremental). It then builds a separate clean
+workspace C by applying the same patch first and running `init`+`resync`
+(clean full build). It compares canonical dumps of B and C across the product's
+own read surfaces — `files`, `units`, `families`, `family <id> --mode deep`
+(deep mode is required; compact mode returns an empty selected-evidence array so
+the family-evidence ledger would never be compared), `unknowns` — plus the
+store-port ledgers not exposed by any CLI surface: the semantic-fact multiset,
+the IR graph (nodes and edges, which have bespoke incremental copy-forward
+logic), and the repo-shape stats. When `--bin` is omitted the harness resolves
+the sibling `repogrammar` binary next to `repo-guard`. Workspaces are removed
+after each scenario. (The claim-input snapshot is intentionally not dumped
+separately: it is the union of the already-compared indexed-files, code-units,
+IR-graph, and semantic-fact surfaces.)
+
+Canonicalization strips only the sanctioned non-semantic fields: generation
+ids/timestamps (never surfaced into the compared dumps — the top-level
+`active_generation` of every response and the `unknown_inventory`'s
+`active_generation` are dropped) and the order/history-assigned
+`fact_id`/`evidence_id` sequence numbers (excluded from the fact and family-
+evidence tuples; the family-evidence `estimated_tokens` presentation field is
+also dropped). The fact tuple deliberately keeps `content_hash` (it is
+provenance-bearing — the field that distinguishes a stale retained fact from a
+correctly re-parsed one), encodes `target` Option-ness explicitly, and joins
+assumptions with the unit separator in emitted order. The single sanctioned
+semantic divergence — external TypeScript worker facts (`typescript`) retained
+by a worker-less incremental sync for unchanged files — is checked against a
+two-sided retention rule (retained facts' path unchanged and content hash
+matching the current indexed file; and no clean-only provider fact left
+unmatched) rather than by equality with the clean rebuild. `cargo_metadata`
+facts are compared by equality, since the in-binary Rust provider is
+reproducible in the clean rebuild. Every v1 scenario is worker-less, so that
+provider bucket is empty by construction; the rule is applied rather than
+blanket-ignored.
+
+Each scenario declares an `expected_outcome` (`EQUAL` or `FELL_BACK`), for a
+fallback an `expected_fallback_reason`, and optionally an
+`expected_reparsed_files` count; a scenario `pass` requires the observed outcome,
+reason, and (when declared) reparsed count to match. This makes the exit-0 gate
+non-trivial: an unexpected `EQUAL` (a gate that silently regressed to the
+incremental path), an unexpected fallback (a misfiring preflight), a wrong
+fallback reason, a file-local path that reparsed more files than the single
+edited one, or any `INEQUAL` all fail. The run writes
+`<output-dir>/sync-equivalence.json` (`schema: sync-equivalence.v1`): per
+scenario the observed `sync_mode`, `fallback_reason`, `reparsed_files`,
+`expected_reparsed_files`, `equal`, `outcome`, `expected_outcome`,
+`expected_fallback_reason`, `pass`, and per-surface bounded diff samples. The
+exit status is `0` only when every requested scenario passes.
+
+The committed v1 scenarios are `java_edit`, `csharp_edit`, `docs_noop`,
+`java_add`, `java_delete`, `rs_content_edit`, `tsjs_content_edit`, and
+`python_body_edit` (incremental paths, expected `EQUAL`); `tsjs_add`, `rs_add`,
+`mocharc_remove`, and `python_conftest_edit` (expected `FELL_BACK` via
+`project_context_changed`); and `python_interface_edit` (expected `FELL_BACK` via
+`python_interface_changed`). The `rs_content_edit`, `tsjs_content_edit`, and
+`python_body_edit` scenarios are the end-to-end proof of the content-only
+file-local fast paths: each edits one function body (a Rust test fn under
+`service/rust/`, a TS ambient test under `web/`, a Python function under
+`analytics/`), and the incremental generation must be canonically equal to a
+clean rebuild while reparsing exactly one file (`expected_reparsed_files: 1`).
+`python_body_edit` is specifically the proof of the Python interface-hash gate:
+the body edit leaves `analytics/app.py`'s interface projection unchanged, so only
+that module reparses while its sibling `analytics/conftest.py` copies forward.
+`python_interface_edit` adds a top-level function to the same module, changing its
+interface hash, and must fall back with `python_interface_changed`;
+`python_conftest_edit` edits `analytics/conftest.py`'s body and must fall back
+with `project_context_changed` regardless of interface hash, proving the conftest
+carve-out. The interface-hash gate's third condition — the Python context-payload
+regime must stay safely under the worker's ~1 MiB per-request cap on both
+manifests, else it falls back with `python_context_budget` — is covered by
+`application::indexing` unit tests with an injected small cap rather than an
+oracle scenario, since a near-cap committed fixture would need ~1 MiB of Python
+source. The `tsjs_add`/`rs_add` counterparts confirm the gate still falls back
+when a source file is *added* (the path set grows, which can change how other
+files resolve). The fixture carries ambient TS tests under `web/` that form runner
+families only while the root `.mocharc.json` is present, so the `mocharc_remove`
+scenario is the end-to-end regression for the Mocha-runner-config gate fix: if
+that gate regressed, the removal would run incrementally, copy forward the stale
+flag-on TS families, and diverge from the clean rebuild — a real inequality on top
+of the expected-outcome check.
+
+## Response payload byte measurement (payload-measure)
+
+`repo-guard payload-measure` is the deterministic byte-measurement instrument for
+the response-precision policy (S10). It indexes the committed fixture
+`src/fixtures/evaluation/payload-measure` in an isolated temporary workspace and
+serializes a fixed query corpus, recording the exact response byte count and
+top-level field-group attribution per operation x category x tier (mode x
+verbosity). It writes `payload-bytes.summary.json` (stable, sorted,
+timestamp-free) and `payload-bytes.md` under `--out`. The subcommand reference is
+in `docs/development/repository-guard.md`.
+
+The fixture is a small deterministic Python/TypeScript repository: `api/routes.py`
+plus `lonely.py` form one FastAPI route family of 31 members (rendered as 20 under
+the member cap, with `member_count` reporting the true 31), alongside small
+SQLAlchemy, Pydantic, pytest, and Express families and a below-support Flask file
+that drives the `PARTIAL_CONTEXT` shape. The corpus covers Found
+(big/small/NL/TypeScript), abstention `UNKNOWN`, `PARTIAL_CONTEXT`, exact family
+hydration, and static-alignment conformance, plus one MCP `inspect_readiness` row.
+
+The big Found family and conformance are additionally measured at `--mode deep
+--include-source-spans` (one extra row per verbosity, tagged `source_spans: on`),
+so the `read_plan` <-> `source_spans` overlap — the S6 dedup target and the plan's
+largest single per-response item — is measurable; it is invisible unless source
+spans are explicitly requested. Every row carries `source_spans: on|off`; the
+summary also records a `fixture_shape` block (big-family `member_count`,
+`members_rendered`, `members_truncated`) so fixture drift is detectable from the
+artifact alone.
+
+### Before/after protocol
+
+Byte savings are declarable only from a before/after comparison, never from a
+single run:
+
+1. Run `payload-measure --out <before>` at the baseline commit (before a
+   precision slice lands).
+2. Run `payload-measure --out <after>` after the slice lands, over the same
+   fixture.
+3. Diff `<before>/payload-bytes.summary.json` against
+   `<after>/payload-bytes.summary.json`. The per-row `total_bytes` and
+   `field_bytes`, and the aggregate `field_group_totals`, are the byte table a
+   savings claim must cite.
+
+The member-cap lane's byte reduction is credited to that lane, not to a precision
+slice: regenerate the baseline after the cap lands so precision-slice deltas are
+measured on post-cap payloads. `verbosity=full` is expected to reproduce the
+pre-change bytes exactly (v1 additivity), while `verbosity=minimal` carries any
+opt-in lean shape; a before/after diff reads both tiers.
+
+### Determinism guarantee
+
+`payload-bytes.summary.json` is a pure function of the fixture content and the
+product binary — no timestamps, latencies, or workspace paths enter it, and every
+map and row list is sorted. Two runs against the same fixture and binary therefore
+produce byte-identical summaries. The end-to-end smoke test
+(`payload_measure_is_deterministic_and_schema_stable_end_to_end` in
+`src/rust/bin/repo_guard.rs`) runs the harness twice against the committed fixture,
+asserts the two summaries are byte-identical, and asserts the schema, row count
+(including the source-spans variants), required report-variant coverage, the
+`fixture_shape` (`member_count == 31`, `members_rendered == 20`), and that
+readiness is measured on the MCP surface. It locates the product `repogrammar`
+binary that `cargo test --workspace` builds alongside the test harness; if that
+binary is absent the test fails loudly (it does not silently no-op, so a green CI
+never hides an unmeasured harness). The pure attribution and row-construction logic
+is covered by separate unit tests that need no live index.
+
+### Scope
+
+The harness uses a purpose-built corpus rather than the product-eval corpus
+`src/fixtures/evaluation/query-corpus-v1.json`. That corpus is a retrieval-accuracy
+corpus: it has no family with >= 25 members (so it cannot exercise the cap or the
+`members[]`-dominance finding) and no byte-tuned abstention/`PARTIAL_CONTEXT`
+targets, so it cannot attribute field-group bytes per report variant. The dedicated
+corpus is the correct instrument for that measurement.
+
+The measured surface is the shared query serializers (`find`/`family`/`check`) —
+the exact functions the Wave-1 precision slices edit. The CLI `--json` output and
+the MCP `repogrammar_context` result are serialized through the same query path, so
+measuring the CLI surface covers the MCP query payloads too. The one exception is
+readiness, which has no query-path serializer: it is measured directly through the
+MCP `inspect_readiness` surface (`serve` stdio), the bounded, source-free readiness
+report.
+
+### Uncovered shapes
+
+A genuine `CompetingFamilies` above-floor margin tie is not reachable on this
+fixture (the family names are too separable, so ambiguous natural-language queries
+abstain via `below_min_score` into `UNKNOWN`), matching the audit's uncovered-shape
+note. Two CLI-only lifecycle/stats slices are out of scope for this harness and
+are owned by later lanes, not excluded on principle: S12 is the CLI `stats`
+`by_language` payload (empty-language-row suppression), and S13 is the CLI
+`status`/`doctor` lifecycle dual-readiness and DB-internals cleanup. The MCP query
+payloads and readiness are fully covered above.
+
+## Agent-study pilot harness (RQ5)
+
+The Phase 7 RQ5 agent-impact study has a standalone pilot harness under
+`src/experiments/agent_study/` (Python 3 stdlib only, no new dependencies). It
+is automation tooling, not product code, and is exercised independently of the
+Rust gate. See `docs/experiments/agent-study-pilot.md` for the protocol,
+pilot results, and honest caveats (N=2 proves mechanics only — no effect
+claims).
+
+- Unit tests (tree-hash equivalence to the Rust `fixture_version` hash,
+  transcript parsers, safety detectors, mechanical grader, record schema +
+  privacy guard):
+  `python3 src/experiments/agent_study/selftest.py`
+  The seeded fixture transcripts are gitignored (the `transcript*.jsonl`
+  privacy backstop covers them too); on a fresh checkout the selftest
+  regenerates them deterministically from the committed
+  `fixtures/build_fixtures.py` before running.
+- Zero-spend end-to-end pipeline check (parse → detect → grade → record → cost
+  accounting over scripted fixture transcripts, including the four seeded
+  detector runs; launches no agent and needs no network):
+  `python3 src/experiments/agent_study/driver.py --dry-run`
+
+Committed records (`agent-study-run.v1` JSONL) hold only hashes, counts, and
+repo-relative paths; raw transcripts and patches stay in a local untracked work
+base outside the repo tree (the driver refuses a `--work-base` inside the repo).
+`regrade.py` re-derives verdicts/metrics from saved transcripts with zero spend
+and writes the committed `docs/experiments/data/agent-study-regrade.v1.json`.
 
 ## Required local gate
 

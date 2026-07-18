@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-07-18T10:03:58Z",
+  "repos": [
+    {
+      "lane": "agent_study",
+      "pinned_commit": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8",
+      "repo_id": "py-app-template",
+      "repogrammar_index_tar_sha256": "3b148ba4b9ebb2c30361267b4eb4a63ac32c84ab923fb5d611486e37f1eff00c",
+      "split": "pilot_burned",
+      "tree_sha256": "e940c82ce02b63a46543806c5cda6b012fe5e4491e82537ee8b3cddea3ba4082",
+      "url": "https://github.com/fastapi/full-stack-fastapi-template"
+    }
+  ],
+  "schema_version": "product-eval-pinned-repos.v1",
+  "tree_hash_algorithm": "fixture_version sha256 (see treehash.py)"
+}

@@ -1,0 +1,40 @@
+{
+  "task_id": "t6-fst-db-session-a",
+  "task_type": "T6",
+  "repo_id": "py-app-template",
+  "prompt_template_id": "t6a-v1",
+  "prompt": "Answer as a written explanation (no code changes). In this repository, how is a database session provided to request handlers? Name the mechanism used to inject it, name the file(s) where that injection is defined, and state the rule that new request-handler code must follow to obtain a session. Be specific and cite the concrete identifiers used in this repository. Write your answer in English.",
+  "oracle": {
+    "oracle_id": "t6a-checklist-v1",
+    "kind": "answer_checklist",
+    "provenance": {
+      "calibrated_against_sha": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8",
+      "note": "Verified against the pinned SHA: backend/app/api/deps.py defines get_db() (yields Session(engine)) and SessionDep = Annotated[Session, Depends(get_db)]; handlers obtain a session by declaring a SessionDep parameter."
+    },
+    "must_have": [
+      {
+        "fact": "names FastAPI dependency injection as the mechanism",
+        "any_regex": ["dependency injection", "Depends\\(", "FastAPI\\s+dependenc"]
+      },
+      {
+        "fact": "names the session dependency identifier",
+        "any_regex": ["SessionDep", "get_db", "get_session"]
+      },
+      {
+        "fact": "names the deps module file",
+        "any_regex": ["deps\\.py", "api/deps", "app/api/deps"]
+      },
+      {
+        "fact": "states the rule new handlers must follow",
+        "_note": "Order-insensitive after pilot calibration (design §9.7): the earlier regex required SessionDep/session BEFORE 'parameter' and false-negatived 'declare a parameter with the type annotation SessionDep'.",
+        "any_regex": ["session\\s*:\\s*SessionDep", "declare[^.\\n]{0,80}parameter", "add[^.\\n]{0,80}(SessionDep|session)[^.\\n]{0,30}parameter", "use\\s+SessionDep", "inject[^.\\n]{0,40}session"]
+      }
+    ],
+    "forbidden": [
+      {
+        "fact": "no fabricated claim that a middleware supplies the session",
+        "any_regex": ["middleware (provides|supplies|creates) the (db |database )?session"]
+      }
+    ]
+  }
+}

@@ -3,23 +3,31 @@
 //! SQL, migrations, PRAGMAs, and generation filesystem layout stay in this
 //! adapter. Application code talks to it through storage ports.
 
-use crate::core::model::{ContentHash, FactCertainty, IrEdgeLabel, IrNodeKind, SemanticFactKind};
+use crate::core::model::{
+    ContentHash, FactCertainty, FamilyConstraintProfile, FamilyPrevalence, FamilyPrevalenceClass,
+    FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics, IrEdgeLabel,
+    IrNodeKind, SemanticFactKind, TypedUnknown, UnknownClass, UnknownObligation, UnknownReasonCode,
+    VariationConstraint,
+};
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
-    ActiveFamilyCandidates, ActiveFamilySummaries, FamilyStore, IndexedFamilyCandidateRecord,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedFamilySummaryRecord, IndexedVariationSlotRecord, StoreError,
+    ActiveFamilyCandidates, ActiveFamilyEvidenceProjection, ActiveFamilySearchSummaries,
+    ActiveFamilySummaries, FamilyConstraintProfileStore, FamilyStore, GenerationWriteSession,
+    GenerationWriteStore, IndexedFamilyCandidateRecord, IndexedFamilyConstraintProfileRecord,
+    IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
+    IndexedVariationSlotRecord, StoreError, WriteSessionStats, FAMILY_SEARCH_PATH_COMPONENT_CAP,
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-    ActiveRepoShapeStats, ActiveSemanticFacts, GenerationHandle, GenerationPruneReport,
-    GenerationPruneRequest, GenerationRetentionStore, IndexCompactReport, IndexCompactRequest,
-    IndexMaintenanceStore, IndexStorageCleanStore, IndexStorageLayout, IndexStorageSizeReport,
-    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
-    RepoShapeLanguageStats, StorageCleanReport, StorageCleanRequest, StorageInspection,
-    STORAGE_SCHEMA_VERSION,
+    ActiveRepoShapeStats, ActiveSemanticFacts, GenerationEngineStampStore, GenerationHandle,
+    GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore, IndexCompactReport,
+    IndexCompactRequest, IndexMaintenanceStore, IndexStorageCleanStore, IndexStorageLayout,
+    IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
+    PythonModuleInterfaceRecord, PythonModuleInterfaceStore, RepoShapeLanguageStats,
+    StorageCleanReport, StorageCleanRequest, StorageInspection, STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -46,16 +54,39 @@ pub struct SqliteIndexLocation {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Test-only aggregate write instrumentation, shared between a store and every
+/// write session it opens. It measures the real number of write-session
+/// connection opens, committed transactions, and phase checkpoints across a run,
+/// so benchmarks and pipeline tests report measured figures rather than values
+/// asserted by construction. Production builds compile none of this.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct WriteInstrumentation {
+    pub connection_opens: std::sync::atomic::AtomicUsize,
+    pub transactions: std::sync::atomic::AtomicUsize,
+    pub checkpoints: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Debug, Clone)]
 pub struct SqliteIndexStore {
     state_dir: PathBuf,
+    #[cfg(test)]
+    write_instrumentation: std::sync::Arc<WriteInstrumentation>,
 }
 
 impl SqliteIndexStore {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         Self {
             state_dir: state_dir.into(),
+            #[cfg(test)]
+            write_instrumentation: std::sync::Arc::new(WriteInstrumentation::default()),
         }
+    }
+
+    /// A shared handle to this store's test-only write instrumentation.
+    #[cfg(test)]
+    pub(crate) fn write_instrumentation(&self) -> std::sync::Arc<WriteInstrumentation> {
+        std::sync::Arc::clone(&self.write_instrumentation)
     }
 
     fn database_path(&self) -> PathBuf {
@@ -117,6 +148,48 @@ impl SqliteIndexStore {
     fn ensure_layout(&self) -> Result<(), IndexStoreError> {
         ensure_real_dir(&self.state_dir, "state directory")?;
         ensure_real_dir(&self.tmp_dir(), "tmp directory")?;
+        Ok(())
+    }
+
+    /// Recreate the repo-local mutable database when its stored schema version is
+    /// strictly older than the current build. Only the mutable SQLite file and
+    /// its WAL/SHM sidecars under `.repogrammar` are removed — nothing else.
+    /// Reads never call this; only the full-rebuild path does, so the existing
+    /// active generation is untouched until a rebuild is actually requested.
+    ///
+    /// This recreation loses no user-authored data: the mutable database is a
+    /// fully derived index (code units, families, evidence) reconstructible from
+    /// repository source by `repogrammar resync`; the repository's own source is
+    /// never touched. The `< STORAGE_SCHEMA_VERSION` guard is deliberately
+    /// strict: a future (`>`) schema is never treated as outdated here, so it is
+    /// never silently recreated — `apply_migrations` fails it closed instead.
+    fn recreate_mutable_database_if_outdated(&self) -> Result<(), IndexStoreError> {
+        let outdated = match self.try_open_mutable_database_read_only()? {
+            Some(connection) => matches!(
+                stored_schema_version(&connection)?,
+                Some(version) if version < STORAGE_SCHEMA_VERSION
+            ),
+            None => false,
+        };
+        if outdated {
+            self.remove_mutable_database_files()?;
+        }
+        Ok(())
+    }
+
+    fn remove_mutable_database_files(&self) -> Result<(), IndexStoreError> {
+        for suffix in ["", "-wal", "-shm"] {
+            let path = self.state_dir.join(format!("{DATABASE_FILE}{suffix}"));
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return Err(unavailable(
+                        "failed to remove outdated repository index database",
+                    ))
+                }
+            }
+        }
         Ok(())
     }
 
@@ -623,6 +696,10 @@ fn canonical_database_path(state_dir: &Path) -> Result<PathBuf, IndexStoreError>
 impl IndexStore for SqliteIndexStore {
     fn prepare_next_generation(&self) -> Result<GenerationHandle, IndexStoreError> {
         self.ensure_layout()?;
+        // A full rebuild against a pre-current schema cannot upgrade in place
+        // (CREATE TABLE IF NOT EXISTS never adds columns), so recreate the
+        // repo-local mutable database before building the new generation.
+        self.recreate_mutable_database_if_outdated()?;
         let connection = self.open_mutable_database(MissingDatabase::Allowed)?;
         apply_migrations(&connection)?;
         let generation_id = self.next_generation_id(&connection)?;
@@ -643,52 +720,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         file: &IndexedFileRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(&file.path)?;
-        let size_bytes = i64::try_from(file.size_bytes)
-            .map_err(|_| invalid_record("file size exceeds SQLite integer range"))?;
-        let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "indexed files")?;
-        let transaction = connection.transaction().map_err(sql_unavailable)?;
-        let existing_file =
-            indexed_file_metadata(&transaction, &generation.generation_id, &file.path)?;
-        if existing_file.as_ref().is_some_and(|existing| {
-            existing.content_hash == file.content_hash.as_str()
-                && existing.size_bytes == size_bytes
-                && existing.language == file.language
-        }) {
-            transaction.commit().map_err(sql_unavailable)?;
-            return Ok(());
-        }
-        if existing_file.is_some() {
-            mark_dependents_dirty_for_path(
-                &transaction,
-                &generation.generation_id,
-                &file.path,
-                "path_replaced",
-            )?;
-            transaction
-                .execute(
-                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
-                    params![generation.generation_id, file.path],
-                )
-                .map_err(sql_unavailable)?;
-        }
-        transaction
-            .execute(
-                "INSERT INTO indexed_files \
-                 (generation_id, path, content_hash, size_bytes, language) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    generation.generation_id,
-                    file.path,
-                    file.content_hash.as_str(),
-                    size_bytes,
-                    file.language,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        transaction.commit().map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_indexed_file(file)?;
+        session.seal(false)
     }
 
     fn remove_indexed_file(
@@ -696,27 +730,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         path: &str,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(path)?;
-        let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "indexed files")?;
-        let transaction = connection.transaction().map_err(sql_unavailable)?;
-        if indexed_file_metadata(&transaction, &generation.generation_id, path)?.is_some() {
-            mark_dependents_dirty_for_path(
-                &transaction,
-                &generation.generation_id,
-                path,
-                "path_removed",
-            )?;
-            transaction
-                .execute(
-                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
-                    params![generation.generation_id, path],
-                )
-                .map_err(sql_unavailable)?;
-        }
-        transaction.commit().map_err(sql_unavailable)?;
-        let _ = run_post_commit_maintenance(&connection)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.remove_indexed_file(path)?;
+        session.seal(true)
     }
 
     fn record_code_unit(
@@ -724,55 +740,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         unit: &IndexedCodeUnitRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(&unit.path)?;
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "code units")?;
-        let Some((file_hash, file_size_bytes)) = connection
-            .query_row(
-                "SELECT content_hash, size_bytes FROM indexed_files \
-                 WHERE generation_id = ?1 AND path = ?2",
-                params![generation.generation_id, unit.path],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .optional()
-            .map_err(sql_unavailable)?
-        else {
-            return Err(invalid_record(
-                "code unit must reference an indexed file in the same generation",
-            ));
-        };
-        if file_hash != unit.content_hash.as_str() {
-            return Err(invalid_record(
-                "code unit content hash must match indexed file content hash",
-            ));
-        }
-        let start_byte = i64::try_from(unit.start_byte)
-            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
-        let end_byte = i64::try_from(unit.end_byte)
-            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
-        if end_byte > file_size_bytes {
-            return Err(invalid_record(
-                "code unit range must not exceed indexed file size",
-            ));
-        }
-        connection
-            .execute(
-                "INSERT INTO code_units \
-                 (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    generation.generation_id,
-                    unit.id,
-                    unit.path,
-                    unit.language,
-                    unit.kind,
-                    start_byte,
-                    end_byte,
-                    unit.content_hash.as_str(),
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_code_unit(unit)?;
+        session.seal(false)
     }
 
     fn record_ir_node(
@@ -780,47 +750,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         node: &IndexedIrNodeRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_index_text_field(&node.id, "IR node id")?;
-        validate_index_text_field(&node.code_unit_id, "IR node code unit id")?;
-        IrNodeKind::parse_protocol_str(&node.kind).map_err(|_| {
-            IndexStoreError::InvalidRecord("IR node kind is unsupported".to_string())
-        })?;
-        validate_empty_object_payload(&node.payload_json, "IR node payload")?;
-        if node.id != format!("ir:{}", node.code_unit_id) {
-            return Err(invalid_record(
-                "IR node id must be derived from code unit id",
-            ));
-        }
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "IR nodes")?;
-        let code_unit_exists = connection
-            .query_row(
-                "SELECT count(*) FROM code_units \
-                 WHERE generation_id = ?1 AND code_unit_id = ?2",
-                params![generation.generation_id, node.code_unit_id],
-                |row| row.get::<_, u32>(0),
-            )
-            .map_err(sql_unavailable)?;
-        if code_unit_exists != 1 {
-            return Err(invalid_record(
-                "IR node must reference an indexed code unit in the same generation",
-            ));
-        }
-        connection
-            .execute(
-                "INSERT INTO ir_nodes \
-                 (generation_id, node_id, code_unit_id, kind, payload_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    generation.generation_id,
-                    node.id,
-                    node.code_unit_id,
-                    node.kind,
-                    node.payload_json,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_ir_node(node)?;
+        session.seal(false)
     }
 
     fn record_ir_edge(
@@ -828,48 +760,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         edge: &IndexedIrEdgeRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_index_text_field(&edge.from_node_id, "IR edge from node id")?;
-        validate_index_text_field(&edge.to_node_id, "IR edge to node id")?;
-        IrEdgeLabel::parse_protocol_str(&edge.label).map_err(|_| {
-            IndexStoreError::InvalidRecord("IR edge label is unsupported".to_string())
-        })?;
-        if edge.from_node_id == edge.to_node_id {
-            return Err(invalid_record("IR edge must not point to itself"));
-        }
-        let connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "IR edges")?;
-        for (node_id, label) in [
-            (edge.from_node_id.as_str(), "from"),
-            (edge.to_node_id.as_str(), "to"),
-        ] {
-            let node_exists = connection
-                .query_row(
-                    "SELECT count(*) FROM ir_nodes \
-                     WHERE generation_id = ?1 AND node_id = ?2",
-                    params![generation.generation_id, node_id],
-                    |row| row.get::<_, u32>(0),
-                )
-                .map_err(sql_unavailable)?;
-            if node_exists != 1 {
-                return Err(IndexStoreError::InvalidRecord(format!(
-                    "IR edge must reference an indexed {label} node in the same generation"
-                )));
-            }
-        }
-        connection
-            .execute(
-                "INSERT INTO ir_edges \
-                 (generation_id, from_node_id, to_node_id, label) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    generation.generation_id,
-                    edge.from_node_id,
-                    edge.to_node_id,
-                    edge.label,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_ir_edge(edge)?;
+        session.seal(false)
     }
 
     fn record_semantic_fact(
@@ -877,117 +770,9 @@ impl IndexStore for SqliteIndexStore {
         generation: &GenerationHandle,
         fact: &IndexedSemanticFactRecord,
     ) -> Result<(), IndexStoreError> {
-        validate_repo_relative_path(&fact.path)?;
-        let mut connection = self.open_existing_generation(&generation.generation_id)?;
-        require_building_generation(&connection, &generation.generation_id, "semantic facts")?;
-        let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = connection
-            .query_row(
-                "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
-                        code_units.end_byte, indexed_files.content_hash \
-                 FROM code_units \
-                 JOIN indexed_files \
-                   ON indexed_files.generation_id = code_units.generation_id \
-                  AND indexed_files.path = code_units.path \
-                 WHERE code_units.generation_id = ?1 \
-                   AND code_units.code_unit_id = ?2",
-                params![generation.generation_id, fact.code_unit_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(sql_unavailable)?
-        else {
-            return Err(invalid_record(
-                "semantic fact must reference an indexed code unit in the same generation",
-            ));
-        };
-        if unit_path != fact.path {
-            return Err(invalid_record(
-                "semantic fact evidence path must match code unit path",
-            ));
-        }
-        if unit_hash != fact.content_hash.as_str() || file_hash != fact.content_hash.as_str() {
-            return Err(invalid_record(
-                "semantic fact content hash must match indexed file and code unit",
-            ));
-        }
-        let start_byte = i64::try_from(fact.start_byte)
-            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
-        let end_byte = i64::try_from(fact.end_byte)
-            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
-        if start_byte < unit_start_byte || end_byte > unit_end_byte {
-            return Err(invalid_record(
-                "semantic fact range must stay within code unit range",
-            ));
-        }
-        let assumptions_json = serde_json::to_string(&fact.assumptions).map_err(|_| {
-            IndexStoreError::InvalidRecord("semantic fact assumptions are invalid".to_string())
-        })?;
-
-        let transaction = connection.transaction().map_err(sql_unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO evidence \
-                 (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
-                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    generation.generation_id,
-                    fact.evidence_id,
-                    fact.code_unit_id,
-                    fact.path,
-                    fact.content_hash.as_str(),
-                    start_byte,
-                    end_byte,
-                    fact.note,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO semantic_facts \
-                 (generation_id, fact_id, kind, subject, target, certainty, \
-                  origin_engine, origin_engine_version, origin_method, assumptions_json, evidence_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    generation.generation_id,
-                    fact.fact_id,
-                    fact.kind,
-                    fact.subject,
-                    fact.target.as_deref(),
-                    fact.certainty,
-                    fact.origin_engine,
-                    fact.origin_engine_version,
-                    fact.origin_method,
-                    assumptions_json,
-                    fact.evidence_id,
-                ],
-            )
-            .map_err(sql_unavailable)?;
-        record_derived_dependency(
-            &transaction,
-            &generation.generation_id,
-            "semantic_fact",
-            &fact.fact_id,
-            &fact.path,
-            fact.content_hash.as_str(),
-        )?;
-        record_derived_dependency(
-            &transaction,
-            &generation.generation_id,
-            "semantic_evidence",
-            &fact.evidence_id,
-            &fact.path,
-            fact.content_hash.as_str(),
-        )?;
-        transaction.commit().map_err(sql_unavailable)?;
-        Ok(())
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_semantic_fact(fact)?;
+        session.seal(false)
     }
 
     fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
@@ -1094,6 +879,17 @@ impl IndexStore for SqliteIndexStore {
                 "IR graph is inconsistent with indexed code units".to_string(),
             ));
         }
+        // Set-wide re-proof of the two per-record `record_code_unit` invariants
+        // that the evidence-scoped scans above never revisit for units carrying
+        // no evidence: the unit hash must equal its file's hash, and the unit
+        // range must stay within the file. This makes the activation gate a
+        // strict superset of the historical per-record enforcement.
+        if code_unit_file_conformance_violation_count(&connection, &generation.generation_id)? != 0
+        {
+            return Err(IndexStoreError::InvalidState(
+                "code units are inconsistent with indexed files".to_string(),
+            ));
+        }
         match generation_status(&connection, &generation.generation_id)?.as_deref() {
             Some("building") => {
                 let updated = connection
@@ -1136,7 +932,43 @@ impl IndexStore for SqliteIndexStore {
     }
 
     fn activate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
-        self.validate_generation(generation)?;
+        // Validate exactly once per activation. The sync pipeline validates the
+        // generation immediately before activating it under the held index lock,
+        // leaving it `validated`; re-running the whole-database integrity check
+        // here would be the second full-database scan per sync. Nothing can write
+        // between validate and activate while the lock is held, so a `validated`
+        // status is authoritative and its violation scans need not be repeated.
+        // Only a not-yet-validated (`building`) generation is validated here —
+        // the direct-activate path used to seed an initial active generation
+        // hands a freshly prepared `building` row straight to activation.
+        let status = {
+            let connection = self.open_existing_generation(&generation.generation_id)?;
+            generation_status(&connection, &generation.generation_id)?
+        };
+        match status.as_deref() {
+            Some("validated") => {}
+            Some("building") => self.validate_generation(generation)?,
+            Some("active") => {
+                return Err(IndexStoreError::InvalidState(
+                    "active generation cannot be reactivated".to_string(),
+                ));
+            }
+            Some("failed") => {
+                return Err(IndexStoreError::InvalidState(
+                    "failed generation cannot be activated".to_string(),
+                ));
+            }
+            Some(other) => {
+                return Err(IndexStoreError::InvalidState(format!(
+                    "unsupported generation status: {other}"
+                )));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
         let mut connection = self.open_existing_generation(&generation.generation_id)?;
         let transaction = connection.transaction().map_err(sql_unavailable)?;
         transaction
@@ -1242,6 +1074,63 @@ impl IndexStore for SqliteIndexStore {
         inspection.wal_bytes = None;
         inspection.shm_bytes = None;
         Ok(inspection)
+    }
+}
+
+impl GenerationEngineStampStore for SqliteIndexStore {
+    fn active_generation_engine_version(&self) -> Result<Option<String>, IndexStoreError> {
+        self.ensure_layout()?;
+        let Some(connection) = self.try_open_mutable_database_read_only()? else {
+            return Ok(None);
+        };
+        let Some(generation_id) = active_generation_id(&connection)? else {
+            return Ok(None);
+        };
+        // A missing row or a NULL/absent stamp both map to `None` so the sync
+        // preflight treats an unstamped base generation as an engine mismatch
+        // rather than hard-erroring the whole sync.
+        connection
+            .query_row(
+                "SELECT repogrammar_version FROM index_generations WHERE generation_id = ?1",
+                params![generation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(sql_unavailable)
+    }
+}
+
+impl PythonModuleInterfaceStore for SqliteIndexStore {
+    fn active_python_module_interfaces(
+        &self,
+    ) -> Result<Vec<PythonModuleInterfaceRecord>, IndexStoreError> {
+        self.ensure_layout()?;
+        let Some(connection) = self.try_open_mutable_database_read_only()? else {
+            return Ok(Vec::new());
+        };
+        let Some(generation_id) = active_generation_id(&connection)? else {
+            return Ok(Vec::new());
+        };
+        let mut statement = connection
+            .prepare(
+                "SELECT path, interface_hash FROM python_module_interfaces \
+                 WHERE generation_id = ?1 ORDER BY path",
+            )
+            .map_err(sql_unavailable)?;
+        let rows = statement
+            .query_map(params![generation_id], |row| {
+                Ok(PythonModuleInterfaceRecord {
+                    path: row.get::<_, String>(0)?,
+                    interface_hash: row.get::<_, String>(1)?,
+                })
+            })
+            .map_err(sql_unavailable)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row.map_err(sql_unavailable)?);
+        }
+        Ok(records)
     }
 }
 
@@ -1409,7 +1298,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         family: &IndexedFamilyRecord,
     ) -> Result<(), StoreError> {
-        record_family_sqlite(self, generation, family).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family(family)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn record_family_member(
@@ -1417,7 +1309,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         member: &IndexedFamilyMemberRecord,
     ) -> Result<(), StoreError> {
-        record_family_member_sqlite(self, generation, member).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family_member(member)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn record_variation_slot(
@@ -1425,7 +1320,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         slot: &IndexedVariationSlotRecord,
     ) -> Result<(), StoreError> {
-        record_variation_slot_sqlite(self, generation, slot).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_variation_slot(slot)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn record_family_evidence(
@@ -1433,7 +1331,10 @@ impl FamilyStore for SqliteIndexStore {
         generation: &GenerationHandle,
         evidence: &IndexedFamilyEvidenceRecord,
     ) -> Result<(), StoreError> {
-        record_family_evidence_sqlite(self, generation, evidence).map_err(family_store_error)
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family_evidence(evidence)?;
+        session.seal(false).map_err(family_store_error)
     }
 
     fn list_active_families(&self) -> Result<ActiveFamilies, StoreError> {
@@ -1454,6 +1355,34 @@ impl FamilyStore for SqliteIndexStore {
         let families =
             query_family_summaries(&connection, &generation_id).map_err(family_store_error)?;
         Ok(ActiveFamilySummaries {
+            generation_id,
+            families,
+        })
+    }
+
+    fn list_active_family_evidence_projection(
+        &self,
+    ) -> Result<ActiveFamilyEvidenceProjection, StoreError> {
+        let (generation_id, connection) = self
+            .open_active_generation_read_model()
+            .map_err(family_store_error)?;
+        let rows = query_family_evidence_projection(&connection, &generation_id)
+            .map_err(family_store_error)?;
+        Ok(ActiveFamilyEvidenceProjection {
+            generation_id,
+            rows,
+        })
+    }
+
+    fn list_active_family_search_summaries(
+        &self,
+    ) -> Result<ActiveFamilySearchSummaries, StoreError> {
+        let (generation_id, connection) = self
+            .open_active_generation_read_model()
+            .map_err(family_store_error)?;
+        let families = query_family_search_summaries(&connection, &generation_id)
+            .map_err(family_store_error)?;
+        Ok(ActiveFamilySearchSummaries {
             generation_id,
             families,
         })
@@ -1544,164 +1473,1383 @@ impl FamilyStore for SqliteIndexStore {
     }
 }
 
-fn record_family_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    family: &IndexedFamilyRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&family.family_id, "family id")?;
-    validate_family_classification(&family.classification)?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "families")?;
-    connection
-        .execute(
-            "INSERT INTO families (generation_id, family_id, classification) VALUES (?1, ?2, ?3)",
-            params![
-                generation.generation_id,
-                family.family_id,
-                family.classification,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
+/// Storage-format version of the constraint-profile JSON column. Bumped only if
+/// the serialized shape changes; hydration rejects any other version.
+const CONSTRAINT_PROFILE_JSON_VERSION: u64 = 1;
+
+impl FamilyConstraintProfileStore for SqliteIndexStore {
+    fn record_family_constraint_profile(
+        &self,
+        generation: &GenerationHandle,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError> {
+        let mut session =
+            SqliteGenerationWriteSession::open(self, generation).map_err(family_store_error)?;
+        session.record_family_constraint_profile(record)?;
+        session.seal(false).map_err(family_store_error)
+    }
+
+    fn show_family_constraint_profile(
+        &self,
+        family_id: &str,
+    ) -> Result<Option<FamilyConstraintProfile>, StoreError> {
+        validate_index_text_field(family_id, "family id").map_err(family_store_error)?;
+        let (generation_id, connection) = self
+            .open_active_generation_read_model()
+            .map_err(family_store_error)?;
+        query_family_constraint_profile(&connection, &generation_id, family_id)
+            .map_err(family_store_error)
+    }
 }
 
-fn record_family_member_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    member: &IndexedFamilyMemberRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&member.family_id, "family member family id")?;
-    validate_index_text_field(&member.code_unit_id, "family member code unit id")?;
-    validate_index_text_field(&member.role, "family member role")?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "family members")?;
-    require_family_row(&connection, &generation.generation_id, &member.family_id)?;
-    require_code_unit_row(&connection, &generation.generation_id, &member.code_unit_id)?;
-    connection
-        .execute(
-            "INSERT INTO family_members (generation_id, family_id, code_unit_id, role) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                generation.generation_id,
-                member.family_id,
-                member.code_unit_id,
-                member.role,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
+/// Rows committed per bounded batch (Phase 5 design §5). Chosen so a worst-case
+/// batch (semantic facts write four rows per record) stays a few MB of WAL and a
+/// sub-100 ms commit; the session also commits at explicit phase checkpoints. A
+/// `building` generation is never read and never resumed, so this bound targets
+/// WAL size and lock-hold time, not partial-work durability.
+const WRITE_SESSION_BATCH_CAPACITY: usize = 2_000;
+
+/// Deterministic fault-injection points for the write-session fault tests. Only
+/// ever set through the `#[cfg(test)]` setter; production builds neither compile
+/// the field nor construct a variant.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InjectedWriteFault {
+    /// Fail the next record once `rows_written` has reached the threshold.
+    AfterRows(usize),
+    /// Fail a batch just before it commits.
+    BeforeCommit,
+    /// In `record_semantic_fact`, fail after the evidence insert and before the
+    /// fact insert (the mid-record seam).
+    AfterEvidenceBeforeFact,
 }
 
-fn record_variation_slot_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    slot: &IndexedVariationSlotRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&slot.family_id, "variation slot family id")?;
-    validate_index_text_field(&slot.slot_id, "variation slot id")?;
-    validate_index_text_field(&slot.description, "variation slot description")?;
-    let connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "variation slots")?;
-    require_family_row(&connection, &generation.generation_id, &slot.family_id)?;
-    connection
-        .execute(
-            "INSERT INTO variation_slots (generation_id, family_id, slot_id, description) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                generation.generation_id,
-                slot.family_id,
-                slot.slot_id,
-                slot.description,
-            ],
-        )
-        .map_err(sql_unavailable)?;
-    Ok(())
+/// Single writer for one `building` generation (Phase 5 design). Owns one
+/// connection with pragmas applied once, writes through bounded-batch
+/// transactions, and finally either `finish`es (commit + seal) or `abandon`s
+/// (rollback + terminal `failed` status). Every record method reproduces the
+/// field-level and referential validation of the historical per-record store
+/// methods; referential reads run on this session's own connection, which sees
+/// both committed batches and the current open batch, so the checks are at least
+/// as strong as the previous per-record SELECTs against the committed database.
+pub struct SqliteGenerationWriteSession {
+    connection: Connection,
+    generation: GenerationHandle,
+    sealed: bool,
+    batch_open: bool,
+    rows_in_batch: usize,
+    batch_capacity: usize,
+    transactions: usize,
+    rows_written: usize,
+    checkpoints: usize,
+    #[cfg(test)]
+    injected_fault: Option<InjectedWriteFault>,
+    #[cfg(test)]
+    instrumentation: std::sync::Arc<WriteInstrumentation>,
 }
 
-fn record_family_evidence_sqlite(
-    store: &SqliteIndexStore,
-    generation: &GenerationHandle,
-    evidence: &IndexedFamilyEvidenceRecord,
-) -> Result<(), IndexStoreError> {
-    validate_index_text_field(&evidence.evidence_id, "family evidence id")?;
-    validate_index_text_field(&evidence.family_id, "family evidence family id")?;
-    validate_index_text_field(&evidence.code_unit_id, "family evidence code unit id")?;
-    validate_family_evidence_covered_claims(&evidence.covered_claims)?;
-    validate_repo_relative_path(&evidence.path)?;
-    validate_index_text_field(&evidence.note, "family evidence note")?;
-    let mut connection = store.open_existing_generation(&generation.generation_id)?;
-    require_building_generation(&connection, &generation.generation_id, "family evidence")?;
-    require_family_row(&connection, &generation.generation_id, &evidence.family_id)?;
-    let (unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash, file_size) =
-        code_unit_evidence_bounds(
-            &connection,
-            &generation.generation_id,
-            &evidence.code_unit_id,
+impl SqliteGenerationWriteSession {
+    fn open(
+        store: &SqliteIndexStore,
+        generation: &GenerationHandle,
+    ) -> Result<Self, IndexStoreError> {
+        let connection = store.open_existing_generation(&generation.generation_id)?;
+        // Require a building generation with a grammatical, record-agnostic
+        // message (one session backs every record kind for the whole build).
+        match generation_status(&connection, &generation.generation_id)?.as_deref() {
+            Some("building") => {}
+            Some(status) => {
+                return Err(IndexStoreError::InvalidState(format!(
+                    "records may only be written for building generations, found {status}"
+                )));
+            }
+            None => {
+                return Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ));
+            }
+        }
+        #[cfg(test)]
+        store
+            .write_instrumentation
+            .connection_opens
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Self {
+            connection,
+            generation: generation.clone(),
+            sealed: false,
+            batch_open: false,
+            rows_in_batch: 0,
+            batch_capacity: WRITE_SESSION_BATCH_CAPACITY,
+            transactions: 0,
+            rows_written: 0,
+            checkpoints: 0,
+            #[cfg(test)]
+            injected_fault: None,
+            #[cfg(test)]
+            instrumentation: store.write_instrumentation(),
+        })
+    }
+
+    fn generation_id(&self) -> &str {
+        &self.generation.generation_id
+    }
+
+    fn ensure_not_sealed(&self) -> Result<(), IndexStoreError> {
+        if self.sealed {
+            return Err(IndexStoreError::InvalidState(
+                "generation write session is already sealed".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Open a batch if none is active and re-assert the `building` status under
+    /// the write lock. `BEGIN IMMEDIATE` takes the write lock up front, so the
+    /// status observed here is held for the whole batch; the process-level index
+    /// lock additionally excludes any other writer, making the per-batch status
+    /// check equivalent to (not weaker than) the historical per-record check.
+    fn ensure_batch(&mut self) -> Result<(), IndexStoreError> {
+        self.check_after_rows_fault()?;
+        if self.batch_open {
+            return Ok(());
+        }
+        self.connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(sql_unavailable)?;
+        self.batch_open = true;
+        self.rows_in_batch = 0;
+        // Roll back the just-opened batch on every non-`building` outcome,
+        // including a status-read error, so the per-batch status re-assertion is
+        // never silently skipped for an open batch.
+        let status = match generation_status(&self.connection, self.generation_id()) {
+            Ok(status) => status,
+            Err(error) => {
+                self.rollback_batch();
+                return Err(error);
+            }
+        };
+        match status.as_deref() {
+            Some("building") => Ok(()),
+            Some(status) => {
+                self.rollback_batch();
+                Err(IndexStoreError::InvalidState(format!(
+                    "records may only be written for building generations, found {status}"
+                )))
+            }
+            None => {
+                self.rollback_batch();
+                Err(IndexStoreError::InvalidState(
+                    "generation row is missing".to_string(),
+                ))
+            }
+        }
+    }
+
+    fn note_rows(&mut self, rows: usize) -> Result<(), IndexStoreError> {
+        self.rows_in_batch = self.rows_in_batch.saturating_add(rows);
+        self.rows_written = self.rows_written.saturating_add(rows);
+        if self.rows_in_batch >= self.batch_capacity {
+            self.commit_batch()?;
+        }
+        Ok(())
+    }
+
+    fn commit_batch(&mut self) -> Result<(), IndexStoreError> {
+        if !self.batch_open {
+            return Ok(());
+        }
+        self.check_before_commit_fault()?;
+        self.connection
+            .execute_batch("COMMIT")
+            .map_err(sql_unavailable)?;
+        self.batch_open = false;
+        self.rows_in_batch = 0;
+        self.transactions = self.transactions.saturating_add(1);
+        self.instrument_transaction();
+        Ok(())
+    }
+
+    fn rollback_batch(&mut self) {
+        if self.batch_open {
+            let _ = self.connection.execute_batch("ROLLBACK");
+            self.batch_open = false;
+            self.rows_in_batch = 0;
+        }
+    }
+
+    /// Best-effort terminal status write for an abandoned build that already
+    /// persisted rows. Purely additive: the schema already allows `failed`,
+    /// `validate_generation` refuses it, and prune deletes any non-active
+    /// generation, so a `failed` row is inert. It is applied only when at least
+    /// one batch committed (`transactions > 0`); a session that rolled back its
+    /// sole open batch persisted nothing, so its generation stays a pristine,
+    /// reusable `building` row. This keeps the granular per-record store methods
+    /// (each a one-shot session) from stamping `failed` on a mere field- or
+    /// referential-validation rejection.
+    fn mark_failed_if_persisted(&self) {
+        if self.transactions == 0 {
+            return;
+        }
+        let _ = self.connection.execute(
+            "UPDATE index_generations SET status = 'failed' \
+             WHERE generation_id = ?1 AND status = 'building'",
+            params![self.generation.generation_id],
+        );
+    }
+
+    /// Commit the final batch, seal the session, then optionally run best-effort
+    /// post-commit maintenance. Sealing happens **before** maintenance so that a
+    /// transient `PRAGMA optimize`/`wal_checkpoint` failure over already-committed
+    /// rows cannot leave the session unsealed and let `Drop` stamp a durable
+    /// build `failed`. A second seal (after `finish` or `abandon`) is a typed
+    /// error rather than a silent success, closing the abandon-then-finish
+    /// footgun. `run_maintenance` is true for a whole-build `finish` and for the
+    /// granular `remove_indexed_file` (which historically ran maintenance) and
+    /// false for the other granular one-shot record paths (which historically ran
+    /// none), so per-record maintenance is not newly introduced.
+    fn seal(&mut self, run_maintenance: bool) -> Result<(), IndexStoreError> {
+        if self.sealed {
+            return Err(IndexStoreError::InvalidState(
+                "generation write session is already sealed".to_string(),
+            ));
+        }
+        self.commit_batch()?;
+        self.sealed = true;
+        if run_maintenance {
+            let _ = run_post_commit_maintenance(&self.connection);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn instrument_transaction(&self) {
+        self.instrumentation
+            .transactions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(not(test))]
+    fn instrument_transaction(&self) {}
+
+    #[cfg(test)]
+    fn instrument_checkpoint(&self) {
+        self.instrumentation
+            .checkpoints
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(not(test))]
+    fn instrument_checkpoint(&self) {}
+
+    fn write_indexed_file(&mut self, file: &IndexedFileRecord) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&file.path)?;
+        let size_bytes = i64::try_from(file.size_bytes)
+            .map_err(|_| invalid_record("file size exceeds SQLite integer range"))?;
+        self.ensure_batch()?;
+        let existing_file =
+            indexed_file_metadata(&self.connection, self.generation_id(), &file.path)?;
+        if existing_file.as_ref().is_some_and(|existing| {
+            existing.content_hash == file.content_hash.as_str()
+                && existing.size_bytes == size_bytes
+                && existing.language == file.language
+        }) {
+            return Ok(());
+        }
+        let mut rows = 0usize;
+        if existing_file.is_some() {
+            mark_dependents_dirty_for_path(
+                &self.connection,
+                self.generation_id(),
+                &file.path,
+                "path_replaced",
+            )?;
+            self.connection
+                .execute(
+                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
+                    params![self.generation.generation_id, file.path],
+                )
+                .map_err(sql_unavailable)?;
+            rows += 1;
+        }
+        self.connection
+            .execute(
+                "INSERT INTO indexed_files \
+                 (generation_id, path, content_hash, size_bytes, language) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    self.generation.generation_id,
+                    file.path,
+                    file.content_hash.as_str(),
+                    size_bytes,
+                    file.language,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        rows += 1;
+        self.note_rows(rows)
+    }
+
+    fn write_remove_indexed_file(&mut self, path: &str) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(path)?;
+        self.ensure_batch()?;
+        if indexed_file_metadata(&self.connection, self.generation_id(), path)?.is_some() {
+            mark_dependents_dirty_for_path(
+                &self.connection,
+                self.generation_id(),
+                path,
+                "path_removed",
+            )?;
+            self.connection
+                .execute(
+                    "DELETE FROM indexed_files WHERE generation_id = ?1 AND path = ?2",
+                    params![self.generation.generation_id, path],
+                )
+                .map_err(sql_unavailable)?;
+            self.note_rows(1)?;
+        }
+        Ok(())
+    }
+
+    fn write_code_unit(&mut self, unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&unit.path)?;
+        let start_byte = i64::try_from(unit.start_byte)
+            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(unit.end_byte)
+            .map_err(|_| invalid_record("code unit range exceeds SQLite integer range"))?;
+        self.ensure_batch()?;
+        let Some((file_hash, file_size_bytes)) = self
+            .connection
+            .query_row(
+                "SELECT content_hash, size_bytes FROM indexed_files \
+                 WHERE generation_id = ?1 AND path = ?2",
+                params![self.generation.generation_id, unit.path],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "code unit must reference an indexed file in the same generation",
+            ));
+        };
+        if file_hash != unit.content_hash.as_str() {
+            return Err(invalid_record(
+                "code unit content hash must match indexed file content hash",
+            ));
+        }
+        if end_byte > file_size_bytes {
+            return Err(invalid_record(
+                "code unit range must not exceed indexed file size",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO code_units \
+                 (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    self.generation.generation_id,
+                    unit.id,
+                    unit.path,
+                    unit.language,
+                    unit.kind,
+                    start_byte,
+                    end_byte,
+                    unit.content_hash.as_str(),
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_ir_node(&mut self, node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&node.id, "IR node id")?;
+        validate_index_text_field(&node.code_unit_id, "IR node code unit id")?;
+        IrNodeKind::parse_protocol_str(&node.kind).map_err(|_| {
+            IndexStoreError::InvalidRecord("IR node kind is unsupported".to_string())
+        })?;
+        validate_empty_object_payload(&node.payload_json, "IR node payload")?;
+        if node.id != format!("ir:{}", node.code_unit_id) {
+            return Err(invalid_record(
+                "IR node id must be derived from code unit id",
+            ));
+        }
+        self.ensure_batch()?;
+        let code_unit_exists = self
+            .connection
+            .query_row(
+                "SELECT count(*) FROM code_units \
+                 WHERE generation_id = ?1 AND code_unit_id = ?2",
+                params![self.generation.generation_id, node.code_unit_id],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(sql_unavailable)?;
+        if code_unit_exists != 1 {
+            return Err(invalid_record(
+                "IR node must reference an indexed code unit in the same generation",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO ir_nodes \
+                 (generation_id, node_id, code_unit_id, kind, payload_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    self.generation.generation_id,
+                    node.id,
+                    node.code_unit_id,
+                    node.kind,
+                    node.payload_json,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_ir_edge(&mut self, edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&edge.from_node_id, "IR edge from node id")?;
+        validate_index_text_field(&edge.to_node_id, "IR edge to node id")?;
+        IrEdgeLabel::parse_protocol_str(&edge.label).map_err(|_| {
+            IndexStoreError::InvalidRecord("IR edge label is unsupported".to_string())
+        })?;
+        if edge.from_node_id == edge.to_node_id {
+            return Err(invalid_record("IR edge must not point to itself"));
+        }
+        self.ensure_batch()?;
+        for (node_id, label) in [
+            (edge.from_node_id.as_str(), "from"),
+            (edge.to_node_id.as_str(), "to"),
+        ] {
+            let node_exists = self
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM ir_nodes \
+                     WHERE generation_id = ?1 AND node_id = ?2",
+                    params![self.generation.generation_id, node_id],
+                    |row| row.get::<_, u32>(0),
+                )
+                .map_err(sql_unavailable)?;
+            if node_exists != 1 {
+                return Err(IndexStoreError::InvalidRecord(format!(
+                    "IR edge must reference an indexed {label} node in the same generation"
+                )));
+            }
+        }
+        self.connection
+            .execute(
+                "INSERT INTO ir_edges \
+                 (generation_id, from_node_id, to_node_id, label) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.generation.generation_id,
+                    edge.from_node_id,
+                    edge.to_node_id,
+                    edge.label,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_semantic_fact(
+        &mut self,
+        fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(&fact.path)?;
+        let start_byte = i64::try_from(fact.start_byte)
+            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(fact.end_byte)
+            .map_err(|_| invalid_record("semantic fact range exceeds SQLite integer range"))?;
+        let assumptions_json = serde_json::to_string(&fact.assumptions).map_err(|_| {
+            IndexStoreError::InvalidRecord("semantic fact assumptions are invalid".to_string())
+        })?;
+        self.ensure_batch()?;
+        let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = self
+            .connection
+            .query_row(
+                "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
+                        code_units.end_byte, indexed_files.content_hash \
+                 FROM code_units \
+                 JOIN indexed_files \
+                   ON indexed_files.generation_id = code_units.generation_id \
+                  AND indexed_files.path = code_units.path \
+                 WHERE code_units.generation_id = ?1 \
+                   AND code_units.code_unit_id = ?2",
+                params![self.generation.generation_id, fact.code_unit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "semantic fact must reference an indexed code unit in the same generation",
+            ));
+        };
+        if unit_path != fact.path {
+            return Err(invalid_record(
+                "semantic fact evidence path must match code unit path",
+            ));
+        }
+        if unit_hash != fact.content_hash.as_str() || file_hash != fact.content_hash.as_str() {
+            return Err(invalid_record(
+                "semantic fact content hash must match indexed file and code unit",
+            ));
+        }
+        if start_byte < unit_start_byte || end_byte > unit_end_byte {
+            return Err(invalid_record(
+                "semantic fact range must stay within code unit range",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, family_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    self.generation.generation_id,
+                    fact.evidence_id,
+                    fact.code_unit_id,
+                    fact.path,
+                    fact.content_hash.as_str(),
+                    start_byte,
+                    end_byte,
+                    fact.note,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.check_after_evidence_before_fact_fault()?;
+        self.connection
+            .execute(
+                "INSERT INTO semantic_facts \
+                 (generation_id, fact_id, kind, subject, target, certainty, \
+                  origin_engine, origin_engine_version, origin_method, assumptions_json, evidence_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    self.generation.generation_id,
+                    fact.fact_id,
+                    fact.kind,
+                    fact.subject,
+                    fact.target.as_deref(),
+                    fact.certainty,
+                    fact.origin_engine,
+                    fact.origin_engine_version,
+                    fact.origin_method,
+                    assumptions_json,
+                    fact.evidence_id,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "semantic_fact",
+            &fact.fact_id,
+            &fact.path,
+            fact.content_hash.as_str(),
         )?;
-    if unit_path != evidence.path {
-        return Err(invalid_record(
-            "family evidence path must match code unit path",
-        ));
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "semantic_evidence",
+            &fact.evidence_id,
+            &fact.path,
+            fact.content_hash.as_str(),
+        )?;
+        self.note_rows(4)
     }
-    if unit_hash != evidence.content_hash.as_str() || file_hash != evidence.content_hash.as_str() {
-        return Err(invalid_record(
-            "family evidence content hash must match indexed file and code unit",
-        ));
+
+    fn write_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&family.family_id, "family id")?;
+        validate_family_classification(&family.classification)?;
+        let prevalence = &family.prevalence;
+        if prevalence.classification_reason.trim().is_empty() {
+            return Err(invalid_record(
+                "family classification reason must not be empty",
+            ));
+        }
+        let eligible_peer_count =
+            family_prevalence_count_param(prevalence.eligible_peer_count, "eligible peer count")?;
+        let supported_member_count = family_prevalence_count_param(
+            prevalence.supported_member_count,
+            "supported member count",
+        )?;
+        let competing_ready_family_count = family_prevalence_count_param(
+            prevalence.competing_ready_family_count,
+            "competing ready family count",
+        )?;
+        let largest_competing_support = family_prevalence_count_param(
+            prevalence.largest_competing_support,
+            "largest competing support",
+        )?;
+        let blocked_peer_count =
+            family_prevalence_count_param(prevalence.blocked_peer_count, "blocked peer count")?;
+        let unsupported_peer_count = family_prevalence_count_param(
+            prevalence.unsupported_peer_count,
+            "unsupported peer count",
+        )?;
+        self.ensure_batch()?;
+        self.connection
+            .execute(
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    self.generation.generation_id,
+                    family.family_id,
+                    family.classification,
+                    eligible_peer_count,
+                    supported_member_count,
+                    prevalence.coverage_ratio,
+                    competing_ready_family_count,
+                    largest_competing_support,
+                    blocked_peer_count,
+                    unsupported_peer_count,
+                    prevalence.classification_reason,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
     }
-    let start_byte = i64::try_from(evidence.start_byte)
-        .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
-    let end_byte = i64::try_from(evidence.end_byte)
-        .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
-    if start_byte > end_byte {
-        return Err(invalid_record(
-            "family evidence range start must not exceed end",
-        ));
+
+    fn write_family_member(
+        &mut self,
+        member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&member.family_id, "family member family id")?;
+        validate_index_text_field(&member.code_unit_id, "family member code unit id")?;
+        validate_index_text_field(&member.role, "family member role")?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &member.family_id)?;
+        require_code_unit_row(&self.connection, self.generation_id(), &member.code_unit_id)?;
+        self.connection
+            .execute(
+                "INSERT INTO family_members (generation_id, family_id, code_unit_id, role) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.generation.generation_id,
+                    member.family_id,
+                    member.code_unit_id,
+                    member.role,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
     }
-    if start_byte < unit_start_byte || end_byte > unit_end_byte || end_byte > file_size {
-        return Err(invalid_record(
-            "family evidence range must stay within code unit range",
-        ));
+
+    fn write_variation_slot(
+        &mut self,
+        slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&slot.family_id, "variation slot family id")?;
+        validate_index_text_field(&slot.slot_id, "variation slot id")?;
+        validate_index_text_field(&slot.description, "variation slot description")?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &slot.family_id)?;
+        self.connection
+            .execute(
+                "INSERT INTO variation_slots (generation_id, family_id, slot_id, description) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.generation.generation_id,
+                    slot.family_id,
+                    slot.slot_id,
+                    slot.description,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
     }
-    let covered_claims_json = family_evidence_covered_claims_json(&evidence.covered_claims)?;
-    let transaction = connection.transaction().map_err(sql_unavailable)?;
-    transaction
-        .execute(
-            "INSERT INTO evidence \
-             (generation_id, evidence_id, family_id, code_unit_id, covered_claims_json, path, content_hash, start_byte, end_byte, note) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                generation.generation_id,
-                evidence.evidence_id,
-                evidence.family_id,
-                evidence.code_unit_id,
-                covered_claims_json,
-                evidence.path,
-                evidence.content_hash.as_str(),
-                start_byte,
-                end_byte,
-                evidence.note,
-            ],
+
+    fn write_family_evidence(
+        &mut self,
+        evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&evidence.evidence_id, "family evidence id")?;
+        validate_index_text_field(&evidence.family_id, "family evidence family id")?;
+        validate_index_text_field(&evidence.code_unit_id, "family evidence code unit id")?;
+        validate_family_evidence_covered_claims(&evidence.covered_claims)?;
+        validate_repo_relative_path(&evidence.path)?;
+        validate_index_text_field(&evidence.note, "family evidence note")?;
+        let start_byte = i64::try_from(evidence.start_byte)
+            .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(evidence.end_byte)
+            .map_err(|_| invalid_record("family evidence range exceeds SQLite integer range"))?;
+        if start_byte > end_byte {
+            return Err(invalid_record(
+                "family evidence range start must not exceed end",
+            ));
+        }
+        let covered_claims_json = family_evidence_covered_claims_json(&evidence.covered_claims)?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &evidence.family_id)?;
+        let (unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash, file_size) =
+            code_unit_evidence_bounds(
+                &self.connection,
+                self.generation_id(),
+                &evidence.code_unit_id,
+            )?;
+        if unit_path != evidence.path {
+            return Err(invalid_record(
+                "family evidence path must match code unit path",
+            ));
+        }
+        if unit_hash != evidence.content_hash.as_str()
+            || file_hash != evidence.content_hash.as_str()
+        {
+            return Err(invalid_record(
+                "family evidence content hash must match indexed file and code unit",
+            ));
+        }
+        if start_byte < unit_start_byte || end_byte > unit_end_byte || end_byte > file_size {
+            return Err(invalid_record(
+                "family evidence range must stay within code unit range",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO evidence \
+                 (generation_id, evidence_id, family_id, code_unit_id, covered_claims_json, path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    self.generation.generation_id,
+                    evidence.evidence_id,
+                    evidence.family_id,
+                    evidence.code_unit_id,
+                    covered_claims_json,
+                    evidence.path,
+                    evidence.content_hash.as_str(),
+                    start_byte,
+                    end_byte,
+                    evidence.note,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "family",
+            &evidence.family_id,
+            &evidence.path,
+            evidence.content_hash.as_str(),
+        )?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "family_evidence",
+            &evidence.evidence_id,
+            &evidence.path,
+            evidence.content_hash.as_str(),
+        )?;
+        self.note_rows(3)
+    }
+
+    fn write_family_constraint_profile(
+        &mut self,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_index_text_field(&record.family_id, "family constraint profile family id")?;
+        let profile_json = constraint_profile_to_json(&record.profile)?;
+        self.ensure_batch()?;
+        require_family_row(&self.connection, self.generation_id(), &record.family_id)?;
+        self.connection
+            .execute(
+                "INSERT INTO family_constraint_profiles (generation_id, family_id, profile_json) \
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    self.generation.generation_id,
+                    record.family_id,
+                    profile_json
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    fn write_python_module_interface(
+        &mut self,
+        path: &str,
+        interface_hash: &str,
+    ) -> Result<(), IndexStoreError> {
+        validate_repo_relative_path(path)?;
+        validate_index_text_field(interface_hash, "python module interface hash")?;
+        self.ensure_batch()?;
+        // Keyed to the file row (FK): a module interface must never outlive its
+        // `indexed_files` row, so require it explicitly for a typed error rather
+        // than a raw constraint failure.
+        if indexed_file_metadata(&self.connection, self.generation_id(), path)?.is_none() {
+            return Err(invalid_record(
+                "python module interface must reference an indexed file in the same generation",
+            ));
+        }
+        self.connection
+            .execute(
+                "INSERT INTO python_module_interfaces (generation_id, path, interface_hash) \
+                 VALUES (?1, ?2, ?3)",
+                params![self.generation.generation_id, path, interface_hash],
+            )
+            .map_err(sql_unavailable)?;
+        self.note_rows(1)
+    }
+
+    #[cfg(test)]
+    fn check_after_rows_fault(&mut self) -> Result<(), IndexStoreError> {
+        if let Some(InjectedWriteFault::AfterRows(threshold)) = self.injected_fault {
+            if self.rows_written >= threshold {
+                self.injected_fault = None;
+                return Err(IndexStoreError::InvalidState(
+                    "injected write-session fault after rows".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn check_after_rows_fault(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn check_before_commit_fault(&mut self) -> Result<(), IndexStoreError> {
+        if self.injected_fault == Some(InjectedWriteFault::BeforeCommit) {
+            self.injected_fault = None;
+            return Err(IndexStoreError::InvalidState(
+                "injected write-session fault before commit".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn check_before_commit_fault(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn check_after_evidence_before_fact_fault(&mut self) -> Result<(), IndexStoreError> {
+        if self.injected_fault == Some(InjectedWriteFault::AfterEvidenceBeforeFact) {
+            self.injected_fault = None;
+            return Err(IndexStoreError::InvalidState(
+                "injected write-session fault after evidence before fact".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn check_after_evidence_before_fact_fault(&mut self) -> Result<(), IndexStoreError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_fault(&mut self, fault: InjectedWriteFault) {
+        self.injected_fault = Some(fault);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_is_open(&self) -> bool {
+        self.batch_open
+    }
+}
+
+impl GenerationWriteSession for SqliteGenerationWriteSession {
+    fn generation(&self) -> &GenerationHandle {
+        &self.generation
+    }
+
+    fn record_indexed_file(&mut self, file: &IndexedFileRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_indexed_file(file)
+    }
+
+    fn remove_indexed_file(&mut self, path: &str) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_remove_indexed_file(path)
+    }
+
+    fn record_code_unit(&mut self, unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_code_unit(unit)
+    }
+
+    fn record_ir_node(&mut self, node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_ir_node(node)
+    }
+
+    fn record_ir_edge(&mut self, edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_ir_edge(edge)
+    }
+
+    fn record_semantic_fact(
+        &mut self,
+        fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_semantic_fact(fact)
+    }
+
+    fn record_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family(family).map_err(family_store_error)
+    }
+
+    fn record_family_member(
+        &mut self,
+        member: &IndexedFamilyMemberRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family_member(member).map_err(family_store_error)
+    }
+
+    fn record_variation_slot(
+        &mut self,
+        slot: &IndexedVariationSlotRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_variation_slot(slot).map_err(family_store_error)
+    }
+
+    fn record_family_evidence(
+        &mut self,
+        evidence: &IndexedFamilyEvidenceRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family_evidence(evidence)
+            .map_err(family_store_error)
+    }
+
+    fn record_family_constraint_profile(
+        &mut self,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError> {
+        self.ensure_not_sealed().map_err(family_store_error)?;
+        self.write_family_constraint_profile(record)
+            .map_err(family_store_error)
+    }
+
+    fn record_python_module_interface(
+        &mut self,
+        path: &str,
+        interface_hash: &str,
+    ) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_python_module_interface(path, interface_hash)
+    }
+
+    fn checkpoint(&mut self) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.commit_batch()?;
+        self.checkpoints = self.checkpoints.saturating_add(1);
+        self.instrument_checkpoint();
+        // Checkpoint committed frames back into the main database so WAL growth
+        // is bounded to roughly one phase rather than the whole build. This is a
+        // best-effort optimization over already-committed data, so a transient
+        // failure is not fatal.
+        let _ = run_passive_wal_checkpoint(&self.connection);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), IndexStoreError> {
+        self.seal(true)
+    }
+
+    fn abandon(&mut self) -> Result<(), IndexStoreError> {
+        if self.sealed {
+            return Ok(());
+        }
+        self.rollback_batch();
+        self.mark_failed_if_persisted();
+        self.sealed = true;
+        Ok(())
+    }
+
+    fn stats(&self) -> WriteSessionStats {
+        WriteSessionStats {
+            transactions: self.transactions,
+            rows_written: self.rows_written,
+            checkpoints: self.checkpoints,
+        }
+    }
+}
+
+impl Drop for SqliteGenerationWriteSession {
+    fn drop(&mut self) {
+        if self.sealed {
+            return;
+        }
+        // A build dropped before `finish` (error propagation or panic unwind)
+        // reclaims the generation: roll back the open batch and, if any batch
+        // already committed, stamp `failed`. Errors are swallowed so drop never
+        // panics.
+        self.rollback_batch();
+        self.mark_failed_if_persisted();
+        self.sealed = true;
+    }
+}
+
+impl GenerationWriteStore for SqliteIndexStore {
+    fn open_generation_write_session<'a>(
+        &'a self,
+        generation: &GenerationHandle,
+    ) -> Result<Box<dyn GenerationWriteSession + 'a>, IndexStoreError> {
+        Ok(Box::new(SqliteGenerationWriteSession::open(
+            self, generation,
+        )?))
+    }
+}
+
+fn query_family_constraint_profile(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<Option<FamilyConstraintProfile>, IndexStoreError> {
+    let profile_json = connection
+        .query_row(
+            "SELECT profile_json FROM family_constraint_profiles \
+             WHERE generation_id = ?1 AND family_id = ?2",
+            params![generation_id, family_id],
+            |row| row.get::<_, String>(0),
         )
+        .optional()
         .map_err(sql_unavailable)?;
-    record_derived_dependency(
-        &transaction,
-        &generation.generation_id,
-        "family",
-        &evidence.family_id,
-        &evidence.path,
-        evidence.content_hash.as_str(),
+    let Some(profile_json) = profile_json else {
+        return Ok(None);
+    };
+    Ok(Some(stored_constraint_profile(&profile_json)?))
+}
+
+/// Serialize a constraint profile to a deterministic, source-free JSON column.
+/// Every value is validated on write; the read path re-validates so a tampered
+/// row is rejected on hydration. Object keys serialize in sorted order (the
+/// default `serde_json` map is a `BTreeMap`), so the encoding is deterministic.
+fn constraint_profile_to_json(
+    profile: &FamilyConstraintProfile,
+) -> Result<String, IndexStoreError> {
+    let required = profile
+        .required_equal_features
+        .iter()
+        .map(|constraint| feature_constraint_to_json(constraint, ConstraintAxis::Required))
+        .collect::<Result<Vec<_>, _>>()?;
+    let prohibited = profile
+        .prohibited_or_blocking_features
+        .iter()
+        .map(|constraint| feature_constraint_to_json(constraint, ConstraintAxis::Prohibited))
+        .collect::<Result<Vec<_>, _>>()?;
+    let variations = profile
+        .allowed_variations
+        .iter()
+        .map(variation_constraint_to_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let obligations = profile
+        .unresolved_obligations
+        .iter()
+        .map(obligation_to_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let value = serde_json::json!({
+        "version": CONSTRAINT_PROFILE_JSON_VERSION,
+        "required_equal_features": required,
+        "allowed_variations": variations,
+        "prohibited_or_blocking_features": prohibited,
+        "unresolved_obligations": obligations,
+    });
+    serde_json::to_string(&value)
+        .map_err(|_| invalid_record("family constraint profile JSON is invalid"))
+}
+
+/// Which array a feature constraint belongs to. The prohibited axis carries only
+/// `ProhibitedPresence`; the required axis carries only the equality/subset
+/// semantics. Keeping the axis explicit stops a tampered blocker row from
+/// hydrating inside `required_equal_features` (or vice versa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintAxis {
+    Required,
+    Prohibited,
+}
+
+impl ConstraintAxis {
+    fn accepts(self, semantics: FeatureConstraintSemantics) -> bool {
+        match self {
+            Self::Required => !semantics.is_prohibition(),
+            Self::Prohibited => semantics.is_prohibition(),
+        }
+    }
+}
+
+fn feature_constraint_to_json(
+    constraint: &FeatureConstraint,
+    axis: ConstraintAxis,
+) -> Result<serde_json::Value, IndexStoreError> {
+    validate_index_text_field(
+        &constraint.prefix,
+        "family constraint profile feature prefix",
     )?;
-    record_derived_dependency(
-        &transaction,
-        &generation.generation_id,
-        "family_evidence",
-        &evidence.evidence_id,
-        &evidence.path,
-        evidence.content_hash.as_str(),
+    if !axis.accepts(constraint.semantics) {
+        return Err(invalid_record(
+            "family constraint semantics do not belong to its axis",
+        ));
+    }
+    // Empty-set semantics carry an empty `values` list and vice versa; reject a
+    // record that contradicts its own semantics before it reaches storage.
+    if constraint.semantics.requires_empty_values() != constraint.values.is_empty() {
+        return Err(invalid_record(
+            "family constraint feature values are inconsistent with its semantics",
+        ));
+    }
+    for value in &constraint.values {
+        validate_index_text_field(value, "family constraint profile feature value")?;
+    }
+    Ok(serde_json::json!({
+        "prefix": constraint.prefix,
+        "values": constraint.values,
+        "origin": constraint.origin.as_token(),
+        "semantics": constraint.semantics.as_token(),
+    }))
+}
+
+fn variation_constraint_to_json(
+    variation: &VariationConstraint,
+) -> Result<serde_json::Value, IndexStoreError> {
+    validate_index_text_field(
+        &variation.dimension,
+        "family constraint profile variation dimension",
     )?;
-    transaction.commit().map_err(sql_unavailable)?;
-    Ok(())
+    for profile in &variation.observed_profiles {
+        validate_index_text_field(profile, "family constraint profile observed profile")?;
+    }
+    for member_id in &variation.representative_member_ids {
+        validate_index_text_field(
+            member_id,
+            "family constraint profile representative member id",
+        )?;
+    }
+    Ok(serde_json::json!({
+        "dimension": variation.dimension,
+        "observed_profiles": variation.observed_profiles,
+        "observed_profiles_truncated": variation.observed_profiles_truncated,
+        "includes_absent_profile": variation.includes_absent_profile,
+        "representative_member_ids": variation.representative_member_ids,
+        "observed_only": variation.observed_only,
+    }))
+}
+
+fn obligation_to_json(
+    obligation: &UnknownObligation,
+) -> Result<serde_json::Value, IndexStoreError> {
+    validate_index_text_field(
+        &obligation.affected_claim,
+        "family constraint profile obligation affected claim",
+    )?;
+    if let Some(recovery) = &obligation.recovery {
+        validate_index_text_field(recovery, "family constraint profile obligation recovery")?;
+    }
+    Ok(serde_json::json!({
+        "class": obligation.class.as_protocol_str(),
+        "reason": obligation.reason.as_protocol_str(),
+        "affected_claim": obligation.affected_claim,
+        "recovery": obligation.recovery,
+    }))
+}
+
+fn malformed_constraint_profile() -> IndexStoreError {
+    IndexStoreError::InvalidState("stored family constraint profile is malformed".to_string())
+}
+
+/// Parse and re-validate a stored constraint-profile JSON column into the typed
+/// value. Any missing field, unknown token, wrong version, or source-like value
+/// is a malformed-storage error.
+fn stored_constraint_profile(json: &str) -> Result<FamilyConstraintProfile, IndexStoreError> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| malformed_constraint_profile())?;
+    let object = value.as_object().ok_or_else(malformed_constraint_profile)?;
+    if object.get("version").and_then(serde_json::Value::as_u64)
+        != Some(CONSTRAINT_PROFILE_JSON_VERSION)
+    {
+        return Err(malformed_constraint_profile());
+    }
+    Ok(FamilyConstraintProfile {
+        required_equal_features: stored_feature_constraints(
+            object.get("required_equal_features"),
+            ConstraintAxis::Required,
+        )?,
+        allowed_variations: stored_variation_constraints(object.get("allowed_variations"))?,
+        prohibited_or_blocking_features: stored_feature_constraints(
+            object.get("prohibited_or_blocking_features"),
+            ConstraintAxis::Prohibited,
+        )?,
+        unresolved_obligations: stored_obligations(object.get("unresolved_obligations"))?,
+    })
+}
+
+fn stored_feature_constraints(
+    value: Option<&serde_json::Value>,
+    axis: ConstraintAxis,
+) -> Result<Vec<FeatureConstraint>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    let mut constraints = Vec::with_capacity(array.len());
+    for entry in array {
+        let object = entry.as_object().ok_or_else(malformed_constraint_profile)?;
+        let prefix = constraint_profile_string(object.get("prefix"))?;
+        validate_stored_semantic_text_field("stored constraint feature prefix", &prefix)?;
+        let values = constraint_profile_string_array(object.get("values"))?;
+        for value in &values {
+            validate_stored_semantic_text_field("stored constraint feature value", value)?;
+        }
+        let origin =
+            FeatureConstraintOrigin::parse_token(&constraint_profile_string(object.get("origin"))?)
+                .map_err(|_| malformed_constraint_profile())?;
+        let semantics = FeatureConstraintSemantics::parse_token(&constraint_profile_string(
+            object.get("semantics"),
+        )?)
+        .map_err(|_| malformed_constraint_profile())?;
+        // A blocker row must not hydrate inside `required_equal_features`, nor a
+        // required binding inside `prohibited_or_blocking_features`.
+        if !axis.accepts(semantics) {
+            return Err(malformed_constraint_profile());
+        }
+        if semantics.requires_empty_values() != values.is_empty() {
+            return Err(malformed_constraint_profile());
+        }
+        constraints.push(FeatureConstraint {
+            prefix,
+            values,
+            origin,
+            semantics,
+        });
+    }
+    Ok(constraints)
+}
+
+fn stored_variation_constraints(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<VariationConstraint>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    let mut variations = Vec::with_capacity(array.len());
+    for entry in array {
+        let object = entry.as_object().ok_or_else(malformed_constraint_profile)?;
+        let dimension = constraint_profile_string(object.get("dimension"))?;
+        validate_stored_semantic_text_field("stored constraint variation dimension", &dimension)?;
+        let observed_profiles = constraint_profile_string_array(object.get("observed_profiles"))?;
+        for profile in &observed_profiles {
+            validate_stored_semantic_text_field("stored constraint observed profile", profile)?;
+        }
+        let representative_member_ids =
+            constraint_profile_string_array(object.get("representative_member_ids"))?;
+        for member_id in &representative_member_ids {
+            validate_stored_semantic_text_field(
+                "stored constraint representative member id",
+                member_id,
+            )?;
+        }
+        let observed_only = constraint_profile_bool(object.get("observed_only"))?;
+        if !observed_only {
+            return Err(IndexStoreError::InvalidState(
+                "stored constraint variation must be observed-only".to_string(),
+            ));
+        }
+        variations.push(VariationConstraint {
+            dimension,
+            observed_profiles,
+            observed_profiles_truncated: constraint_profile_bool(
+                object.get("observed_profiles_truncated"),
+            )?,
+            includes_absent_profile: constraint_profile_bool(
+                object.get("includes_absent_profile"),
+            )?,
+            representative_member_ids,
+            observed_only,
+        });
+    }
+    Ok(variations)
+}
+
+fn stored_obligations(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<UnknownObligation>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    let mut obligations = Vec::with_capacity(array.len());
+    for entry in array {
+        let object = entry.as_object().ok_or_else(malformed_constraint_profile)?;
+        let class =
+            UnknownClass::parse_protocol_str(&constraint_profile_string(object.get("class"))?)
+                .map_err(|_| malformed_constraint_profile())?;
+        let reason = UnknownReasonCode::parse_protocol_str(&constraint_profile_string(
+            object.get("reason"),
+        )?)
+        .map_err(|_| malformed_constraint_profile())?;
+        let affected_claim = constraint_profile_string(object.get("affected_claim"))?;
+        validate_stored_semantic_text_field(
+            "stored constraint obligation affected claim",
+            &affected_claim,
+        )?;
+        let recovery = match object.get("recovery") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(recovery)) => {
+                validate_stored_semantic_text_field(
+                    "stored constraint obligation recovery",
+                    recovery,
+                )?;
+                Some(recovery.clone())
+            }
+            Some(_) => return Err(malformed_constraint_profile()),
+        };
+        obligations.push(TypedUnknown {
+            class,
+            reason,
+            affected_claim,
+            recovery,
+        });
+    }
+    Ok(obligations)
+}
+
+fn constraint_profile_string(value: Option<&serde_json::Value>) -> Result<String, IndexStoreError> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(malformed_constraint_profile)
+}
+
+fn constraint_profile_string_array(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<String>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    array
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(malformed_constraint_profile)
+        })
+        .collect()
+}
+
+fn constraint_profile_bool(value: Option<&serde_json::Value>) -> Result<bool, IndexStoreError> {
+    value
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(malformed_constraint_profile)
 }
 
 struct IndexedFileMetadata {
@@ -1789,9 +2937,9 @@ fn record_derived_dependency(
 }
 
 fn validate_family_classification(classification: &str) -> Result<(), IndexStoreError> {
-    match classification {
-        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
-        _ => Err(invalid_record("family classification is unsupported")),
+    match FamilyPrevalenceClass::parse_token(classification) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(invalid_record("family classification is unsupported")),
     }
 }
 
@@ -2168,7 +3316,11 @@ fn query_family_summaries(
 ) -> Result<Vec<IndexedFamilySummaryRecord>, IndexStoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT families.family_id, families.classification, count(family_members.code_unit_id) \
+            "SELECT families.family_id, families.classification, count(family_members.code_unit_id), \
+                    families.eligible_peer_count, families.supported_member_count, \
+                    families.coverage_ratio, families.competing_ready_family_count, \
+                    families.largest_competing_support, families.blocked_peer_count, \
+                    families.unsupported_peer_count, families.classification_reason \
              FROM families \
              LEFT JOIN family_members \
                ON family_members.generation_id = families.generation_id \
@@ -2184,20 +3336,51 @@ fn query_family_summaries(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, String>(10)?,
             ))
         })
         .map_err(sql_unavailable)?;
     let mut summaries = Vec::new();
     for row in rows {
-        let (family_id, classification, support) = row.map_err(sql_unavailable)?;
+        let (
+            family_id,
+            classification,
+            support,
+            eligible,
+            supported,
+            coverage,
+            competing,
+            largest,
+            blocked,
+            unsupported,
+            reason,
+        ) = row.map_err(sql_unavailable)?;
         validate_stored_semantic_text_field("stored family id", &family_id)?;
         validate_stored_family_classification(&classification)?;
+        let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+            eligible_peer_count: eligible,
+            supported_member_count: supported,
+            coverage_ratio: coverage,
+            competing_ready_family_count: competing,
+            largest_competing_support: largest,
+            blocked_peer_count: blocked,
+            unsupported_peer_count: unsupported,
+            classification_reason: reason,
+        })?;
         summaries.push(IndexedFamilySummaryRecord {
             family_id,
             classification,
             support: usize::try_from(support).map_err(|_| {
                 IndexStoreError::InvalidState("stored family support is invalid".to_string())
             })?,
+            prevalence,
         });
     }
     Ok(summaries)
@@ -2317,7 +3500,9 @@ fn query_families(
 ) -> Result<Vec<IndexedFamilyRecord>, IndexStoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT family_id, classification \
+            "SELECT family_id, classification, eligible_peer_count, supported_member_count, \
+                    coverage_ratio, competing_ready_family_count, largest_competing_support, \
+                    blocked_peer_count, unsupported_peer_count, classification_reason \
              FROM families \
              WHERE generation_id = ?1 \
              ORDER BY family_id COLLATE BINARY",
@@ -2325,17 +3510,50 @@ fn query_families(
         .map_err(sql_unavailable)?;
     let rows = statement
         .query_map(params![generation_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+            ))
         })
         .map_err(sql_unavailable)?;
     let mut families = Vec::new();
     for row in rows {
-        let (family_id, classification) = row.map_err(sql_unavailable)?;
+        let (
+            family_id,
+            classification,
+            eligible,
+            supported,
+            coverage,
+            competing,
+            largest,
+            blocked,
+            unsupported,
+            reason,
+        ) = row.map_err(sql_unavailable)?;
         validate_stored_semantic_text_field("stored family id", &family_id)?;
         validate_stored_family_classification(&classification)?;
+        let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+            eligible_peer_count: eligible,
+            supported_member_count: supported,
+            coverage_ratio: coverage,
+            competing_ready_family_count: competing,
+            largest_competing_support: largest,
+            blocked_peer_count: blocked,
+            unsupported_peer_count: unsupported,
+            classification_reason: reason,
+        })?;
         families.push(IndexedFamilyRecord {
             family_id,
             classification,
+            prevalence,
         });
     }
     Ok(families)
@@ -2348,22 +3566,60 @@ fn query_family(
 ) -> Result<Option<IndexedFamilyRecord>, IndexStoreError> {
     let record = connection
         .query_row(
-            "SELECT family_id, classification \
+            "SELECT family_id, classification, eligible_peer_count, supported_member_count, \
+                    coverage_ratio, competing_ready_family_count, largest_competing_support, \
+                    blocked_peer_count, unsupported_peer_count, classification_reason \
              FROM families \
              WHERE generation_id = ?1 AND family_id = ?2",
             params![generation_id, family_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            },
         )
         .optional()
         .map_err(sql_unavailable)?;
-    let Some((family_id, classification)) = record else {
+    let Some((
+        family_id,
+        classification,
+        eligible,
+        supported,
+        coverage,
+        competing,
+        largest,
+        blocked,
+        unsupported,
+        reason,
+    )) = record
+    else {
         return Ok(None);
     };
     validate_stored_semantic_text_field("stored family id", &family_id)?;
     validate_stored_family_classification(&classification)?;
+    let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+        eligible_peer_count: eligible,
+        supported_member_count: supported,
+        coverage_ratio: coverage,
+        competing_ready_family_count: competing,
+        largest_competing_support: largest,
+        blocked_peer_count: blocked,
+        unsupported_peer_count: unsupported,
+        classification_reason: reason,
+    })?;
     Ok(Some(IndexedFamilyRecord {
         family_id,
         classification,
+        prevalence,
     }))
 }
 
@@ -2579,6 +3835,203 @@ fn query_family_evidence(
         });
     }
     Ok(evidence_records)
+}
+
+fn query_family_evidence_projection(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedFamilyEvidenceProjectionRecord>, IndexStoreError> {
+    // Bounded projection: a single sorted scan of the active generation's family
+    // evidence, selecting only the three columns list-level freshness needs. The
+    // expected hash is read directly from the evidence row (the same value the
+    // single-family freshness check compares against), so no per-family joins or
+    // re-reads are required.
+    let mut statement = connection
+        .prepare(
+            "SELECT family_id, path, content_hash \
+             FROM evidence \
+             WHERE generation_id = ?1 AND family_id IS NOT NULL \
+             ORDER BY family_id COLLATE BINARY, path COLLATE BINARY, content_hash COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut projection = Vec::new();
+    for row in rows {
+        let (family_id, path, content_hash) = row.map_err(sql_unavailable)?;
+        let Some(family_id) = family_id else {
+            return Err(IndexStoreError::InvalidState(
+                "stored family evidence is not linked to a family".to_string(),
+            ));
+        };
+        validate_stored_semantic_text_field("stored family evidence family id", &family_id)?;
+        validate_stored_repo_relative_path(&path, "stored family evidence path")?;
+        projection.push(IndexedFamilyEvidenceProjectionRecord {
+            family_id,
+            path,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored family evidence content hash is invalid".to_string(),
+                )
+            })?,
+        });
+    }
+    Ok(projection)
+}
+
+fn query_family_search_summaries(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedFamilySearchSummaryRecord>, IndexStoreError> {
+    // One bounded, source-free projection of every active family's searchable
+    // metadata. Language, code-unit kind, and framework role are uniform across a
+    // family's members by construction (they are part of the family key), so
+    // aggregating them with MIN yields their single deterministic value while the
+    // join stays a single statement. Support counts distinct members; a
+    // correlated subquery collects the family's distinct evidence paths joined by
+    // newlines (a separator no repo-relative path may contain) so in-memory
+    // shaping can split them without ambiguity.
+    let mut statement = connection
+        .prepare(
+            "SELECT families.family_id, families.classification, families.eligible_peer_count, \
+                    families.supported_member_count, families.coverage_ratio, \
+                    families.competing_ready_family_count, families.largest_competing_support, \
+                    families.blocked_peer_count, families.unsupported_peer_count, \
+                    families.classification_reason, \
+                    MIN(code_units.language), MIN(code_units.kind), MIN(family_members.role), \
+                    COUNT(DISTINCT family_members.code_unit_id), \
+                    ( \
+                        SELECT group_concat(component, char(10)) FROM ( \
+                            SELECT DISTINCT evidence.path AS component \
+                            FROM evidence \
+                            WHERE evidence.generation_id = ?1 \
+                              AND evidence.family_id = families.family_id \
+                            ORDER BY evidence.path COLLATE BINARY \
+                        ) \
+                    ) \
+             FROM families \
+             JOIN family_members \
+               ON family_members.generation_id = families.generation_id \
+              AND family_members.family_id = families.family_id \
+             JOIN code_units \
+               ON code_units.generation_id = family_members.generation_id \
+              AND code_units.code_unit_id = family_members.code_unit_id \
+             WHERE families.generation_id = ?1 \
+             GROUP BY families.family_id, families.classification, \
+                      families.eligible_peer_count, families.supported_member_count, \
+                      families.coverage_ratio, families.competing_ready_family_count, \
+                      families.largest_competing_support, families.blocked_peer_count, \
+                      families.unsupported_peer_count, families.classification_reason \
+             ORDER BY families.family_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, Option<String>>(14)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut summaries = Vec::new();
+    for row in rows {
+        let (
+            family_id,
+            classification,
+            eligible,
+            supported,
+            coverage,
+            competing,
+            largest,
+            blocked,
+            unsupported,
+            reason,
+            language,
+            code_unit_kind,
+            framework_role,
+            support,
+            evidence_paths,
+        ) = row.map_err(sql_unavailable)?;
+        validate_stored_semantic_text_field("stored family id", &family_id)?;
+        validate_stored_family_classification(&classification)?;
+        validate_stored_semantic_text_field("stored family language", &language)?;
+        validate_stored_semantic_text_field("stored family code unit kind", &code_unit_kind)?;
+        validate_stored_semantic_text_field("stored family role", &framework_role)?;
+        let prevalence = stored_family_prevalence(StoredFamilyPrevalenceColumns {
+            eligible_peer_count: eligible,
+            supported_member_count: supported,
+            coverage_ratio: coverage,
+            competing_ready_family_count: competing,
+            largest_competing_support: largest,
+            blocked_peer_count: blocked,
+            unsupported_peer_count: unsupported,
+            classification_reason: reason,
+        })?;
+        let support = usize::try_from(support).map_err(|_| {
+            IndexStoreError::InvalidState("stored family support is invalid".to_string())
+        })?;
+        let evidence_path_components =
+            stored_family_search_path_components(evidence_paths.as_deref())?;
+        summaries.push(IndexedFamilySearchSummaryRecord {
+            family_id,
+            language,
+            code_unit_kind,
+            framework_role,
+            classification,
+            support,
+            prevalence,
+            evidence_path_components,
+        });
+    }
+    Ok(summaries)
+}
+
+/// Shape the newline-joined distinct evidence paths of one family into a bounded,
+/// deterministically ordered set of repo-relative path segments (ancestor
+/// directory components and basenames). Never emits absolute paths or source
+/// text: every source path is validated as repo-relative before splitting.
+fn stored_family_search_path_components(
+    evidence_paths: Option<&str>,
+) -> Result<Vec<String>, IndexStoreError> {
+    let mut components = std::collections::BTreeSet::new();
+    for path in evidence_paths
+        .into_iter()
+        .flat_map(|joined| joined.split('\n'))
+    {
+        if path.is_empty() {
+            continue;
+        }
+        validate_stored_repo_relative_path(path, "stored family evidence path")?;
+        for segment in path.split('/') {
+            if !segment.is_empty() {
+                components.insert(segment.to_string());
+            }
+        }
+    }
+    Ok(components
+        .into_iter()
+        .take(FAMILY_SEARCH_PATH_COMPONENT_CAP)
+        .collect())
 }
 
 fn query_indexed_files(
@@ -3006,6 +4459,18 @@ fn run_post_commit_maintenance(
     ))
 }
 
+/// Checkpoint committed WAL frames back into the main database without blocking
+/// on readers. Used at pipeline phase boundaries to bound WAL growth; it touches
+/// only already-committed data, so callers treat a failure as non-fatal.
+fn run_passive_wal_checkpoint(connection: &Connection) -> Result<(), IndexStoreError> {
+    connection
+        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
 fn run_compaction_maintenance(connection: &Connection) -> Result<(u64, u64, u64), IndexStoreError> {
     connection
         .execute_batch("PRAGMA optimize; VACUUM;")
@@ -3070,7 +4535,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'read_path_indexes_v7', datetime('now'))",
+             VALUES (?1, 'python_module_interfaces_v10', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -3080,16 +4545,31 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     Ok(())
 }
 
+/// Read-path storage schema gate. A stored version older than the current build
+/// is an explicit, typed condition whose recovery is a full rebuild via
+/// `repogrammar resync`; the recovery guidance is attached in the application
+/// layer. A missing or newer version stays a generic unsupported-state error.
+fn schema_version_read_gate(stored: Option<u32>) -> Result<(), IndexStoreError> {
+    match stored {
+        Some(version) if version == STORAGE_SCHEMA_VERSION => Ok(()),
+        Some(version) if version < STORAGE_SCHEMA_VERSION => {
+            Err(IndexStoreError::SchemaVersionOutdated(
+                "repository index schema predates this repogrammar build and must be rebuilt"
+                    .to_string(),
+            ))
+        }
+        _ => Err(IndexStoreError::InvalidState(
+            "storage schema version is missing or unsupported".to_string(),
+        )),
+    }
+}
+
 fn validate_generation_for_read(
     connection: &Connection,
     generation_id: &str,
 ) -> Result<(), IndexStoreError> {
     let inspection = inspect_connection(connection, Some(generation_id))?;
-    if inspection.schema_version != Some(STORAGE_SCHEMA_VERSION) {
-        return Err(IndexStoreError::InvalidState(
-            "storage schema version is missing or unsupported".to_string(),
-        ));
-    }
+    schema_version_read_gate(inspection.schema_version)?;
     if inspection.integrity_check.as_deref() != Some("ok") {
         return Err(IndexStoreError::InvalidState(
             "SQLite integrity check failed".to_string(),
@@ -3146,11 +4626,7 @@ fn validate_active_generation_for_read(
     connection: &Connection,
     generation_id: &str,
 ) -> Result<(), IndexStoreError> {
-    if stored_schema_version(connection)? != Some(STORAGE_SCHEMA_VERSION) {
-        return Err(IndexStoreError::InvalidState(
-            "storage schema version is missing or unsupported".to_string(),
-        ));
-    }
+    schema_version_read_gate(stored_schema_version(connection)?)?;
     if !required_schema_is_present(connection)? {
         return Err(IndexStoreError::InvalidState(
             "required storage schema is missing or malformed".to_string(),
@@ -3191,11 +4667,7 @@ fn validate_active_generation_for_read_model(
     connection: &Connection,
     generation_id: &str,
 ) -> Result<(), IndexStoreError> {
-    if stored_schema_version(connection)? != Some(STORAGE_SCHEMA_VERSION) {
-        return Err(IndexStoreError::InvalidState(
-            "storage schema version is missing or unsupported".to_string(),
-        ));
-    }
+    schema_version_read_gate(stored_schema_version(connection)?)?;
     if !required_schema_is_present(connection)? {
         return Err(IndexStoreError::InvalidState(
             "required storage schema is missing or malformed".to_string(),
@@ -3458,12 +4930,13 @@ fn family_evidence_violation_count(
             |row| row.get::<_, i64>(0),
         )
         .map_err(sql_unavailable)?;
+    // Every emitted family is backed by supported evidence, so evidence is
+    // required for all four prevalence classifications.
     let missing_evidence_count = connection
         .query_row(
             "SELECT count(*) \
              FROM families \
              WHERE families.generation_id = ?1 \
-               AND families.classification <> 'UNKNOWN' \
                AND NOT EXISTS (\
                    SELECT 1 \
                    FROM evidence \
@@ -3479,7 +4952,8 @@ fn family_evidence_violation_count(
             "SELECT count(*) \
              FROM families \
              WHERE generation_id = ?1 \
-               AND classification NOT IN ('DOMINANT_PATTERN', 'VARIATION', 'EXCEPTION', 'UNKNOWN')",
+               AND classification NOT IN \
+                   ('DOMINANT_PATTERN', 'SUPPORTED_PATTERN', 'MINORITY_PATTERN', 'UNKNOWN_PREVALENCE')",
             params![generation_id],
             |row| row.get::<_, i64>(0),
         )
@@ -3731,6 +5205,37 @@ fn ir_graph_violation_count(
     })
 }
 
+/// Count code-unit rows whose stored content hash or byte range disagrees with
+/// their indexed file. The `record_code_unit` write path proves both invariants
+/// per record, but the evidence-scoped validation scans only revisit units that
+/// carry evidence; this set-wide check closes that gap so the activation gate is
+/// a strict superset of per-record enforcement. Every code-unit row references an
+/// existing file by foreign key, so an inner join covers the whole set.
+fn code_unit_file_conformance_violation_count(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<usize, IndexStoreError> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) \
+             FROM code_units \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = code_units.generation_id \
+              AND indexed_files.path = code_units.path \
+             WHERE code_units.generation_id = ?1 \
+               AND (code_units.content_hash <> indexed_files.content_hash \
+                    OR code_units.end_byte > indexed_files.size_bytes)",
+            params![generation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_unavailable)?;
+    usize::try_from(count).map_err(|_| {
+        IndexStoreError::InvalidState(
+            "code unit conformance violation count is outside valid range".to_string(),
+        )
+    })
+}
+
 fn generation_status(
     connection: &Connection,
     generation_id: &str,
@@ -3787,22 +5292,6 @@ fn list_database_generation_entries(
     }
     entries.sort_by_key(|entry| entry.number);
     Ok(entries)
-}
-
-fn require_building_generation(
-    connection: &Connection,
-    generation_id: &str,
-    record_type: &str,
-) -> Result<(), IndexStoreError> {
-    match generation_status(connection, generation_id)?.as_deref() {
-        Some("building") => Ok(()),
-        Some(_) => Err(IndexStoreError::InvalidState(format!(
-            "{record_type} may only be recorded for building generations"
-        ))),
-        None => Err(IndexStoreError::InvalidState(
-            "generation row is missing".to_string(),
-        )),
-    }
 }
 
 fn ensure_real_dir(path: &Path, label: &'static str) -> Result<(), IndexStoreError> {
@@ -4102,12 +5591,62 @@ fn validate_stored_semantic_text_field(
 }
 
 fn validate_stored_family_classification(classification: &str) -> Result<(), IndexStoreError> {
-    match classification {
-        "DOMINANT_PATTERN" | "VARIATION" | "EXCEPTION" | "UNKNOWN" => Ok(()),
-        _ => Err(IndexStoreError::InvalidState(
+    match FamilyPrevalenceClass::parse_token(classification) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(IndexStoreError::InvalidState(
             "stored family classification is invalid".to_string(),
         )),
     }
+}
+
+/// Raw stored `families` prevalence columns, before range validation.
+struct StoredFamilyPrevalenceColumns {
+    eligible_peer_count: i64,
+    supported_member_count: i64,
+    coverage_ratio: Option<f64>,
+    competing_ready_family_count: i64,
+    largest_competing_support: i64,
+    blocked_peer_count: i64,
+    unsupported_peer_count: i64,
+    classification_reason: String,
+}
+
+/// Build a validated [`FamilyPrevalence`] from stored SQL column values.
+fn stored_family_prevalence(
+    columns: StoredFamilyPrevalenceColumns,
+) -> Result<FamilyPrevalence, IndexStoreError> {
+    let count = |value: i64, label: &str| {
+        usize::try_from(value)
+            .map_err(|_| IndexStoreError::InvalidState(format!("stored family {label} is invalid")))
+    };
+    if columns.classification_reason.trim().is_empty() {
+        return Err(IndexStoreError::InvalidState(
+            "stored family classification reason is empty".to_string(),
+        ));
+    }
+    Ok(FamilyPrevalence {
+        eligible_peer_count: count(columns.eligible_peer_count, "eligible peer count")?,
+        supported_member_count: count(columns.supported_member_count, "supported member count")?,
+        coverage_ratio: columns.coverage_ratio,
+        competing_ready_family_count: count(
+            columns.competing_ready_family_count,
+            "competing ready family count",
+        )?,
+        largest_competing_support: count(
+            columns.largest_competing_support,
+            "largest competing support",
+        )?,
+        blocked_peer_count: count(columns.blocked_peer_count, "blocked peer count")?,
+        unsupported_peer_count: count(columns.unsupported_peer_count, "unsupported peer count")?,
+        classification_reason: columns.classification_reason,
+    })
+}
+
+/// Bind the prevalence columns for a family INSERT.
+fn family_prevalence_count_param(value: usize, label: &str) -> Result<i64, IndexStoreError> {
+    i64::try_from(value).map_err(|_| {
+        IndexStoreError::InvalidRecord(format!("family {label} exceeds SQLite integer range"))
+    })
 }
 
 fn looks_like_embedded_absolute_path(value: &str) -> bool {
@@ -4140,6 +5679,9 @@ fn family_store_error(error: IndexStoreError) -> StoreError {
         IndexStoreError::Unavailable(message) => StoreError::Unavailable(message),
         IndexStoreError::InvalidState(message) => StoreError::InvalidState(message),
         IndexStoreError::InvalidRecord(message) => StoreError::InvalidRecord(message),
+        IndexStoreError::SchemaVersionOutdated(message) => {
+            StoreError::SchemaVersionOutdated(message)
+        }
     }
 }
 
@@ -4249,7 +5791,19 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
     },
     RequiredTableSchema {
         name: "families",
-        columns: &["generation_id", "family_id", "classification"],
+        columns: &[
+            "generation_id",
+            "family_id",
+            "classification",
+            "eligible_peer_count",
+            "supported_member_count",
+            "coverage_ratio",
+            "competing_ready_family_count",
+            "largest_competing_support",
+            "blocked_peer_count",
+            "unsupported_peer_count",
+            "classification_reason",
+        ],
         primary_key_columns: &["generation_id", "family_id"],
         minimum_foreign_key_rows: 1,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
@@ -4287,6 +5841,14 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
     RequiredTableSchema {
+        name: "family_constraint_profiles",
+        columns: &["generation_id", "family_id", "profile_json"],
+        primary_key_columns: &["generation_id", "family_id"],
+        // One `index_generations` mapping plus the two-column `families` mapping.
+        minimum_foreign_key_rows: 3,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
+    RequiredTableSchema {
         name: "derived_record_dependencies",
         columns: &[
             "generation_id",
@@ -4310,6 +5872,15 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         ],
         primary_key_columns: &["generation_id", "record_kind", "record_id"],
         minimum_foreign_key_rows: 2,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
+    RequiredTableSchema {
+        name: "python_module_interfaces",
+        columns: &["generation_id", "path", "interface_hash"],
+        primary_key_columns: &["generation_id", "path"],
+        // One `index_generations` mapping plus the two-column `indexed_files`
+        // mapping.
+        minimum_foreign_key_rows: 3,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
 ];
@@ -4396,7 +5967,15 @@ CREATE TABLE IF NOT EXISTS semantic_facts (
 CREATE TABLE IF NOT EXISTS families (
     generation_id TEXT NOT NULL,
     family_id TEXT NOT NULL,
-    classification TEXT NOT NULL CHECK (classification IN ('DOMINANT_PATTERN', 'VARIATION', 'EXCEPTION', 'UNKNOWN')),
+    classification TEXT NOT NULL CHECK (classification IN ('DOMINANT_PATTERN', 'SUPPORTED_PATTERN', 'MINORITY_PATTERN', 'UNKNOWN_PREVALENCE')),
+    eligible_peer_count INTEGER NOT NULL CHECK (eligible_peer_count >= 0),
+    supported_member_count INTEGER NOT NULL CHECK (supported_member_count >= 0),
+    coverage_ratio REAL,
+    competing_ready_family_count INTEGER NOT NULL CHECK (competing_ready_family_count >= 0),
+    largest_competing_support INTEGER NOT NULL CHECK (largest_competing_support >= 0),
+    blocked_peer_count INTEGER NOT NULL CHECK (blocked_peer_count >= 0),
+    unsupported_peer_count INTEGER NOT NULL CHECK (unsupported_peer_count >= 0),
+    classification_reason TEXT NOT NULL CHECK (classification_reason <> ''),
     PRIMARY KEY (generation_id, family_id),
     FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE
 );
@@ -4447,6 +6026,15 @@ ON evidence(generation_id, family_id, path COLLATE BINARY, start_byte, end_byte,
 CREATE INDEX IF NOT EXISTS idx_evidence_generation_path_family
 ON evidence(generation_id, path COLLATE BINARY, family_id, start_byte, end_byte, evidence_id COLLATE BINARY);
 
+CREATE TABLE IF NOT EXISTS family_constraint_profiles (
+    generation_id TEXT NOT NULL,
+    family_id TEXT NOT NULL,
+    profile_json TEXT NOT NULL CHECK (profile_json <> ''),
+    PRIMARY KEY (generation_id, family_id),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, family_id) REFERENCES families(generation_id, family_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS derived_record_dependencies (
     generation_id TEXT NOT NULL,
     record_kind TEXT NOT NULL CHECK (record_kind <> ''),
@@ -4460,6 +6048,15 @@ CREATE TABLE IF NOT EXISTS derived_record_dependencies (
 
 CREATE INDEX IF NOT EXISTS idx_derived_record_dependencies_path
 ON derived_record_dependencies(generation_id, path, content_hash);
+
+CREATE TABLE IF NOT EXISTS python_module_interfaces (
+    generation_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    interface_hash TEXT NOT NULL CHECK (interface_hash <> ''),
+    PRIMARY KEY (generation_id, path),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS dirty_records (
     generation_id TEXT NOT NULL,
@@ -4554,6 +6151,7 @@ mod tests {
         IndexedFamilyRecord {
             family_id: "family:routes:read".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
+            prevalence: crate::test_support::sample_family_prevalence(),
         }
     }
 
@@ -4617,6 +6215,144 @@ mod tests {
             .activate_generation(&generation)
             .expect("activate generation");
         (workspace, store, generation)
+    }
+
+    #[test]
+    fn constraint_profile_round_trips_through_the_store() {
+        let workspace = TempWorkspace::new("sqlite-constraint-profile");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        let record = IndexedFamilyConstraintProfileRecord {
+            family_id: family().family_id,
+            profile: crate::test_support::sample_family_constraint_profile(),
+        };
+        store
+            .record_family_constraint_profile(&generation, &record)
+            .expect("record constraint profile");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let hydrated = store
+            .show_family_constraint_profile(&family().family_id)
+            .expect("show constraint profile")
+            .expect("profile exists after activation");
+        assert_eq!(
+            hydrated,
+            crate::test_support::sample_family_constraint_profile()
+        );
+        assert!(store
+            .show_family_constraint_profile("family:missing")
+            .expect("show missing profile")
+            .is_none());
+
+        // Hydrated profiles stay source-free: no URLs or absolute workspace paths.
+        let rendered = format!("{hydrated:?}");
+        assert!(!rendered.contains("://"));
+        assert!(!rendered.contains(&workspace.path().display().to_string()));
+    }
+
+    #[test]
+    fn constraint_profile_write_rejects_source_like_values() {
+        let workspace = TempWorkspace::new("sqlite-constraint-profile-source-free");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+
+        let mut profile = crate::test_support::sample_family_constraint_profile();
+        profile.required_equal_features[0].values = vec!["const handler = route;".to_string()];
+        let record = IndexedFamilyConstraintProfileRecord {
+            family_id: family().family_id,
+            profile,
+        };
+        let error = store
+            .record_family_constraint_profile(&generation, &record)
+            .expect_err("source-like feature value must be rejected");
+        assert!(matches!(error, StoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn stored_constraint_profile_rejects_malformed_rows() {
+        let valid =
+            constraint_profile_to_json(&crate::test_support::sample_family_constraint_profile())
+                .expect("serialize sample profile");
+        // The well-formed baseline hydrates cleanly.
+        assert!(stored_constraint_profile(&valid).is_ok());
+
+        let base: serde_json::Value = serde_json::from_str(&valid).expect("parse baseline JSON");
+        let reject = |mutate: &dyn Fn(&mut serde_json::Value)| {
+            let mut value = base.clone();
+            mutate(&mut value);
+            let json = serde_json::to_string(&value).expect("serialize mutated JSON");
+            let error =
+                stored_constraint_profile(&json).expect_err("malformed row must be rejected");
+            assert!(
+                matches!(error, IndexStoreError::InvalidState(_)),
+                "expected a typed malformed-storage error, got {error:?}"
+            );
+        };
+
+        // Wrong stored version.
+        reject(&|value| value["version"] = serde_json::json!(999));
+        // Unknown origin token.
+        reject(&|value| value["required_equal_features"][0]["origin"] = serde_json::json!("notes"));
+        // Unknown semantics token.
+        reject(&|value| {
+            value["required_equal_features"][0]["semantics"] = serde_json::json!("subset")
+        });
+        // Wrong JSON type for values.
+        reject(&|value| value["required_equal_features"][0]["values"] = serde_json::json!("nope"));
+        // Source-like value injected post-write.
+        reject(&|value| {
+            value["required_equal_features"][0]["values"] = serde_json::json!(["const x = 1;"])
+        });
+        // Semantics/values contradiction (equal-empty with non-empty values).
+        reject(&|value| {
+            value["required_equal_features"][0]["semantics"] = serde_json::json!("equal_empty")
+        });
+        // A prohibited-presence blocker tampered into the required axis. Index 3 of
+        // the sample is an empty-valued characteristic, so only the axis check
+        // fires (values stay empty).
+        reject(&|value| {
+            value["required_equal_features"][3]["semantics"] =
+                serde_json::json!("prohibited_presence")
+        });
+        // A required binding tampered into the prohibited axis.
+        reject(&|value| {
+            value["prohibited_or_blocking_features"][0]["semantics"] = serde_json::json!("equal");
+            value["prohibited_or_blocking_features"][0]["values"] = serde_json::json!(["svc"]);
+        });
+        // Unknown obligation class token.
+        reject(&|value| value["unresolved_obligations"][0]["class"] = serde_json::json!("bogus"));
     }
 
     fn query_plan_details<P>(connection: &Connection, sql: &str, params: P) -> Vec<String>
@@ -4965,6 +6701,9 @@ mod tests {
             family().classification
         );
         assert_eq!(summaries.families[0].support, 2);
+        // Prevalence metadata round-trips through the summary and detail reads.
+        assert_eq!(summaries.families[0].prevalence, family().prevalence);
+        assert_eq!(families.families[0].prevalence, family().prevalence);
         assert_eq!(member_candidates.generation_id, generation.generation_id);
         assert_eq!(
             member_candidates.candidates[0].family_id,
@@ -4989,6 +6728,290 @@ mod tests {
         assert!(missing.is_none());
         assert!(!format!("{detail:?}").contains(&workspace.path().display().to_string()));
         assert!(!format!("{detail:?}").contains("const secret"));
+    }
+
+    /// Stamp the mutable database with an older schema version to simulate a
+    /// pre-current index. The read gate and rebuild recreate key on this
+    /// version, so a version downgrade exercises both migration paths. Recreating
+    /// this database loses no user-authored data: it is a derived index fully
+    /// rebuildable from repository source by `resync`.
+    fn stamp_previous_schema_version(store: &SqliteIndexStore) {
+        let connection =
+            Connection::open(store.mutable_database_path()).expect("open mutable database");
+        connection
+            .execute(
+                "UPDATE schema_migrations SET version = ?1",
+                params![STORAGE_SCHEMA_VERSION - 1],
+            )
+            .expect("downgrade stored schema version");
+    }
+
+    /// Stamp the mutable database with a schema version far newer than this build
+    /// (a hypothetical `v99`) to simulate an index written by a newer RepoGrammar.
+    /// The current binary must refuse it fail-closed, never treat it as outdated.
+    fn stamp_future_schema_version(store: &SqliteIndexStore) {
+        let connection =
+            Connection::open(store.mutable_database_path()).expect("open mutable database");
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) \
+                 VALUES (?1, 'future', datetime('now'))",
+                params![STORAGE_SCHEMA_VERSION + 89],
+            )
+            .expect("stamp future schema version");
+    }
+
+    #[test]
+    fn schema_version_read_gate_is_fail_closed_by_version_band() {
+        // The current version is servable.
+        assert!(schema_version_read_gate(Some(STORAGE_SCHEMA_VERSION)).is_ok());
+        // An older version is a typed, resync-recoverable condition.
+        assert!(matches!(
+            schema_version_read_gate(Some(STORAGE_SCHEMA_VERSION - 1)),
+            Err(IndexStoreError::SchemaVersionOutdated(_))
+        ));
+        // A future version is refused as unsupported — never routed to the
+        // outdated branch, which would recreate/rebuild it, and never accepted.
+        assert!(matches!(
+            schema_version_read_gate(Some(STORAGE_SCHEMA_VERSION + 89)),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+        // A missing version is unsupported, not outdated.
+        assert!(matches!(
+            schema_version_read_gate(None),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn future_schema_mutable_database_is_never_silently_recreated() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-future-no-recreate");
+        stamp_future_schema_version(&store);
+
+        // The rebuild pre-step must leave a future-version database intact: only
+        // strictly-older schemas are recreated, so no data is silently dropped.
+        store
+            .recreate_mutable_database_if_outdated()
+            .expect("recreate check must succeed without removing a future database");
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION + 89)
+        );
+    }
+
+    #[test]
+    fn future_schema_rebuild_is_fail_closed_without_data_loss() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-future-rebuild-fail-closed");
+        stamp_future_schema_version(&store);
+
+        // A rebuild against a future schema must fail closed with a typed
+        // "newer" error, not silently recreate the database (a future schema is
+        // not the same as an outdated one).
+        let error = store
+            .prepare_next_generation()
+            .expect_err("a future schema rebuild must be refused");
+        assert!(format!("{error:?}").contains("newer"));
+
+        // The future database is preserved — nothing was recreated or lost.
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION + 89)
+        );
+    }
+
+    #[test]
+    fn future_schema_read_is_fail_closed_and_leaves_the_database_intact() {
+        let (_workspace, store, _generation) = store_with_active_family("sqlite-future-read");
+        stamp_future_schema_version(&store);
+
+        let error = store
+            .list_active_family_summaries()
+            .expect_err("a future schema read must fail");
+        // Not a resync-recoverable outdated error: a future schema is unsupported.
+        assert!(!matches!(error, StoreError::SchemaVersionOutdated(_)));
+        assert!(matches!(error, StoreError::InvalidState(_)));
+
+        // The read must not delete or rebuild the future database.
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION + 89)
+        );
+    }
+
+    #[test]
+    fn outdated_schema_read_is_a_typed_resync_error_without_touching_active_generation() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-outdated-read-error");
+        stamp_previous_schema_version(&store);
+
+        let error = store
+            .list_active_family_summaries()
+            .expect_err("an outdated schema read must fail");
+        assert!(matches!(error, StoreError::SchemaVersionOutdated(_)));
+
+        // The read must not delete or rebuild: the active generation is intact.
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION - 1)
+        );
+
+        // The application layer routes the typed error to the resync recovery
+        // guidance from the recovery classifier vocabulary.
+        let message = match crate::application::query::list_families(&store)
+            .expect_err("list_families must surface the outdated schema error")
+        {
+            crate::error::RepoGrammarError::InvalidInput(message) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("resync"),
+            "recovery guidance must recommend resync, got: {message}"
+        );
+    }
+
+    #[test]
+    fn outdated_schema_rebuild_recreates_a_working_current_state() {
+        let (_workspace, store, _generation) = store_with_active_family("sqlite-outdated-rebuild");
+        stamp_previous_schema_version(&store);
+
+        // A full rebuild recreates the mutable database at the current schema.
+        let generation = store
+            .prepare_next_generation()
+            .expect("rebuild recreates the mutable database");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate rebuilt generation");
+
+        let detail = store
+            .show_family(&family().family_id)
+            .expect("show family")
+            .expect("family exists after rebuild");
+        assert_eq!(detail.family, family());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION)
+        );
+    }
+
+    #[test]
+    fn family_evidence_projection_lists_active_generation_rows() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-family-evidence-projection");
+
+        let projection = store
+            .list_active_family_evidence_projection()
+            .expect("list family evidence projection");
+
+        assert_eq!(projection.generation_id, generation.generation_id);
+        assert_eq!(
+            projection.rows,
+            vec![
+                IndexedFamilyEvidenceProjectionRecord {
+                    family_id: family().family_id,
+                    path: "src/a.ts".to_string(),
+                    content_hash: file("src/a.ts").content_hash,
+                },
+                IndexedFamilyEvidenceProjectionRecord {
+                    family_id: family().family_id,
+                    path: "src/b.ts".to_string(),
+                    content_hash: file("src/b.ts").content_hash,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn family_search_summaries_project_bounded_source_free_metadata() {
+        let (_workspace, store, generation) =
+            store_with_active_family("sqlite-family-search-summaries");
+
+        let summaries = store
+            .list_active_family_search_summaries()
+            .expect("list family search summaries");
+
+        assert_eq!(summaries.generation_id, generation.generation_id);
+        assert_eq!(
+            summaries.families,
+            vec![IndexedFamilySearchSummaryRecord {
+                family_id: family().family_id,
+                language: "typescript".to_string(),
+                code_unit_kind: "module".to_string(),
+                framework_role: "member".to_string(),
+                classification: family().classification,
+                support: 2,
+                prevalence: family().prevalence,
+                // Distinct segments of "src/a.ts" and "src/b.ts", sorted.
+                evidence_path_components: vec![
+                    "a.ts".to_string(),
+                    "b.ts".to_string(),
+                    "src".to_string(),
+                ],
+            }]
+        );
+
+        // Source-freedom: no component may be absolute, a URL, or a source line.
+        for family in &summaries.families {
+            for component in &family.evidence_path_components {
+                assert!(
+                    !component.starts_with('/'),
+                    "absolute component: {component}"
+                );
+                assert!(!component.contains("://"), "url component: {component}");
+                assert!(
+                    !component.contains('/'),
+                    "unsplit path component: {component}"
+                );
+                assert!(
+                    !component.contains('{')
+                        && !component.contains('}')
+                        && !component.contains("=>")
+                        && !component.contains(';'),
+                    "source-like component: {component}"
+                );
+            }
+        }
+        let rendered = format!("{summaries:?}");
+        assert!(!rendered.contains("const secret"));
     }
 
     #[test]
@@ -5895,8 +7918,13 @@ mod tests {
 
         connection
             .execute(
-                "INSERT INTO families (generation_id, family_id, classification) \
-                 VALUES (?1, ?2, 'UNKNOWN')",
+                "INSERT INTO families (\
+                     generation_id, family_id, classification, eligible_peer_count, \
+                     supported_member_count, coverage_ratio, competing_ready_family_count, \
+                     largest_competing_support, blocked_peer_count, unsupported_peer_count, \
+                     classification_reason) \
+                 VALUES (?1, ?2, 'DOMINANT_PATTERN', 2, 2, 1.0, 0, 0, 0, 0, \
+                         'coverage 2/2 with no competing ready family')",
                 params![generation.generation_id, family().family_id],
             )
             .expect("insert tamper family");
@@ -7557,6 +9585,120 @@ mod tests {
     }
 
     #[test]
+    fn schema_creates_python_module_interfaces_table_at_current_version() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-schema");
+        let store = store(&workspace);
+        store
+            .prepare_next_generation()
+            .expect("prepare generation creates the mutable database");
+        let connection =
+            Connection::open(store.mutable_database_path()).expect("open mutable database");
+        assert_eq!(
+            stored_schema_version(&connection).expect("read schema version"),
+            Some(STORAGE_SCHEMA_VERSION)
+        );
+        assert!(required_schema_is_present(&connection).expect("required schema present"));
+        let table_present: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'python_module_interfaces'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query sqlite_master");
+        assert_eq!(table_present, 1);
+    }
+
+    #[test]
+    fn python_module_interfaces_round_trip_through_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-round-trip");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        {
+            let mut session = store
+                .open_generation_write_session(&generation)
+                .expect("open write session");
+            session
+                .record_indexed_file(&file("pkg/app.py"))
+                .expect("record app.py");
+            session
+                .record_indexed_file(&file("pkg/other.py"))
+                .expect("record other.py");
+            session
+                .record_python_module_interface("pkg/app.py", "sha256:aaa")
+                .expect("record app interface");
+            session
+                .record_python_module_interface("pkg/other.py", "sha256:bbb")
+                .expect("record other interface");
+            session.finish().expect("finish session");
+        }
+        store
+            .validate_generation(&generation)
+            .expect("validate generation with interface rows");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        // Rows load in path order for the active generation only.
+        assert_eq!(
+            store
+                .active_python_module_interfaces()
+                .expect("load interfaces"),
+            vec![
+                PythonModuleInterfaceRecord {
+                    path: "pkg/app.py".to_string(),
+                    interface_hash: "sha256:aaa".to_string(),
+                },
+                PythonModuleInterfaceRecord {
+                    path: "pkg/other.py".to_string(),
+                    interface_hash: "sha256:bbb".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn active_python_module_interfaces_is_empty_without_active_generation() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-empty");
+        let store = store(&workspace);
+        assert!(store
+            .active_python_module_interfaces()
+            .expect("load interfaces with no generation")
+            .is_empty());
+    }
+
+    #[test]
+    fn python_module_interface_requires_an_indexed_file_row() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-fk");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut session = store
+            .open_generation_write_session(&generation)
+            .expect("open write session");
+        let error = session
+            .record_python_module_interface("pkg/missing.py", "sha256:aaa")
+            .expect_err("interface for a missing file row must be rejected");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn python_module_interface_rejects_empty_hash() {
+        let workspace = TempWorkspace::new("sqlite-python-interface-empty-hash");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        let mut session = store
+            .open_generation_write_session(&generation)
+            .expect("open write session");
+        session
+            .record_indexed_file(&file("pkg/app.py"))
+            .expect("record app.py");
+        let error = session
+            .record_python_module_interface("pkg/app.py", "")
+            .expect_err("an empty interface hash must be rejected");
+        assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+    }
+
+    #[test]
     fn broken_current_generation_pointer_is_reported() {
         let workspace = TempWorkspace::new("sqlite-broken-pointer");
         let store = store(&workspace);
@@ -7679,6 +9821,401 @@ mod tests {
         let error = store
             .inspect()
             .expect_err("broken symlink pointer must fail");
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    // --- Generation write-session fault-injection tests --------------------
+    //
+    // These exercise the single-connection, bounded-batch write session and its
+    // abandonment lifecycle. The invariant across every fault is: the active
+    // generation stays readable and unchanged, an abandoned build that already
+    // committed rows is stamped `failed`, and a build that persisted nothing
+    // leaves a reusable `building` generation.
+
+    fn generation_status_of(
+        store: &SqliteIndexStore,
+        generation: &GenerationHandle,
+    ) -> Option<String> {
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        generation_status(&connection, &generation.generation_id).expect("read status")
+    }
+
+    fn generation_table_count(
+        store: &SqliteIndexStore,
+        generation: &GenerationHandle,
+        table: &str,
+    ) -> i64 {
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE generation_id = ?1"),
+                params![generation.generation_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count rows")
+    }
+
+    fn seed_active_generation(store: &SqliteIndexStore, path: &str) -> GenerationHandle {
+        let generation = store.prepare_next_generation().expect("prepare active");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(store, &generation).expect("open session");
+            session
+                .record_indexed_file(&file(path))
+                .expect("record file");
+            session.finish().expect("finish session");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate seed generation");
+        generation
+    }
+
+    #[test]
+    fn write_session_builds_generation_with_one_connection_and_bounded_transactions() {
+        use std::sync::atomic::Ordering;
+        let workspace = TempWorkspace::new("sqlite-write-session-happy");
+        let store = store(&workspace);
+        let instrumentation = store.write_instrumentation();
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session
+            .record_code_unit(&code_unit("src/a.ts"))
+            .expect("record code unit");
+        session
+            .record_semantic_fact(&semantic_fact("src/a.ts"))
+            .expect("record semantic fact");
+        session.checkpoint().expect("checkpoint");
+        session.finish().expect("finish");
+        let stats = session.stats();
+        assert!(stats.transactions >= 1);
+        assert!(stats.transactions < stats.rows_written);
+        assert!(stats.rows_written >= 3);
+        assert_eq!(stats.checkpoints, 1);
+        drop(session);
+
+        // The whole build opened exactly one measured connection.
+        assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 1);
+
+        store.validate_generation(&generation).expect("validate");
+        store.activate_generation(&generation).expect("activate");
+        let files = store.list_active_indexed_files().expect("list files");
+        assert_eq!(files.files.len(), 1);
+    }
+
+    #[test]
+    fn write_session_checkpoint_commits_and_counts() {
+        let workspace = TempWorkspace::new("sqlite-write-session-checkpoint");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        // A phase checkpoint commits the open batch (so the row is durable and a
+        // fresh reader sees it) and increments the checkpoint counter.
+        assert_eq!(session.stats().transactions, 0);
+        session.checkpoint().expect("checkpoint");
+        assert_eq!(session.stats().transactions, 1);
+        assert_eq!(session.stats().checkpoints, 1);
+        assert!(!session.batch_is_open());
+        session
+            .checkpoint()
+            .expect("second checkpoint is a no-op commit");
+        assert_eq!(session.stats().checkpoints, 2);
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            1
+        );
+        session.finish().expect("finish");
+    }
+
+    #[test]
+    fn write_session_finish_after_abandon_is_a_typed_error() {
+        let workspace = TempWorkspace::new("sqlite-write-session-finish-after-abandon");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session.abandon().expect("abandon");
+        // A build that gave up on one path must not silently finish on another.
+        let error = session
+            .finish()
+            .expect_err("finish after abandon must error");
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        // The rolled-back build persisted nothing and stays a reusable building
+        // row (abandon committed no batch), so it can never activate an empty
+        // index through the finished path.
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("building")
+        );
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            0
+        );
+    }
+
+    #[test]
+    fn write_session_double_finish_is_a_typed_error() {
+        let workspace = TempWorkspace::new("sqlite-write-session-double-finish");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session.finish().expect("first finish");
+        let error = session.finish().expect_err("second finish must error");
+        assert!(matches!(error, IndexStoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn write_session_record_validation_failure_leaves_generation_building() {
+        let workspace = TempWorkspace::new("sqlite-write-session-validation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+            // A code unit with no matching indexed file: a referential rejection
+            // that persists nothing.
+            let error = session
+                .record_code_unit(&code_unit("src/missing.ts"))
+                .expect_err("referential failure");
+            assert!(matches!(error, IndexStoreError::InvalidRecord(_)));
+        }
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("building")
+        );
+    }
+
+    #[test]
+    fn write_session_abandon_after_commit_marks_failed_and_preserves_active() {
+        let workspace = TempWorkspace::new("sqlite-write-session-abandon");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+            session
+                .record_indexed_file(&file("src/b.ts"))
+                .expect("record file");
+            session.checkpoint().expect("checkpoint commits a batch");
+            session.abandon().expect("abandon");
+        }
+        assert_eq!(
+            generation_status_of(&store, &second).as_deref(),
+            Some("failed")
+        );
+        let files = store.list_active_indexed_files().expect("list active");
+        assert_eq!(files.generation_id, first.generation_id);
+    }
+
+    #[test]
+    fn write_session_drop_without_finish_after_commit_marks_failed() {
+        let workspace = TempWorkspace::new("sqlite-write-session-drop");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+            session
+                .record_indexed_file(&file("src/b.ts"))
+                .expect("record file");
+            session.checkpoint().expect("checkpoint commits a batch");
+            // Dropped without finish or abandon (the panic-unwind path).
+        }
+        assert_eq!(
+            generation_status_of(&store, &second).as_deref(),
+            Some("failed")
+        );
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active")
+                .generation_id,
+            first.generation_id
+        );
+    }
+
+    #[test]
+    fn write_session_fault_after_rows_aborts_and_reclaims() {
+        let workspace = TempWorkspace::new("sqlite-write-session-after-rows");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+            session
+                .record_indexed_file(&file("src/b.ts"))
+                .expect("record file");
+            session.checkpoint().expect("checkpoint");
+            session.inject_fault(InjectedWriteFault::AfterRows(1));
+            let error = session
+                .record_indexed_file(&file("src/c.ts"))
+                .expect_err("mid-build fault");
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+        }
+        assert_eq!(
+            generation_status_of(&store, &second).as_deref(),
+            Some("failed")
+        );
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active")
+                .generation_id,
+            first.generation_id
+        );
+    }
+
+    #[test]
+    fn write_session_fault_after_evidence_before_fact_rolls_back() {
+        let workspace = TempWorkspace::new("sqlite-write-session-mid-record");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+            session
+                .record_indexed_file(&file("src/a.ts"))
+                .expect("record file");
+            session
+                .record_code_unit(&code_unit("src/a.ts"))
+                .expect("record code unit");
+            session.checkpoint().expect("commit file and unit");
+            session.inject_fault(InjectedWriteFault::AfterEvidenceBeforeFact);
+            let error = session
+                .record_semantic_fact(&semantic_fact("src/a.ts"))
+                .expect_err("mid-record fault");
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+            session.abandon().expect("abandon");
+        }
+        // File and unit survive (committed), the torn fact and its evidence are
+        // rolled back, and the generation is unreachable.
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            1
+        );
+        assert_eq!(generation_table_count(&store, &generation, "code_units"), 1);
+        assert_eq!(
+            generation_table_count(&store, &generation, "semantic_facts"),
+            0
+        );
+        assert_eq!(generation_table_count(&store, &generation, "evidence"), 0);
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("failed")
+        );
+    }
+
+    #[test]
+    fn write_session_fault_before_commit_discards_batch() {
+        let workspace = TempWorkspace::new("sqlite-write-session-before-commit");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+            session
+                .record_indexed_file(&file("src/a.ts"))
+                .expect("record file");
+            session.inject_fault(InjectedWriteFault::BeforeCommit);
+            let error = session.checkpoint().expect_err("commit fault");
+            assert!(matches!(error, IndexStoreError::InvalidState(_)));
+            assert!(session.batch_is_open());
+            session.abandon().expect("abandon");
+        }
+        // The sole batch never committed, so nothing persisted and the
+        // generation stays a reusable `building` row.
+        assert_eq!(
+            generation_table_count(&store, &generation, "indexed_files"),
+            0
+        );
+        assert_eq!(
+            generation_status_of(&store, &generation).as_deref(),
+            Some("building")
+        );
+    }
+
+    #[test]
+    fn write_session_reader_sees_old_active_until_activation() {
+        let workspace = TempWorkspace::new("sqlite-write-session-reader");
+        let store = store(&workspace);
+        let first = seed_active_generation(&store, "src/a.ts");
+        let second = store.prepare_next_generation().expect("prepare second");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &second).expect("open session");
+        session
+            .record_indexed_file(&file("src/b.ts"))
+            .expect("record file");
+        session.checkpoint().expect("checkpoint");
+        // Mid-build, reads still resolve the previous active generation.
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active")
+                .generation_id,
+            first.generation_id
+        );
+        session.finish().expect("finish");
+        drop(session);
+        store.validate_generation(&second).expect("validate");
+        store.activate_generation(&second).expect("activate");
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("list active after activation")
+                .generation_id,
+            second.generation_id
+        );
+    }
+
+    #[test]
+    fn write_session_status_flip_between_batches_is_rejected() {
+        let workspace = TempWorkspace::new("sqlite-write-session-flip");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare");
+        let mut session =
+            SqliteGenerationWriteSession::open(&store, &generation).expect("open session");
+        session
+            .record_indexed_file(&file("src/a.ts"))
+            .expect("record file");
+        session.checkpoint().expect("checkpoint closes the batch");
+        // An external writer flips the generation out of `building` between
+        // batches.
+        {
+            let connection = store
+                .open_existing_generation(&generation.generation_id)
+                .expect("open generation");
+            connection
+                .execute(
+                    "UPDATE index_generations SET status = 'failed' WHERE generation_id = ?1",
+                    params![generation.generation_id],
+                )
+                .expect("flip status");
+        }
+        let error = session
+            .record_code_unit(&code_unit("src/a.ts"))
+            .expect_err("status flip must be caught at the next batch");
         assert!(matches!(error, IndexStoreError::InvalidState(_)));
     }
 }

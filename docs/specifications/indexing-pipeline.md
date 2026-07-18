@@ -31,8 +31,8 @@ inside the mutable `.repogrammar/repogrammar.sqlite` database, validate that
 generation, and mark the corresponding `index_generations` row active. `index`
 and `resync` do this as full rebuilds; `sync` attempts path-level incremental
 copy-forward from the readable active generation and falls back to the full
-rebuild path when project context, worker, schema, layout, or dirty-state
-preconditions are unsafe. The
+rebuild path when project context, worker, engine-version, schema, layout, or
+dirty-state preconditions are unsafe. The
 current default indexing path also stores syntax-origin `FRAMEWORK_ROLE`
 semantic fact records for recognized TS/JS and Python framework-shaped code
 units. These records use `FRAMEWORK_HEURISTIC` certainty and same-generation
@@ -668,8 +668,8 @@ PHP-only generations are `file_manifest_only`; mixed generations remain
 `syntax_only_code_units`. While the tokens are absent from
 `ParserProjectContext`, add/modify/remove deltas stay incremental and generation
 copy-forward purges legacy PHP unit, IR, fact, support, evidence, and family
-records while retaining file metadata. Discovery honors Git ignore; autosync
-fingerprinting retains its generic Git-independent conservative charging. This
+records while retaining file metadata. Discovery and autosync fingerprinting
+both honor Git ignore over the same accepted manifest. This
 stage decodes/parses no source or configuration and creates no PHP unit, IR,
 fact, `UNKNOWN`, family, project model, or readiness/support claim.
 
@@ -707,8 +707,8 @@ accepted token. Swift-only generations are `file_manifest_only`; mixed
 generations retain `syntax_only_code_units`. While the tokens are absent from
 `ParserProjectContext`, add/modify/remove deltas stay incremental and copy-
 forward purges legacy Swift units, IR, facts, support, evidence, and families
-while retaining file metadata. Discovery honors Git ignore; autosync retains
-its generic Git-independent conservative charging. This stage decodes/parses
+while retaining file metadata. Discovery and autosync fingerprinting both honor
+Git ignore over the same accepted manifest. This stage decodes/parses
 no source or configuration and creates no Swift unit, IR, fact, `UNKNOWN`,
 family, project model, or readiness/support claim.
 
@@ -740,9 +740,9 @@ token from the whole accepted manifest. Ruby-only generations are
 when an incremental round dispatches no parser. While the tokens are absent from
 `ParserProjectContext`, add/modify/remove deltas remain incremental and
 generation copy-forward purges any legacy Ruby unit, IR, fact, derived support,
-or family while retaining file metadata. Discovery honors Git ignore; the
-autosync fingerprint intentionally retains its generic Git-independent
-conservative charging. This stage creates no Ruby unit, IR, fact, `UNKNOWN`,
+or family while retaining file metadata. Discovery and the autosync fingerprint
+both honor Git ignore over the same accepted manifest. This stage creates no
+Ruby unit, IR, fact, `UNKNOWN`,
 family, project model, or support and never evaluates project files or selects an
 ambient engine.
 
@@ -1095,11 +1095,15 @@ resolves traits, or performs points-to analysis.
 
 ## Classification
 
-Classification must produce dominant pattern, variation, exception, or unknown
-with evidence and freshness checks. The current EC-MVFI-lite implementation can
-produce `DOMINANT_PATTERN` only for repeated compatible candidates backed by
-strong semantic/dataflow support; otherwise query output remains typed
-`UNKNOWN`.
+Classification must produce one of the four evidence-backed prevalence
+classifications — `DOMINANT_PATTERN`, `SUPPORTED_PATTERN`, `MINORITY_PATTERN`,
+or `UNKNOWN_PREVALENCE` — with evidence and freshness checks. Minimum support
+only qualifies a cluster for emission; the pipeline then computes a
+`FamilyPrevalence` record and classifies the family by its coverage of eligible
+peers and any competing ready families (see `domain-model.md`). The current
+EC-MVFI-lite implementation only emits a family for repeated compatible
+candidates backed by strong semantic/dataflow support; candidates that never
+reach minimum support remain typed `UNKNOWN` and are not emitted as families.
 FastAPI route decorator targets can become derived support only when they
 exact-match the canonical route-method table:
 `fastapi.FastAPI.{delete,get,head,options,patch,post,put}` and
@@ -1154,17 +1158,35 @@ as discovery and fails closed before retaining an over-limit directory entry or
 fingerprint record. Although it hashes path, size, modification-time, and
 language metadata rather than content, accepted-byte accounting uses each
 supported file's metadata size to align its admission units with indexing.
-Polling deliberately does not run Git-ignore checks: supported Git-ignored
-candidates therefore count toward the fingerprint file/byte budgets, so
-autosync can conservatively refuse a repository that manual Git-aware discovery
-would accept. The subsequent `sync` remains the authoritative Git-aware path.
-The reported-skipped-path budget does not apply because the fingerprint emits
-no skip report. Incremental `sync`
+Polling evaluates Git ignore with the same accepted-manifest policy as manual
+discovery so the two paths agree on which files are in scope. To keep the ~1s
+poll cheap, one fingerprint pass batches every supported candidate through a
+single `git check-ignore -z --stdin` subprocess (measured at roughly 10 ms for a
+few hundred paths, about one percent of the default 1000 ms poll) instead of one
+process per file; when Git is absent or errors, the pass applies the same safe
+no-ignore warning fallback discovery uses and reports `unavailable`. Because
+Git-ignored supported files are excluded before accepted-file/byte charging,
+they no longer count toward the fingerprint budgets, so `autosync run` and manual
+`sync` no longer disagree about whether the same repository is within accepted
+limits. Each pass also counts, but never logs by path, the number of Git-ignored
+supported files it excluded; the daemon records that bounded count and the
+Git-ignore status to its log on change, and surfacing it through
+`autosync status --json` is deferred. The subsequent `sync` remains the
+authoritative Git-aware path. The reported-skipped-path budget does not apply
+because the fingerprint emits no skip report. The fingerprint remains
+metadata-only and does not hash content, so a same-size, same-modification-time
+edit is invisible to polling until another change or a manual `sync` runs; the
+authoritative `sync` always recomputes content hashes. Incremental `sync`
 copy-forwards unchanged active records into a new building generation only
-after the project-context gate passes; changes to parser project-context source
-inventories such as TS/JS, Python, or Rust source files fall back to a full
-rebuild. Current inventory-only Go, PHP, Ruby, and Swift source/config tokens
-are the explicit exceptions described above. When safe, incremental `sync`
+after the project-context gate passes. A content-only edit of a Rust or TS/JS
+source file takes the incremental fast path, as does a content-only edit of a
+`.py` module whose interface projection is unchanged (see the Python
+interface-hash gate below). Adding or removing any project-context source file,
+editing any `.py` module whose interface changed or could not be verified,
+editing any `conftest.py`, and adding, editing, or removing any project-config
+file fall back to a full rebuild (see the gate table below). Current
+inventory-only Go, PHP, Ruby, and Swift source/config tokens are the explicit
+exceptions described above. When safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
 validation. Derived-support facts (including
@@ -1174,3 +1196,144 @@ copied-forward worker facts, so a worker-less incremental `sync` preserves the
 base generation's provider-resolved family support for unchanged files instead
 of silently dropping it and diverging from a full rebuild. Lazy query-time
 recomputation remains future work.
+
+The project-context gate distinguishes *content-only modifications* from
+*path-set changes*. A modified non-inventory file is one whose repo-relative path
+appears in both the base and the current manifest with a changed content hash
+(no add, remove, or rename). The gate decides per change class:
+
+| Change class | Paths | Sync outcome |
+|---|---|---|
+| Content-only modify | `.rs`/`.ts`/`.tsx`/`.js`/`.jsx` source | incremental — reparse the edited file only |
+| Content-only modify | `.py` module, interface hash unchanged, context payload safely under cap | incremental — reparse the edited file only |
+| Content-only modify | `.py` module, interface hash changed | full-rebuild fallback (`python_interface_changed`) |
+| Content-only modify | `.py` module, interface unverifiable (worker error/timeout, or a build-time probe failure left no stored hash) | full-rebuild fallback (`python_interface_unverified`) |
+| Content-only modify | `.py` module, whole-project context payload near/over the worker request cap on either manifest | full-rebuild fallback (`python_context_budget`) |
+| Content-only modify | `conftest.py` | full-rebuild fallback (`project_context_changed`) |
+| Content-only modify | any discovered project-config file | full-rebuild fallback (`project_context_changed`) |
+| Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or any project-config file | full-rebuild fallback (`project_context_changed`) |
+| Add/modify/remove | Java/C#/C/C++ and inventory-only source | incremental — parsers ignore project context |
+
+The content-only Rust and TS/JS fast path is sound because their parsers consume
+only their own discovered path set plus root configuration — Rust: the
+`rust_module_paths` set and the nearest `Cargo.toml`'s feature names; TS/JS: the
+`tsjs_module_paths` set and the root tsconfig/jsconfig/package.json projections
+plus the test-runner flag — and never another file's source text. A content-only
+edit (same path, changed hash, no add/remove) leaves every language path set and
+every root configuration byte-identical, so it cannot change how any other file
+parses. Exactly the edited file is reparsed with the freshly rebuilt full
+context, every unchanged file copies forward, and derived support and families
+still recompute globally over the merged fact set. Adds and removes change the
+path set itself — Python module identity, Rust `mod` candidate resolution, TS/JS
+import specifier resolution — and therefore still force a full rebuild. A
+configured semantic worker still forces a full rebuild every run
+(`semantic_worker_requires_full_rebuild`); the fast path applies to worker-less
+operation. That rule covers the semantic worker only — the Python interface probe
+below reuses the frontend parse worker and never runs when a semantic worker is
+configured, because the semantic-worker fallback fires first in preflight.
+
+### Python interface-hash gate
+
+Python is the only language whose parser consumes other files' text: each
+module's parse depends on a per-module *interface projection* of every other
+module — its top-level symbol surface, its literal `__all__` (or a non-literal
+marker), and, for a package `__init__`, its re-export `ImportFrom` items. This
+projection is the sole channel by which a module's text reaches another module's
+parse (`python_module_files`; see `docs/specifications/python-analysis.md`).
+Therefore a content-only `.py` edit is provably file-local **iff** the module's
+interface projection is byte-identical before and after the edit, the file is not
+a `conftest.py`, no add/remove/rename occurred, **and** the whole-project Python
+context payload stays safely under the worker's per-request byte cap on both the
+base and the current manifest (see the payload-regime condition below).
+
+To decide this before parsing, indexing persists each Python module's interface
+hash at build time (schema v10 `python_module_interfaces`, computed by the
+frontend worker's `extract_interface` mode) and, at sync preflight for a
+Python-modified delta, re-probes each modified module's current interface hash
+with one bounded worker call per file. When every modified module's hash equals
+its stored base hash, the cross-file context every *other* module sees is
+byte-identical, so the modified modules reparse in isolation (with the freshly
+rebuilt full context) and every unchanged module — including its interface hash —
+copies forward, matching a clean full rebuild exactly. A changed hash falls back
+with `python_interface_changed`; a hash that cannot be computed or has no stored
+base falls back with `python_interface_unverified` (a stored hash is absent only
+when a module's build-time interface probe failed — a base generation on an older
+schema is rejected earlier by the preflight `unsupported_storage_schema` gate and
+never reaches here). The probe never guesses an interface.
+
+**Payload-regime condition.** The frontend `parse_document` request ships every
+`.py` module's text as whole-project context (`module_files`, plus every
+`conftest.py` again in `conftest_files`). When the serialized request exceeds the
+worker's per-request byte cap, that context is *silently dropped* and the target
+is parsed without cross-module resolution. A size-changing `.py` edit — even an
+interface-stable one — can therefore flip whether sibling modules are parsed with
+or without context, which would make an incremental sync's copied-forward sibling
+facts (parsed under the base regime) diverge from a clean rebuild's (parsed under
+the current regime). The gate closes this by requiring the aggregate Python
+context payload to stay safely under the cap on **both** the base and the current
+manifest, estimated conservatively from manifest sizes alone (no file reads): raw
+byte sizes plus fixed per-entry/envelope overhead, times a **6x** headroom that
+bounds JSON string escaping. Because the gate never reads file contents it cannot
+assume the bytes are valid Python, so the headroom must bound the worst-case
+escaping of any byte: the request serializer (`serde_json`) escapes each
+short-escape-less control character `U+0000..=U+001F` to a six-byte `\uXXXX`
+sequence — the largest expansion any byte can incur (`"`, `\`, and `\b\t\n\f\r`
+cost two bytes; every other byte `>= 0x20`, including all UTF-8 continuation
+bytes, is emitted verbatim). A `.py` file dense in control characters therefore
+escapes up to 6x, not the ~2x of ordinary source, so `raw * 6 < cap` is the
+smallest provable bound and holds on every input; the retired 2x factor was
+unsound, admitting a control-char-dense module whose real request could serialize
+past the cap. If either manifest is near or over the cap, the sync falls back with
+`python_context_budget`. The check runs only when the delta modifies a Python
+module, since adds/removes and conftest/config edits already fall back and a delta
+with no modified module leaves the sizes byte-identical. The oracle's
+`python_context_budget` scenario exercises exactly this regime: a control-char
+module edit that crosses the 6x boundary but stays under the retired 2x boundary,
+so the oracle fails closed if the unsound headroom returns.
+
+This wave implements the sound conservative core only: an interface-changed edit
+falls back to a full rebuild rather than computing a reverse-import invalidation
+closure. `conftest.py` is deliberately excluded because it alters ancestor
+pytest-fixture context for a whole subtree, which the module interface projection
+does not model, and root `setup.py`/`setup.cfg`/`pyproject.toml` are discovered
+as project config (not modules), so both keep full-rebuild behavior regardless of
+any interface hash.
+
+The config set that forces a full rebuild on any add, modify, or remove covers
+root `package.json`, `tsconfig.json`, `jsconfig.json`,
+`jest.config.{json,cjs,mjs}`, `vitest.config.{json,cjs,mjs}`,
+`next.config.{cjs,mjs}`, `pyproject.toml`, `setup.cfg`, and `Cargo.toml`/
+`Cargo.lock` at any depth, plus `conftest.py` at any depth. It also covers the
+Mocha runner configs `.mocharc.json`, `.mocharc.jsonc`, `.mocharc.cjs`,
+`.mocharc.yml`, and `.mocharc.yaml` (`.mocharc.js`/`jest.config.js`/
+`next.config.js` and other `.js` config names are already covered by the `.js`
+extension): these are discovered as TS/JS config and flip the global TS/JS
+test-runner flag in the parser project context, so adding, editing, or removing
+one must force a full rebuild rather than copy forward facts parsed under the
+old runner flag.
+
+Sync preflight also compares the base generation's stored producing engine
+version (`index_generations.repogrammar_version`) with the running binary. A
+mismatch forces a full rebuild, because copy-forward would relabel facts
+produced by an older engine with the new version without reparsing them. A base
+generation that stores no readable version stamp is treated as a mismatch:
+`sync` never copies forward facts of unknown provenance.
+
+The full-rebuild fallback reason vocabulary reported on
+`IndexingSyncReport.fallback_reason` is: `legacy_or_empty_storage_layout`,
+`unsupported_storage_schema`, `missing_active_generation`,
+`active_dirty_records`, `semantic_worker_requires_full_rebuild`,
+`engine_version_changed` (preflight, in that order), `project_context_changed`
+(the post-delta project-context gate), and — when the only project-context change
+is a modified `.py` module — `python_context_budget` (the payload-regime check,
+evaluated first), then `python_interface_changed` or `python_interface_unverified`
+(the Python interface-hash gate; `python_interface_unverified` is checked before
+`python_interface_changed`, so an unverifiable module dominates a provably-changed
+one). Each fallback is a valid, recorded outcome; the incremental path is entered
+only when none apply.
+
+Every narrowing of this gate is guarded by the incremental/full-build
+equivalence oracle: for an active state and a scripted patch, `repo-guard
+sync-equivalence` requires the incremental-sync generation to be canonically
+equal to a clean full rebuild over the same worktree, or to have explicitly
+fallen back to a full rebuild. See `docs/development/testing.md`.

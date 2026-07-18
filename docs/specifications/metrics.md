@@ -25,12 +25,43 @@ Accepted measurement sources are `host_reported`, `user_entered`, and
 `documented_tokenizer`.
 
 `estimated_potential_token_savings` is a separate `ESTIMATED` diagnostic. It is
-computed from RepoGrammar's selected family-evidence metadata, read-plan token
-estimates, and any explicitly requested source-span token estimate. It is a
-potential read-displacement estimate for the current RepoGrammar output shape;
+a potential read-displacement estimate for the current RepoGrammar output shape;
 it is not actual token savings, not a causal claim, and not a substitute for a
 paired baseline/treatment measurement. The estimate must saturate at zero when
-the returned context is larger than the local baseline estimate.
+the returned context is larger than the local baseline estimate. Every value
+uses the shared bytes/4 token heuristic and carries the standing caveat that it
+is estimated potential only, not measured token savings. There is no path from
+this diagnostic to a measured claim; measured savings remain exclusive to the
+paired-experiment recorder below.
+
+### All-scope accounting by outcome shape
+
+The estimate is computed by a single authority for every context-delivering
+outcome shape, not only Python found families. Each shape has a `baseline` (the
+source reading RepoGrammar displaces) and a `returned` (what RepoGrammar hands
+back instead); `estimated_potential_token_savings = max(0, baseline - returned)`.
+
+- `found` (find/family/member on a resolved family): `baseline` is the full
+  family evidence-record set; `returned` is the selected evidence metadata plus
+  the read-plan estimate plus any requested source-span estimate. Unchanged.
+- `partial_context` (a PARTIAL_CONTEXT read plan): `baseline` is the estimated
+  whole-file read of the resolved target file, taken from the indexed file
+  inventory's stored size (never a filesystem read); `returned` is the read-plan
+  estimate plus any source-span estimate. When the stored size is unavailable no
+  event is recorded rather than a guessed baseline.
+- `alignment` (a committed or partial `check` certificate): `baseline` is the
+  whole target-file read plus the comparison family's evidence baseline;
+  `returned` is the certificate body estimate plus the read-plan and source-span
+  estimates. An abstaining certificate displaces no full read and records no
+  event.
+- abstentions and fallbacks (`UNKNOWN`, out-of-scope, missing-size) record zero
+  savings and never negative accounting. They are counted only in the query
+  denominator so the panel can report `savings_events / total_queries` honestly.
+
+Each recorded event is attributed a low-cardinality `outcome_shape`
+(`found`/`partial_context`/`alignment`) and `language` token (the indexed
+language scope, or `mixed`/`unknown`), used only for the local aggregate
+breakdowns; neither carries source text, paths, or raw targets.
 
 v0.1 records local paired measurements through:
 
@@ -74,6 +105,12 @@ paths, repository names, symbols, patches, or query text.
 does not include the user-provided experiment name, session ids, or raw token
 counts, and it reports token/count data only through coarse buckets.
 
+The decomposed `product_readiness` model (on `status`/`doctor` JSON and the MCP
+`inspect_readiness` operation) carries a `measurement` dimension that follows the
+same discipline: its `token_saving_status` stays `NOT_MEASURED` and
+`measurement_kind` stays `ESTIMATED` until a comparable paired baseline/treatment
+experiment exists. Readiness never asserts measured token savings.
+
 ## Product claims
 
 Production telemetry may support ecological-validity analysis, but it must not
@@ -102,7 +139,19 @@ that adds the persisted semantic unknown inventory. It may also report the
 repo-local aggregate
 `estimated_potential_token_savings` with `measurement_kind: ESTIMATED`,
 `event_count`, aggregate estimated baseline/returned token counts, and the
-caveat that it is not measured token savings.
+caveat that it is not measured token savings. This aggregate is all-scope: it
+sums savings events across every indexed language and every context-delivering
+outcome shape (found, partial_context, alignment), not only Python found
+families. Stats additionally reports an `all_scope_token_savings` block with the
+same totals, the honest `savings_events` / `total_queries` denominator, and
+`by_outcome_shape` and `by_language` breakdowns (each a per-key object with
+`event_count` and the three token counts). The existing Python-scoped repo-shape
+fields (`eligible_code_units`, `family_count`, coverage ratios, risk signals)
+are unchanged and remain the official-scope subset; `scope_explanations` and the
+`all_scope_token_savings` note point to that relationship. The human `stats`
+rendering leads with a concise summary (readiness, indexed inventory, family
+coverage, the all-scope savings headline, and the scope note) and moves the full
+per-metric detail behind `--json`; no JSON field is removed.
 It also reports a separate local-only `query_outcome_rollup` with
 `rollup_scope: local_query_outcomes`. That rollup counts every recorded
 family-query outcome by low-cardinality status, entrypoint, command or MCP
@@ -154,15 +203,23 @@ rather than an internal crash.
 telemetry is effectively enabled, it may update a repo-local bucketed passive
 diagnostics rollup only; disabled telemetry keeps the same diagnostics
 local-only and must not create upload queue entries.
-Successful family context responses may update a separate repo-local aggregate
+Context-delivering responses may update a separate repo-local aggregate
 under `.repogrammar/telemetry/local-metrics/` for
-`estimated_potential_token_savings`. That aggregate is local-only and must not
-include source snippets, prompts, query text, paths, repository names, symbols,
-content hashes, byte ranges, evidence text, or raw targets.
+`estimated_potential_token_savings`. A found family, a PARTIAL_CONTEXT read
+plan, and a committed or partial alignment certificate each record one savings
+event under its outcome shape; abstentions record none. The aggregate adds
+additive `by_outcome_shape` and `by_language` breakdown objects (tolerated when
+absent in files written before they existed) while keeping the same
+`estimated-potential-token-savings.v1` schema token. It is local-only and must
+not include source snippets, prompts, query text, paths, repository names,
+symbols, content hashes, byte ranges, evidence text, or raw targets.
 Family query and MCP context calls may update a second repo-local aggregate in
-the same directory for `family_query_outcomes`. That aggregate may count
-`UNKNOWN`, `PARTIAL_CONTEXT`, and fallback outcomes, but those counts must not
-be added to `estimated_potential_token_savings` events or described as
-successful family hits.
+the same directory for `family_query_outcomes`. That aggregate counts every
+recorded outcome (`found`, `PARTIAL_CONTEXT`, `UNKNOWN`, fallback) and is the
+`total_queries` denominator; its outcome counts are distinct from
+`estimated_potential_token_savings` events and must not be described as
+successful family hits. A single query may appear in both aggregates (for
+example a PARTIAL_CONTEXT is one query outcome and one partial_context savings
+event), but the two aggregates stay separate metrics.
 If treatment correctness fails, raw token deltas may still be reported, but the
 result must be marked invalid for product token-saving claims.

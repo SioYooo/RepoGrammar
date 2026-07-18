@@ -81,6 +81,22 @@ stored family with no evidence rows also cannot be proven
 fresh; the freshness check abstains rather than serving an evidence-less row as
 a confident match.
 
+The `families` listing applies the same evidence-freshness discipline across the
+whole active generation, but reports it as a per-family verdict rather than
+hiding the family. It reads one bounded projection of `(family_id, path,
+content_hash)` for the active generation, hash-verifies each distinct evidence
+path at most once, and assigns each family one of three states: `fresh` (every
+evidence path verified with a matching hash), `stale` (at least one evidence
+path is missing or its content hash changed), or `cannot_verify` (no stale path,
+but at least one path failed verification for a non-content reason — too large,
+non-UTF-8, or unavailable). A family with zero evidence rows abstains as
+`cannot_verify`, matching the single-family evidence-less rule above. Stale takes
+precedence over `cannot_verify`, which takes precedence over `fresh`. Stale and
+`cannot_verify` families stay listed with their verdict and are counted in the
+report's `fresh_count`/`stale_count`/`cannot_verify_count`; a stale listing also
+carries one low-cardinality report-level `StaleEvidence` unknown recovering via
+`run repogrammar resync`, and is never collapsed into a whole-listing `UNKNOWN`.
+
 Implementation paths that consume family-affecting `UNKNOWN`s must use one
 authoritative classifier for blocking, non-blocking, public family-effect, and
 compatibility-feature decisions. Callers may filter that classifier's result by
@@ -521,10 +537,25 @@ Metrics may count persisted semantic unknowns by language, framework role,
 framework-role state, adapter, reason, stage, required mechanism,
 support-blocking status, and stable recovery code. Recovery buckets must use
 low-cardinality codes such as `run_sync`, `add_project_config`,
-`enable_provider`, `resolve_import_graph`, `resolve_fixture_graph`,
-`resolve_dependency_metadata`, `runtime_trace_required`,
-`manual_review_required`, or reserved `unknown`; they must not use free-text
-recovery guidance, repository paths, code snippets, code-unit ids, or fact ids.
+`enable_provider`, `not_implemented_in_current_version`, `resolve_import_graph`,
+`resolve_fixture_graph`, `resolve_dependency_metadata`,
+`runtime_trace_required`, `manual_review_required`, or reserved `unknown`; they
+must not use free-text recovery guidance, repository paths, code snippets,
+code-unit ids, or fact ids. Provider-related codes must match the optional
+semantic provider registry so guidance never names a capability an agent cannot
+act on: `enable_provider` is emitted only for a mechanism an *integrated*
+provider slot resolves (today only the TypeScript compiler slot), because that
+provider exists and `doctor` shows how to configure it; a mechanism a
+*registered-but-not-integrated* slot would resolve (the python and rust slots),
+or a framework/dependency-injection/build model only a future provider could
+resolve, recovers via `not_implemented_in_current_version` rather than promising
+a provider. A single cross-check authority against the registry decides this;
+callers must not re-derive it from hard-coded mechanism lists.
+`resolve_dependency_metadata` is retained as a reserved historical code but no
+live mechanism emits it, because its mechanism is a python-provider-slot bucket
+that now recovers via `not_implemented_in_current_version`. The `run_sync`
+recovery code keeps that spelling for metric-bucket continuity even though its
+operator action is `repogrammar resync`.
 Mechanism buckets should be actionable analyzer/provider codes, for example
 `python_import_graph`, `pytest_fixture_graph`, `fastapi_dependency_graph`,
 `python_package_reexport_model`, `python_star_import_model`,
