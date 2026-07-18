@@ -11,6 +11,7 @@ cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
 cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap]
+cargo run --quiet --bin repo-guard -- payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>]
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- smoke-npm-package --tarball <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version>
@@ -114,6 +115,48 @@ harness error such as a missing binary, an unparseable corpus, a subprocess
 failure, or non-JSON query output. The corpus, result schema, and current
 baseline reading are documented in
 `docs/experiments/product-core-baseline.md`.
+
+## payload-measure
+
+`payload-measure` is the deterministic response-payload byte-measurement harness
+for the response-precision policy. Like `product-eval` it is report-only
+measurement infrastructure: it changes no production behavior and never modifies
+the real repository. It indexes one committed fixture
+(`src/fixtures/evaluation/payload-measure` by default, overridable with
+`--fixture`) in an isolated temporary workspace (`init`+`resync`), then drives a
+fixed query corpus and records the exact serialized response byte count plus
+top-level field-group attribution per operation x category x tier (mode x
+verbosity x source-spans). The corpus covers every reachable report shape on the
+fixture: Found (big/small/NL/TypeScript families), abstention `UNKNOWN`,
+`PARTIAL_CONTEXT`, exact family hydration, and static-alignment conformance, each
+measured across `compact`/`deep` x `minimal`/`standard`/`full`; plus one
+`inspect_readiness` row. The big Found family and conformance are additionally
+measured at `--mode deep --include-source-spans` (tagged `source_spans: on`) so
+the `read_plan` <-> `source_spans` overlap (the S6 dedup target) is measurable.
+The summary also records a `fixture_shape` block (big-family `member_count`,
+`members_rendered`, `members_truncated`) so fixture drift is detectable from the
+artifact.
+
+Readiness is measured through the product's MCP `serve` `inspect_readiness`
+surface — the bounded, source-free readiness report — rather than the CLI
+`status` lifecycle command, whose storage internals (`wal_bytes`, `shm_bytes`,
+`journal_mode`, ...) are volatile and out of scope for the response-precision
+policy.
+
+It writes two artifacts under `--out`: `payload-bytes.summary.json` (the stable,
+sorted, timestamp-free machine artifact) and `payload-bytes.md` (a human byte
+table). The summary is a pure function of the fixture and the product binary, so
+two runs against the same fixture and binary produce byte-identical
+`payload-bytes.summary.json` files. `--bin` overrides the product binary
+(otherwise the sibling `repogrammar` next to `repo-guard` is used). The command
+exits `0` on completion and nonzero only on a harness error (missing binary,
+unavailable fixture, subprocess failure, or non-JSON output).
+
+The harness only measures; it never asserts a savings figure. A "we saved X
+bytes" claim is declarable only from a before/after diff of two
+`payload-bytes.summary.json` runs — one at a baseline commit and one after a
+precision slice lands — over the same fixture. The before/after protocol and the
+guardrail expectations are documented in `docs/development/testing.md`.
 
 ## smoke-packaged-artifact
 

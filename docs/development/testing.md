@@ -1302,6 +1302,99 @@ that gate regressed, the removal would run incrementally, copy forward the stale
 flag-on TS families, and diverge from the clean rebuild — a real inequality on top
 of the expected-outcome check.
 
+## Response payload byte measurement (payload-measure)
+
+`repo-guard payload-measure` is the deterministic byte-measurement instrument for
+the response-precision policy (S10). It indexes the committed fixture
+`src/fixtures/evaluation/payload-measure` in an isolated temporary workspace and
+serializes a fixed query corpus, recording the exact response byte count and
+top-level field-group attribution per operation x category x tier (mode x
+verbosity). It writes `payload-bytes.summary.json` (stable, sorted,
+timestamp-free) and `payload-bytes.md` under `--out`. The subcommand reference is
+in `docs/development/repository-guard.md`.
+
+The fixture is a small deterministic Python/TypeScript repository: `api/routes.py`
+plus `lonely.py` form one FastAPI route family of 31 members (rendered as 20 under
+the member cap, with `member_count` reporting the true 31), alongside small
+SQLAlchemy, Pydantic, pytest, and Express families and a below-support Flask file
+that drives the `PARTIAL_CONTEXT` shape. The corpus covers Found
+(big/small/NL/TypeScript), abstention `UNKNOWN`, `PARTIAL_CONTEXT`, exact family
+hydration, and static-alignment conformance, plus one MCP `inspect_readiness` row.
+
+The big Found family and conformance are additionally measured at `--mode deep
+--include-source-spans` (one extra row per verbosity, tagged `source_spans: on`),
+so the `read_plan` <-> `source_spans` overlap — the S6 dedup target and the plan's
+largest single per-response item — is measurable; it is invisible unless source
+spans are explicitly requested. Every row carries `source_spans: on|off`; the
+summary also records a `fixture_shape` block (big-family `member_count`,
+`members_rendered`, `members_truncated`) so fixture drift is detectable from the
+artifact alone.
+
+### Before/after protocol
+
+Byte savings are declarable only from a before/after comparison, never from a
+single run:
+
+1. Run `payload-measure --out <before>` at the baseline commit (before a
+   precision slice lands).
+2. Run `payload-measure --out <after>` after the slice lands, over the same
+   fixture.
+3. Diff `<before>/payload-bytes.summary.json` against
+   `<after>/payload-bytes.summary.json`. The per-row `total_bytes` and
+   `field_bytes`, and the aggregate `field_group_totals`, are the byte table a
+   savings claim must cite.
+
+The member-cap lane's byte reduction is credited to that lane, not to a precision
+slice: regenerate the baseline after the cap lands so precision-slice deltas are
+measured on post-cap payloads. `verbosity=full` is expected to reproduce the
+pre-change bytes exactly (v1 additivity), while `verbosity=minimal` carries any
+opt-in lean shape; a before/after diff reads both tiers.
+
+### Determinism guarantee
+
+`payload-bytes.summary.json` is a pure function of the fixture content and the
+product binary — no timestamps, latencies, or workspace paths enter it, and every
+map and row list is sorted. Two runs against the same fixture and binary therefore
+produce byte-identical summaries. The end-to-end smoke test
+(`payload_measure_is_deterministic_and_schema_stable_end_to_end` in
+`src/rust/bin/repo_guard.rs`) runs the harness twice against the committed fixture,
+asserts the two summaries are byte-identical, and asserts the schema, row count
+(including the source-spans variants), required report-variant coverage, the
+`fixture_shape` (`member_count == 31`, `members_rendered == 20`), and that
+readiness is measured on the MCP surface. It locates the product `repogrammar`
+binary that `cargo test --workspace` builds alongside the test harness; if that
+binary is absent the test fails loudly (it does not silently no-op, so a green CI
+never hides an unmeasured harness). The pure attribution and row-construction logic
+is covered by separate unit tests that need no live index.
+
+### Scope
+
+The harness uses a purpose-built corpus rather than the product-eval corpus
+`src/fixtures/evaluation/query-corpus-v1.json`. That corpus is a retrieval-accuracy
+corpus: it has no family with >= 25 members (so it cannot exercise the cap or the
+`members[]`-dominance finding) and no byte-tuned abstention/`PARTIAL_CONTEXT`
+targets, so it cannot attribute field-group bytes per report variant. The dedicated
+corpus is the correct instrument for that measurement.
+
+The measured surface is the shared query serializers (`find`/`family`/`check`) —
+the exact functions the Wave-1 precision slices edit. The CLI `--json` output and
+the MCP `repogrammar_context` result are serialized through the same query path, so
+measuring the CLI surface covers the MCP query payloads too. The one exception is
+readiness, which has no query-path serializer: it is measured directly through the
+MCP `inspect_readiness` surface (`serve` stdio), the bounded, source-free readiness
+report.
+
+### Uncovered shapes
+
+A genuine `CompetingFamilies` above-floor margin tie is not reachable on this
+fixture (the family names are too separable, so ambiguous natural-language queries
+abstain via `below_min_score` into `UNKNOWN`), matching the audit's uncovered-shape
+note. Two CLI-only lifecycle/stats slices are out of scope for this harness and
+are owned by later lanes, not excluded on principle: S12 is the CLI `stats`
+`by_language` payload (empty-language-row suppression), and S13 is the CLI
+`status`/`doctor` lifecycle dual-readiness and DB-internals cleanup. The MCP query
+payloads and readiness are fully covered above.
+
 ## Agent-study pilot harness (RQ5)
 
 The Phase 7 RQ5 agent-impact study has a standalone pilot harness under

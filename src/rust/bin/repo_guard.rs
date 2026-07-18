@@ -212,6 +212,12 @@ where
                 Err(error) => CommandResult::err(format!("sync-equivalence failed: {error}\n")),
             }
         }
+        [command, rest @ ..] if command == "payload-measure" => {
+            match payload_measure_command(root, rest) {
+                Ok(report) => CommandResult::ok(report),
+                Err(error) => CommandResult::err(format!("payload measurement failed: {error}\n")),
+            }
+        }
         [command] if command == "check" => run_check(root),
         [command, flag, source] if command == "sync-agent-guides" && flag == "--from" => {
             match sync_agent_guides(root, source) {
@@ -325,7 +331,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -3605,6 +3611,112 @@ impl EvalWorkspace {
         Ok((actual, latencies))
     }
 
+    /// Captures one query response as the verbatim CLI `--json` payload plus its
+    /// exact serialized byte length, threading the requested `verbosity` tier.
+    /// Unlike [`EvalWorkspace::run_query`] it performs no matching or
+    /// repetitions and does not require a success exit status, so abstention,
+    /// partial-context, and insufficient-evidence shapes (which the product
+    /// emits on stdout) are measured verbatim. The byte length is the trimmed
+    /// payload length, excluding any trailing newline, so it is stable across
+    /// runs of the same fixture and binary. Used only by the payload-measure
+    /// harness; the resolution decision is unchanged.
+    fn capture_query_json(
+        &self,
+        operation: &str,
+        target: &str,
+        mode: &str,
+        verbosity: &str,
+        include_source_spans: bool,
+    ) -> Result<(serde_json::Value, usize), String> {
+        let project = self.project_arg()?;
+        let mut command = self.command();
+        command.args([
+            operation,
+            target,
+            "--project",
+            &project,
+            "--mode",
+            mode,
+            "--verbosity",
+            verbosity,
+            "--json",
+        ]);
+        if include_source_spans {
+            command.arg("--include-source-spans");
+        }
+        let output = command.output().map_err(|_| {
+            format!("payload-measure query '{operation} {target}' could not execute")
+        })?;
+        let stdout = String::from_utf8(output.stdout).map_err(|_| {
+            format!("payload-measure query '{operation} {target}' output was not UTF-8")
+        })?;
+        let trimmed = stdout.trim();
+        let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|_| {
+            format!("payload-measure query '{operation} {target}' output was not JSON")
+        })?;
+        Ok((value, trimmed.len()))
+    }
+
+    /// Drives the product's MCP `serve` stdio surface for a single
+    /// `inspect_readiness` call and returns the bounded, source-free readiness
+    /// payload plus its serialized byte length. This measures the actual MCP
+    /// readiness surface (lean by construction) rather than the CLI `status`
+    /// lifecycle command, whose storage internals (`wal_bytes`/`shm_bytes`/...)
+    /// are volatile and out of scope for the response-precision policy.
+    fn capture_inspect_readiness(&self) -> Result<(serde_json::Value, usize), String> {
+        let project = self.project_arg()?;
+        let mut child = self
+            .command()
+            .args(["serve", "--project", &project])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| "payload-measure could not start MCP serve".to_string())?;
+        let requests = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\
+{\"name\":\"repogrammar_context\",\"arguments\":{\"operation\":\"inspect_readiness\"}}}\n"
+        );
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "payload-measure MCP serve stdin was unavailable".to_string())?
+            .write_all(requests.as_bytes())
+            .map_err(|_| "payload-measure could not write the MCP serve request".to_string())?;
+        let output = child
+            .wait_with_output()
+            .map_err(|_| "payload-measure MCP serve did not complete".to_string())?;
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| "payload-measure MCP serve output was not UTF-8".to_string())?;
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let message: serde_json::Value = match serde_json::from_str(line) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if message.get("id").and_then(serde_json::Value::as_u64) != Some(1) {
+                continue;
+            }
+            let text = message
+                .get("result")
+                .and_then(|result| result.get("content"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "MCP inspect_readiness response had no text content".to_string())?;
+            let value: serde_json::Value = serde_json::from_str(text)
+                .map_err(|_| "MCP inspect_readiness content was not JSON".to_string())?;
+            return Ok((value, text.len()));
+        }
+        Err("MCP inspect_readiness produced no tools/call response".to_string())
+    }
+
     fn retain(&self) {
         if self.cleanup.replace(false) {
             eprintln!(
@@ -5183,6 +5295,534 @@ fn run_product_eval(
         .collect();
     report.push_str(&format!("by_intent: {}\n", intent_summary.join(" | ")));
     Ok(report)
+}
+
+// ===========================================================================
+// S10: response payload byte-measurement harness (`payload-measure`).
+//
+// Serializes a fixed query corpus against one deterministic fixture index and
+// records the exact response byte count and top-level field-group attribution
+// per operation x category x tier (mode x verbosity). The output is a stable,
+// sorted, timestamp-free `payload-bytes.summary.json` (plus a human
+// `payload-bytes.md`) so a run before a precision slice and a run after it diff
+// cleanly. This harness only measures; it never asserts a savings figure. A
+// savings claim is declarable only from a before/after diff of two summaries.
+// ===========================================================================
+
+const PAYLOAD_MEASURE_SCHEMA: &str = "payload-bytes.v1";
+const PAYLOAD_MEASURE_FIXTURE_ID: &str = "payload-measure";
+const PAYLOAD_MEASURE_FIXTURE_DEFAULT: &str = "src/fixtures/evaluation/payload-measure";
+const PAYLOAD_MEASURE_MODES: &[&str] = &["compact", "deep"];
+const PAYLOAD_MEASURE_VERBOSITIES: &[&str] = &["minimal", "standard", "full"];
+
+/// One query-serializer case in the fixed payload corpus. Every case is driven
+/// at the full `mode x verbosity` cross product so a before/after run can
+/// attribute field-group byte deltas per report variant. Targets are chosen to
+/// exercise every reachable report shape on the committed fixture: Found (big/
+/// small/NL/TypeScript), abstention UNKNOWN, PARTIAL_CONTEXT, exact family
+/// hydration, and static-alignment conformance.
+///
+/// When `measure_source_spans` is set, the case is additionally driven at
+/// `--mode deep --include-source-spans` (one extra row per verbosity) so the
+/// `read_plan` <-> `source_spans` overlap region (the S6 dedup target, the plan's
+/// largest single per-response item) is measurable — it is invisible unless
+/// source spans are explicitly requested.
+struct PayloadMeasureCase {
+    operation: &'static str,
+    category: &'static str,
+    target: &'static str,
+    measure_source_spans: bool,
+}
+
+const PAYLOAD_MEASURE_CASES: &[PayloadMeasureCase] = &[
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_big_family_path",
+        target: "api/routes.py",
+        measure_source_spans: true,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_small_family_path",
+        target: "db/repository.py",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_big_family_nl",
+        target: "fastapi route handler",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "found_typescript_family_path",
+        target: "web/router.ts",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "abstain_unknown_nl",
+        target: "http endpoint route",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "abstain_no_candidate_nl",
+        target: "zzz nonexistent qqq",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "find",
+        category: "partial_context_path",
+        target: "legacy_app.py",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "family",
+        category: "family_big",
+        target: "family:python:fastapi_route:framework_fastapi_route",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "family",
+        category: "family_small",
+        target: "family:python:pydantic_model:framework_pydantic_model",
+        measure_source_spans: false,
+    },
+    PayloadMeasureCase {
+        operation: "check",
+        category: "check_big_family_path",
+        target: "api/routes.py",
+        measure_source_spans: true,
+    },
+];
+
+/// Number of extra `--include-source-spans` rows the corpus emits: one per
+/// verbosity for each case flagged `measure_source_spans`. Used by the smoke
+/// test to derive the expected row count from the corpus definition.
+#[cfg(test)]
+const fn payload_measure_source_span_rows() -> usize {
+    let mut spans_cases = 0;
+    let mut index = 0;
+    while index < PAYLOAD_MEASURE_CASES.len() {
+        if PAYLOAD_MEASURE_CASES[index].measure_source_spans {
+            spans_cases += 1;
+        }
+        index += 1;
+    }
+    spans_cases * PAYLOAD_MEASURE_VERBOSITIES.len()
+}
+
+fn payload_measure_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut out = None;
+    let mut bin = None;
+    let mut fixture = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" => out = Some(product_eval_take_value(args, &mut index, "--out")?),
+            "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            "--fixture" => fixture = Some(product_eval_take_value(args, &mut index, "--fixture")?),
+            other => return Err(format!("unknown payload-measure argument '{other}'")),
+        }
+        index += 1;
+    }
+    let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
+    run_payload_measure(root, &out, bin.as_deref(), fixture.as_deref())
+}
+
+/// Attributes serialized compact bytes to each top-level field of a response,
+/// mirroring the audit methodology (`len(json.dumps(value, separators=...))`).
+/// The result is a sorted map, so the same payload always attributes the same
+/// bytes to the same fields in the same order.
+fn attribute_field_bytes(value: &serde_json::Value) -> std::collections::BTreeMap<String, u64> {
+    let mut attribution = std::collections::BTreeMap::new();
+    if let Some(object) = value.as_object() {
+        for (field, body) in object {
+            let bytes = serde_json::to_string(body)
+                .map(|text| text.len() as u64)
+                .unwrap_or(0);
+            attribution.insert(field.clone(), bytes);
+        }
+    }
+    attribution
+}
+
+/// Builds one measurement row plus its field-group attribution (for aggregate
+/// totals). The row is a fully deterministic object; `route` is `null` when the
+/// payload carries no `query_route`.
+#[allow(clippy::too_many_arguments)]
+fn payload_measure_row(
+    operation: &str,
+    category: &str,
+    mode: &str,
+    verbosity: &str,
+    source_spans: &str,
+    surface: &str,
+    value: &serde_json::Value,
+    total_bytes: usize,
+) -> (serde_json::Value, Vec<(String, u64)>) {
+    let field_bytes = attribute_field_bytes(value);
+    let field_bytes_object: serde_json::Map<String, serde_json::Value> = field_bytes
+        .iter()
+        .map(|(field, bytes)| (field.clone(), serde_json::json!(bytes)))
+        .collect();
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let route = value
+        .get("query_route")
+        .and_then(|route| route.get("route"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let row = serde_json::json!({
+        "operation": operation,
+        "category": category,
+        "mode": mode,
+        "verbosity": verbosity,
+        "source_spans": source_spans,
+        "surface": surface,
+        "status": status,
+        "route": route,
+        "total_bytes": total_bytes,
+        "field_bytes": serde_json::Value::Object(field_bytes_object),
+    });
+    (row, field_bytes.into_iter().collect())
+}
+
+#[allow(clippy::type_complexity)]
+fn payload_measure_row_lines(
+    summary: &serde_json::Value,
+) -> Vec<(String, String, String, String, String, String, u64)> {
+    summary
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    (
+                        row["operation"].as_str().unwrap_or("").to_string(),
+                        row["category"].as_str().unwrap_or("").to_string(),
+                        row["mode"].as_str().unwrap_or("").to_string(),
+                        row["verbosity"].as_str().unwrap_or("").to_string(),
+                        row["source_spans"].as_str().unwrap_or("").to_string(),
+                        row["status"].as_str().unwrap_or("").to_string(),
+                        row["total_bytes"].as_u64().unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn payload_measure_top_field_groups(
+    summary: &serde_json::Value,
+    limit: usize,
+) -> Vec<(String, u64)> {
+    let mut pairs: Vec<(String, u64)> = summary
+        .get("field_group_totals")
+        .and_then(serde_json::Value::as_object)
+        .map(|object| {
+            object
+                .iter()
+                .map(|(field, bytes)| (field.clone(), bytes.as_u64().unwrap_or(0)))
+                .collect()
+        })
+        .unwrap_or_default();
+    pairs.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    pairs.truncate(limit);
+    pairs
+}
+
+fn payload_measure_markdown(summary: &serde_json::Value) -> String {
+    let mut markdown = String::new();
+    markdown.push_str("# Payload byte measurement\n\n");
+    markdown.push_str(&format!(
+        "- Schema: `{}`\n",
+        summary["schema_version"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Fixture: `{}` (version `{}`)\n",
+        summary["fixture_id"].as_str().unwrap_or("?"),
+        summary["fixture_version"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Product schema: `{}`\n",
+        summary["product_schema_version"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Commit: `{}`\n",
+        summary["repogrammar_commit"].as_str().unwrap_or("?")
+    ));
+    markdown.push_str(&format!(
+        "- Rows: {} | Grand total: {} B\n\n",
+        summary["totals"]["row_count"].as_u64().unwrap_or(0),
+        summary["totals"]["grand_total_bytes"].as_u64().unwrap_or(0)
+    ));
+    markdown.push_str(
+        "| operation | category | mode | verbosity | source_spans | status | total_bytes |\n",
+    );
+    markdown.push_str("|---|---|---|---|---|---|---|\n");
+    for (operation, category, mode, verbosity, source_spans, status, total_bytes) in
+        payload_measure_row_lines(summary)
+    {
+        markdown.push_str(&format!(
+            "| {operation} | {category} | {mode} | {verbosity} | {source_spans} | {status} | {total_bytes} |\n"
+        ));
+    }
+    markdown.push_str("\n## Heaviest field groups (summed across rows)\n\n");
+    markdown.push_str("| field | bytes |\n|---|---|\n");
+    for (field, bytes) in payload_measure_top_field_groups(summary, 12) {
+        markdown.push_str(&format!("| {field} | {bytes} |\n"));
+    }
+    markdown.push_str(
+        "\nA \"we saved X bytes\" claim is declarable only from a before/after diff of two \
+`payload-bytes.summary.json` runs (same fixture, one with the slice, one without).\n",
+    );
+    markdown
+}
+
+fn payload_measure_report(summary: &serde_json::Value, summary_file: &Path) -> String {
+    let mut report = String::new();
+    report.push_str(&format!(
+        "payload-measure fixture {} (version {}) at commit {}\n",
+        summary["fixture_id"].as_str().unwrap_or("?"),
+        summary["fixture_version"].as_str().unwrap_or("?"),
+        summary["repogrammar_commit"].as_str().unwrap_or("?"),
+    ));
+    report.push_str(&format!(
+        "schema {} | product schema {} | {} rows | grand total {} B\n",
+        summary["schema_version"].as_str().unwrap_or("?"),
+        summary["product_schema_version"].as_str().unwrap_or("?"),
+        summary["totals"]["row_count"].as_u64().unwrap_or(0),
+        summary["totals"]["grand_total_bytes"].as_u64().unwrap_or(0),
+    ));
+    report.push_str(&format!(
+        "{:<18}{:<32}{:<9}{:<11}{:<7}{:<22}{:>12}\n",
+        "operation", "category", "mode", "verbosity", "spans", "status", "total_bytes"
+    ));
+    for (operation, category, mode, verbosity, source_spans, status, total_bytes) in
+        payload_measure_row_lines(summary)
+    {
+        report.push_str(&format!(
+            "{operation:<18}{category:<32}{mode:<9}{verbosity:<11}{source_spans:<7}{status:<22}{total_bytes:>12}\n"
+        ));
+    }
+    let top: Vec<String> = payload_measure_top_field_groups(summary, 8)
+        .into_iter()
+        .map(|(field, bytes)| format!("{field}={bytes}"))
+        .collect();
+    report.push_str(&format!("top field groups (summed): {}\n", top.join(", ")));
+    report.push_str(&format!("wrote {}\n", summary_file.display()));
+    report.push_str(
+        "before/after: rerun payload-measure after a precision slice lands and diff \
+payload-bytes.summary.json; any savings claim must cite the two-run byte table.\n",
+    );
+    report
+}
+
+fn run_payload_measure(
+    root: &Path,
+    out_dir: &str,
+    bin_override: Option<&str>,
+    fixture_override: Option<&str>,
+) -> Result<String, String> {
+    let binary = resolve_product_binary(root, bin_override)?;
+    let fixture_rel = fixture_override.unwrap_or(PAYLOAD_MEASURE_FIXTURE_DEFAULT);
+    let source = fs::canonicalize(root.join(fixture_rel))
+        .map_err(|_| format!("payload-measure fixture '{fixture_rel}' is unavailable"))?;
+    let fixture_version = fixture_version_hash(&source)?;
+    let commit = resolve_git_commit(root, "HEAD").unwrap_or_else(|_| "unknown".to_string());
+
+    let workspace = EvalWorkspace::new(&binary, &source)?;
+    if let Err(error) = workspace.init() {
+        workspace.retain();
+        return Err(error);
+    }
+    if let Err(error) = workspace.resync() {
+        workspace.retain();
+        return Err(error);
+    }
+
+    let mut sortable: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut field_group_totals: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+    let mut grand_total_bytes: u64 = 0;
+    let mut product_schema_version: Option<String> = None;
+    let mut fixture_shape: Option<serde_json::Value> = None;
+
+    for case in PAYLOAD_MEASURE_CASES {
+        // Base cross product: `mode x verbosity`, no rendered source spans.
+        for mode in PAYLOAD_MEASURE_MODES {
+            for verbosity in PAYLOAD_MEASURE_VERBOSITIES {
+                let (value, total_bytes) = match workspace.capture_query_json(
+                    case.operation,
+                    case.target,
+                    mode,
+                    verbosity,
+                    false,
+                ) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        workspace.retain();
+                        return Err(error);
+                    }
+                };
+                if product_schema_version.is_none() {
+                    product_schema_version = value
+                        .get("schema_version")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                // Record the big family's shape once so a before/after run and
+                // the smoke test can detect fixture drift (member cap / count).
+                if case.category == "found_big_family_path" && fixture_shape.is_none() {
+                    fixture_shape = Some(serde_json::json!({
+                        "category": case.category,
+                        "member_count": value.get("member_count").and_then(serde_json::Value::as_u64),
+                        "members_rendered": value
+                            .get("members")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|members| members.len()),
+                        "members_truncated": value
+                            .get("members_truncated")
+                            .and_then(serde_json::Value::as_bool),
+                    }));
+                }
+                let (row, field_bytes) = payload_measure_row(
+                    case.operation,
+                    case.category,
+                    mode,
+                    verbosity,
+                    "off",
+                    "cli_json",
+                    &value,
+                    total_bytes,
+                );
+                for (field, bytes) in field_bytes {
+                    *field_group_totals.entry(field).or_insert(0) += bytes;
+                }
+                grand_total_bytes += total_bytes as u64;
+                let key = format!(
+                    "{}|{}|{}|{}|off",
+                    case.operation, case.category, mode, verbosity
+                );
+                sortable.push((key, row));
+            }
+        }
+        // Source-spans variant: deep mode with rendered spans, so the
+        // `read_plan` <-> `source_spans` overlap (S6, the plan's largest single
+        // per-response item) is measurable — invisible without this request.
+        if case.measure_source_spans {
+            for verbosity in PAYLOAD_MEASURE_VERBOSITIES {
+                let (value, total_bytes) = match workspace.capture_query_json(
+                    case.operation,
+                    case.target,
+                    "deep",
+                    verbosity,
+                    true,
+                ) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        workspace.retain();
+                        return Err(error);
+                    }
+                };
+                let (row, field_bytes) = payload_measure_row(
+                    case.operation,
+                    case.category,
+                    "deep",
+                    verbosity,
+                    "on",
+                    "cli_json",
+                    &value,
+                    total_bytes,
+                );
+                for (field, bytes) in field_bytes {
+                    *field_group_totals.entry(field).or_insert(0) += bytes;
+                }
+                grand_total_bytes += total_bytes as u64;
+                let key = format!("{}|{}|deep|{}|on", case.operation, case.category, verbosity);
+                sortable.push((key, row));
+            }
+        }
+    }
+
+    // Readiness: the bounded, source-free MCP `inspect_readiness` surface. The
+    // CLI `status` lifecycle command is deliberately not measured here — its
+    // storage internals are volatile and out of scope for the precision policy.
+    let (readiness_value, readiness_bytes) = match workspace.capture_inspect_readiness() {
+        Ok(pair) => pair,
+        Err(error) => {
+            workspace.retain();
+            return Err(error);
+        }
+    };
+    let (readiness_row, readiness_field_bytes) = payload_measure_row(
+        "inspect_readiness",
+        "readiness",
+        "-",
+        "-",
+        "-",
+        "mcp_tool",
+        &readiness_value,
+        readiness_bytes,
+    );
+    for (field, bytes) in readiness_field_bytes {
+        *field_group_totals.entry(field).or_insert(0) += bytes;
+    }
+    grand_total_bytes += readiness_bytes as u64;
+    sortable.push((
+        "inspect_readiness|readiness|-|-|-".to_string(),
+        readiness_row,
+    ));
+
+    sortable.sort_by(|left, right| left.0.cmp(&right.0));
+    let rows: Vec<serde_json::Value> = sortable.into_iter().map(|(_, row)| row).collect();
+    let row_count = rows.len();
+
+    let field_group_totals_object: serde_json::Map<String, serde_json::Value> = field_group_totals
+        .iter()
+        .map(|(field, bytes)| (field.clone(), serde_json::json!(bytes)))
+        .collect();
+
+    let summary = serde_json::json!({
+        "schema_version": PAYLOAD_MEASURE_SCHEMA,
+        "fixture_id": PAYLOAD_MEASURE_FIXTURE_ID,
+        "fixture_relpath": fixture_rel.replace('\\', "/"),
+        "fixture_version": fixture_version,
+        "product_schema_version": product_schema_version,
+        "repogrammar_commit": commit,
+        "mode_axis": PAYLOAD_MEASURE_MODES,
+        "verbosity_axis": PAYLOAD_MEASURE_VERBOSITIES,
+        "fixture_shape": fixture_shape,
+        "totals": {
+            "row_count": row_count,
+            "grand_total_bytes": grand_total_bytes,
+        },
+        "field_group_totals": serde_json::Value::Object(field_group_totals_object),
+        "rows": rows,
+    });
+
+    let out_dir_absolute = if Path::new(out_dir).is_absolute() {
+        PathBuf::from(out_dir)
+    } else {
+        root.join(out_dir)
+    };
+    fs::create_dir_all(&out_dir_absolute)
+        .map_err(|_| "could not create payload-measure output directory".to_string())?;
+    let summary_file = out_dir_absolute.join("payload-bytes.summary.json");
+    let serialized = serde_json::to_string_pretty(&summary)
+        .map_err(|_| "could not serialize payload-measure summary".to_string())?;
+    fs::write(&summary_file, format!("{serialized}\n"))
+        .map_err(|_| "could not write payload-measure summary".to_string())?;
+    let human_file = out_dir_absolute.join("payload-bytes.md");
+    fs::write(&human_file, payload_measure_markdown(&summary))
+        .map_err(|_| "could not write payload-measure human summary".to_string())?;
+
+    Ok(payload_measure_report(&summary, &summary_file))
 }
 
 fn run_check(root: &Path) -> CommandResult {
@@ -9384,5 +10024,276 @@ verify-stable-release-evidence --evidence-dir evidence
             }
             let _ = fs::remove_dir_all(&scratch);
         }
+    }
+
+    #[test]
+    fn attribute_field_bytes_sorts_fields_and_measures_compact_bytes() {
+        let value = serde_json::json!({
+            "z_last": [1, 2, 3],
+            "a_first": "value",
+            "middle": {"k": 1},
+        });
+        let attribution = attribute_field_bytes(&value);
+        // Sorted key order is stable regardless of insertion order.
+        let keys: Vec<&String> = attribution.keys().collect();
+        assert_eq!(keys, vec!["a_first", "middle", "z_last"]);
+        // Compact serialized byte lengths, matching the audit's `vbytes`.
+        assert_eq!(attribution["a_first"], "\"value\"".len() as u64);
+        assert_eq!(attribution["z_last"], "[1,2,3]".len() as u64);
+        assert_eq!(attribution["middle"], "{\"k\":1}".len() as u64);
+        // A non-object payload attributes nothing.
+        assert!(attribute_field_bytes(&serde_json::json!("scalar")).is_empty());
+    }
+
+    #[test]
+    fn payload_measure_row_extracts_status_route_and_field_bytes() {
+        let value = serde_json::json!({
+            "status": "ok",
+            "query_route": {"route": "discover_hydrate_compose"},
+            "family": {"family_id": "family:python:fastapi_route:framework_fastapi_route"},
+        });
+        let (row, field_bytes) = payload_measure_row(
+            "find",
+            "found_big_family_path",
+            "deep",
+            "minimal",
+            "on",
+            "cli_json",
+            &value,
+            7617,
+        );
+        assert_eq!(row["operation"], "find");
+        assert_eq!(row["category"], "found_big_family_path");
+        assert_eq!(row["mode"], "deep");
+        assert_eq!(row["verbosity"], "minimal");
+        assert_eq!(row["source_spans"], "on");
+        assert_eq!(row["surface"], "cli_json");
+        assert_eq!(row["status"], "ok");
+        assert_eq!(row["route"], "discover_hydrate_compose");
+        assert_eq!(row["total_bytes"], 7617);
+        assert!(row["field_bytes"].is_object());
+        // Aggregation payload carries every top-level field.
+        let fields: std::collections::BTreeSet<String> =
+            field_bytes.into_iter().map(|(field, _)| field).collect();
+        assert!(fields.contains("family"));
+        assert!(fields.contains("query_route"));
+        // An abstention payload without a route yields a null route.
+        let abstention = serde_json::json!({"status": "UNKNOWN"});
+        let (abstention_row, _) = payload_measure_row(
+            "find",
+            "abstain_unknown_nl",
+            "compact",
+            "minimal",
+            "off",
+            "cli_json",
+            &abstention,
+            1411,
+        );
+        assert!(abstention_row["route"].is_null());
+        assert_eq!(abstention_row["status"], "UNKNOWN");
+        assert_eq!(abstention_row["source_spans"], "off");
+    }
+
+    #[test]
+    fn payload_measure_cases_cover_the_required_report_variants() {
+        let categories: std::collections::BTreeSet<&str> = PAYLOAD_MEASURE_CASES
+            .iter()
+            .map(|case| case.category)
+            .collect();
+        for required in [
+            "found_big_family_path",
+            "found_small_family_path",
+            "found_big_family_nl",
+            "found_typescript_family_path",
+            "abstain_unknown_nl",
+            "partial_context_path",
+            "check_big_family_path",
+            "family_big",
+            "family_small",
+        ] {
+            assert!(categories.contains(required), "missing category {required}");
+        }
+        // Every case names a supported query verb and a non-empty target.
+        for case in PAYLOAD_MEASURE_CASES {
+            assert!(
+                matches!(case.operation, "find" | "family" | "check"),
+                "unexpected operation {}",
+                case.operation
+            );
+            assert!(!case.target.is_empty());
+        }
+        assert_eq!(PAYLOAD_MEASURE_MODES, ["compact", "deep"]);
+        assert_eq!(PAYLOAD_MEASURE_VERBOSITIES, ["minimal", "standard", "full"]);
+        // The source-spans variant (S6 read_plan<->spans dedup target) is
+        // measured on the big Found family and on conformance.
+        let spans_cases: std::collections::BTreeSet<&str> = PAYLOAD_MEASURE_CASES
+            .iter()
+            .filter(|case| case.measure_source_spans)
+            .map(|case| case.category)
+            .collect();
+        assert!(spans_cases.contains("found_big_family_path"));
+        assert!(spans_cases.contains("check_big_family_path"));
+        assert_eq!(payload_measure_source_span_rows(), spans_cases.len() * 3);
+    }
+
+    /// Locates the product `repogrammar` binary that `cargo test --workspace`
+    /// builds alongside the test harness by walking up from the test executable
+    /// (`target/<profile>/deps/`) to the profile directory. Returns `None` only
+    /// when the binary is absent; the smoke test then fails loudly rather than
+    /// passing silently, so a green CI never hides an unmeasured harness.
+    fn locate_built_product_binary() -> Option<PathBuf> {
+        let file_name = if cfg!(windows) {
+            "repogrammar.exe"
+        } else {
+            "repogrammar"
+        };
+        let executable = std::env::current_exe().ok()?;
+        let mut directory = executable.parent();
+        for _ in 0..6 {
+            let current = directory?;
+            let candidate = current.join(file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            directory = current.parent();
+        }
+        None
+    }
+
+    #[test]
+    fn payload_measure_is_deterministic_and_schema_stable_end_to_end() {
+        let binary = locate_built_product_binary().expect(
+            "product `repogrammar` binary not found next to the test harness; \
+build it first with `cargo build --bin repogrammar` or run the mandated \
+`cargo test --workspace --all-features` (which builds every bin)",
+        );
+        let binary = binary.to_str().expect("product binary path is UTF-8");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let out_first = unique_product_eval_root();
+        let out_second = unique_product_eval_root();
+
+        run_payload_measure(root, out_first.to_str().unwrap(), Some(binary), None)
+            .expect("first payload-measure run");
+        run_payload_measure(root, out_second.to_str().unwrap(), Some(binary), None)
+            .expect("second payload-measure run");
+
+        let first = fs::read(out_first.join("payload-bytes.summary.json"))
+            .expect("first summary is readable");
+        let second = fs::read(out_second.join("payload-bytes.summary.json"))
+            .expect("second summary is readable");
+        assert_eq!(
+            first, second,
+            "payload-bytes.summary.json must be byte-identical across two runs of the same fixture"
+        );
+
+        let summary: serde_json::Value =
+            serde_json::from_slice(&first).expect("summary parses as JSON");
+        assert_eq!(summary["schema_version"], PAYLOAD_MEASURE_SCHEMA);
+        assert_eq!(summary["fixture_id"], PAYLOAD_MEASURE_FIXTURE_ID);
+        assert_eq!(
+            summary["product_schema_version"],
+            repogrammar::application::query::PRODUCT_SCHEMA_VERSION
+        );
+
+        let rows = summary["rows"].as_array().expect("rows is an array");
+        // query cases x 2 modes x 3 verbosities, plus source-spans variants,
+        // plus 1 readiness row.
+        let expected_rows =
+            PAYLOAD_MEASURE_CASES.len() * 6 + payload_measure_source_span_rows() + 1;
+        assert_eq!(rows.len(), expected_rows);
+        assert_eq!(
+            summary["totals"]["row_count"].as_u64().unwrap(),
+            rows.len() as u64
+        );
+
+        let categories: std::collections::BTreeSet<&str> = rows
+            .iter()
+            .filter_map(|row| row["category"].as_str())
+            .collect();
+        for required in [
+            "found_big_family_path",
+            "found_small_family_path",
+            "found_big_family_nl",
+            "abstain_unknown_nl",
+            "partial_context_path",
+            "check_big_family_path",
+            "readiness",
+        ] {
+            assert!(
+                categories.contains(required),
+                "missing measured category {required}"
+            );
+        }
+
+        for row in rows {
+            assert!(
+                row["total_bytes"].as_u64().unwrap() > 0,
+                "every measured payload has positive bytes"
+            );
+            assert!(row["field_bytes"].is_object());
+        }
+
+        // The big family really has 31 members with the cap rendering 20; a
+        // fixture drift that changed either would fail here.
+        let shape = &summary["fixture_shape"];
+        assert_eq!(shape["category"], "found_big_family_path");
+        assert_eq!(
+            shape["member_count"].as_u64(),
+            Some(31),
+            "big family must report 31 members"
+        );
+        assert_eq!(
+            shape["members_rendered"].as_u64(),
+            Some(20),
+            "member cap must render exactly 20 members"
+        );
+        assert_eq!(shape["members_truncated"].as_bool(), Some(true));
+        // The source_spans field carries the full membership under the read plan;
+        // cross-check the found_big_family row's `members` byte attribution stays
+        // present at both source_spans states.
+        let spans_on_rows: Vec<&serde_json::Value> = rows
+            .iter()
+            .filter(|row| row["source_spans"] == "on")
+            .collect();
+        assert_eq!(
+            spans_on_rows.len(),
+            payload_measure_source_span_rows(),
+            "one source-spans row per flagged case per verbosity"
+        );
+        for row in &spans_on_rows {
+            assert_eq!(row["mode"], "deep", "source spans only render in deep mode");
+            assert!(
+                row["field_bytes"].get("source_spans").is_some(),
+                "a spans-on row must carry a non-empty source_spans field group"
+            );
+        }
+
+        // Readiness is measured through the lean MCP surface, not CLI `status`.
+        let readiness = rows
+            .iter()
+            .find(|row| row["category"] == "readiness")
+            .expect("readiness row present");
+        assert_eq!(readiness["surface"], "mcp_tool");
+        assert_eq!(readiness["operation"], "inspect_readiness");
+        // Rows are sorted, so the artifact ordering is itself deterministic.
+        let ordered: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}|{}|{}|{}|{}",
+                    row["operation"].as_str().unwrap_or(""),
+                    row["category"].as_str().unwrap_or(""),
+                    row["mode"].as_str().unwrap_or(""),
+                    row["verbosity"].as_str().unwrap_or(""),
+                    row["source_spans"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        let mut sorted = ordered.clone();
+        sorted.sort();
+        assert_eq!(ordered, sorted, "rows must be emitted in sorted order");
+
+        let _ = fs::remove_dir_all(&out_first);
+        let _ = fs::remove_dir_all(&out_second);
     }
 }
