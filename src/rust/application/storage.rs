@@ -2,14 +2,16 @@
 
 use crate::application::recovery::{recovery_guidance, RecoveryAction};
 use crate::core::model::{
-    FactCertainty, FamilyPrevalenceClass, IrEdgeLabel, IrNodeKind, SemanticFactKind,
+    FactCertainty, FamilyConstraintProfile, FamilyPrevalenceClass, FeatureConstraint, IrEdgeLabel,
+    IrNodeKind, SemanticFactKind, VariationConstraint,
 };
 use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
-    ActiveFamilySearchSummaries, FamilyStore, IndexedFamilyEvidenceRecord,
-    IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
+    ActiveFamilySearchSummaries, FamilyConstraintProfileStore, FamilyStore,
+    IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     GenerationHandle, GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore,
@@ -160,6 +162,27 @@ pub fn show_family(
 ) -> Result<Option<ActiveFamily>, RepoGrammarError> {
     validate_semantic_text_field("family id", family_id)?;
     store.show_family(family_id).map_err(family_store_error)
+}
+
+pub fn record_family_constraint_profile(
+    store: &(impl FamilyConstraintProfileStore + ?Sized),
+    generation: &GenerationHandle,
+    record: &IndexedFamilyConstraintProfileRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_constraint_profile(record)?;
+    store
+        .record_family_constraint_profile(generation, record)
+        .map_err(family_store_error)
+}
+
+pub fn show_family_constraint_profile(
+    store: &impl FamilyConstraintProfileStore,
+    family_id: &str,
+) -> Result<Option<FamilyConstraintProfile>, RepoGrammarError> {
+    validate_semantic_text_field("family id", family_id)?;
+    store
+        .show_family_constraint_profile(family_id)
+        .map_err(family_store_error)
 }
 
 pub fn validate_index_generation(
@@ -402,6 +425,74 @@ fn validate_family(family: &IndexedFamilyRecord) -> Result<(), RepoGrammarError>
     Ok(())
 }
 
+fn validate_family_constraint_profile(
+    record: &IndexedFamilyConstraintProfileRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_family_text_field("family constraint profile family id", &record.family_id)?;
+    let profile = &record.profile;
+    for constraint in &profile.required_equal_features {
+        validate_feature_constraint("required-equal feature", constraint, false)?;
+    }
+    for constraint in &profile.prohibited_or_blocking_features {
+        validate_feature_constraint("prohibited feature", constraint, true)?;
+    }
+    for variation in &profile.allowed_variations {
+        validate_variation_constraint(variation)?;
+    }
+    for obligation in &profile.unresolved_obligations {
+        validate_family_text_field(
+            "constraint profile obligation affected claim",
+            &obligation.affected_claim,
+        )?;
+        if let Some(recovery) = &obligation.recovery {
+            validate_family_text_field("constraint profile obligation recovery", recovery)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_feature_constraint(
+    label: &str,
+    constraint: &FeatureConstraint,
+    prohibited_axis: bool,
+) -> Result<(), RepoGrammarError> {
+    validate_family_text_field(&format!("{label} prefix"), &constraint.prefix)?;
+    // The prohibited axis carries only prohibited-presence blockers; the required
+    // axis carries only equality/subset bindings. Reject a cross-axis semantics.
+    if constraint.semantics.is_prohibition() != prohibited_axis {
+        return Err(RepoGrammarError::InvalidInput(format!(
+            "{label} semantics do not belong to its axis"
+        )));
+    }
+    // Empty-set semantics (equal-empty, prohibited-presence) bind an empty value
+    // list; equality and must-contain bind a non-empty one.
+    if constraint.semantics.requires_empty_values() != constraint.values.is_empty() {
+        return Err(RepoGrammarError::InvalidInput(format!(
+            "{label} values are inconsistent with its semantics"
+        )));
+    }
+    for value in &constraint.values {
+        validate_family_text_field(&format!("{label} value"), value)?;
+    }
+    Ok(())
+}
+
+fn validate_variation_constraint(variation: &VariationConstraint) -> Result<(), RepoGrammarError> {
+    if !variation.observed_only {
+        return Err(RepoGrammarError::InvalidInput(
+            "variation constraint must be observed-only".to_string(),
+        ));
+    }
+    validate_family_text_field("variation dimension", &variation.dimension)?;
+    for profile in &variation.observed_profiles {
+        validate_family_text_field("variation observed profile", profile)?;
+    }
+    for member_id in &variation.representative_member_ids {
+        validate_family_text_field("variation representative member id", member_id)?;
+    }
+    Ok(())
+}
+
 fn validate_family_member(member: &IndexedFamilyMemberRecord) -> Result<(), RepoGrammarError> {
     validate_family_text_field("family member family id", &member.family_id)?;
     validate_family_text_field("family member code unit id", &member.code_unit_id)?;
@@ -571,9 +662,9 @@ mod tests {
     use crate::ports::family_store::{
         ActiveFamilies, ActiveFamily, ActiveFamilyCandidates, ActiveFamilyEvidenceProjection,
         ActiveFamilySearchSummaries, ActiveFamilySummaries, IndexedFamilyCandidateRecord,
-        IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord,
-        IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedFamilySearchSummaryRecord,
-        IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
+        IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceProjectionRecord,
+        IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+        IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -880,6 +971,38 @@ mod tests {
             } else {
                 Ok(None)
             }
+        }
+    }
+
+    impl FamilyConstraintProfileStore for FakeStore {
+        fn record_family_constraint_profile(
+            &self,
+            _generation: &GenerationHandle,
+            _record: &IndexedFamilyConstraintProfileRecord,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn show_family_constraint_profile(
+            &self,
+            family_id: &str,
+        ) -> Result<Option<FamilyConstraintProfile>, StoreError> {
+            if family_id == family().family_id {
+                Ok(Some(constraint_profile()))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    fn constraint_profile() -> FamilyConstraintProfile {
+        crate::test_support::sample_family_constraint_profile()
+    }
+
+    fn constraint_profile_record() -> IndexedFamilyConstraintProfileRecord {
+        IndexedFamilyConstraintProfileRecord {
+            family_id: family().family_id,
+            profile: constraint_profile(),
         }
     }
 
@@ -1355,5 +1478,66 @@ mod tests {
             .expect_err("reversed range")
             .to_string()
             .contains("range"));
+    }
+
+    #[test]
+    fn constraint_profile_use_cases_delegate_through_storage_port() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+
+        record_family_constraint_profile(&store, &generation, &constraint_profile_record())
+            .expect("record constraint profile");
+        let hydrated = show_family_constraint_profile(&store, &family().family_id)
+            .expect("show constraint profile")
+            .expect("profile exists");
+        assert_eq!(hydrated, constraint_profile());
+        assert!(show_family_constraint_profile(&store, "family:missing")
+            .expect("show missing")
+            .is_none());
+    }
+
+    #[test]
+    fn constraint_profile_validation_rejects_invalid_fields_before_store_call() {
+        let store = FakeStore;
+        let generation = prepare_index_generation(&store).expect("prepare generation");
+
+        let mut missing_id = constraint_profile_record();
+        missing_id.family_id = " ".to_string();
+        assert!(
+            record_family_constraint_profile(&store, &generation, &missing_id)
+                .expect_err("missing family id")
+                .to_string()
+                .contains("family id")
+        );
+
+        let mut leaky_value = constraint_profile_record();
+        leaky_value.profile.required_equal_features[0].values = vec!["see /tmp/secret".to_string()];
+        assert!(
+            record_family_constraint_profile(&store, &generation, &leaky_value)
+                .expect_err("leaky feature value")
+                .to_string()
+                .contains("unsupported content")
+        );
+
+        let mut not_observed_only = constraint_profile_record();
+        not_observed_only.profile.allowed_variations[0].observed_only = false;
+        assert!(
+            record_family_constraint_profile(&store, &generation, &not_observed_only)
+                .expect_err("non observed-only variation")
+                .to_string()
+                .contains("observed-only")
+        );
+
+        // A prohibited-presence blocker tampered into the required axis. Index 3
+        // is an empty-valued characteristic, so only the axis check fires.
+        let mut cross_axis = constraint_profile_record();
+        cross_axis.profile.required_equal_features[3].semantics =
+            crate::core::model::FeatureConstraintSemantics::ProhibitedPresence;
+        assert!(
+            record_family_constraint_profile(&store, &generation, &cross_axis)
+                .expect_err("cross-axis semantics")
+                .to_string()
+                .contains("axis")
+        );
     }
 }

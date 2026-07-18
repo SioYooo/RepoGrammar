@@ -4,6 +4,21 @@
 
 ### Added
 
+- Derived source-backed family constraint profiles at storage schema v9.
+  Every emitted family now records a FamilyConstraintProfile - required
+  features under a four-token semantics discriminator (Equal,
+  EqualEmpty for equal-but-empty dimensions, MustContain for the
+  support-family core, ProhibitedPresence on the prohibited axis with
+  read-and-write axis validation), observed-only variation constraints
+  that agree dimension-for-dimension with the co-persisted variation
+  slots, and the claim's typed unknown obligations - derived exclusively
+  from the existing compatibility authorities with drift-guard tests on
+  both hand-maintained mirrors. Profiles persist through a dedicated
+  constraint-profile store into a validated deterministic column, are
+  hydration-validated including tampering rejection, and are not yet
+  exposed on query or interface surfaces; production wiring lands with
+  the alignment slice.
+
 - Added evaluation run conditions and an honest naive control to the
   product-core harness: `repo-guard product-eval` accepts `--condition
   <token>` and `--baseline token-overlap`, results carry explicit

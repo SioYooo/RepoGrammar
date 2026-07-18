@@ -4,17 +4,20 @@
 //! adapter. Application code talks to it through storage ports.
 
 use crate::core::model::{
-    ContentHash, FactCertainty, FamilyPrevalence, FamilyPrevalenceClass, IrEdgeLabel, IrNodeKind,
-    SemanticFactKind,
+    ContentHash, FactCertainty, FamilyConstraintProfile, FamilyPrevalence, FamilyPrevalenceClass,
+    FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics, IrEdgeLabel,
+    IrNodeKind, SemanticFactKind, TypedUnknown, UnknownClass, UnknownObligation, UnknownReasonCode,
+    VariationConstraint,
 };
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
     family_evidence_covered_claim_is_supported, ActiveFamilies, ActiveFamily,
     ActiveFamilyCandidates, ActiveFamilyEvidenceProjection, ActiveFamilySearchSummaries,
-    ActiveFamilySummaries, FamilyStore, IndexedFamilyCandidateRecord,
-    IndexedFamilyEvidenceProjectionRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
-    IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
-    IndexedVariationSlotRecord, StoreError, FAMILY_SEARCH_PATH_COMPONENT_CAP,
+    ActiveFamilySummaries, FamilyConstraintProfileStore, FamilyStore, IndexedFamilyCandidateRecord,
+    IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceProjectionRecord,
+    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
+    IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord, IndexedVariationSlotRecord,
+    StoreError, FAMILY_SEARCH_PATH_COMPONENT_CAP,
 };
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
@@ -1614,6 +1617,397 @@ impl FamilyStore for SqliteIndexStore {
             evidence,
         }))
     }
+}
+
+/// Storage-format version of the constraint-profile JSON column. Bumped only if
+/// the serialized shape changes; hydration rejects any other version.
+const CONSTRAINT_PROFILE_JSON_VERSION: u64 = 1;
+
+impl FamilyConstraintProfileStore for SqliteIndexStore {
+    fn record_family_constraint_profile(
+        &self,
+        generation: &GenerationHandle,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError> {
+        record_family_constraint_profile_sqlite(self, generation, record)
+            .map_err(family_store_error)
+    }
+
+    fn show_family_constraint_profile(
+        &self,
+        family_id: &str,
+    ) -> Result<Option<FamilyConstraintProfile>, StoreError> {
+        validate_index_text_field(family_id, "family id").map_err(family_store_error)?;
+        let (generation_id, connection) = self
+            .open_active_generation_read_model()
+            .map_err(family_store_error)?;
+        query_family_constraint_profile(&connection, &generation_id, family_id)
+            .map_err(family_store_error)
+    }
+}
+
+fn record_family_constraint_profile_sqlite(
+    store: &SqliteIndexStore,
+    generation: &GenerationHandle,
+    record: &IndexedFamilyConstraintProfileRecord,
+) -> Result<(), IndexStoreError> {
+    validate_index_text_field(&record.family_id, "family constraint profile family id")?;
+    let profile_json = constraint_profile_to_json(&record.profile)?;
+    let connection = store.open_existing_generation(&generation.generation_id)?;
+    require_building_generation(
+        &connection,
+        &generation.generation_id,
+        "family constraint profiles",
+    )?;
+    require_family_row(&connection, &generation.generation_id, &record.family_id)?;
+    connection
+        .execute(
+            "INSERT INTO family_constraint_profiles (generation_id, family_id, profile_json) \
+             VALUES (?1, ?2, ?3)",
+            params![generation.generation_id, record.family_id, profile_json],
+        )
+        .map_err(sql_unavailable)?;
+    Ok(())
+}
+
+fn query_family_constraint_profile(
+    connection: &Connection,
+    generation_id: &str,
+    family_id: &str,
+) -> Result<Option<FamilyConstraintProfile>, IndexStoreError> {
+    let profile_json = connection
+        .query_row(
+            "SELECT profile_json FROM family_constraint_profiles \
+             WHERE generation_id = ?1 AND family_id = ?2",
+            params![generation_id, family_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sql_unavailable)?;
+    let Some(profile_json) = profile_json else {
+        return Ok(None);
+    };
+    Ok(Some(stored_constraint_profile(&profile_json)?))
+}
+
+/// Serialize a constraint profile to a deterministic, source-free JSON column.
+/// Every value is validated on write; the read path re-validates so a tampered
+/// row is rejected on hydration. Object keys serialize in sorted order (the
+/// default `serde_json` map is a `BTreeMap`), so the encoding is deterministic.
+fn constraint_profile_to_json(
+    profile: &FamilyConstraintProfile,
+) -> Result<String, IndexStoreError> {
+    let required = profile
+        .required_equal_features
+        .iter()
+        .map(|constraint| feature_constraint_to_json(constraint, ConstraintAxis::Required))
+        .collect::<Result<Vec<_>, _>>()?;
+    let prohibited = profile
+        .prohibited_or_blocking_features
+        .iter()
+        .map(|constraint| feature_constraint_to_json(constraint, ConstraintAxis::Prohibited))
+        .collect::<Result<Vec<_>, _>>()?;
+    let variations = profile
+        .allowed_variations
+        .iter()
+        .map(variation_constraint_to_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let obligations = profile
+        .unresolved_obligations
+        .iter()
+        .map(obligation_to_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let value = serde_json::json!({
+        "version": CONSTRAINT_PROFILE_JSON_VERSION,
+        "required_equal_features": required,
+        "allowed_variations": variations,
+        "prohibited_or_blocking_features": prohibited,
+        "unresolved_obligations": obligations,
+    });
+    serde_json::to_string(&value)
+        .map_err(|_| invalid_record("family constraint profile JSON is invalid"))
+}
+
+/// Which array a feature constraint belongs to. The prohibited axis carries only
+/// `ProhibitedPresence`; the required axis carries only the equality/subset
+/// semantics. Keeping the axis explicit stops a tampered blocker row from
+/// hydrating inside `required_equal_features` (or vice versa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintAxis {
+    Required,
+    Prohibited,
+}
+
+impl ConstraintAxis {
+    fn accepts(self, semantics: FeatureConstraintSemantics) -> bool {
+        match self {
+            Self::Required => !semantics.is_prohibition(),
+            Self::Prohibited => semantics.is_prohibition(),
+        }
+    }
+}
+
+fn feature_constraint_to_json(
+    constraint: &FeatureConstraint,
+    axis: ConstraintAxis,
+) -> Result<serde_json::Value, IndexStoreError> {
+    validate_index_text_field(
+        &constraint.prefix,
+        "family constraint profile feature prefix",
+    )?;
+    if !axis.accepts(constraint.semantics) {
+        return Err(invalid_record(
+            "family constraint semantics do not belong to its axis",
+        ));
+    }
+    // Empty-set semantics carry an empty `values` list and vice versa; reject a
+    // record that contradicts its own semantics before it reaches storage.
+    if constraint.semantics.requires_empty_values() != constraint.values.is_empty() {
+        return Err(invalid_record(
+            "family constraint feature values are inconsistent with its semantics",
+        ));
+    }
+    for value in &constraint.values {
+        validate_index_text_field(value, "family constraint profile feature value")?;
+    }
+    Ok(serde_json::json!({
+        "prefix": constraint.prefix,
+        "values": constraint.values,
+        "origin": constraint.origin.as_token(),
+        "semantics": constraint.semantics.as_token(),
+    }))
+}
+
+fn variation_constraint_to_json(
+    variation: &VariationConstraint,
+) -> Result<serde_json::Value, IndexStoreError> {
+    validate_index_text_field(
+        &variation.dimension,
+        "family constraint profile variation dimension",
+    )?;
+    for profile in &variation.observed_profiles {
+        validate_index_text_field(profile, "family constraint profile observed profile")?;
+    }
+    for member_id in &variation.representative_member_ids {
+        validate_index_text_field(
+            member_id,
+            "family constraint profile representative member id",
+        )?;
+    }
+    Ok(serde_json::json!({
+        "dimension": variation.dimension,
+        "observed_profiles": variation.observed_profiles,
+        "observed_profiles_truncated": variation.observed_profiles_truncated,
+        "includes_absent_profile": variation.includes_absent_profile,
+        "representative_member_ids": variation.representative_member_ids,
+        "observed_only": variation.observed_only,
+    }))
+}
+
+fn obligation_to_json(
+    obligation: &UnknownObligation,
+) -> Result<serde_json::Value, IndexStoreError> {
+    validate_index_text_field(
+        &obligation.affected_claim,
+        "family constraint profile obligation affected claim",
+    )?;
+    if let Some(recovery) = &obligation.recovery {
+        validate_index_text_field(recovery, "family constraint profile obligation recovery")?;
+    }
+    Ok(serde_json::json!({
+        "class": obligation.class.as_protocol_str(),
+        "reason": obligation.reason.as_protocol_str(),
+        "affected_claim": obligation.affected_claim,
+        "recovery": obligation.recovery,
+    }))
+}
+
+fn malformed_constraint_profile() -> IndexStoreError {
+    IndexStoreError::InvalidState("stored family constraint profile is malformed".to_string())
+}
+
+/// Parse and re-validate a stored constraint-profile JSON column into the typed
+/// value. Any missing field, unknown token, wrong version, or source-like value
+/// is a malformed-storage error.
+fn stored_constraint_profile(json: &str) -> Result<FamilyConstraintProfile, IndexStoreError> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| malformed_constraint_profile())?;
+    let object = value.as_object().ok_or_else(malformed_constraint_profile)?;
+    if object.get("version").and_then(serde_json::Value::as_u64)
+        != Some(CONSTRAINT_PROFILE_JSON_VERSION)
+    {
+        return Err(malformed_constraint_profile());
+    }
+    Ok(FamilyConstraintProfile {
+        required_equal_features: stored_feature_constraints(
+            object.get("required_equal_features"),
+            ConstraintAxis::Required,
+        )?,
+        allowed_variations: stored_variation_constraints(object.get("allowed_variations"))?,
+        prohibited_or_blocking_features: stored_feature_constraints(
+            object.get("prohibited_or_blocking_features"),
+            ConstraintAxis::Prohibited,
+        )?,
+        unresolved_obligations: stored_obligations(object.get("unresolved_obligations"))?,
+    })
+}
+
+fn stored_feature_constraints(
+    value: Option<&serde_json::Value>,
+    axis: ConstraintAxis,
+) -> Result<Vec<FeatureConstraint>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    let mut constraints = Vec::with_capacity(array.len());
+    for entry in array {
+        let object = entry.as_object().ok_or_else(malformed_constraint_profile)?;
+        let prefix = constraint_profile_string(object.get("prefix"))?;
+        validate_stored_semantic_text_field("stored constraint feature prefix", &prefix)?;
+        let values = constraint_profile_string_array(object.get("values"))?;
+        for value in &values {
+            validate_stored_semantic_text_field("stored constraint feature value", value)?;
+        }
+        let origin =
+            FeatureConstraintOrigin::parse_token(&constraint_profile_string(object.get("origin"))?)
+                .map_err(|_| malformed_constraint_profile())?;
+        let semantics = FeatureConstraintSemantics::parse_token(&constraint_profile_string(
+            object.get("semantics"),
+        )?)
+        .map_err(|_| malformed_constraint_profile())?;
+        // A blocker row must not hydrate inside `required_equal_features`, nor a
+        // required binding inside `prohibited_or_blocking_features`.
+        if !axis.accepts(semantics) {
+            return Err(malformed_constraint_profile());
+        }
+        if semantics.requires_empty_values() != values.is_empty() {
+            return Err(malformed_constraint_profile());
+        }
+        constraints.push(FeatureConstraint {
+            prefix,
+            values,
+            origin,
+            semantics,
+        });
+    }
+    Ok(constraints)
+}
+
+fn stored_variation_constraints(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<VariationConstraint>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    let mut variations = Vec::with_capacity(array.len());
+    for entry in array {
+        let object = entry.as_object().ok_or_else(malformed_constraint_profile)?;
+        let dimension = constraint_profile_string(object.get("dimension"))?;
+        validate_stored_semantic_text_field("stored constraint variation dimension", &dimension)?;
+        let observed_profiles = constraint_profile_string_array(object.get("observed_profiles"))?;
+        for profile in &observed_profiles {
+            validate_stored_semantic_text_field("stored constraint observed profile", profile)?;
+        }
+        let representative_member_ids =
+            constraint_profile_string_array(object.get("representative_member_ids"))?;
+        for member_id in &representative_member_ids {
+            validate_stored_semantic_text_field(
+                "stored constraint representative member id",
+                member_id,
+            )?;
+        }
+        let observed_only = constraint_profile_bool(object.get("observed_only"))?;
+        if !observed_only {
+            return Err(IndexStoreError::InvalidState(
+                "stored constraint variation must be observed-only".to_string(),
+            ));
+        }
+        variations.push(VariationConstraint {
+            dimension,
+            observed_profiles,
+            observed_profiles_truncated: constraint_profile_bool(
+                object.get("observed_profiles_truncated"),
+            )?,
+            includes_absent_profile: constraint_profile_bool(
+                object.get("includes_absent_profile"),
+            )?,
+            representative_member_ids,
+            observed_only,
+        });
+    }
+    Ok(variations)
+}
+
+fn stored_obligations(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<UnknownObligation>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    let mut obligations = Vec::with_capacity(array.len());
+    for entry in array {
+        let object = entry.as_object().ok_or_else(malformed_constraint_profile)?;
+        let class =
+            UnknownClass::parse_protocol_str(&constraint_profile_string(object.get("class"))?)
+                .map_err(|_| malformed_constraint_profile())?;
+        let reason = UnknownReasonCode::parse_protocol_str(&constraint_profile_string(
+            object.get("reason"),
+        )?)
+        .map_err(|_| malformed_constraint_profile())?;
+        let affected_claim = constraint_profile_string(object.get("affected_claim"))?;
+        validate_stored_semantic_text_field(
+            "stored constraint obligation affected claim",
+            &affected_claim,
+        )?;
+        let recovery = match object.get("recovery") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(recovery)) => {
+                validate_stored_semantic_text_field(
+                    "stored constraint obligation recovery",
+                    recovery,
+                )?;
+                Some(recovery.clone())
+            }
+            Some(_) => return Err(malformed_constraint_profile()),
+        };
+        obligations.push(TypedUnknown {
+            class,
+            reason,
+            affected_claim,
+            recovery,
+        });
+    }
+    Ok(obligations)
+}
+
+fn constraint_profile_string(value: Option<&serde_json::Value>) -> Result<String, IndexStoreError> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(malformed_constraint_profile)
+}
+
+fn constraint_profile_string_array(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<String>, IndexStoreError> {
+    let array = value
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(malformed_constraint_profile)?;
+    array
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(malformed_constraint_profile)
+        })
+        .collect()
+}
+
+fn constraint_profile_bool(value: Option<&serde_json::Value>) -> Result<bool, IndexStoreError> {
+    value
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(malformed_constraint_profile)
 }
 
 fn record_family_sqlite(
@@ -3482,7 +3876,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'family_prevalence_v8', datetime('now'))",
+             VALUES (?1, 'family_constraint_profiles_v9', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -4773,6 +5167,14 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
     RequiredTableSchema {
+        name: "family_constraint_profiles",
+        columns: &["generation_id", "family_id", "profile_json"],
+        primary_key_columns: &["generation_id", "family_id"],
+        // One `index_generations` mapping plus the two-column `families` mapping.
+        minimum_foreign_key_rows: 3,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
+    RequiredTableSchema {
         name: "derived_record_dependencies",
         columns: &[
             "generation_id",
@@ -4940,6 +5342,15 @@ ON evidence(generation_id, family_id, path COLLATE BINARY, start_byte, end_byte,
 
 CREATE INDEX IF NOT EXISTS idx_evidence_generation_path_family
 ON evidence(generation_id, path COLLATE BINARY, family_id, start_byte, end_byte, evidence_id COLLATE BINARY);
+
+CREATE TABLE IF NOT EXISTS family_constraint_profiles (
+    generation_id TEXT NOT NULL,
+    family_id TEXT NOT NULL,
+    profile_json TEXT NOT NULL CHECK (profile_json <> ''),
+    PRIMARY KEY (generation_id, family_id),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, family_id) REFERENCES families(generation_id, family_id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS derived_record_dependencies (
     generation_id TEXT NOT NULL,
@@ -5112,6 +5523,144 @@ mod tests {
             .activate_generation(&generation)
             .expect("activate generation");
         (workspace, store, generation)
+    }
+
+    #[test]
+    fn constraint_profile_round_trips_through_the_store() {
+        let workspace = TempWorkspace::new("sqlite-constraint-profile");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_family_member(&generation, &family_member(path))
+                .expect("record family member");
+            store
+                .record_family_evidence(&generation, &family_evidence(path))
+                .expect("record family evidence");
+        }
+        let record = IndexedFamilyConstraintProfileRecord {
+            family_id: family().family_id,
+            profile: crate::test_support::sample_family_constraint_profile(),
+        };
+        store
+            .record_family_constraint_profile(&generation, &record)
+            .expect("record constraint profile");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let hydrated = store
+            .show_family_constraint_profile(&family().family_id)
+            .expect("show constraint profile")
+            .expect("profile exists after activation");
+        assert_eq!(
+            hydrated,
+            crate::test_support::sample_family_constraint_profile()
+        );
+        assert!(store
+            .show_family_constraint_profile("family:missing")
+            .expect("show missing profile")
+            .is_none());
+
+        // Hydrated profiles stay source-free: no URLs or absolute workspace paths.
+        let rendered = format!("{hydrated:?}");
+        assert!(!rendered.contains("://"));
+        assert!(!rendered.contains(&workspace.path().display().to_string()));
+    }
+
+    #[test]
+    fn constraint_profile_write_rejects_source_like_values() {
+        let workspace = TempWorkspace::new("sqlite-constraint-profile-source-free");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        for path in ["src/a.ts", "src/b.ts"] {
+            store
+                .record_indexed_file(&generation, &file(path))
+                .expect("record file");
+            store
+                .record_code_unit(&generation, &code_unit(path))
+                .expect("record code unit");
+        }
+        store
+            .record_family(&generation, &family())
+            .expect("record family");
+
+        let mut profile = crate::test_support::sample_family_constraint_profile();
+        profile.required_equal_features[0].values = vec!["const handler = route;".to_string()];
+        let record = IndexedFamilyConstraintProfileRecord {
+            family_id: family().family_id,
+            profile,
+        };
+        let error = store
+            .record_family_constraint_profile(&generation, &record)
+            .expect_err("source-like feature value must be rejected");
+        assert!(matches!(error, StoreError::InvalidRecord(_)));
+    }
+
+    #[test]
+    fn stored_constraint_profile_rejects_malformed_rows() {
+        let valid =
+            constraint_profile_to_json(&crate::test_support::sample_family_constraint_profile())
+                .expect("serialize sample profile");
+        // The well-formed baseline hydrates cleanly.
+        assert!(stored_constraint_profile(&valid).is_ok());
+
+        let base: serde_json::Value = serde_json::from_str(&valid).expect("parse baseline JSON");
+        let reject = |mutate: &dyn Fn(&mut serde_json::Value)| {
+            let mut value = base.clone();
+            mutate(&mut value);
+            let json = serde_json::to_string(&value).expect("serialize mutated JSON");
+            let error =
+                stored_constraint_profile(&json).expect_err("malformed row must be rejected");
+            assert!(
+                matches!(error, IndexStoreError::InvalidState(_)),
+                "expected a typed malformed-storage error, got {error:?}"
+            );
+        };
+
+        // Wrong stored version.
+        reject(&|value| value["version"] = serde_json::json!(999));
+        // Unknown origin token.
+        reject(&|value| value["required_equal_features"][0]["origin"] = serde_json::json!("notes"));
+        // Unknown semantics token.
+        reject(&|value| {
+            value["required_equal_features"][0]["semantics"] = serde_json::json!("subset")
+        });
+        // Wrong JSON type for values.
+        reject(&|value| value["required_equal_features"][0]["values"] = serde_json::json!("nope"));
+        // Source-like value injected post-write.
+        reject(&|value| {
+            value["required_equal_features"][0]["values"] = serde_json::json!(["const x = 1;"])
+        });
+        // Semantics/values contradiction (equal-empty with non-empty values).
+        reject(&|value| {
+            value["required_equal_features"][0]["semantics"] = serde_json::json!("equal_empty")
+        });
+        // A prohibited-presence blocker tampered into the required axis. Index 3 of
+        // the sample is an empty-valued characteristic, so only the axis check
+        // fires (values stay empty).
+        reject(&|value| {
+            value["required_equal_features"][3]["semantics"] =
+                serde_json::json!("prohibited_presence")
+        });
+        // A required binding tampered into the prohibited axis.
+        reject(&|value| {
+            value["prohibited_or_blocking_features"][0]["semantics"] = serde_json::json!("equal");
+            value["prohibited_or_blocking_features"][0]["values"] = serde_json::json!(["svc"]);
+        });
+        // Unknown obligation class token.
+        reject(&|value| value["unresolved_obligations"][0]["class"] = serde_json::json!("bogus"));
     }
 
     fn query_plan_details<P>(connection: &Connection, sql: &str, params: P) -> Vec<String>

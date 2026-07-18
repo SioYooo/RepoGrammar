@@ -394,3 +394,51 @@ impl McpReadOnlyRuntime for BenchmarkMcpRuntime<'_> {
         lookup_family(self.store, target, mode)
     }
 }
+
+#[test]
+fn constraint_profile_round_trips_through_storage_use_cases() {
+    let workspace = TempWorkspace::new("integration-constraint-profile");
+    let state_dir = workspace.path().join(".repogrammar");
+    let store = SqliteIndexStore::new(&state_dir);
+    let generation = store.prepare_next_generation().expect("prepare generation");
+
+    let file = benchmark_file(0);
+    let unit = benchmark_unit(&file, 0);
+    store
+        .record_indexed_file(&generation, &file)
+        .expect("record file");
+    store
+        .record_code_unit(&generation, &unit)
+        .expect("record code unit");
+    let family = benchmark_family(0);
+    store
+        .record_family(&generation, &family)
+        .expect("record family");
+    store
+        .record_family_member(&generation, &benchmark_family_member(&family, &unit))
+        .expect("record family member");
+    store
+        .record_family_evidence(&generation, &benchmark_family_evidence(&family, &unit, 0))
+        .expect("record family evidence");
+
+    let record = crate::ports::family_store::IndexedFamilyConstraintProfileRecord {
+        family_id: family.family_id.clone(),
+        profile: crate::test_support::sample_family_constraint_profile(),
+    };
+    // The write path runs through the storage use-case (validation) into the
+    // real SQLite adapter, proving the full stack round-trips a profile.
+    crate::application::storage::record_family_constraint_profile(&store, &generation, &record)
+        .expect("record constraint profile through the storage use case");
+    store
+        .activate_generation(&generation)
+        .expect("activate generation");
+
+    let hydrated =
+        crate::application::storage::show_family_constraint_profile(&store, &family.family_id)
+            .expect("show constraint profile through the storage use case")
+            .expect("profile exists after activation");
+    assert_eq!(
+        hydrated,
+        crate::test_support::sample_family_constraint_profile()
+    );
+}

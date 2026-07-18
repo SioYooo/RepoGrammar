@@ -1,6 +1,6 @@
 //! Persistence port for pattern-family records.
 
-use crate::core::model::{ContentHash, FamilyPrevalence};
+use crate::core::model::{ContentHash, FamilyConstraintProfile, FamilyPrevalence};
 use crate::ports::index_store::GenerationHandle;
 
 pub const FAMILY_EVIDENCE_COVERED_CLAIMS: &[&str] =
@@ -219,4 +219,37 @@ pub trait FamilyStore {
     ) -> Result<ActiveFamilyCandidates, StoreError>;
 
     fn show_family(&self, family_id: &str) -> Result<Option<ActiveFamily>, StoreError>;
+}
+
+/// One family's derived [`FamilyConstraintProfile`], keyed by family id and
+/// scoped to a generation by the store. The profile is a source-backed
+/// implementation specification; the record only carries RepoGrammar-owned typed
+/// values, never repository source text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedFamilyConstraintProfileRecord {
+    pub family_id: String,
+    pub profile: FamilyConstraintProfile,
+}
+
+/// Persistence port for family constraint profiles.
+///
+/// This is a separate port from [`FamilyStore`] so the profile round-trip can be
+/// added without widening the `FamilyStore` contract that read-only consumers
+/// already implement. The concrete storage adapter implements both ports; the
+/// hydration read lives beside `show_family` on the same store.
+pub trait FamilyConstraintProfileStore {
+    /// Persist one family's constraint profile for the building generation. The
+    /// referenced family must already exist in the same generation.
+    fn record_family_constraint_profile(
+        &self,
+        generation: &GenerationHandle,
+        record: &IndexedFamilyConstraintProfileRecord,
+    ) -> Result<(), StoreError>;
+
+    /// Hydrate one family's constraint profile from the active generation, or
+    /// `None` when the family has no stored profile.
+    fn show_family_constraint_profile(
+        &self,
+        family_id: &str,
+    ) -> Result<Option<FamilyConstraintProfile>, StoreError>;
 }

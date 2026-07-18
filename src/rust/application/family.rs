@@ -14,13 +14,16 @@ use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
 };
 use crate::core::model::{
-    assess_family_prevalence, coverage_ratio, ClaimImpact, FactCertainty, FamilyPrevalence,
-    PrevalenceInputs, SemanticFact, SemanticFactKind, UnknownClass, UnknownReasonCode,
+    assess_family_prevalence, coverage_ratio, ClaimImpact, FactCertainty, FamilyConstraintProfile,
+    FamilyPrevalence, FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics,
+    PrevalenceInputs, SemanticFact, SemanticFactKind, UnknownClass, UnknownObligation,
+    UnknownReasonCode, VariationConstraint, CONSTRAINT_OBSERVED_PROFILE_CAP,
+    CONSTRAINT_REPRESENTATIVE_MEMBER_CAP,
 };
 use crate::core::policy::rust_self_dogfood::rust_family_eligible_kind;
 use crate::ports::family_store::{
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilyRecord,
-    IndexedVariationSlotRecord,
+    IndexedFamilyConstraintProfileRecord, IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord,
+    IndexedFamilyRecord, IndexedVariationSlotRecord,
 };
 use crate::ports::index_store::IndexedCodeUnitRecord;
 use sha2::{Digest, Sha256};
@@ -74,6 +77,9 @@ pub struct FamilyClaim {
     pub exceptions: Vec<FamilyException>,
     pub unknowns: Vec<ClaimUnknown>,
     pub readiness: ClaimReadiness,
+    /// Source-backed implementation specification derived from the same
+    /// family-membership authorities that produced this claim.
+    pub constraint_profile: FamilyConstraintProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -581,6 +587,12 @@ fn family_claim_from_supported_evidence(
         unsupported_peer_count: prevalence_inputs.unsupported_peer_count,
         classification_reason: assessment.reason,
     };
+    let constraint_profile = derive_family_constraint_profile(
+        key,
+        &supported_evidence,
+        features_by_unit,
+        &claim_unknowns,
+    );
     FamilyClaim {
         family_id,
         classification: assessment.class.as_token().to_string(),
@@ -595,6 +607,304 @@ fn family_claim_from_supported_evidence(
         exceptions: Vec::new(),
         unknowns: claim_unknowns,
         readiness: ClaimReadiness::Ready,
+        constraint_profile,
+    }
+}
+
+/// Derive the source-backed [`FamilyConstraintProfile`] for a supported cluster.
+///
+/// Every field is read from the same family-membership decision authorities that
+/// admitted the cluster — never from notes, storage order, or free text:
+/// `required_equal_features` from the universal preconditions plus the role's
+/// `characteristic_profile_prefixes`; `allowed_variations` from the per-language
+/// variation-slot prefix tables; `prohibited_or_blocking_features` from the
+/// per-language `unknown_blocker:` incompatibility rule; and
+/// `unresolved_obligations` from the claim's own typed unknowns (the
+/// runtime-equivalence obligation and any non-blocking unknowns, in claim order).
+fn derive_family_constraint_profile(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+    claim_unknowns: &[ClaimUnknown],
+) -> FamilyConstraintProfile {
+    FamilyConstraintProfile {
+        required_equal_features: required_equal_feature_constraints(
+            key,
+            evidence,
+            features_by_unit,
+        ),
+        allowed_variations: allowed_variation_constraints(key, evidence, features_by_unit),
+        prohibited_or_blocking_features: prohibited_feature_constraints(key),
+        unresolved_obligations: claim_unknowns
+            .iter()
+            .map(|unknown| UnknownObligation {
+                class: unknown.class,
+                reason: unknown.reason,
+                affected_claim: unknown.affected_claim.clone(),
+                recovery: unknown.recovery.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Features every member of the cluster is bound to by construction: the
+/// framework-role identity (`Equal`), the role's characteristic-profile prefixes
+/// (`Equal`, or `EqualEmpty` when the shared value is the empty set), and the
+/// shared support-family core (`MustContain`, a subset rule). Values are read from
+/// a deterministic representative member; characteristic and role values are equal
+/// across all members, and the support-family core is the cluster intersection.
+fn required_equal_feature_constraints(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<FeatureConstraint> {
+    let Some(representative) = evidence.first() else {
+        return Vec::new();
+    };
+    let role_feature = prefixed_features(representative, features_by_unit, "framework_role:")
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let mut constraints = Vec::new();
+    let role_values = sorted_vec(prefixed_features(
+        representative,
+        features_by_unit,
+        "framework_role:",
+    ));
+    if !role_values.is_empty() {
+        constraints.push(FeatureConstraint {
+            prefix: "framework_role:".to_string(),
+            values: role_values,
+            origin: FeatureConstraintOrigin::FrameworkRoleIdentity,
+            semantics: FeatureConstraintSemantics::Equal,
+        });
+    }
+    // The support-family core is a set intersection: membership requires only
+    // pairwise overlap, so members may carry additional support families and the
+    // core is a MustContain (subset) rule, not equality. Complete-link clustering
+    // can even yield an empty global core, in which case there is no shared core
+    // to record. When the role's characteristic prefixes already bind
+    // `support_family:` by equality, that stronger equality constraint takes
+    // precedence and the redundant intersection entry is dropped.
+    let support_family_is_characteristic =
+        characteristic_profile_prefixes(&key.language, &role_feature).contains(&"support_family:");
+    if !support_family_is_characteristic {
+        let support_core = sorted_vec(cluster_support_family_core(evidence, features_by_unit));
+        if !support_core.is_empty() {
+            constraints.push(FeatureConstraint {
+                prefix: "support_family:".to_string(),
+                values: support_core,
+                origin: FeatureConstraintOrigin::SupportFamilyIntersection,
+                semantics: FeatureConstraintSemantics::MustContain,
+            });
+        }
+    }
+    constraints.extend(characteristic_feature_constraints(
+        key,
+        representative,
+        &role_feature,
+        features_by_unit,
+    ));
+    constraints
+}
+
+/// The role's characteristic (identity-defining) prefixes as per-prefix required
+/// constraints, read from a representative member. Mirrors
+/// [`cluster_characteristic_profile`] (which flattens the same values for id
+/// hashing), including its pytest fixture-context special case; keep the two in
+/// sync. Characteristic prefixes are equality-enforced, so a prefix whose shared
+/// value is the empty set is a real "must be empty" constraint
+/// (`EqualEmpty`) — a candidate carrying any value there is rejected — and must be
+/// emitted, not dropped.
+fn characteristic_feature_constraints(
+    key: &FamilyKey,
+    representative: &FamilyEvidence,
+    role_feature: &str,
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<FeatureConstraint> {
+    if key.language == "python"
+        && (role_feature == "framework_pytest_test" || role_feature == "framework_pytest_fixture")
+    {
+        // pytest membership turns on the non-builtin fixture context; an empty
+        // shared context is itself a binding "must be empty" constraint.
+        let values = sorted_vec(non_builtin_pytest_fixture_context(
+            representative,
+            features_by_unit,
+        ));
+        return vec![equality_feature_constraint(
+            "fixture_context_nonbuiltin:",
+            values,
+        )];
+    }
+    characteristic_profile_prefixes(key.language.as_str(), role_feature)
+        .iter()
+        .map(|prefix| {
+            let values = sorted_vec(prefixed_features(representative, features_by_unit, prefix));
+            equality_feature_constraint(prefix, values)
+        })
+        .collect()
+}
+
+/// A characteristic (equality-enforced) constraint. Non-empty shared values bind
+/// by [`FeatureConstraintSemantics::Equal`]; an empty shared value set binds by
+/// [`FeatureConstraintSemantics::EqualEmpty`] (members must carry no value there).
+fn equality_feature_constraint(prefix: &str, values: Vec<String>) -> FeatureConstraint {
+    let semantics = if values.is_empty() {
+        FeatureConstraintSemantics::EqualEmpty
+    } else {
+        FeatureConstraintSemantics::Equal
+    };
+    FeatureConstraint {
+        prefix: prefix.to_string(),
+        values,
+        origin: FeatureConstraintOrigin::CharacteristicProfile,
+        semantics,
+    }
+}
+
+/// Dimensions along which members legally differ, derived from the same
+/// per-language variation-slot prefix tables the emitted [`VariationSlot`]s use.
+/// A dimension is recorded only when the members actually exhibit more than one
+/// non-empty profile; observed profiles are enumerated observed-only and capped.
+fn allowed_variation_constraints(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationConstraint> {
+    variation_feature_prefixes(&key.language, key.framework_role.as_str())
+        .iter()
+        .filter_map(|(dimension, prefixes)| {
+            variation_constraint_for_dimension(dimension, prefixes, evidence, features_by_unit)
+        })
+        .collect()
+}
+
+/// Build one [`VariationConstraint`] for a dimension, or `None` when the members
+/// do not legally differ along it. The variation decision matches the variation
+/// slot rule exactly (the slot varies when the set of per-member profiles —
+/// including the empty profile — has more than one element and at least one is
+/// non-empty), so the two co-persisted artifacts agree on which dimensions vary.
+/// Each non-empty member profile is the same `prefixed_feature_profile` the slot
+/// detector uses, rendered as a deterministic, source-free string; a member with
+/// no value under the dimension is recorded via `includes_absent_profile`.
+fn variation_constraint_for_dimension(
+    dimension: &str,
+    prefixes: &[&str],
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<VariationConstraint> {
+    // Rendered non-empty profile -> first member id exhibiting it, in sorted
+    // evidence order. `includes_absent_profile` tracks the empty profile, which
+    // is one of the distinct profiles the slot rule counts.
+    let mut representative_by_profile: BTreeMap<String, String> = BTreeMap::new();
+    let mut includes_absent_profile = false;
+    for item in evidence {
+        let profile = prefixed_feature_profile(item, features_by_unit, prefixes);
+        if profile.is_empty() {
+            includes_absent_profile = true;
+            continue;
+        }
+        let rendered = profile.into_iter().collect::<Vec<_>>().join(",");
+        representative_by_profile
+            .entry(rendered)
+            .or_insert_with(|| item.code_unit_id.clone());
+    }
+    // has_context requires at least one non-empty profile; the dimension varies
+    // when the distinct profiles (non-empty ones plus the absent profile, if any)
+    // number more than one. This is exactly the variation-slot detection rule.
+    let non_empty_distinct = representative_by_profile.len();
+    let distinct = non_empty_distinct + usize::from(includes_absent_profile);
+    if non_empty_distinct == 0 || distinct <= 1 {
+        return None;
+    }
+    let observed_profiles_truncated = non_empty_distinct > CONSTRAINT_OBSERVED_PROFILE_CAP;
+    let observed_profiles: Vec<String> = representative_by_profile
+        .keys()
+        .take(CONSTRAINT_OBSERVED_PROFILE_CAP)
+        .cloned()
+        .collect();
+    let representative_member_ids: Vec<String> = representative_by_profile
+        .values()
+        .take(CONSTRAINT_REPRESENTATIVE_MEMBER_CAP)
+        .cloned()
+        .collect();
+    Some(VariationConstraint {
+        dimension: dimension.to_string(),
+        observed_profiles,
+        observed_profiles_truncated,
+        includes_absent_profile,
+        representative_member_ids,
+        observed_only: true,
+    })
+}
+
+/// Feature values whose presence excludes membership for this key. The only such
+/// rule the per-language compatibility functions apply is the `unknown_blocker:`
+/// rejection, and only for the languages whose rule checks it; the constraint is
+/// a `ProhibitedPresence` wildcard (empty `values`), meaning *any* value under the
+/// prefix excludes membership.
+fn prohibited_feature_constraints(key: &FamilyKey) -> Vec<FeatureConstraint> {
+    if language_excludes_on_unknown_blocker(&key.language) {
+        vec![FeatureConstraint {
+            prefix: "unknown_blocker:".to_string(),
+            values: Vec::new(),
+            origin: FeatureConstraintOrigin::IncompatibilityBlocker,
+            semantics: FeatureConstraintSemantics::ProhibitedPresence,
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Whether the language's `evidence_pair_is_compatible` refinement rejects a
+/// member that carries any `unknown_blocker:` feature. Mirrors the guard inlined
+/// at the top of the tsjs/java/csharp/cpp/rust compatibility functions; Python's
+/// refinement has no such guard.
+fn language_excludes_on_unknown_blocker(language: &str) -> bool {
+    is_tsjs_language_name(language)
+        || language == "java"
+        || language == "csharp"
+        || is_c_cpp_language(language)
+        || language == "rust"
+}
+
+/// The per-language variation-slot prefix table for a role: the single authority
+/// the emitted variation slots and the allowed-variation constraints both read.
+fn variation_feature_prefixes(
+    language: &str,
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    if language == "python" {
+        return python_variation_feature_prefixes(framework_role);
+    }
+    if is_tsjs_language_name(language) {
+        return tsjs_variation_feature_prefixes(framework_role);
+    }
+    if language == "java" {
+        return java_variation_feature_prefixes(framework_role);
+    }
+    if language == "csharp" {
+        return csharp_variation_feature_prefixes(framework_role);
+    }
+    if is_c_cpp_language(language) {
+        return cpp_variation_feature_prefixes(framework_role);
+    }
+    &[]
+}
+
+fn sorted_vec(values: BTreeSet<String>) -> Vec<String> {
+    values.into_iter().collect()
+}
+
+/// Build the storage record for a claim's constraint profile. Deferred write:
+/// the production indexing pipeline persists this alongside the other family
+/// storage records in a later slice; the derivation and record shape are stable.
+pub fn family_constraint_profile_record(
+    claim: &FamilyClaim,
+) -> IndexedFamilyConstraintProfileRecord {
+    IndexedFamilyConstraintProfileRecord {
+        family_id: claim.family_id.clone(),
+        profile: claim.constraint_profile.clone(),
     }
 }
 
@@ -7899,6 +8209,657 @@ mod tests {
             assert!(
                 after_ids.contains(id),
                 "family id {id} was re-pointed by an unrelated file insert"
+            );
+        }
+    }
+
+    fn required_constraint<'a>(
+        profile: &'a FamilyConstraintProfile,
+        prefix: &str,
+    ) -> Option<&'a FeatureConstraint> {
+        profile
+            .required_equal_features
+            .iter()
+            .find(|constraint| constraint.prefix == prefix)
+    }
+
+    fn variation_constraint<'a>(
+        profile: &'a FamilyConstraintProfile,
+        dimension: &str,
+    ) -> Option<&'a VariationConstraint> {
+        profile
+            .allowed_variations
+            .iter()
+            .find(|variation| variation.dimension == dimension)
+    }
+
+    #[test]
+    fn constraint_profile_for_fastapi_route_requires_decorator_shape_and_observes_variation() {
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let import_targets = ["app.models.user", "app.models.user", "app.models.item"];
+        let mut facts = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+            facts.push(python_context_fact(
+                unit,
+                "fastapi_route_decorator",
+                Some("fastapi.APIRouter.get"),
+            ));
+            facts.push(python_context_fact(
+                unit,
+                "import_binding",
+                Some(import_targets[index]),
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+
+        // Framework-role identity and the non-empty support-family intersection
+        // are universal required-equal features.
+        assert_eq!(
+            required_constraint(profile, "framework_role:").map(|c| c.origin),
+            Some(FeatureConstraintOrigin::FrameworkRoleIdentity)
+        );
+        assert_eq!(
+            required_constraint(profile, "support_family:").map(|c| c.origin),
+            Some(FeatureConstraintOrigin::SupportFamilyIntersection)
+        );
+        // fastapi's characteristic prefix (decorator_shape) is required-equal.
+        let decorator = required_constraint(profile, "decorator_shape:")
+            .expect("decorator_shape is a fastapi characteristic constraint");
+        assert_eq!(
+            decorator.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(
+            decorator.values,
+            vec![stable_token("fastapi_route_decorator")]
+        );
+
+        // import_context legally varies: two distinct profiles were observed.
+        let variation = variation_constraint(profile, "python_import_context")
+            .expect("import context is an observed variation dimension");
+        assert!(variation.observed_only);
+        assert_eq!(variation.observed_profiles.len(), 2);
+        assert!(!variation.observed_profiles_truncated);
+
+        // The always-present runtime-equivalence obligation is recorded, unblocked.
+        assert!(profile.unresolved_obligations.iter().any(|obligation| {
+            obligation.affected_claim.ends_with(":runtime_equivalence")
+                && obligation.class == UnknownClass::NonBlocking
+        }));
+        // Python's compatibility rule has no unknown_blocker guard.
+        assert!(profile.prohibited_or_blocking_features.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_for_flask_route_requires_method_and_path_shape() {
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "flask_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:flask.route"));
+            let mut support = semantic_support_fact_with_target(unit, "flask.route");
+            support
+                .assumptions
+                .push("framework_role=framework:flask.route".to_string());
+            facts.push(support);
+            facts.push(python_context_fact(unit, "flask_route_decorator", None));
+            facts.push(python_context_fact(
+                unit,
+                "flask_route_method",
+                Some("flask.http_method.get"),
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+
+        let method = required_constraint(profile, "http_method:")
+            .expect("http_method is a flask characteristic constraint");
+        assert_eq!(
+            method.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(method.values, vec![stable_token("get")]);
+        let path_shape = required_constraint(profile, "route_path_shape:")
+            .expect("route_path_shape is a flask characteristic constraint");
+        assert_eq!(path_shape.values, vec!["literal".to_string()]);
+    }
+
+    #[test]
+    fn constraint_profile_records_unknown_blocker_prohibition_for_tsjs_family() {
+        let units: Vec<_> = ["src/a.ts", "src/b.ts", "src/c.ts"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| unit(path, "express_route", index))
+            .collect();
+        let targets = [
+            "express.route.get",
+            "express.route.post",
+            "express.route.delete",
+        ];
+        let mut facts = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            facts.push(role_fact(unit, "framework:express.route_handler"));
+            facts.push(tsjs_derived_fact_with_assumptions(
+                unit,
+                targets[index],
+                "framework:express.route_handler",
+                vec!["handler_shape=inline_json"],
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+
+        // TS/JS compatibility rejects any member carrying an unknown_blocker
+        // feature; the prohibition is recorded as a wildcard (empty values).
+        let blocker = profile
+            .prohibited_or_blocking_features
+            .iter()
+            .find(|constraint| constraint.prefix == "unknown_blocker:")
+            .expect("tsjs families record the unknown_blocker prohibition");
+        assert_eq!(
+            blocker.origin,
+            FeatureConstraintOrigin::IncompatibilityBlocker
+        );
+        assert!(blocker.values.is_empty());
+        // Universal required-equal features still hold, and the characteristic
+        // handler_shape is required-equal for express routes.
+        assert!(required_constraint(profile, "framework_role:").is_some());
+        assert!(required_constraint(profile, "support_family:").is_some());
+        assert!(required_constraint(profile, "handler_shape:").is_some());
+    }
+
+    #[test]
+    fn constraint_profile_storage_record_mirrors_the_claim_profile() {
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+        }
+        let report = build_family_claims(&units, &facts);
+        let claim = &report.claims[0];
+
+        let record = family_constraint_profile_record(claim);
+        assert_eq!(record.family_id, claim.family_id);
+        assert_eq!(record.profile, claim.constraint_profile);
+    }
+
+    #[test]
+    fn constraint_profile_variation_enumeration_is_capped_and_flags_truncation() {
+        // Nine fastapi routes with nine distinct import contexts cluster into one
+        // family (import context is not a membership key) whose import-context
+        // variation exceeds the observed-profile cap.
+        let member_count = CONSTRAINT_OBSERVED_PROFILE_CAP + 1;
+        let units: Vec<_> = (0..member_count)
+            .map(|index| python_unit(&format!("app/route{index}.py"), "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+            facts.push(python_context_fact(
+                unit,
+                "import_binding",
+                Some(&format!("app.models.model{index}")),
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let variation = variation_constraint(
+            &report.claims[0].constraint_profile,
+            "python_import_context",
+        )
+        .expect("import context varies across the members");
+        assert!(variation.observed_profiles_truncated);
+        assert_eq!(
+            variation.observed_profiles.len(),
+            CONSTRAINT_OBSERVED_PROFILE_CAP
+        );
+        assert!(variation.representative_member_ids.len() <= CONSTRAINT_REPRESENTATIVE_MEMBER_CAP);
+    }
+
+    #[test]
+    fn constraint_profile_support_family_core_is_must_contain_not_equal() {
+        // Members legally carry overlapping-but-unequal support families
+        // (membership needs only pairwise overlap), so the shared core is a
+        // MustContain subset rule and a member may carry a strict superset.
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "sqlalchemy_repository_method", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:sqlalchemy.repository_method"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "sqlalchemy.orm.Session.execute",
+            ));
+        }
+        // The third member also commits: its support family is a strict superset
+        // of the {query_call} core shared by every member.
+        facts.push(semantic_support_fact_with_target(
+            &units[2],
+            "sqlalchemy.orm.Session.commit",
+        ));
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        assert_eq!(report.claims[0].support, 3);
+        let support = required_constraint(&report.claims[0].constraint_profile, "support_family:")
+            .expect("the shared support-family core is recorded");
+        assert_eq!(
+            support.origin,
+            FeatureConstraintOrigin::SupportFamilyIntersection
+        );
+        assert_eq!(support.semantics, FeatureConstraintSemantics::MustContain);
+        assert_eq!(support.values, vec![stable_token("sqlalchemy.query_call")]);
+    }
+
+    #[test]
+    fn constraint_profile_dedupes_support_family_when_it_is_characteristic() {
+        // gtest binds support_family by equality (it is a characteristic prefix),
+        // so it is recorded once with Equal semantics, never duplicated as a
+        // weaker MustContain intersection entry.
+        let units = (0..3)
+            .map(|index| cpp_unit(&format!("tests/{index}_test.cc"), "gtest_test_case", index))
+            .collect::<Vec<_>>();
+        let facts = units
+            .iter()
+            .flat_map(|unit| {
+                [
+                    role_fact(unit, "framework:gtest.test"),
+                    cpp_test_derived_fact(unit, "gtest.TEST", "gtest", "TEST", "identifier_pair"),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let profile = &report.claims[0].constraint_profile;
+        let support = required_constraint(profile, "support_family:")
+            .expect("gtest binds support_family by equality");
+        assert_eq!(
+            support.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(support.semantics, FeatureConstraintSemantics::Equal);
+        assert!(!profile
+            .required_equal_features
+            .iter()
+            .any(|constraint| constraint.origin
+                == FeatureConstraintOrigin::SupportFamilyIntersection));
+    }
+
+    #[test]
+    fn constraint_profile_emits_equal_empty_for_absent_pytest_fixture_context() {
+        // Every member shares the empty non-builtin fixture context; equality
+        // against the empty set is itself a binding "must be empty" constraint.
+        let units: Vec<_> = ["tests/a.py", "tests/b.py", "tests/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "pytest_test", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:pytest.test"));
+            facts.push(semantic_support_fact_with_target(unit, "pytest.test"));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let fixture = required_constraint(
+            &report.claims[0].constraint_profile,
+            "fixture_context_nonbuiltin:",
+        )
+        .expect("an empty non-builtin fixture context is a binding must-be-empty constraint");
+        assert_eq!(
+            fixture.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(fixture.semantics, FeatureConstraintSemantics::EqualEmpty);
+        assert!(fixture.values.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_variations_agree_with_variation_slots() {
+        // Mixed presence: two members share one import context, the third has
+        // none. The variation slot marks the dimension as varying (empty vs
+        // non-empty), and the constraint profile must agree via the recorded
+        // absent profile — the two co-persisted artifacts must not contradict.
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+        }
+        facts.push(python_context_fact(
+            &units[0],
+            "import_binding",
+            Some("app.models.user"),
+        ));
+        facts.push(python_context_fact(
+            &units[1],
+            "import_binding",
+            Some("app.models.user"),
+        ));
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+
+        let import = variation_constraint(&claim.constraint_profile, "python_import_context")
+            .expect("import context varies (present on two members, absent on one)");
+        assert!(import.includes_absent_profile);
+        assert_eq!(import.observed_profiles.len(), 1);
+        assert!(claim
+            .variation_slots
+            .iter()
+            .any(|slot| slot.slot_id == "slot:python_import_context"));
+
+        // General agreement: for every dimension the per-language table can emit,
+        // the variation slot and the constraint profile agree on whether it varies.
+        for entry in variation_feature_prefixes(&claim.language, claim.framework_role.as_str()) {
+            let dimension = entry.0;
+            let slot_present = claim
+                .variation_slots
+                .iter()
+                .any(|slot| slot.slot_id == format!("slot:{dimension}"));
+            let constraint_present =
+                variation_constraint(&claim.constraint_profile, dimension).is_some();
+            assert_eq!(
+                slot_present, constraint_present,
+                "variation slot and constraint disagree for dimension {dimension}"
+            );
+        }
+    }
+
+    fn drift_evidence(code_unit_id: &str) -> FamilyEvidence {
+        FamilyEvidence {
+            code_unit_id: code_unit_id.to_string(),
+            path: "src/x".to_string(),
+            content_hash: hash(),
+            start_byte: 0,
+            end_byte: 1,
+            support_targets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unknown_blocker_prohibition_mirrors_the_compatibility_authority() {
+        // The prohibited-feature derivation reuses language_excludes_on_unknown_blocker,
+        // a hand-maintained mirror of the guard inlined in each per-language
+        // compatibility function. Assert the mirror matches the authority's actual
+        // accept/reject behavior for the unknown_blocker dimension in every language.
+        let cases: [(&str, &[&str]); 6] = [
+            (
+                "typescript",
+                &[
+                    "framework_role:framework_express_route_handler",
+                    "support_family:svc",
+                    "handler_shape:h",
+                ],
+            ),
+            (
+                "java",
+                &[
+                    "framework_role:framework_junit5_test",
+                    "support_family:svc",
+                    "anchor_kind:a",
+                    "test_annotation:t",
+                ],
+            ),
+            (
+                "csharp",
+                &[
+                    "framework_role:framework_xunit_test",
+                    "support_family:svc",
+                    "test_attribute:x",
+                ],
+            ),
+            (
+                "cpp",
+                &[
+                    "framework_role:framework_gtest_test",
+                    "support_family:svc",
+                    "test_framework:gtest",
+                    "test_macro:test",
+                ],
+            ),
+            (
+                "rust",
+                &[
+                    "framework_role:framework_serde_model",
+                    "support_family:svc",
+                    "framework_api_anchor:a",
+                ],
+            ),
+            (
+                "python",
+                &[
+                    "framework_role:framework_fastapi_route",
+                    "support_family:svc",
+                    "decorator_shape:d",
+                ],
+            ),
+        ];
+        for (language, feature_list) in cases {
+            let base: BTreeSet<String> = feature_list.iter().map(|f| f.to_string()).collect();
+            let key = FamilyKey {
+                language: language.to_string(),
+                code_unit_kind: "unit".to_string(),
+                framework_role: "role".to_string(),
+                normalized_shape: "shape".to_string(),
+            };
+            let left = drift_evidence("left");
+            let right = drift_evidence("right");
+
+            let mut features_by_unit: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            features_by_unit.insert("left".to_string(), base.clone());
+            features_by_unit.insert("right".to_string(), base.clone());
+            // Identical members are compatible in every language.
+            assert!(
+                evidence_pair_is_compatible(&key, &left, &right, &features_by_unit),
+                "{language} baseline pair must be compatible"
+            );
+
+            // Inject an unknown_blocker feature on the right member.
+            let mut blocked = base.clone();
+            blocked.insert("unknown_blocker:dynamic".to_string());
+            features_by_unit.insert("right".to_string(), blocked);
+            let rejected = !evidence_pair_is_compatible(&key, &left, &right, &features_by_unit);
+            assert_eq!(
+                rejected,
+                language_excludes_on_unknown_blocker(language),
+                "{language} prohibition mirror disagrees with the compatibility authority"
+            );
+        }
+    }
+
+    #[test]
+    fn pytest_fixture_context_constraint_mirrors_the_compatibility_authority() {
+        // The pytest branch of characteristic_feature_constraints is a mirror of
+        // the pytest branch of python_evidence_pair_is_compatible (non-builtin
+        // fixture-context equality). Assert both gate on the same dimension for
+        // the same synthetic evidence.
+        let key = FamilyKey {
+            language: "python".to_string(),
+            code_unit_kind: "pytest_test".to_string(),
+            framework_role: "framework:pytest.test".to_string(),
+            normalized_shape: "shape".to_string(),
+        };
+        let features_for = |context: &[&str]| -> BTreeSet<String> {
+            let mut features: BTreeSet<String> = [
+                "framework_role:framework_pytest_test".to_string(),
+                "support_family:pytest_test_anchor".to_string(),
+            ]
+            .into_iter()
+            .collect();
+            for value in context {
+                features.insert(format!("fixture_context:{value}"));
+            }
+            features
+        };
+        let left = drift_evidence("left");
+        let right = drift_evidence("right");
+
+        // Shared non-builtin fixture context: compatible, and the constraint
+        // records exactly that context by equality.
+        let mut features: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        features.insert("left".to_string(), features_for(&["conftest_db"]));
+        features.insert("right".to_string(), features_for(&["conftest_db"]));
+        assert!(evidence_pair_is_compatible(&key, &left, &right, &features));
+        let shared =
+            characteristic_feature_constraints(&key, &left, "framework_pytest_test", &features);
+        let fixture = shared
+            .iter()
+            .find(|constraint| constraint.prefix == "fixture_context_nonbuiltin:")
+            .expect("pytest records the non-builtin fixture context");
+        assert_eq!(fixture.values, vec!["conftest_db".to_string()]);
+        assert_eq!(fixture.semantics, FeatureConstraintSemantics::Equal);
+
+        // Differing non-builtin fixture context: incompatible. The compat gate is
+        // exactly the dimension the constraint records.
+        features.insert("right".to_string(), features_for(&["conftest_other"]));
+        assert!(!evidence_pair_is_compatible(&key, &left, &right, &features));
+
+        // Shared empty non-builtin fixture context: compatible, and the constraint
+        // binds must-be-empty.
+        let mut empty: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        empty.insert("left".to_string(), features_for(&[]));
+        empty.insert("right".to_string(), features_for(&[]));
+        assert!(evidence_pair_is_compatible(&key, &left, &right, &empty));
+        let empty_constraints =
+            characteristic_feature_constraints(&key, &left, "framework_pytest_test", &empty);
+        let empty_fixture = empty_constraints
+            .iter()
+            .find(|constraint| constraint.prefix == "fixture_context_nonbuiltin:")
+            .expect("an empty non-builtin fixture context is recorded");
+        assert_eq!(
+            empty_fixture.semantics,
+            FeatureConstraintSemantics::EqualEmpty
+        );
+        assert!(empty_fixture.values.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_emits_equal_empty_for_absent_general_characteristic() {
+        // A fastapi family with no decorator anchor facts shares the empty
+        // decorator_shape; equality against empty is a binding must-be-empty
+        // constraint on the general (non-pytest) path.
+        let units: Vec<_> = ["app/a.py", "app/b.py", "app/c.py"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| python_unit(path, "fastapi_route", index))
+            .collect();
+        let mut facts = Vec::new();
+        for unit in &units {
+            facts.push(role_fact(unit, "framework:fastapi.route"));
+            facts.push(semantic_support_fact_with_target(
+                unit,
+                "fastapi.APIRouter.get",
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let decorator =
+            required_constraint(&report.claims[0].constraint_profile, "decorator_shape:")
+                .expect("empty decorator_shape is a binding must-be-empty constraint");
+        assert_eq!(
+            decorator.origin,
+            FeatureConstraintOrigin::CharacteristicProfile
+        );
+        assert_eq!(decorator.semantics, FeatureConstraintSemantics::EqualEmpty);
+        assert!(decorator.values.is_empty());
+    }
+
+    #[test]
+    fn constraint_profile_variations_agree_with_variation_slots_tsjs() {
+        // Non-Python coverage: express routes share a handler shape (so they
+        // cluster) but differ on HTTP method, which both the variation slot and
+        // the constraint profile must mark as varying.
+        let units: Vec<_> = ["src/a.ts", "src/b.ts", "src/c.ts"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| unit(path, "express_route", index))
+            .collect();
+        let methods = ["get", "get", "post"];
+        let targets = [
+            "express.route.get",
+            "express.route.get",
+            "express.route.post",
+        ];
+        let mut facts = Vec::new();
+        for (index, member) in units.iter().enumerate() {
+            facts.push(role_fact(member, "framework:express.route_handler"));
+            let route_method = format!("route_method={}", methods[index]);
+            facts.push(tsjs_derived_fact_with_assumptions(
+                member,
+                targets[index],
+                "framework:express.route_handler",
+                vec!["handler_shape=inline_json", route_method.as_str()],
+            ));
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1);
+        let claim = &report.claims[0];
+        assert_eq!(claim.language, "typescript");
+
+        let method = variation_constraint(&claim.constraint_profile, "tsjs_route_method")
+            .expect("route method varies across the express members");
+        assert!(!method.includes_absent_profile);
+        assert_eq!(method.observed_profiles.len(), 2);
+
+        for entry in variation_feature_prefixes(&claim.language, claim.framework_role.as_str()) {
+            let dimension = entry.0;
+            let slot_present = claim
+                .variation_slots
+                .iter()
+                .any(|slot| slot.slot_id == format!("slot:{dimension}"));
+            let constraint_present =
+                variation_constraint(&claim.constraint_profile, dimension).is_some();
+            assert_eq!(
+                slot_present, constraint_present,
+                "variation slot and constraint disagree for dimension {dimension}"
             );
         }
     }

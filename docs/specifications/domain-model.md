@@ -283,6 +283,66 @@ family. It is not implemented in the bootstrap.
 A `VariationPoint` is an allowed slot where implementations can differ while
 remaining inside the same family.
 
+## FamilyConstraintProfile
+
+A `FamilyConstraintProfile` is the source-backed implementation specification a
+family record carries. It turns a family claim into a set of typed obligations an
+agent can conform to. Every field is derived during family building from the same
+family-membership decision authorities that admitted the members — never from
+notes, storage order, or free text. The profile has four parts:
+
+- `required_equal_features`: the features every member is bound to. Each is a
+  typed `FeatureConstraint { prefix, values, origin, semantics }`, and the
+  `semantics` field states how the values bind — the membership rules are not
+  uniform:
+  - the framework-role identity and the role's characteristic-profile prefixes
+    (the `characteristic_profile_prefixes` authority, including the pytest
+    fixture-context special case) bind by `Equal`, and by `EqualEmpty` when the
+    shared value is the empty set. `EqualEmpty` is a real "must be empty"
+    constraint because the characteristic prefixes are equality-enforced: a
+    candidate carrying any value there is rejected, so the empty case must be
+    recorded, not dropped. `EqualEmpty` is distinct from the prohibited-presence
+    wildcard below.
+  - the shared support-family core binds by `MustContain` (a subset rule):
+    membership requires only pairwise overlap, so members may carry additional
+    support families and equality would be false. Complete-link clustering can
+    yield an empty global core, in which case there is no shared core and the
+    entry is omitted. When a role's characteristic prefixes already bind
+    `support_family:` by equality, that stronger `Equal` constraint takes
+    precedence and the redundant `MustContain` intersection entry is dropped.
+- `allowed_variations`: dimensions along which members legally differ, derived
+  from the same per-language variation-slot prefix tables the emitted variation
+  slots use, using exactly the slot detection rule so the two co-persisted
+  artifacts never contradict. Each `VariationConstraint` enumerates only the
+  non-empty profiles actually observed among the current members (`observed_only`
+  is always `true`; unobserved values are never claimed legal) and records
+  `includes_absent_profile` when at least one member carried no value under the
+  dimension (the absent profile the slot rule also counts). The enumeration is
+  bounded to `CONSTRAINT_OBSERVED_PROFILE_CAP` (8) with an
+  `observed_profiles_truncated` flag, plus bounded `representative_member_ids`
+  (capped at `CONSTRAINT_REPRESENTATIVE_MEMBER_CAP`, 8).
+- `prohibited_or_blocking_features`: feature values whose presence excludes
+  membership for the family key, bound by `ProhibitedPresence` semantics with an
+  empty `values` wildcard. The only such rule the per-language compatibility
+  functions apply is the `unknown_blocker:` rejection, and only for the languages
+  whose rule checks it (TS/JS, Java, C#, C/C++, Rust). Python's refinement has no
+  such guard, so Python families carry no prohibition.
+- `unresolved_obligations`: the claim's own typed unknowns — the always-present
+  runtime-equivalence obligation followed by any non-blocking unknowns, in claim
+  order. `UnknownObligation` reuses the typed `UNKNOWN` vocabulary verbatim
+  (`class`/`reason`/`affected_claim`/`recovery`); the profile never opens a
+  second, free-text obligation channel.
+
+The derivation reuses the compatibility, characteristic-profile, variation-slot,
+and typed-`UNKNOWN` authorities directly rather than reconstructing constraints
+from raw fields. Two small predicates — `language_excludes_on_unknown_blocker`
+and the pytest fixture-context dispatch — are hand-maintained mirrors of the
+per-language compatibility functions; they are cross-referenced to those
+authorities in the code and guarded by drift tests that assert the mirror matches
+`evidence_pair_is_compatible`'s actual accept/reject behavior. The profile is a
+derived value carried on the family claim; a later slice exposes it through the
+read interfaces.
+
 ## Evidence
 
 Evidence links a conclusion to a code unit, source range, provenance record, and

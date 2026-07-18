@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 8;
+pub const STORAGE_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {

@@ -574,11 +574,27 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `8`. Existing pre-release schema `1`
-through `7` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `9`. Existing pre-release schema `1`
+through `8` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
+Schema `9` adds the `family_constraint_profiles` table, which persists one
+`FamilyConstraintProfile` per family (see the domain model). Each row is
+family-keyed and generation-scoped with `PRIMARY KEY (generation_id, family_id)`
+and cascades from both `index_generations` and `families`:
+
+- `generation_id` `TEXT NOT NULL`;
+- `family_id` `TEXT NOT NULL`;
+- `profile_json` `TEXT NOT NULL` (`CHECK <> ''`) — a validated, deterministic,
+  source-free structured column. The adapter serializes the typed profile
+  (required-equal features, allowed variations, prohibited/blocking features, and
+  unresolved obligations) with a stored `version` tag; hydration re-validates
+  every value (source-free, known origin/class/reason tokens, matching version)
+  and rejects any malformed row. Object keys serialize in sorted order, so the
+  encoding is deterministic. The production indexing pipeline persists profiles
+  in a later slice, so a valid generation may legitimately carry no rows yet.
+
 Schema `8` replaces the legacy classification vocabulary with the four
 prevalence classifications and adds the `FamilyPrevalence` columns to the
 `families` table:
@@ -631,6 +647,7 @@ Schema work should keep separate tables for:
 - unified IR summaries;
 - fingerprints and candidate groups;
 - pattern families and templates;
+- family constraint profiles;
 - variations, exceptions, and counterexamples;
 - derived record dependencies and dirty-record markers;
 - source evidence.

@@ -1,6 +1,10 @@
 //! Shared deterministic helpers for tests.
 
-use crate::core::model::FamilyPrevalence;
+use crate::core::model::{
+    FamilyConstraintProfile, FamilyPrevalence, FeatureConstraint, FeatureConstraintOrigin,
+    FeatureConstraintSemantics, TypedUnknown, UnknownClass, UnknownObligation, UnknownReasonCode,
+    VariationConstraint,
+};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -18,6 +22,69 @@ pub fn sample_family_prevalence() -> FamilyPrevalence {
         blocked_peer_count: 0,
         unsupported_peer_count: 0,
         classification_reason: "coverage 2/2 with no competing ready family".to_string(),
+    }
+}
+
+/// A deterministic fastapi-shaped [`FamilyConstraintProfile`] for tests that need
+/// a profile value but do not exercise the derivation itself. It deliberately
+/// covers every constraint kind so persistence round-trips are not limited to
+/// `Equal` semantics: the framework-role identity (`Equal`), the support-family
+/// core (`MustContain`, `SupportFamilyIntersection`), a non-empty characteristic
+/// (`Equal`), an empty-set characteristic (`EqualEmpty`), a prohibited-presence
+/// blocker (`ProhibitedPresence`, `IncompatibilityBlocker`), one observed-only
+/// variation, and the always-present runtime-equivalence obligation.
+pub fn sample_family_constraint_profile() -> FamilyConstraintProfile {
+    let obligation: UnknownObligation = TypedUnknown {
+        class: UnknownClass::NonBlocking,
+        reason: UnknownReasonCode::FrameworkMagic,
+        affected_claim: "family:example:runtime_equivalence".to_string(),
+        recovery: Some("add semantic-worker or framework adapter evidence".to_string()),
+    };
+    FamilyConstraintProfile {
+        required_equal_features: vec![
+            FeatureConstraint {
+                prefix: "framework_role:".to_string(),
+                values: vec!["framework_fastapi_route".to_string()],
+                origin: FeatureConstraintOrigin::FrameworkRoleIdentity,
+                semantics: FeatureConstraintSemantics::Equal,
+            },
+            FeatureConstraint {
+                prefix: "support_family:".to_string(),
+                values: vec!["fastapi_route_decorator".to_string()],
+                origin: FeatureConstraintOrigin::SupportFamilyIntersection,
+                semantics: FeatureConstraintSemantics::MustContain,
+            },
+            FeatureConstraint {
+                prefix: "decorator_shape:".to_string(),
+                values: vec!["fastapi_route_decorator".to_string()],
+                origin: FeatureConstraintOrigin::CharacteristicProfile,
+                semantics: FeatureConstraintSemantics::Equal,
+            },
+            FeatureConstraint {
+                prefix: "effect_marker:".to_string(),
+                values: Vec::new(),
+                origin: FeatureConstraintOrigin::CharacteristicProfile,
+                semantics: FeatureConstraintSemantics::EqualEmpty,
+            },
+        ],
+        allowed_variations: vec![VariationConstraint {
+            dimension: "python_import_context".to_string(),
+            observed_profiles: vec!["alpha".to_string(), "beta".to_string()],
+            observed_profiles_truncated: false,
+            includes_absent_profile: false,
+            representative_member_ids: vec![
+                "unit:src/a.py#function:0-1".to_string(),
+                "unit:src/b.py#function:0-1".to_string(),
+            ],
+            observed_only: true,
+        }],
+        prohibited_or_blocking_features: vec![FeatureConstraint {
+            prefix: "unknown_blocker:".to_string(),
+            values: Vec::new(),
+            origin: FeatureConstraintOrigin::IncompatibilityBlocker,
+            semantics: FeatureConstraintSemantics::ProhibitedPresence,
+        }],
+        unresolved_obligations: vec![obligation],
     }
 }
 
