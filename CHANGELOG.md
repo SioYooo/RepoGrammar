@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- Decomposed product readiness and stamped schema versions on every
+  structured payload. A single readiness authority reports
+  independently-truthful dimensions - repository state, active index,
+  family evidence freshness counts, prevalence counts, query retrieval,
+  static alignment, providers, autosync, and measurement status (always
+  NOT_MEASURED without a paired experiment) - plus the top blocking
+  UNKNOWN mechanisms and exactly one recovery action from the shared
+  classifier. The summary token (ready, degraded, not_ready) is a pure
+  projection of the same recovery authority the query path consumes, so
+  a ready summary provably implies query-preflight readiness (a
+  property test enforces it, closing the baseline defect where status
+  reported query_ready while every family claim was stale-blocked);
+  unreadable stores yield null dimensions rather than definite tokens.
+  The MCP surface gains an inspect_readiness operation on the existing
+  single tool, and CLI find/family/families/member/explain/check/
+  status/doctor/stats plus all MCP results carry
+  schema_version product-schemas.v1 under a documented additive
+  pre-1.0 compatibility policy.
+
 ### Changed
 
 - Narrowed the incremental-sync full-rebuild gate for content-only Rust

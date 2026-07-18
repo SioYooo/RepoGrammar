@@ -18,13 +18,15 @@ The tool carries an `operation` field. Supported v0.1 operations are:
 - `show_family`
 - `explain_deviation`
 - `check_conformance`
+- `inspect_readiness`
 
 This keeps agent tool selection stable while preserving explicit internal
 operation semantics. The CLI remains multi-command for human discoverability.
 
 The current input schema is intentionally small:
 
-- required `operation`: one of the four operation strings above.
+- required `operation`: one of the five operation strings above.
+  `inspect_readiness` takes no `target` and ignores the evidence-shaping fields.
 - optional `target`: non-empty string, at most 8192 bytes, with no control
   characters.
 - optional `token_budget`: positive integer up to 200000 used to cap selected
@@ -96,6 +98,46 @@ surfaces a selected family. The initial target may be a path, path:line locator,
 or `unit:` member id.
 
 CLI equivalent: `repogrammar check`.
+
+### inspect_readiness
+
+Return a bounded, read-only, source-free report of RepoGrammar's product
+capability state in the current checkout. It runs neither the query preflight nor
+family lookup and takes no `target`. The response `readiness` object is the shared
+decomposed readiness model (see `docs/specifications/product.md`): a
+low-cardinality `summary` token (`ready`, `degraded`, or `not_ready`), and
+independently truthful dimensions for `repository_state`, `active_index`,
+`family_evidence` (fresh/stale/cannot_verify counts), `family_prevalence` (counts
+by classification, or `null` when the family store is unreadable),
+`query_retrieval` (exact and term-retrieval modes plus the vocabulary version),
+`static_alignment` (`available`/`unavailable`/`not_applicable`, or `cannot_verify`
+when the family store is unreadable), `providers` (per-slot integration and
+availability), `autosync`, and `measurement` (the NOT_MEASURED token-saving
+discipline). It also carries `top_blocking_unknowns` (the bounded top-five
+required-mechanism buckets from the persisted unknown inventory, or `null` when
+that inventory is unreadable — distinct from `[]` for genuinely none) and one
+`recovery` object whose `action` comes from the shared recovery classifier, with
+`recommended_command` present only when the action is an executable RepoGrammar
+command (`executable: true`) and null otherwise. The summary is a pure projection
+of that one recovery decision — the same authority the query preflight consumes —
+so it is never more optimistic than the query path: an unservable index (not
+initialized, unhealthy storage, blocking lock, or missing active generation) is
+`not_ready`; a servable index that is stale (family evidence stale/unverifiable
+OR the repository index carries dirty derived records) or has a
+recommended-but-stopped autosync is `degraded` with the stale count visible; only
+a fully clean, fresh servable index is `ready`. Consequently `summary: ready`
+implies the query preflight is `Ready` on the same checkout, and one payload can
+never pair `readiness.query_ready: false` with `product_readiness.summary: ready`.
+The output is low-cardinality typed tokens and counts only — never source text,
+evidence, paths, content hashes, or family detail — and `inspect_readiness`
+records no family-query telemetry (it is a status-like inspection, like
+`status`/`doctor`). It performs the same bounded stats-scale reads as those
+commands, so like them it is for readiness triage, not routine per-query loops.
+When readiness cannot be assembled at all, the response is the standard
+`FALLBACK_TO_CODE_SEARCH` object.
+
+CLI equivalent: the source-free readiness fields of `repogrammar status --json`
+and `repogrammar doctor --json` (`product_readiness`).
 
 ## Missing and stale indexes
 
@@ -290,8 +332,9 @@ byte past the limit and rejects the request rather than buffering an
 unterminated multi-gigabyte line into memory. v0.1 serving behavior defaults to read-only for source,
 family/index content, and business-code state and must not modify business code
 from pattern-family results. MCP serving uses a read-only analysis runtime
-facade that can only request repository status and pattern-family lookup.
-Indexing remains the only writer for repository analysis records. The only
+facade that can only request repository status, pattern-family lookup, and the
+decomposed product readiness report. Indexing remains the only writer for
+repository analysis records. The only
 allowed MCP side effects are the local aggregate metrics described below and
 idempotent SQLite schema/index migration for an already initialized mutable
 database; none of these is source, family content, business-code state, or
@@ -312,6 +355,13 @@ item:
   "isError": false
 }
 ```
+
+Every wrapped RepoGrammar result object carries a `schema_version` field, shared
+with the CLI structured payloads (`product-schemas.v1`; see
+`docs/specifications/cli.md`). The pre-1.0 compatibility policy is additive:
+fields may be added within a version; removing or renaming a field, or changing
+its meaning, requires a version bump and a CHANGELOG entry. Consumers must ignore
+unknown fields.
 
 Missing state, missing active indexes, and typed analysis uncertainty are normal
 tool results. Unknown JSON-RPC methods, unknown tool names, invalid operations,
@@ -388,10 +438,10 @@ official scope and indexed inventory fields separately: top-level stats remains
 with no supported families should route the agent to exact-path
 `repogrammar_context`/`find`/`check` calls that may return `PARTIAL_CONTEXT`.
 React/RN remains unsupported and must not be inferred from stats.
-For readiness triage, agents may run `repogrammar doctor --json` and read only
-the source-free `readiness` object; they must treat `.codegraph/` entries as
-foreign unmanaged provider state and must not ask RepoGrammar to create,
-modify, or delete them.
+For readiness triage, agents may call `inspect_readiness` (or run
+`repogrammar doctor --json`) and read only the source-free readiness object; they
+must treat `.codegraph/` entries as foreign unmanaged provider state and must not
+ask RepoGrammar to create, modify, or delete them.
 When RepoGrammar returns missing-state fallback and the user has allowed
 repo-local analysis state, agents may run
 `repogrammar init --yes`, or `repogrammar init --yes --autosync` when the

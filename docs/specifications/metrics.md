@@ -74,6 +74,12 @@ paths, repository names, symbols, patches, or query text.
 does not include the user-provided experiment name, session ids, or raw token
 counts, and it reports token/count data only through coarse buckets.
 
+The decomposed `product_readiness` model (on `status`/`doctor` JSON and the MCP
+`inspect_readiness` operation) carries a `measurement` dimension that follows the
+same discipline: its `token_saving_status` stays `NOT_MEASURED` and
+`measurement_kind` stays `ESTIMATED` until a comparable paired baseline/treatment
+experiment exists. Readiness never asserts measured token savings.
+
 ## Product claims
 
 Production telemetry may support ecological-validity analysis, but it must not

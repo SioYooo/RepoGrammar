@@ -28,11 +28,13 @@ use repogrammar::application::install::{
     NativeMcpServerState, MCP_SERVER_NAME,
 };
 use repogrammar::application::progress::ProgressEvent;
+use repogrammar::application::providers::optional_provider_report;
 use repogrammar::application::query::{
     enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
-    list_indexed_files, lookup_family_with_freshness_and_local_context, render_source_spans,
-    repo_shape_diagnostics, unknown_inventory, FamilyEvidenceFreshnessRequest, FamilyListReport,
-    FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport, IndexedFilesReport, ReadPlan,
+    list_indexed_files, lookup_family_with_freshness_and_local_context,
+    product_readiness_from_stores, render_source_spans, repo_shape_diagnostics, unknown_inventory,
+    FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, ProductReadinessReport, ReadPlan,
     RepoShapeDiagnosticsReport, SourceSpanRenderReport, SourceSpanRenderRequest,
     UnknownInventoryReport,
 };
@@ -1574,6 +1576,35 @@ impl CliRuntime for ProductCliRuntime {
         unknown_inventory(&store)
     }
 
+    fn product_readiness(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        let report = repository_status_with_storage(request.clone(), &store)?;
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        let providers = optional_provider_report(
+            |key| env_lookup(key),
+            |binary| {
+                repogrammar::application::providers::binary_available_on_path(binary, &env_lookup)
+            },
+        );
+        Ok(product_readiness_from_stores(
+            &report,
+            FamilyEvidenceFreshnessRequest {
+                repository_root: request.path.clone(),
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            &store,
+            &store,
+            &FilesystemSourceStore,
+            providers,
+            // Token-saving measurement stays NOT_MEASURED here: readiness never
+            // claims a paired experiment exists.
+            false,
+        ))
+    }
+
     fn install_agent_integration(
         &self,
         command: &str,
@@ -1696,6 +1727,13 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         <Self as CliRuntime>::family_lookup(self, request, target, mode)
+    }
+
+    fn product_readiness(
+        &self,
+        request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        <Self as CliRuntime>::product_readiness(self, request)
     }
 
     fn render_source_spans(
@@ -3533,6 +3571,7 @@ mod tests {
     /// runtime-equivalence obligation carried but never discharged.
     fn assert_member_statically_aligned(value: &Value, family_id: &str) {
         assert_eq!(value["command"], "check");
+        assert_eq!(value["schema_version"], "product-schemas.v1");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["status"], "STATICALLY_ALIGNED");
         assert_eq!(value["alignment_status"], "STATICALLY_ALIGNED");
@@ -9045,6 +9084,24 @@ mod tests {
         assert_eq!(value["readiness"]["query_ready"], true);
         assert_eq!(value["readiness"]["active_generation_available"], true);
         assert_eq!(value["readiness"]["recommended_next_command"], Value::Null);
+        // The decomposed product readiness block is assembled end-to-end by the
+        // real runtime alongside the classic readiness view, under a versioned
+        // schema, and stays source-free.
+        assert_eq!(value["schema_version"], "product-schemas.v1");
+        let product_readiness = &value["product_readiness"];
+        assert_eq!(product_readiness["repository_state"], "initialized");
+        assert_eq!(product_readiness["active_index"]["available"], true);
+        assert_eq!(product_readiness["active_index"]["schema_current"], true);
+        assert!(product_readiness["summary"].is_string());
+        assert_eq!(product_readiness["query_retrieval"]["exact_lookup"], true);
+        assert_eq!(
+            product_readiness["query_retrieval"]["vocabulary_version"],
+            "query-vocabulary.v1"
+        );
+        assert_eq!(
+            product_readiness["measurement"]["token_saving_status"],
+            "NOT_MEASURED"
+        );
         assert!(!status
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));

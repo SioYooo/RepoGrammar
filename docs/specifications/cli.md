@@ -352,8 +352,11 @@ storage layout, mutable-database presence, legacy generation-layout presence,
 mutable WAL/SHM sidecar byte counts, active derived dependency count, active
 dirty-record count, storage/indexing implementation status, missing
 subdirectories, and relevant warning states. Status JSON must use
-`manifest_schema_version` and `storage_schema_version`; it must not use an
-ambiguous top-level `schema_version` field. When storage is wired, it must also
+`manifest_schema_version` and `storage_schema_version` for the index and storage
+schema versions, and must never collapse them into the top-level `schema_version`
+field. The top-level `schema_version` field is reserved for the shared product
+payload schema token (`product-schemas.v1`); see the product schema versioning
+paragraph below. When storage is wired, it must also
 report SQLite integrity status and unhealthy storage states without exposing
 absolute paths. When mutable and legacy layouts coexist, status must report the
 mixed layout while retaining the mutable database as the active read source.
@@ -377,6 +380,47 @@ as `.codegraph/` only when present or tracked-risk is detected, with
 `managed_by_repogrammar: false`. Readiness output must not expose source text,
 absolute paths, repo names, file lists, raw Git output, or raw errors.
 
+Status and doctor JSON must also include a source-free `product_readiness`
+object: the shared decomposed capability model that replaces reliance on the
+single optimistic `query_ready` boolean. It reports a deterministic
+low-cardinality `summary` token (`ready`, `degraded`, or `not_ready`) plus
+independently truthful dimensions — `repository_state`, `active_index` (with
+`available`, `active_generation`, `manifest_schema_version`, `schema_current`),
+`family_evidence` (`state` and `fresh_count`/`stale_count`/`cannot_verify_count`
+from the bounded freshness machinery, plus `evidence_unreadable`),
+`family_prevalence` (counts by classification, or `null` when the family store is
+unreadable), `query_retrieval` (exact and term-retrieval modes and the
+`vocabulary_version`), `static_alignment` (`available`/`unavailable`/
+`not_applicable`, or `cannot_verify` when the family store is unreadable),
+`providers` (per-slot integration and availability), `autosync`, and
+`measurement` (the NOT_MEASURED token-saving discipline). It also carries
+`top_blocking_unknowns` (the bounded top-five required-mechanism buckets, `null`
+when that inventory is unreadable versus `[]` for genuinely none) and one
+`recovery` object from the shared recovery classifier (`action`, `reason`,
+`recommended_command` — null unless the action is an executable RepoGrammar
+command — `guidance`, and `executable`). A store-read error must yield no definite
+dimension token: prevalence and the top-unknown list report unreadable (`null`)
+and static alignment `cannot_verify`, never a false zero/not-applicable.
+
+The summary is a pure projection of the one combined recovery decision, derived
+from the same authoritative repository recovery the query preflight consumes (so
+it already folds in the repository dirty-record freshness signal) layered with the
+hash-checked family-evidence freshness; it is never more optimistic than the query
+path. An unservable index is `not_ready`; a servable index that is stale (family
+evidence stale/unverifiable, or the repository index carries dirty derived
+records) or whose autosync is recommended-but-stopped is `degraded` with the stale
+count visible; only a fully clean, fresh servable index is `ready`. A
+stale-families-while-`query_ready` checkout therefore reports `degraded`, never a
+bare `ready`, and `summary: ready` guarantees `query_ready` is true in the same
+payload. Assembling the block performs bounded stats-scale reads (a family-evidence
+freshness scan plus an unknown-inventory read), so `status`/`doctor`/
+`inspect_readiness` are readiness-triage commands, not routine per-query loops.
+Because the classic `readiness` object and `product_readiness` are computed from
+independent repository-status snapshots within one invocation, they can describe
+slightly different points in time under concurrent modification. The block is
+present only when the runtime can assemble it (it is absent/null for deferred
+runtimes).
+
 `repogrammar doctor` must support human and `--json` output. It must check
 manifest status, required lifecycle subdirectories, storage/indexing
 implementation status, lock state, Git hygiene, and state directory
@@ -391,7 +435,9 @@ rather than silently repaired. JSON output must expose this as
 `checks.locks` with `pass`, `warning`, `fail`, or `not_applicable`.
 Doctor JSON must use `checks.manifest_schema_version` and
 `checks.storage_schema_version`; it must not expose an ambiguous
-`checks.schema_version` field. When storage can be inspected, doctor JSON also
+`checks.schema_version` field. The product payload schema token stays at the
+top-level `schema_version`, never inside `checks`. When storage can be inspected,
+doctor JSON also
 reports `checks.dependency_records` and `checks.dirty_records` so stale/dirty
 storage diagnostics are machine-readable. It must also report
 `checks.storage_layout`, `checks.mutable_database_present`,
@@ -399,10 +445,28 @@ storage diagnostics are machine-readable. It must also report
 `checks.shm_bytes`. Legacy-only storage and mixed mutable-plus-legacy storage
 must produce explicit doctor findings without treating the legacy files as
 authoritative when a mutable database is present.
-Doctor JSON must include the same `readiness` object as status JSON. Doctor may
-recommend commands such as `repogrammar init`, `repogrammar resync`,
-`repogrammar doctor`, or `repogrammar autosync start`, but it must not perform
-those actions implicitly.
+Doctor JSON must include the same `readiness` and `product_readiness` objects as
+status JSON. Doctor may recommend commands such as `repogrammar init`,
+`repogrammar resync`, `repogrammar doctor`, or `repogrammar autosync start`, but
+it must not perform those actions implicitly. Doctor and status human output must
+lead with the actionable capability summary and the one canonical next action from
+the recovery classifier (a `capability:` line and a `next_action:` line). Family
+evidence counts (`stale_family_evidence`, `unverifiable_family_evidence`) are
+rendered as facts only: the single command shown is the classifier's `next_action`,
+and callers must not infer a second command from raw freshness counts. Internal
+mechanism ids stay in the JSON as follow-up handles.
+
+Every primary structured CLI payload — the pattern-family query commands (`find`,
+`family`, `member`, `explain`, `check`, which share the same stamped serializers),
+plus `families`, `status`, `doctor`, and `stats` JSON, including their fallback and
+lifecycle-error payloads — carries a top-level `schema_version` product payload
+token (`product-schemas.v1`), shared with the MCP result objects
+(`docs/specifications/mcp-api.md`). This is the wire contract version and is
+distinct from the index/storage `manifest_schema_version` and
+`storage_schema_version`. The pre-1.0 compatibility policy is additive: fields may
+be added within a version; removing or renaming a field, or changing its meaning,
+requires a version bump and a CHANGELOG entry. Consumers must ignore unknown
+fields.
 During the current syntax-only phase, `doctor` is wired to SQLite storage health
 for the active generation. It must still distinguish file-manifest-only,
 syntax-only code-unit, and future family-evidence indexing.

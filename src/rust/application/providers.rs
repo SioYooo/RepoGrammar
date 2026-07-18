@@ -44,6 +44,22 @@ pub fn optional_provider_report(
         .collect()
 }
 
+/// Whether `binary` is present on the host `PATH`, by scanning `PATH` entries for
+/// a matching file. Reads `PATH` through the injected env lookup and never
+/// executes anything, so optional-provider runtime detection stays pure, testable,
+/// and side-effect-free. Shared by every surface that reports provider
+/// availability (CLI `doctor`, the readiness runtime) so the detection lives in
+/// one place.
+pub fn binary_available_on_path<F>(binary: &str, env_lookup: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(path) = env_lookup("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(binary).is_file())
+}
+
 /// Recovery code for a provider-resolvable mechanism an *integrated* provider can
 /// act on: the provider exists and `doctor` shows how to configure it, so the
 /// action is executable.

@@ -17,16 +17,16 @@ use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings,
     family_query_abstention_reason, family_query_route_report, family_query_unknown_metric,
-    query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
-    select_family_evidence, validate_query_target, validate_query_token_budget,
-    AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode,
-    FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
-    FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport, QueryPreflightOperation,
-    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission,
-    RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics, ResolvedQueryTarget,
-    SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness,
-    UnknownInventoryBucket, UnknownInventoryReport,
+    product_readiness_value, query_preflight, read_plan_with_rendered_spans,
+    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
+    validate_query_token_budget, AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode,
+    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
+    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
+    ResolvedQueryTarget, SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute,
+    TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -34,7 +34,8 @@ use crate::application::query::{
     UnknownInventoryLanguageSummary,
 };
 use crate::application::recovery::{
-    recovery_command, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth, RecoveryLockState,
+    recovery_command, recovery_guidance, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth,
+    RecoveryLockState,
 };
 #[cfg(test)]
 use crate::application::recovery::{RecoveryAction, RecoveryReason, RecoveryRecommendation};
@@ -261,6 +262,13 @@ pub trait CliRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<UnknownInventoryReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("unknowns"))
+    }
+
+    fn product_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("readiness"))
     }
 
     fn install_agent_integration(
@@ -1616,6 +1624,7 @@ fn query_fallback(
                 "reason": reason,
                 "guidance": guidance,
                 "command": command,
+                "schema_version": PRODUCT_SCHEMA_VERSION,
                 "implemented": implemented,
             })),
         );
@@ -1990,6 +1999,7 @@ fn feature_constraint_json(
 fn families_json(command: &str, report: &FamilyListReport) -> String {
     let mut value = json!({
         "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": if report.families.is_empty() { "UNKNOWN" } else { "ok" },
         "implemented": true,
         "active_generation": report.active_generation,
@@ -2530,6 +2540,7 @@ fn family_lookup_json(
         }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
+            "schema_version": PRODUCT_SCHEMA_VERSION,
             "status": "UNKNOWN",
             "implemented": true,
             "active_generation": report.active_generation,
@@ -2561,6 +2572,7 @@ fn alignment_certificate_json(
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
     json!({
         "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": certificate.alignment_status.as_token(),
         "implemented": true,
         "active_generation": certificate.active_generation,
@@ -2649,6 +2661,7 @@ fn family_partial_context_json(
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
     let value = json!({
         "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "PARTIAL_CONTEXT",
         "implemented": true,
         "active_generation": report.active_generation,
@@ -2686,6 +2699,7 @@ fn family_detail_json(
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
     json_line(json!({
         "command": command,
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "ok",
         "implemented": true,
         "active_generation": family.active_generation,
@@ -5175,6 +5189,7 @@ fn stats_fallback(json: bool, reason: &str, guidance: &str, include_unknowns: bo
             "reason": reason,
             "guidance": guidance,
             "command": "stats",
+            "schema_version": PRODUCT_SCHEMA_VERSION,
             "implemented": true,
             "official_family_scope": OFFICIAL_FAMILY_SCOPE,
             "repo_shape_scope": REPO_SHAPE_SCOPE,
@@ -5299,6 +5314,7 @@ fn stats_json(
     );
     let mut value = json!({
         "command": "stats",
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "ok",
         "implemented": true,
         "official_family_scope": OFFICIAL_FAMILY_SCOPE,
@@ -6935,9 +6951,12 @@ where
         state_dir_override: state_dir_override(env_lookup),
     };
 
+    // The decomposed readiness report is independent of the classic status view;
+    // runtimes that do not implement it (deferred/test runtimes) leave it absent.
+    let readiness = runtime.product_readiness(request.clone()).ok();
     match runtime.repository_status(request) {
-        Ok(report) if options.json => CliOutput::success(status_json(&report)),
-        Ok(report) => CliOutput::success(status_human(&report)),
+        Ok(report) if options.json => CliOutput::success(status_json(&report, readiness.as_ref())),
+        Ok(report) => CliOutput::success(status_human(&report, readiness.as_ref())),
         Err(error) => lifecycle_error("status", options.json, error),
     }
 }
@@ -6955,10 +6974,18 @@ where
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
     };
+    let readiness = runtime
+        .product_readiness(RepositoryStatusRequest {
+            path: request.path.clone(),
+            state_dir_override: request.state_dir_override.clone(),
+        })
+        .ok();
 
     match runtime.repository_doctor(request) {
-        Ok(report) if options.json => CliOutput::success(doctor_json(&report, env_lookup)),
-        Ok(report) => CliOutput::success(doctor_human(&report)),
+        Ok(report) if options.json => {
+            CliOutput::success(doctor_json(&report, env_lookup, readiness.as_ref()))
+        }
+        Ok(report) => CliOutput::success(doctor_human(&report, readiness.as_ref())),
         Err(error) => lifecycle_error("doctor", options.json, error),
     }
 }
@@ -8696,8 +8723,14 @@ fn storage_clean_legacy_reclaimable_bytes(report: &StorageCleanReport) -> u64 {
         .saturating_sub(report.legacy_layout.bytes_after)
 }
 
-fn status_human(report: &RepositoryStatusReport) -> String {
+fn status_human(
+    report: &RepositoryStatusReport,
+    readiness: Option<&ProductReadinessReport>,
+) -> String {
     let mut output = String::new();
+    if let Some(readiness) = readiness {
+        output.push_str(&readiness_human_lead(readiness));
+    }
     let storage_inspection = report.storage_inspection.as_ref();
     output.push_str(report.status.as_human_message());
     output.push('\n');
@@ -8804,7 +8837,10 @@ fn status_human(report: &RepositoryStatusReport) -> String {
     output
 }
 
-fn status_json(report: &RepositoryStatusReport) -> String {
+fn status_json(
+    report: &RepositoryStatusReport,
+    readiness: Option<&ProductReadinessReport>,
+) -> String {
     let active_generation = match &report.status {
         RepositoryStatus::Initialized { active_generation }
             if active_generation != "none" && active_generation != "not implemented" =>
@@ -8816,6 +8852,7 @@ fn status_json(report: &RepositoryStatusReport) -> String {
     let storage_inspection = report.storage_inspection.as_ref();
     json_line(json!({
         "command": "status",
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "initialized": matches!(report.status, RepositoryStatus::Initialized { .. }),
         "state_dir": report.state_dir,
         "status": repository_status_value(&report.status),
@@ -8838,11 +8875,18 @@ fn status_json(report: &RepositoryStatusReport) -> String {
         "storage_error": report.storage_error,
         "missing_subdirs": report.missing_subdirs,
         "readiness": readiness_json(&report.readiness),
+        "product_readiness": readiness.map(product_readiness_value),
     }))
 }
 
-fn doctor_human(report: &RepositoryDoctorReport) -> String {
+fn doctor_human(
+    report: &RepositoryDoctorReport,
+    readiness: Option<&ProductReadinessReport>,
+) -> String {
     let mut output = String::from("doctor: repository lifecycle diagnostics\n");
+    if let Some(readiness) = readiness {
+        output.push_str(&readiness_human_lead(readiness));
+    }
     output.push_str(&format!("state_dir: {}\n", report.status.state_dir));
     output.push_str(&format!(
         "status: {}\n",
@@ -8859,7 +8903,11 @@ fn doctor_human(report: &RepositoryDoctorReport) -> String {
     output
 }
 
-fn doctor_json<F>(report: &RepositoryDoctorReport, env_lookup: &F) -> String
+fn doctor_json<F>(
+    report: &RepositoryDoctorReport,
+    env_lookup: &F,
+    readiness: Option<&ProductReadinessReport>,
+) -> String
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -8875,6 +8923,7 @@ where
         };
     json_line(json!({
         "command": "doctor",
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "initialized": matches!(report.status.status, RepositoryStatus::Initialized { .. }),
         "state_dir": report.status.state_dir,
         "status": repository_status_value(&report.status.status),
@@ -8898,6 +8947,7 @@ where
             "dirty_records": storage_inspection.and_then(|inspection| inspection.dirty_record_count),
         },
         "readiness": readiness_json(&report.status.readiness),
+        "product_readiness": readiness.map(product_readiness_value),
         "findings": findings,
         "optional_providers": optional_providers_json(env_lookup),
     }))
@@ -8912,7 +8962,7 @@ where
 {
     crate::application::providers::optional_provider_report(
         |key| env_lookup(key),
-        |binary| binary_available_on_path(binary, env_lookup),
+        |binary| crate::application::providers::binary_available_on_path(binary, env_lookup),
     )
     .into_iter()
     .map(|status| {
@@ -8927,17 +8977,33 @@ where
     .collect()
 }
 
-/// Whether `binary` is present on the host `PATH`, by scanning `PATH` entries for
-/// a matching file. Reads `PATH` through the injected env lookup and never
-/// executes anything, so detection stays pure, testable, and side-effect-free.
-fn binary_available_on_path<F>(binary: &str, env_lookup: &F) -> bool
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let Some(path) = env_lookup("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(binary).is_file())
+/// Human-readable leading block for `status`/`doctor`: the actionable capability
+/// summary and the one canonical next action from the shared recovery classifier.
+/// Family-evidence counts are rendered as facts only; the single command shown is
+/// the classifier's `next_action`. Callers must not infer a second command from
+/// raw freshness counts, so no per-count command hint is printed. Internal
+/// mechanism ids stay in the JSON as follow-up handles rather than crowding the
+/// human lead.
+fn readiness_human_lead(readiness: &ProductReadinessReport) -> String {
+    let mut lead = String::new();
+    lead.push_str(&format!("capability: {}\n", readiness.summary.as_str()));
+    lead.push_str(&format!(
+        "next_action: {}\n",
+        recovery_guidance(readiness.recovery.action)
+    ));
+    if readiness.family_evidence.stale_count > 0 {
+        lead.push_str(&format!(
+            "stale_family_evidence: {}\n",
+            readiness.family_evidence.stale_count
+        ));
+    }
+    if readiness.family_evidence.cannot_verify_count > 0 {
+        lead.push_str(&format!(
+            "unverifiable_family_evidence: {}\n",
+            readiness.family_evidence.cannot_verify_count
+        ));
+    }
+    lead
 }
 
 fn readiness_json(readiness: &RepositoryReadiness) -> Value {
@@ -9280,6 +9346,7 @@ fn lifecycle_error(command: &str, json: bool, error: RepoGrammarError) -> CliOut
             2,
             json_line(json!({
                 "command": command,
+                "schema_version": PRODUCT_SCHEMA_VERSION,
                 "status": "error",
                 "reason": error.to_string(),
             })),
@@ -12189,6 +12256,7 @@ mod tests {
 
         let value: Value =
             serde_json::from_str(families_json("families", &report).trim()).expect("families JSON");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(
             value["families"][0]["family_id"],
             "family:python:route:framework_fastapi_route:cluster_alpha"
@@ -12248,6 +12316,7 @@ mod tests {
         // JSON carries the verbatim per-family field and the report-level counts.
         let value: Value =
             serde_json::from_str(families_json("families", &report).trim()).expect("families JSON");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "ok");
         assert_eq!(value["families"][0]["freshness"], "fresh");
         assert_eq!(value["families"][1]["freshness"], "stale");
@@ -13097,6 +13166,7 @@ mod tests {
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("stats JSON");
         assert_eq!(value["command"], "stats");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "ok");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["official_family_scope"], "python_v0_1");
@@ -13581,6 +13651,7 @@ mod tests {
         let value: Value =
             serde_json::from_str(output.stdout.trim()).expect("partial context JSON");
         assert_eq!(value["command"], "find");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "PARTIAL_CONTEXT");
         assert_eq!(value["query_route"]["route"], "partial_context_read_plan");
         assert_eq!(
@@ -13710,6 +13781,7 @@ mod tests {
         assert!(!output.stdout.contains("res.json"));
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("family JSON");
         assert_eq!(value["command"], "find");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["status"], "ok");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["query_route"]["route"], "discover_hydrate_compose");
@@ -14853,7 +14925,7 @@ mod tests {
         let value: Value = serde_json::from_str(json.stdout.trim()).expect("status JSON");
         assert_eq!(value["initialized"], false);
         assert_eq!(value["state_dir"], DEFAULT_STATE_DIR);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], Value::Null);
         assert_eq!(value["storage_schema_version"], Value::Null);
 
@@ -14875,7 +14947,7 @@ mod tests {
         let initialized = run_with_context(["status", "--json"], workspace.path(), &env);
         let value: Value = serde_json::from_str(initialized.stdout.trim()).expect("status JSON");
         assert_eq!(value["initialized"], true);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["indexing"], "not_implemented");
@@ -15722,7 +15794,7 @@ mod tests {
         assert_eq!(status.status, 0);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage_layout"], "empty");
@@ -15914,7 +15986,7 @@ mod tests {
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage_layout"], Value::Null);
@@ -16186,7 +16258,7 @@ mod tests {
             .contains(workspace.path().to_string_lossy().as_ref()));
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], "gen-000001");
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], STORAGE_SCHEMA_VERSION);
         assert_eq!(value["storage_layout"], "mutable");
@@ -16381,7 +16453,7 @@ mod tests {
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(value["active_generation"], Value::Null);
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
         assert_eq!(value["manifest_schema_version"], 1);
         assert_eq!(value["storage_schema_version"], Value::Null);
         assert_eq!(value["storage"], "unhealthy");

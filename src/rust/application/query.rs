@@ -7,24 +7,25 @@ use crate::application::family::{
     classify_unknown_family_effect, extract_target_unit_features,
     FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
 };
-use crate::application::providers::provider_recovery_code;
+use crate::application::providers::{provider_recovery_code, ProviderSlotStatus};
 use crate::application::query_terms::{normalize_query, score_family_candidates, MatchedSignals};
 use crate::application::recovery::{
-    classify_recovery, recovery_guidance, RecoveryAction, RecoveryAgentState,
+    classify_recovery, recovery_command, recovery_guidance, RecoveryAction, RecoveryAgentState,
     RecoveryAutosyncState, RecoveryContext, RecoveryEvidenceState, RecoveryFreshness,
-    RecoveryHealth, RecoveryLockState, RecoveryRecommendation,
+    RecoveryHealth, RecoveryLockState, RecoveryReason, RecoveryRecommendation,
 };
 use crate::application::repository::{
-    repository_recovery_for_report, RepositoryImplementationStatus, RepositoryStatusReport,
+    repository_recovery_for_report, RepositoryAutosyncReadiness, RepositoryImplementationStatus,
+    RepositoryManifestStatus, RepositoryStatus, RepositoryStatusReport,
 };
 use crate::core::mining::representative_selection::{
     select_representative_evidence, EvidenceCoverage, EvidenceSelectionCandidate,
 };
 use crate::core::model::{
     ClaimImpact, CodeUnitId, ContentHash, EstimatedPotentialTokenSavings, Evidence, FactCertainty,
-    FactOrigin, FamilyConstraintProfile, FamilyPrevalence, Provenance, RepositoryRevision,
-    ResolutionClass, SemanticFact, SemanticFactKind, SemanticObligation, SourceRange, SymbolId,
-    UnknownClass, UnknownReasonCode,
+    FactOrigin, FamilyConstraintProfile, FamilyPrevalence, FamilyPrevalenceClass, Provenance,
+    RepositoryRevision, ResolutionClass, SemanticFact, SemanticFactKind, SemanticObligation,
+    SourceRange, SymbolId, UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::alignment::{AlignmentStatus, TargetRelationship};
 use crate::core::policy::freshness::{
@@ -41,6 +42,7 @@ use crate::ports::index_store::{
     IndexedSemanticFactRecord, RepoShapeLanguageStats,
 };
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_QUERY_TARGET_BYTES: usize = 8 * 1024;
@@ -6011,6 +6013,656 @@ fn stale_evidence_unknown(affected_claim: impl Into<String>) -> FamilyQueryUnkno
     }
 }
 
+// ---------------------------------------------------------------------------
+// Product readiness: decomposed capability state.
+//
+// A single application-layer authority that reports RepoGrammar's product
+// capability as several independently truthful dimensions plus one
+// low-cardinality summary token derived deterministically from them. It replaces
+// the earlier single optimistic `query_ready` boolean, which could report `true`
+// while every family claim was stale-blocked. CLI `status`/`doctor` and the MCP
+// `inspect_readiness` operation all render this one report.
+// ---------------------------------------------------------------------------
+
+/// Schema-version token stamped on every primary structured product payload:
+/// CLI `find`/`family`/`families`/`check`/`status`/`doctor`/`stats` JSON, this
+/// readiness report, and the MCP result objects.
+///
+/// Pre-1.0 compatibility policy: fields may be ADDED within a version without a
+/// bump; removing or renaming a field, or changing a field's meaning, requires a
+/// version bump and a CHANGELOG entry. Consumers must ignore unknown fields.
+pub const PRODUCT_SCHEMA_VERSION: &str = "product-schemas.v1";
+
+/// Committed query-retrieval vocabulary version (the small normalized-query
+/// tables in `query_terms`). Reported so consumers can detect a vocabulary change
+/// across index generations.
+const QUERY_RETRIEVAL_VOCABULARY_VERSION: &str = "query-vocabulary.v1";
+
+/// Bounded cap on the top blocking-unknown mechanisms surfaced with the report.
+const READINESS_TOP_UNKNOWN_LIMIT: usize = 5;
+
+/// The deterministic, low-cardinality product readiness summary token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadinessSummary {
+    /// The active index is servable and no truthfulness or maintenance caveat
+    /// applies: the repository query preflight is `Ready` on the same inputs and
+    /// family evidence is fresh.
+    Ready,
+    /// The active index is servable, but at least one caveat applies: stale or
+    /// unverifiable family evidence, a stale repository index (dirty derived
+    /// records), or a recommended-but-not-running autosync. Queries may still run
+    /// but can fall back.
+    Degraded,
+    /// RepoGrammar cannot serve family queries in this checkout right now.
+    NotReady,
+}
+
+impl ReadinessSummary {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::NotReady => "not_ready",
+        }
+    }
+}
+
+/// Repository lifecycle/storage/lock state dimension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryStateReadiness {
+    NotInitialized,
+    StorageUnhealthy,
+    Locked,
+    Initialized,
+}
+
+impl RepositoryStateReadiness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotInitialized => "not_initialized",
+            Self::StorageUnhealthy => "storage_unhealthy",
+            Self::Locked => "locked",
+            Self::Initialized => "initialized",
+        }
+    }
+}
+
+/// Active-index availability dimension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveIndexReadiness {
+    /// True only when an active generation is present and its schema is current.
+    pub available: bool,
+    pub active_generation: Option<String>,
+    pub manifest_schema_version: Option<u32>,
+    pub schema_current: bool,
+}
+
+/// Family-evidence freshness state (from the bounded freshness machinery).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FamilyEvidenceReadinessState {
+    Fresh,
+    Stale,
+    CannotVerify,
+    NotApplicable,
+}
+
+impl FamilyEvidenceReadinessState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::CannotVerify => "cannot_verify",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
+/// Family-evidence dimension: the per-state counts from the shared freshness
+/// projection plus whether the family store was unreadable at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FamilyEvidenceReadiness {
+    pub state: FamilyEvidenceReadinessState,
+    pub fresh_count: usize,
+    pub stale_count: usize,
+    pub cannot_verify_count: usize,
+    /// True when the family evidence could not be read at all (a store error),
+    /// which is distinct from a repository that simply has no families.
+    pub evidence_unreadable: bool,
+}
+
+/// Family-prevalence dimension: family counts by prevalence classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FamilyPrevalenceReadiness {
+    pub dominant_count: usize,
+    pub supported_count: usize,
+    pub minority_count: usize,
+    pub unknown_prevalence_count: usize,
+    pub total_count: usize,
+}
+
+/// Query-retrieval dimension: the always-present retrieval modes and the
+/// committed vocabulary version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryRetrievalReadiness {
+    pub exact_lookup: bool,
+    pub term_retrieval: bool,
+    pub vocabulary_version: &'static str,
+}
+
+/// Static-alignment dimension: whether the active generation carries at least one
+/// fresh, ready (dominant/supported) family that `check_conformance` can align
+/// against. `CannotVerify` is reported when the family store could not be read at
+/// all, so the dimension never asserts a definite `not_applicable` over an
+/// unreadable store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticAlignmentReadiness {
+    Available,
+    Unavailable,
+    NotApplicable,
+    CannotVerify,
+}
+
+impl StaticAlignmentReadiness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+            Self::NotApplicable => "not_applicable",
+            Self::CannotVerify => "cannot_verify",
+        }
+    }
+}
+
+/// Measurement dimension: the NOT_MEASURED token-saving discipline. Token savings
+/// stay `ESTIMATED`/`NOT_MEASURED` until a comparable paired local experiment
+/// exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasurementReadiness {
+    pub token_saving_status: &'static str,
+    pub measurement_kind: &'static str,
+    pub paired_experiment_available: bool,
+}
+
+impl MeasurementReadiness {
+    fn from_paired(paired_experiment_available: bool) -> Self {
+        if paired_experiment_available {
+            Self {
+                token_saving_status: "MEASURED",
+                measurement_kind: "MEASURED",
+                paired_experiment_available,
+            }
+        } else {
+            Self {
+                token_saving_status: "NOT_MEASURED",
+                measurement_kind: "ESTIMATED",
+                paired_experiment_available,
+            }
+        }
+    }
+}
+
+/// The decomposed product readiness report: distinct, independently truthful
+/// dimensions plus one deterministic summary token and one executable recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductReadinessReport {
+    pub summary: ReadinessSummary,
+    pub repository_state: RepositoryStateReadiness,
+    pub active_index: ActiveIndexReadiness,
+    pub family_evidence: FamilyEvidenceReadiness,
+    /// `None` when the family store could not be read (distinct from a repository
+    /// with zero families, which is `Some` of an all-zero count).
+    pub family_prevalence: Option<FamilyPrevalenceReadiness>,
+    pub query_retrieval: QueryRetrievalReadiness,
+    pub static_alignment: StaticAlignmentReadiness,
+    pub providers: Vec<ProviderSlotStatus>,
+    pub autosync: RepositoryAutosyncReadiness,
+    pub measurement: MeasurementReadiness,
+    /// Bounded top blocking-unknown mechanisms (by count), for triage. `None` when
+    /// the unknown inventory could not be read (distinct from genuinely none,
+    /// which is `Some` of an empty vector).
+    pub top_blocking_unknowns: Option<Vec<UnknownInventoryBucket>>,
+    /// The one executable recovery action from the shared recovery classifier.
+    pub recovery: RecoveryRecommendation,
+}
+
+/// Assemble the decomposed readiness report from already-reduced dimension inputs
+/// and derive the summary token deterministically. This is the pure decision
+/// authority: it is unit-tested directly against fixture states (including the
+/// stale-families-while-servable case) with no store access.
+///
+/// `family_freshness`/`family_prevalence` are `None` only when the family store
+/// could not be read; `top_blocking_unknowns` is `None` only when the unknown
+/// inventory could not be read.
+///
+/// The readiness recovery is derived from the *same* authoritative repository
+/// recovery the query preflight consumes (`repository_recovery_for_report`, which
+/// already incorporates the repository dirty-record freshness signal), then
+/// layered with the hash-checked family-evidence freshness. This guarantees the
+/// invariant `summary == ready` ⇒ `query_preflight` is `Ready` on the same
+/// report, so one payload can never carry `readiness.query_ready = false`
+/// alongside `product_readiness.summary = ready`.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_product_readiness(
+    report: &RepositoryStatusReport,
+    family_freshness: Option<FamilyFreshnessCounts>,
+    family_prevalence: Option<FamilyPrevalenceReadiness>,
+    static_alignment: StaticAlignmentReadiness,
+    providers: Vec<ProviderSlotStatus>,
+    paired_experiment_available: bool,
+    top_blocking_unknowns: Option<Vec<UnknownInventoryBucket>>,
+) -> ProductReadinessReport {
+    let measurement = MeasurementReadiness::from_paired(paired_experiment_available);
+    let initialized = matches!(report.status, RepositoryStatus::Initialized { .. });
+    let storage_health = if matches!(report.status, RepositoryStatus::CorruptedManifest)
+        || !report.missing_subdirs.is_empty()
+        || report.storage == RepositoryImplementationStatus::Unhealthy
+    {
+        RecoveryHealth::Unhealthy
+    } else if report.storage == RepositoryImplementationStatus::Available {
+        RecoveryHealth::Healthy
+    } else {
+        RecoveryHealth::Unknown
+    };
+
+    // The authoritative repository-level recovery — exactly what `query_preflight`
+    // consumes. It already folds in the repository dirty-record freshness signal
+    // (`repository_freshness_for_report` over `dirty_record_count`), the lock
+    // state, storage health, initialization, and active-generation availability.
+    let repository_recovery = repository_recovery_for_report(report);
+    let lock_state = if repository_recovery.reason == RecoveryReason::BlockingLock {
+        RecoveryLockState::Blocking
+    } else {
+        RecoveryLockState::Clear
+    };
+    let active_generation_available = report.readiness.active_generation_available;
+    let active_generation = match &report.status {
+        RepositoryStatus::Initialized { active_generation }
+            if active_generation != "none" && active_generation != "not implemented" =>
+        {
+            Some(active_generation.clone())
+        }
+        _ => None,
+    };
+    // Trust the repository's own manifest validation rather than re-deriving a
+    // version comparison from a mirrored constant: a current manifest is one the
+    // repository parsed as valid with a recorded schema version.
+    let schema_current = report.manifest == RepositoryManifestStatus::Valid
+        && report.manifest_schema_version.is_some();
+
+    let family_evidence = family_evidence_readiness(family_freshness);
+    let family_ctx_evidence = if family_evidence.evidence_unreadable {
+        RecoveryEvidenceState::Unknown
+    } else if family_evidence.fresh_count
+        + family_evidence.stale_count
+        + family_evidence.cannot_verify_count
+        == 0
+    {
+        RecoveryEvidenceState::NotApplicable
+    } else {
+        RecoveryEvidenceState::Available
+    };
+    let family_freshness_signal = family_evidence_freshness_signal(&family_evidence);
+
+    // Combined recovery: any repository-level condition (blocker, dirty-index
+    // staleness, or recommended-but-stopped autosync) dominates, because those
+    // gate the whole index in the query path. Only when the repository path is
+    // fully clean and fresh does the family-evidence freshness decide, through the
+    // same evidence classifier the query surfaces use.
+    let recovery = if repository_recovery.action != RecoveryAction::None {
+        repository_recovery
+    } else {
+        classify_query_evidence_recovery(family_freshness_signal, family_ctx_evidence)
+    };
+
+    let repository_state = if !initialized {
+        RepositoryStateReadiness::NotInitialized
+    } else if storage_health == RecoveryHealth::Unhealthy {
+        RepositoryStateReadiness::StorageUnhealthy
+    } else if matches!(
+        lock_state,
+        RecoveryLockState::Blocking | RecoveryLockState::Unknown
+    ) {
+        RepositoryStateReadiness::Locked
+    } else {
+        RepositoryStateReadiness::Initialized
+    };
+
+    // The summary is a pure projection of the one combined recovery reason, so it
+    // can never be more optimistic than that authority. `Ready` requires the
+    // combined recovery to be `None` (repository clean and fresh, autosync not
+    // recommended, and family evidence fresh); a recommended-but-stopped autosync
+    // (`AutosyncRecommended`) is a live maintenance caveat and is `Degraded`.
+    let summary = match recovery.reason {
+        RecoveryReason::RepositoryNotInitialized
+        | RecoveryReason::StorageUnhealthy
+        | RecoveryReason::BlockingLock
+        | RecoveryReason::ActiveIndexMissing => ReadinessSummary::NotReady,
+        RecoveryReason::Ready => ReadinessSummary::Ready,
+        _ => ReadinessSummary::Degraded,
+    };
+
+    ProductReadinessReport {
+        summary,
+        repository_state,
+        active_index: ActiveIndexReadiness {
+            available: active_generation_available && schema_current,
+            active_generation,
+            manifest_schema_version: report.manifest_schema_version,
+            schema_current,
+        },
+        family_evidence,
+        family_prevalence,
+        query_retrieval: QueryRetrievalReadiness {
+            exact_lookup: true,
+            term_retrieval: true,
+            vocabulary_version: QUERY_RETRIEVAL_VOCABULARY_VERSION,
+        },
+        static_alignment,
+        providers,
+        autosync: report.readiness.autosync.clone(),
+        measurement,
+        top_blocking_unknowns,
+        recovery,
+    }
+}
+
+fn family_evidence_readiness(
+    family_freshness: Option<FamilyFreshnessCounts>,
+) -> FamilyEvidenceReadiness {
+    match family_freshness {
+        None => FamilyEvidenceReadiness {
+            state: FamilyEvidenceReadinessState::CannotVerify,
+            fresh_count: 0,
+            stale_count: 0,
+            cannot_verify_count: 0,
+            evidence_unreadable: true,
+        },
+        Some(counts) => {
+            let state = if counts.stale_count > 0 {
+                FamilyEvidenceReadinessState::Stale
+            } else if counts.cannot_verify_count > 0 {
+                FamilyEvidenceReadinessState::CannotVerify
+            } else if counts.fresh_count > 0 {
+                FamilyEvidenceReadinessState::Fresh
+            } else {
+                FamilyEvidenceReadinessState::NotApplicable
+            };
+            FamilyEvidenceReadiness {
+                state,
+                fresh_count: counts.fresh_count,
+                stale_count: counts.stale_count,
+                cannot_verify_count: counts.cannot_verify_count,
+                evidence_unreadable: false,
+            }
+        }
+    }
+}
+
+/// Family-evidence freshness expressed as a recovery-context freshness signal, so
+/// it can be combined with the repository-level freshness and fed to the one
+/// recovery classifier.
+fn family_evidence_freshness_signal(evidence: &FamilyEvidenceReadiness) -> RecoveryFreshness {
+    if evidence.evidence_unreadable {
+        return RecoveryFreshness::CannotVerify;
+    }
+    match evidence.state {
+        FamilyEvidenceReadinessState::Stale => RecoveryFreshness::Stale,
+        FamilyEvidenceReadinessState::CannotVerify => RecoveryFreshness::CannotVerify,
+        FamilyEvidenceReadinessState::Fresh => RecoveryFreshness::Fresh,
+        FamilyEvidenceReadinessState::NotApplicable => RecoveryFreshness::NotApplicable,
+    }
+}
+
+/// Gather the store-derived readiness inputs (tolerating store errors) and call
+/// the pure assembler. `providers` and `paired_experiment_available` are supplied
+/// by the caller, which owns environment and telemetry access.
+pub fn product_readiness_from_stores(
+    report: &RepositoryStatusReport,
+    request: FamilyEvidenceFreshnessRequest,
+    family_store: &impl FamilyStore,
+    index_store: &impl IndexStore,
+    source_store: &impl SourceStore,
+    providers: Vec<ProviderSlotStatus>,
+    paired_experiment_available: bool,
+) -> ProductReadinessReport {
+    // A family-store read error yields no definite dimension tokens: prevalence is
+    // `None` (not an asserted all-zero) and static alignment is `CannotVerify` (not
+    // an asserted `not_applicable`).
+    let (family_freshness, family_prevalence, static_alignment) =
+        match list_families_with_freshness(request, family_store, source_store) {
+            Ok(listing) => {
+                let counts = listing.freshness_counts.unwrap_or_default();
+                let mut prevalence = FamilyPrevalenceReadiness::default();
+                let mut fresh_ready_family = false;
+                for family in &listing.families {
+                    let classification =
+                        accumulate_prevalence_token(&family.classification, &mut prevalence);
+                    if matches!(family.freshness, Some(FamilyFreshness::Fresh))
+                        && matches!(
+                            classification,
+                            Some(
+                                FamilyPrevalenceClass::DominantPattern
+                                    | FamilyPrevalenceClass::SupportedPattern
+                            )
+                        )
+                    {
+                        fresh_ready_family = true;
+                    }
+                }
+                let static_alignment = if listing.families.is_empty() {
+                    StaticAlignmentReadiness::NotApplicable
+                } else if fresh_ready_family {
+                    StaticAlignmentReadiness::Available
+                } else {
+                    StaticAlignmentReadiness::Unavailable
+                };
+                (Some(counts), Some(prevalence), static_alignment)
+            }
+            Err(_) => (None, None, StaticAlignmentReadiness::CannotVerify),
+        };
+
+    // `None` distinguishes an unreadable unknown inventory from a genuinely empty
+    // one (`Some(vec![])`).
+    let top_blocking_unknowns = match unknown_inventory(index_store) {
+        Ok(inventory) => Some(top_blocking_unknown_mechanisms(
+            inventory.by_required_mechanism,
+        )),
+        Err(_) => None,
+    };
+
+    assemble_product_readiness(
+        report,
+        family_freshness,
+        family_prevalence,
+        static_alignment,
+        providers,
+        paired_experiment_available,
+        top_blocking_unknowns,
+    )
+}
+
+/// Route one family's stored prevalence classification token into the readiness
+/// prevalence buckets, incrementing `total_count` and returning the parsed class.
+/// An unparseable token is counted as unknown prevalence rather than silently
+/// dropped, so the four buckets always sum to `total_count`.
+fn accumulate_prevalence_token(
+    token: &str,
+    prevalence: &mut FamilyPrevalenceReadiness,
+) -> Option<FamilyPrevalenceClass> {
+    prevalence.total_count += 1;
+    match FamilyPrevalenceClass::parse_token(token) {
+        Ok(class @ FamilyPrevalenceClass::DominantPattern) => {
+            prevalence.dominant_count += 1;
+            Some(class)
+        }
+        Ok(class @ FamilyPrevalenceClass::SupportedPattern) => {
+            prevalence.supported_count += 1;
+            Some(class)
+        }
+        Ok(class @ FamilyPrevalenceClass::MinorityPattern) => {
+            prevalence.minority_count += 1;
+            Some(class)
+        }
+        Ok(class @ FamilyPrevalenceClass::UnknownPrevalence) => {
+            prevalence.unknown_prevalence_count += 1;
+            Some(class)
+        }
+        Err(_) => {
+            prevalence.unknown_prevalence_count += 1;
+            None
+        }
+    }
+}
+
+/// The top blocking-unknown mechanisms by count (descending, mechanism name
+/// ascending for determinism), bounded to [`READINESS_TOP_UNKNOWN_LIMIT`].
+fn top_blocking_unknown_mechanisms(
+    mut buckets: Vec<UnknownInventoryBucket>,
+) -> Vec<UnknownInventoryBucket> {
+    buckets.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    buckets.truncate(READINESS_TOP_UNKNOWN_LIMIT);
+    buckets
+}
+
+/// Source-free JSON view of the decomposed readiness report. Shared by CLI
+/// `status`/`doctor` and the MCP `inspect_readiness` operation so the readiness
+/// shape has a single serializer authority.
+pub fn product_readiness_value(report: &ProductReadinessReport) -> Value {
+    json!({
+        "summary": report.summary.as_str(),
+        "repository_state": report.repository_state.as_str(),
+        "active_index": {
+            "available": report.active_index.available,
+            "active_generation": report.active_index.active_generation,
+            "manifest_schema_version": report.active_index.manifest_schema_version,
+            "schema_current": report.active_index.schema_current,
+        },
+        "family_evidence": {
+            "state": report.family_evidence.state.as_str(),
+            "fresh_count": report.family_evidence.fresh_count,
+            "stale_count": report.family_evidence.stale_count,
+            "cannot_verify_count": report.family_evidence.cannot_verify_count,
+            "evidence_unreadable": report.family_evidence.evidence_unreadable,
+        },
+        "family_prevalence": report.family_prevalence.map(|prevalence| {
+            json!({
+                "dominant_pattern_count": prevalence.dominant_count,
+                "supported_pattern_count": prevalence.supported_count,
+                "minority_pattern_count": prevalence.minority_count,
+                "unknown_prevalence_count": prevalence.unknown_prevalence_count,
+                "total_count": prevalence.total_count,
+            })
+        }),
+        "query_retrieval": {
+            "exact_lookup": report.query_retrieval.exact_lookup,
+            "term_retrieval": report.query_retrieval.term_retrieval,
+            "vocabulary_version": report.query_retrieval.vocabulary_version,
+        },
+        "static_alignment": {
+            "state": report.static_alignment.as_str(),
+        },
+        "providers": report
+            .providers
+            .iter()
+            .map(|status| {
+                json!({
+                    "id": status.slot.id(),
+                    "language": status.slot.language(),
+                    "integrated": status.slot.is_integrated(),
+                    "availability": status.availability.as_protocol_str(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "autosync": {
+            "configured": report.autosync.configured,
+            "running": report.autosync.running,
+            "recommended": report.autosync.recommended,
+        },
+        "measurement": {
+            "token_saving_status": report.measurement.token_saving_status,
+            "measurement_kind": report.measurement.measurement_kind,
+            "paired_experiment_available": report.measurement.paired_experiment_available,
+        },
+        "top_blocking_unknowns": report.top_blocking_unknowns.as_ref().map(|buckets| {
+            buckets
+                .iter()
+                .map(|bucket| {
+                    json!({
+                        "required_mechanism": bucket.key,
+                        "count": bucket.count,
+                    })
+                })
+                .collect::<Vec<_>>()
+        }),
+        "recovery": product_readiness_recovery_value(report.recovery),
+    })
+}
+
+fn product_readiness_recovery_value(recovery: RecoveryRecommendation) -> Value {
+    let command = readiness_recovery_command(recovery.action);
+    json!({
+        "action": readiness_recovery_action_token(recovery.action),
+        "reason": readiness_recovery_reason_token(recovery.reason),
+        "recommended_command": command,
+        "guidance": recovery_guidance(recovery.action),
+        "executable": command.is_some(),
+    })
+}
+
+/// The executable repogrammar command for a recovery action, or `None` when the
+/// action is not a repogrammar command (source fallback, unsupported target, or
+/// no action). Mirrors the status/doctor `recommended_next_command` contract.
+fn readiness_recovery_command(action: RecoveryAction) -> Option<&'static str> {
+    match action {
+        RecoveryAction::UseSourceFallback | RecoveryAction::Unsupported | RecoveryAction::None => {
+            None
+        }
+        _ => Some(recovery_command(action)),
+    }
+}
+
+fn readiness_recovery_action_token(action: RecoveryAction) -> &'static str {
+    match action {
+        RecoveryAction::Setup => "setup",
+        RecoveryAction::Resync => "resync",
+        RecoveryAction::StartAutosync => "start_autosync",
+        RecoveryAction::UseSourceFallback => "use_source_fallback",
+        RecoveryAction::Unsupported => "unsupported",
+        RecoveryAction::RepairStorage => "repair_storage",
+        RecoveryAction::ResolveLock => "resolve_lock",
+        RecoveryAction::InstallAgent(_) => "install_agent",
+        RecoveryAction::InstallSupportedAgent => "install_supported_agent",
+        RecoveryAction::RepairAgentIntegration(_) => "repair_agent_integration",
+        RecoveryAction::None => "none",
+    }
+}
+
+fn readiness_recovery_reason_token(reason: RecoveryReason) -> &'static str {
+    match reason {
+        RecoveryReason::RepositoryNotInitialized => "repository_not_initialized",
+        RecoveryReason::StorageUnhealthy => "storage_unhealthy",
+        RecoveryReason::BlockingLock => "blocking_lock",
+        RecoveryReason::ActiveIndexMissing => "active_index_missing",
+        RecoveryReason::EvidenceStale => "evidence_stale",
+        RecoveryReason::EvidenceCannotBeVerified => "evidence_cannot_be_verified",
+        RecoveryReason::TargetUnsupported => "target_unsupported",
+        RecoveryReason::FamilyEvidenceUnavailable => "family_evidence_unavailable",
+        RecoveryReason::AutosyncRecommended => "autosync_recommended",
+        RecoveryReason::AgentMissing => "agent_missing",
+        RecoveryReason::NoLiveAgent => "no_live_agent",
+        RecoveryReason::AgentIntegrationForeign => "agent_integration_foreign",
+        RecoveryReason::AgentIntegrationMalformed => "agent_integration_malformed",
+        RecoveryReason::AgentIntegrationFailed => "agent_integration_failed",
+        RecoveryReason::AgentSelfTestFailed => "agent_self_test_failed",
+        RecoveryReason::Ready => "ready",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7294,6 +7946,408 @@ mod tests {
             QueryPreflightReport::Fallback(fallback) => fallback,
             QueryPreflightReport::Ready => panic!("expected fallback report"),
         }
+    }
+
+    fn healthy_status_report() -> RepositoryStatusReport {
+        status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+            Vec::new(),
+        )
+    }
+
+    fn freshness_counts(fresh: usize, stale: usize, cannot_verify: usize) -> FamilyFreshnessCounts {
+        FamilyFreshnessCounts {
+            fresh_count: fresh,
+            stale_count: stale,
+            cannot_verify_count: cannot_verify,
+        }
+    }
+
+    fn readiness_for(
+        report: &RepositoryStatusReport,
+        family_freshness: Option<FamilyFreshnessCounts>,
+    ) -> ProductReadinessReport {
+        assemble_product_readiness(
+            report,
+            family_freshness,
+            Some(FamilyPrevalenceReadiness::default()),
+            StaticAlignmentReadiness::NotApplicable,
+            Vec::new(),
+            false,
+            Some(Vec::new()),
+        )
+    }
+
+    /// A servable report whose active generation carries dirty derived records on
+    /// a non-evidence dependency: the repository recovery is stale (query_ready is
+    /// false, next action resync) even though the family-evidence hashes are fresh.
+    fn dirty_index_report() -> RepositoryStatusReport {
+        let mut report = healthy_status_report();
+        report.readiness.query_ready = false;
+        report.readiness.recovery = Some(RecoveryRecommendation {
+            action: RecoveryAction::Resync,
+            reason: RecoveryReason::EvidenceStale,
+        });
+        report
+    }
+
+    #[test]
+    fn product_readiness_is_ready_when_index_and_family_evidence_are_fresh() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(3, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::Ready);
+        assert_eq!(
+            readiness.repository_state,
+            RepositoryStateReadiness::Initialized
+        );
+        assert!(readiness.active_index.available);
+        assert!(readiness.active_index.schema_current);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::Fresh
+        );
+        assert_eq!(readiness.recovery.action, RecoveryAction::None);
+    }
+
+    #[test]
+    fn stale_families_are_degraded_with_count_visible_even_when_repository_reports_query_ready() {
+        let report = healthy_status_report();
+        // The repository-level readiness reports a single optimistic query_ready
+        // boolean of `true` for this healthy checkout...
+        assert!(report.readiness.query_ready);
+        let readiness = readiness_for(&report, Some(freshness_counts(1, 3, 0)));
+        // ...yet the decomposed model must surface the staleness as degraded with
+        // the stale count visible rather than hiding it behind that boolean.
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::Stale
+        );
+        assert_eq!(readiness.family_evidence.stale_count, 3);
+        assert_ne!(readiness.recovery.action, RecoveryAction::None);
+    }
+
+    #[test]
+    fn unverifiable_family_evidence_is_degraded() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(0, 0, 2)));
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::CannotVerify
+        );
+        assert!(!readiness.family_evidence.evidence_unreadable);
+    }
+
+    #[test]
+    fn unreadable_family_store_is_degraded_and_marked_unreadable() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, None);
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert!(readiness.family_evidence.evidence_unreadable);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::CannotVerify
+        );
+    }
+
+    #[test]
+    fn fresh_index_with_no_families_is_ready() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(0, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::Ready);
+        assert_eq!(
+            readiness.family_evidence.state,
+            FamilyEvidenceReadinessState::NotApplicable
+        );
+    }
+
+    #[test]
+    fn not_initialized_repository_is_not_ready() {
+        let report = status_report(
+            RepositoryStatus::NotInitialized,
+            RepositoryImplementationStatus::NotImplemented,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+        let readiness = readiness_for(&report, None);
+        assert_eq!(readiness.summary, ReadinessSummary::NotReady);
+        assert_eq!(
+            readiness.repository_state,
+            RepositoryStateReadiness::NotInitialized
+        );
+        assert_eq!(readiness.recovery.action, RecoveryAction::Setup);
+    }
+
+    #[test]
+    fn unhealthy_storage_is_not_ready() {
+        let report = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "gen-000001".to_string(),
+            },
+            RepositoryImplementationStatus::Unhealthy,
+            RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+            Vec::new(),
+        );
+        let readiness = readiness_for(&report, Some(freshness_counts(2, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::NotReady);
+        assert_eq!(
+            readiness.repository_state,
+            RepositoryStateReadiness::StorageUnhealthy
+        );
+    }
+
+    #[test]
+    fn missing_active_index_is_not_ready() {
+        let report = status_report(
+            RepositoryStatus::Initialized {
+                active_generation: "none".to_string(),
+            },
+            RepositoryImplementationStatus::Available,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+        let readiness = readiness_for(&report, None);
+        assert_eq!(readiness.summary, ReadinessSummary::NotReady);
+        assert!(!readiness.active_index.available);
+    }
+
+    #[test]
+    fn autosync_recommended_but_otherwise_healthy_is_degraded() {
+        // A recommended-but-stopped autosync is a live freshness-maintenance
+        // caveat: queries still serve (query_ready stays true), but the summary
+        // must not claim `ready`. The repository readiness reports both the
+        // autosync state and the StartAutosync/AutosyncRecommended recovery, as the
+        // real status surface computes them together.
+        let mut report = healthy_status_report();
+        report.readiness.autosync = RepositoryAutosyncReadiness {
+            configured: true,
+            running: false,
+            recommended: true,
+        };
+        report.readiness.recovery = Some(RecoveryRecommendation {
+            action: RecoveryAction::StartAutosync,
+            reason: RecoveryReason::AutosyncRecommended,
+        });
+        assert!(report.readiness.query_ready);
+        let readiness = readiness_for(&report, Some(freshness_counts(2, 0, 0)));
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(readiness.recovery.action, RecoveryAction::StartAutosync);
+        assert!(readiness.autosync.recommended);
+    }
+
+    #[test]
+    fn dirty_index_is_degraded_even_when_family_evidence_is_hash_fresh() {
+        // The reviewer's reachable case: dirty derived records on a non-evidence
+        // dependency make the repository query path fall back, yet the family
+        // evidence hashes are all fresh. The summary MUST NOT be ready, and the
+        // same payload never carries query_ready=false with summary=ready.
+        let report = dirty_index_report();
+        assert!(!report.readiness.query_ready);
+        let readiness = readiness_for(&report, Some(freshness_counts(4, 0, 0)));
+        assert_ne!(readiness.summary, ReadinessSummary::Ready);
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert_eq!(readiness.recovery.action, RecoveryAction::Resync);
+        // The query path also falls back on the same report.
+        assert!(matches!(
+            query_preflight(QueryPreflightOperation::PatternFamilyQuery, &report),
+            QueryPreflightReport::Fallback(_)
+        ));
+    }
+
+    #[test]
+    fn ready_summary_always_implies_query_preflight_ready() {
+        // Consistency property: wherever the decomposed summary is `ready`, the
+        // repository query preflight must be `Ready` on the same report, and a
+        // report whose query_ready boolean is false can never be summarized ready.
+        let cases: Vec<(RepositoryStatusReport, Option<FamilyFreshnessCounts>)> = vec![
+            (healthy_status_report(), Some(freshness_counts(3, 0, 0))),
+            (healthy_status_report(), Some(freshness_counts(1, 2, 0))),
+            (healthy_status_report(), Some(freshness_counts(0, 0, 2))),
+            (healthy_status_report(), Some(freshness_counts(0, 0, 0))),
+            (healthy_status_report(), None),
+            (dirty_index_report(), Some(freshness_counts(4, 0, 0))),
+            (
+                status_report(
+                    RepositoryStatus::NotInitialized,
+                    RepositoryImplementationStatus::NotImplemented,
+                    RepositoryImplementationStatus::NotImplemented,
+                    Vec::new(),
+                ),
+                None,
+            ),
+            (
+                status_report(
+                    RepositoryStatus::Initialized {
+                        active_generation: "gen-000001".to_string(),
+                    },
+                    RepositoryImplementationStatus::Unhealthy,
+                    RepositoryImplementationStatus::SyntaxOnlyCodeUnits,
+                    Vec::new(),
+                ),
+                Some(freshness_counts(2, 0, 0)),
+            ),
+        ];
+        for (report, family_freshness) in cases {
+            let readiness = readiness_for(&report, family_freshness);
+            if readiness.summary == ReadinessSummary::Ready {
+                assert!(
+                    matches!(
+                        query_preflight(QueryPreflightOperation::PatternFamilyQuery, &report),
+                        QueryPreflightReport::Ready
+                    ),
+                    "ready summary must imply query_preflight Ready"
+                );
+            }
+            if !report.readiness.query_ready {
+                assert_ne!(
+                    readiness.summary,
+                    ReadinessSummary::Ready,
+                    "query_ready=false must never coexist with summary=ready"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_family_store_yields_no_definite_dimension_tokens() {
+        // A family-store read error must not assert definite prevalence/alignment
+        // tokens; those dimensions report unknown, not a false zero/not-applicable.
+        let report = healthy_status_report();
+        let readiness = assemble_product_readiness(
+            &report,
+            None,
+            None,
+            StaticAlignmentReadiness::CannotVerify,
+            Vec::new(),
+            false,
+            None,
+        );
+        assert_eq!(readiness.summary, ReadinessSummary::Degraded);
+        assert!(readiness.family_evidence.evidence_unreadable);
+        assert_eq!(readiness.family_prevalence, None);
+        assert_eq!(
+            readiness.static_alignment,
+            StaticAlignmentReadiness::CannotVerify
+        );
+        assert_eq!(readiness.top_blocking_unknowns, None);
+        let value = product_readiness_value(&readiness);
+        assert!(value["family_prevalence"].is_null());
+        assert!(value["top_blocking_unknowns"].is_null());
+        assert_eq!(value["static_alignment"]["state"], "cannot_verify");
+    }
+
+    #[test]
+    fn summary_token_is_low_cardinality() {
+        assert_eq!(ReadinessSummary::Ready.as_str(), "ready");
+        assert_eq!(ReadinessSummary::Degraded.as_str(), "degraded");
+        assert_eq!(ReadinessSummary::NotReady.as_str(), "not_ready");
+    }
+
+    #[test]
+    fn top_blocking_unknown_mechanisms_are_count_ordered_and_bounded() {
+        let buckets = vec![
+            UnknownInventoryBucket {
+                key: "b".to_string(),
+                count: 2,
+            },
+            UnknownInventoryBucket {
+                key: "a".to_string(),
+                count: 5,
+            },
+            UnknownInventoryBucket {
+                key: "c".to_string(),
+                count: 5,
+            },
+            UnknownInventoryBucket {
+                key: "d".to_string(),
+                count: 1,
+            },
+            UnknownInventoryBucket {
+                key: "e".to_string(),
+                count: 1,
+            },
+            UnknownInventoryBucket {
+                key: "f".to_string(),
+                count: 1,
+            },
+        ];
+        let top = top_blocking_unknown_mechanisms(buckets);
+        assert_eq!(top.len(), READINESS_TOP_UNKNOWN_LIMIT);
+        assert_eq!(top[0].key, "a");
+        assert_eq!(top[1].key, "c");
+        assert_eq!(top[2].key, "b");
+    }
+
+    #[test]
+    fn product_readiness_value_is_source_free_and_exposes_stale_count() {
+        let report = healthy_status_report();
+        let readiness = readiness_for(&report, Some(freshness_counts(1, 2, 0)));
+        let value = product_readiness_value(&readiness);
+        assert_eq!(value["summary"], "degraded");
+        assert_eq!(value["family_evidence"]["stale_count"], 2);
+        assert_eq!(
+            value["query_retrieval"]["vocabulary_version"],
+            "query-vocabulary.v1"
+        );
+        assert_eq!(value["measurement"]["token_saving_status"], "NOT_MEASURED");
+        assert_eq!(value["recovery"]["executable"], true);
+        // The readiness view carries no repository source paths or evidence text.
+        let serialized = value.to_string();
+        assert!(!serialized.contains("/repo"));
+        assert!(!serialized.contains("content_hash"));
+    }
+
+    #[test]
+    fn product_readiness_value_reports_providers_source_free() {
+        let report = healthy_status_report();
+        let providers =
+            crate::application::providers::optional_provider_report(|_| None, |_| false);
+        let readiness = assemble_product_readiness(
+            &report,
+            Some(freshness_counts(1, 0, 0)),
+            Some(FamilyPrevalenceReadiness::default()),
+            StaticAlignmentReadiness::NotApplicable,
+            providers,
+            false,
+            Some(Vec::new()),
+        );
+        let value = product_readiness_value(&readiness);
+        let provider_array = value["providers"].as_array().expect("providers array");
+        assert!(!provider_array.is_empty());
+        assert!(provider_array
+            .iter()
+            .all(|provider| provider.get("availability").is_some()));
+    }
+
+    #[test]
+    fn family_prevalence_buckets_sum_to_total_including_unparseable_tokens() {
+        // An unparseable stored classification token is routed to the unknown
+        // prevalence bucket, never dropped, so the buckets always sum to total.
+        let mut prevalence = FamilyPrevalenceReadiness::default();
+        for token in [
+            "DOMINANT_PATTERN",
+            "SUPPORTED_PATTERN",
+            "MINORITY_PATTERN",
+            "UNKNOWN_PREVALENCE",
+            "SOME_UNRECOGNIZED_TOKEN",
+        ] {
+            accumulate_prevalence_token(token, &mut prevalence);
+        }
+        assert_eq!(prevalence.total_count, 5);
+        assert_eq!(
+            prevalence.dominant_count
+                + prevalence.supported_count
+                + prevalence.minority_count
+                + prevalence.unknown_prevalence_count,
+            prevalence.total_count
+        );
+        // The unrecognized token lands in the unknown bucket with the real one.
+        assert_eq!(prevalence.unknown_prevalence_count, 2);
     }
 
     #[test]

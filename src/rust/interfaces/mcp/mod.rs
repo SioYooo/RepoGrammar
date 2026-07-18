@@ -4,14 +4,15 @@ use crate::application::conformance::AlignmentComputation;
 use crate::application::install::AGENT_PREFLIGHT_GATE;
 use crate::application::query::{
     build_read_plan, estimate_family_output_potential_token_savings, family_query_route_report,
-    family_query_unknown_metric, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, AlignmentCertificateReport, FamilyDetailReport,
-    FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
-    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    family_query_unknown_metric, product_readiness_value, query_preflight,
+    read_plan_with_rendered_spans, repository_status_unavailable_fallback, select_family_evidence,
+    validate_query_target, validate_query_token_budget, AlignmentCertificateReport,
+    FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport,
+    FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown,
+    ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
     ReadPlanLineRangeOmission, ResolvedQueryTarget, SourceSpanRenderReport,
     TermRetrievalAbstention, TermRetrievalRoute, MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET,
+    PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -53,6 +54,7 @@ pub enum McpOperation {
     ShowFamily,
     ExplainDeviation,
     CheckConformance,
+    InspectReadiness,
 }
 
 impl McpOperation {
@@ -62,6 +64,7 @@ impl McpOperation {
             "show_family" => Some(Self::ShowFamily),
             "explain_deviation" => Some(Self::ExplainDeviation),
             "check_conformance" => Some(Self::CheckConformance),
+            "inspect_readiness" => Some(Self::InspectReadiness),
             _ => None,
         }
     }
@@ -72,6 +75,7 @@ impl McpOperation {
             Self::ShowFamily => "show_family",
             Self::ExplainDeviation => "explain_deviation",
             Self::CheckConformance => "check_conformance",
+            Self::InspectReadiness => "inspect_readiness",
         }
     }
 
@@ -81,6 +85,7 @@ impl McpOperation {
             Self::ShowFamily => "family",
             Self::ExplainDeviation => "explain",
             Self::CheckConformance => "check",
+            Self::InspectReadiness => "status",
         }
     }
 }
@@ -97,6 +102,15 @@ pub trait McpReadOnlyRuntime {
         target: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError>;
+
+    /// Assemble the decomposed product readiness report. Read-only and
+    /// source-free, like `repository_status`.
+    fn product_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+    ) -> Result<ProductReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("readiness"))
+    }
 
     fn render_source_spans(
         &self,
@@ -184,7 +198,7 @@ struct ContextArguments {
 pub fn tool_schema() -> Value {
     json!({
         "name": McpToolName::Context.as_str(),
-        "description": "Read-only RepoGrammar pattern-family context. For find_analogues, explain_deviation, and check_conformance, pass the path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use show_family only with an exact family id. Start with compact mode and do not request include_source_spans by default. Use read_plan before editing, and fall back on UNKNOWN/FALLBACK/stale/omitted/insufficient results. Do not run repogrammar stats in normal agent loops. No silent setup; run setup/resync/autosync only when user or project policy permits machine integration and repo-local analysis state.",
+        "description": "Read-only RepoGrammar pattern-family context. For find_analogues, explain_deviation, and check_conformance, pass the path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use show_family only with an exact family id. Use inspect_readiness (no target) for a bounded, source-free capability report: a summary token, per-dimension states (repository, active index, family evidence freshness, prevalence, retrieval, static alignment, providers, autosync, measurement), the top blocking-unknown mechanisms, and one executable recovery action. Start with compact mode and do not request include_source_spans by default. Use read_plan before editing, and fall back on UNKNOWN/FALLBACK/stale/omitted/insufficient results. Do not run repogrammar stats in normal agent loops. No silent setup; run setup/resync/autosync only when user or project policy permits machine integration and repo-local analysis state.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -197,6 +211,7 @@ pub fn tool_schema() -> Value {
                         McpOperation::ShowFamily.as_str(),
                         McpOperation::ExplainDeviation.as_str(),
                         McpOperation::CheckConformance.as_str(),
+                        McpOperation::InspectReadiness.as_str(),
                     ],
                 },
                 "target": {
@@ -238,6 +253,20 @@ pub fn handle_context_call(
         path: context.repository_root.clone(),
         state_dir_override: context.state_dir_override.clone(),
     };
+
+    // `inspect_readiness` is a read-only, source-free capability inspection. It
+    // does not run the query preflight or family lookup; it returns the decomposed
+    // readiness report, or a clean fallback when readiness cannot be assembled.
+    if arguments.operation == McpOperation::InspectReadiness {
+        return Ok(match runtime.product_readiness(request) {
+            Ok(readiness) => inspect_readiness_value(&readiness),
+            Err(_) => fallback_value(
+                arguments.operation,
+                repository_status_unavailable_fallback(QueryPreflightOperation::PatternFamilyQuery),
+            ),
+        });
+    }
+
     let status_report = match runtime.repository_status(request.clone()) {
         Ok(report) => report,
         Err(_) => {
@@ -443,6 +472,7 @@ pub fn handle_context_call(
                 Ok(json!({
                     "operation": arguments.operation.as_str(),
                     "command": arguments.operation.cli_command(),
+                    "schema_version": PRODUCT_SCHEMA_VERSION,
                     "status": "UNKNOWN",
                     "implemented": true,
                     "active_generation": report.active_generation,
@@ -558,6 +588,10 @@ fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
         }
         // check_conformance runs the static-alignment flow.
         McpOperation::CheckConformance => FamilyLookupMode::Conformance,
+        // inspect_readiness never enters the family-lookup path.
+        McpOperation::InspectReadiness => {
+            unreachable!("inspect_readiness is not a family-query operation")
+        }
     }
 }
 
@@ -618,6 +652,10 @@ fn family_query_operation_category(operation: McpOperation) -> FamilyQueryComman
         McpOperation::ShowFamily => FamilyQueryCommandCategory::ShowFamily,
         McpOperation::ExplainDeviation => FamilyQueryCommandCategory::ExplainDeviation,
         McpOperation::CheckConformance => FamilyQueryCommandCategory::CheckConformance,
+        // inspect_readiness records no family-query telemetry (like status/doctor).
+        McpOperation::InspectReadiness => {
+            unreachable!("inspect_readiness records no family-query outcome")
+        }
     }
 }
 
@@ -819,7 +857,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
         .and_then(McpOperation::parse)
         .ok_or_else(|| {
             McpProtocolError::invalid_params(
-                "repogrammar_context operation must be one of find_analogues, show_family, explain_deviation, or check_conformance",
+                "repogrammar_context operation must be one of find_analogues, show_family, explain_deviation, check_conformance, or inspect_readiness",
             )
         })?;
     let target = match object.get("target") {
@@ -914,10 +952,26 @@ fn fallback_value(
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "FALLBACK_TO_CODE_SEARCH",
         "reason": fallback.reason,
         "guidance": fallback.guidance,
         "implemented": fallback.implemented,
+    })
+}
+
+/// Bounded, source-free MCP result for `inspect_readiness`: the decomposed
+/// product readiness report plus the shared operation/command/schema envelope.
+/// It carries no source text, evidence, paths, or family detail — only typed
+/// tokens, counts, and the single recovery action.
+fn inspect_readiness_value(readiness: &ProductReadinessReport) -> Value {
+    json!({
+        "operation": McpOperation::InspectReadiness.as_str(),
+        "command": McpOperation::InspectReadiness.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
+        "status": "ok",
+        "implemented": true,
+        "readiness": product_readiness_value(readiness),
     })
 }
 
@@ -1006,6 +1060,7 @@ fn family_detail_value(
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "ok",
         "implemented": true,
         "active_generation": family.active_generation,
@@ -1079,6 +1134,7 @@ fn family_partial_context_value(
     let value = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "PARTIAL_CONTEXT",
         "implemented": true,
         "active_generation": report.active_generation,
@@ -1112,6 +1168,7 @@ fn alignment_certificate_value(
     json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": certificate.alignment_status.as_token(),
         "implemented": true,
         "active_generation": certificate.active_generation,
@@ -1493,6 +1550,7 @@ mod tests {
         assert_eq!(McpOperation::ShowFamily.as_str(), "show_family");
         assert_eq!(McpOperation::ExplainDeviation.as_str(), "explain_deviation");
         assert_eq!(McpOperation::CheckConformance.as_str(), "check_conformance");
+        assert_eq!(McpOperation::InspectReadiness.as_str(), "inspect_readiness");
     }
 
     #[test]
@@ -1508,13 +1566,15 @@ mod tests {
         assert!(description.contains("do not request include_source_spans by default"));
         assert!(description.contains("Do not run repogrammar stats"));
         assert!(description.contains("No silent setup"));
+        assert!(description.contains("inspect_readiness"));
         assert_eq!(
             schema["inputSchema"]["properties"]["operation"]["enum"],
             json!([
                 "find_analogues",
                 "show_family",
                 "explain_deviation",
-                "check_conformance"
+                "check_conformance",
+                "inspect_readiness"
             ])
         );
         assert_eq!(schema["inputSchema"]["additionalProperties"], false);
@@ -1574,6 +1634,80 @@ mod tests {
         assert_eq!(response["guidance"], "run repogrammar setup");
         assert_eq!(response["implemented"], false);
         assert_eq!(runtime.lookup_calls(), 0);
+    }
+
+    #[test]
+    fn inspect_readiness_returns_bounded_source_free_report_without_family_lookup() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness"}),
+        )
+        .expect("readiness response");
+
+        assert_eq!(response["operation"], "inspect_readiness");
+        assert_eq!(response["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(response["status"], "ok");
+        let readiness = &response["readiness"];
+        // The one-stale-family fixture must surface as degraded with the count.
+        assert_eq!(readiness["summary"], "degraded");
+        assert_eq!(readiness["family_evidence"]["stale_count"], 1);
+        assert_eq!(readiness["repository_state"], "initialized");
+        assert!(readiness["recovery"]["action"].is_string());
+        // Read-only capability inspection: no family lookup runs.
+        assert_eq!(runtime.lookup_calls(), 0);
+        // Bounded and source-free: no read plan, evidence, or source spans.
+        assert!(response.get("read_plan").is_none());
+        assert!(response.get("source_spans").is_none());
+        let serialized = response.to_string();
+        assert!(!serialized.contains("content_hash"));
+        assert!(!serialized.contains("start_byte"));
+    }
+
+    #[test]
+    fn inspect_readiness_reports_not_ready_for_uninitialized_repository() {
+        let runtime = FakeMcpRuntime::not_initialized();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness"}),
+        )
+        .expect("readiness response");
+
+        assert_eq!(response["readiness"]["summary"], "not_ready");
+        assert_eq!(runtime.lookup_calls(), 0);
+    }
+
+    #[test]
+    fn inspect_readiness_over_tools_call_wraps_bounded_text_content() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let outcome = handle_json_rpc_value(
+            &runtime,
+            &context(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "repogrammar_context",
+                    "arguments": {"operation": "inspect_readiness"},
+                },
+            }),
+        );
+
+        let payload = outcome.response.expect("tools/call response");
+        assert_eq!(payload["result"]["isError"], false);
+        let text = payload["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text content");
+        let parsed: Value = serde_json::from_str(text).expect("readiness JSON");
+        assert_eq!(parsed["operation"], "inspect_readiness");
+        assert_eq!(parsed["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(parsed["readiness"]["summary"], "degraded");
     }
 
     #[test]
@@ -2377,6 +2511,27 @@ mod tests {
                 return Ok(unknown_report());
             }
             Ok(self.lookup.clone())
+        }
+
+        fn product_readiness(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<ProductReadinessReport, RepoGrammarError> {
+            // A fixture with one stale family so the bounded readiness output can be
+            // asserted to surface the degraded-with-stale-count case.
+            Ok(crate::application::query::assemble_product_readiness(
+                &self.status,
+                Some(crate::application::query::FamilyFreshnessCounts {
+                    fresh_count: 2,
+                    stale_count: 1,
+                    cannot_verify_count: 0,
+                }),
+                Some(crate::application::query::FamilyPrevalenceReadiness::default()),
+                crate::application::query::StaticAlignmentReadiness::NotApplicable,
+                Vec::new(),
+                false,
+                Some(Vec::new()),
+            ))
         }
 
         fn render_source_spans(

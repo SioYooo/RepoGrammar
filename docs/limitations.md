@@ -116,6 +116,19 @@ When source spans are requested, RepoGrammar renders only bounded spans selected
 from the read plan after hash and freshness checks. Stale or omitted spans mean
 the agent should use normal source reads for the affected case.
 
+## Readiness Is Capability, Not Correctness
+
+The `product_readiness` model (on `status`/`doctor` JSON and the MCP
+`inspect_readiness` operation) reports only whether RepoGrammar can operate in
+the current checkout. A `ready` summary means the active index is servable with
+fresh family evidence; it does not prove that any family, static-alignment, or
+runtime-equivalence claim is correct, that a query will find a supported family,
+or that token savings are real. Its `measurement` dimension stays `NOT_MEASURED`.
+The `static_alignment` dimension reports only that a fresh, ready family exists
+to align against, never that an alignment holds at runtime. The
+`top_blocking_unknowns` are triage buckets, not resolved analysis. A `degraded`
+summary with a stale count is an honest freshness caveat, not an error.
+
 ## Token Savings
 
 `estimated_potential_token_savings` is an estimated local read-displacement

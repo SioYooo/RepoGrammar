@@ -510,6 +510,37 @@ uses the classifier's resync action, while unverifiable or unsupported evidence
 uses source fallback. Callers may format these actions but must not infer a
 different action from raw readiness, freshness, family, or `UNKNOWN` fields.
 
+Status and doctor JSON, and the MCP `inspect_readiness` operation, additionally
+expose a decomposed `product_readiness` model from one application-layer
+authority. RepoGrammar reports product capability as several independently
+truthful dimensions rather than a single optimistic boolean: repository state,
+active index (generation available and schema current), family-evidence freshness
+(fresh/stale/cannot-verify counts reusing the bounded freshness machinery),
+family prevalence by classification (or unreadable), query retrieval (exact and
+term-retrieval modes with a vocabulary version), static alignment (available,
+unavailable, not-applicable, or unreadable), per-slot providers, autosync, and the
+NOT_MEASURED token-saving discipline. A store-read error yields no definite
+dimension token: prevalence and the top-unknown list are reported as unreadable
+(`null`) and static alignment as `cannot_verify`, never a false zero.
+
+A single low-cardinality summary token — `ready`, `degraded`, or `not_ready` — is
+a pure projection of the one combined recovery decision, which is derived from the
+same authoritative repository recovery the query preflight consumes (and therefore
+already incorporates the repository dirty-record freshness signal) layered with
+the hash-checked family-evidence freshness. It is never more optimistic than that
+authority: an unservable index is `not_ready`; a servable index that is stale
+(family evidence stale/unverifiable, or the repository index carries dirty derived
+records) or whose autosync is recommended-but-stopped is `degraded` with the stale
+count visible; only a fully clean, fresh servable index is `ready`. There is no
+top-level optimistic readiness boolean: a checkout whose index reports
+`query_ready` while its family evidence is stale is `degraded`, not `ready`, and
+`summary: ready` guarantees the query preflight is `Ready` on the same checkout —
+one payload can never carry `readiness.query_ready: false` beside
+`product_readiness.summary: ready`. The decomposition is a capability report only;
+it is not a claim that any particular family, alignment, or token-saving result is
+supported or measured. Assembling it performs bounded stats-scale reads, so like
+`status`/`doctor` it is for readiness triage, not routine per-query agent loops.
+
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,
 security, persistence, or conformance claims while still allowing weaker
