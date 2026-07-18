@@ -140,8 +140,9 @@ repo-local aggregate
 `estimated_potential_token_savings` with `measurement_kind: ESTIMATED`,
 `event_count`, aggregate estimated baseline/returned token counts, and the
 caveat that it is not measured token savings. The numerator and query
-denominator come from the same `family-query-metrics.v2` epoch and atomic local
-file replacement; legacy v1 savings and outcome files are historical unpaired
+denominator come from the same `family-query-metrics.v2` epoch and
+process-serialized atomic local file replacement, so concurrent agent processes
+do not lose read-modify-write increments; legacy v1 savings and outcome files are historical unpaired
 evidence and must not be imported into the ratio. This aggregate is all-scope: it
 sums savings events across every indexed language and every context-delivering
 outcome shape (found, partial_context, alignment), not only Python found

@@ -99,7 +99,8 @@ query denominator and optional estimated-savings numerator together: one
 `total_queries` increment per invocation plus, for found families,
 PARTIAL_CONTEXT read plans, and committed/partial alignment certificates, one
 `savings_events` increment and its token totals and breakdowns. Both sides are
-validated and persisted by one atomic file replacement. The file carries epoch
+validated and persisted by one process-serialized atomic file replacement, so
+concurrent CLI and MCP processes cannot overwrite each other's increments. The file carries epoch
 `atomic-query-accounting.v2`, `epoch_started_unix_seconds`, and
 `producer_version`; stats may only form a ratio within this cohort. Existing
 `estimated-potential-token-savings.v1` and `family-query-outcomes.v1` files are

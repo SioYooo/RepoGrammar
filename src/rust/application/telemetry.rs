@@ -11,7 +11,11 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const TELEMETRY_SCHEMA_VERSION: &str = "telemetry.v1";
@@ -31,6 +35,10 @@ const RATIO_BUCKETS: &[&str] = &["unknown", "0", "0-25", "25-50", "50-75", "75-1
 const RISK_BUCKETS: &[&str] = &["unknown", "low", "medium", "high"];
 const FAMILY_QUERY_OUTCOMES_METRIC_NAME: &str = "family_query_outcomes";
 const FAMILY_QUERY_METRICS_METRIC_NAME: &str = "family_query_metrics";
+const FAMILY_QUERY_METRICS_LOCK_ATTEMPTS: usize = 500;
+const FAMILY_QUERY_METRICS_LOCK_RETRY: Duration = Duration::from_millis(2);
+const FAMILY_QUERY_METRICS_STALE_LOCK_AGE: Duration = Duration::from_secs(30);
+static FAMILY_QUERY_METRICS_LOCK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// Context-delivering outcome shapes an estimated-potential-token-savings event
 /// can be attributed to. A closed vocabulary, additive to the
 /// `estimated-potential-token-savings.v1` rollup (tolerated-when-absent).
@@ -1009,6 +1017,7 @@ pub fn record_family_query_metric(
     savings: Option<FamilyQuerySavingsRecord<'_>>,
 ) -> Result<FamilyQueryMetricsRollup, RepoGrammarError> {
     let path = family_query_metrics_file(request)?;
+    let _lock = acquire_family_query_metrics_lock(&path)?;
     let mut rollup = read_family_query_metrics_file(&path)?;
     accumulate_family_query_outcome(&mut rollup.query_outcomes, record)?;
     if let Some(savings) = savings {
@@ -1019,6 +1028,84 @@ pub fn record_family_query_metric(
     }
     write_family_query_metrics_file(&path, &rollup)?;
     Ok(rollup)
+}
+
+struct FamilyQueryMetricsLockGuard {
+    path: PathBuf,
+    token: String,
+}
+
+impl Drop for FamilyQueryMetricsLockGuard {
+    fn drop(&mut self) {
+        remove_family_query_metrics_lock_if_owned(&self.path, &self.token);
+    }
+}
+
+fn acquire_family_query_metrics_lock(
+    metrics_path: &Path,
+) -> Result<FamilyQueryMetricsLockGuard, RepoGrammarError> {
+    let lock_path = metrics_path.with_extension("lock");
+    ensure_parent_dir(&lock_path)?;
+    let token = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        FAMILY_QUERY_METRICS_LOCK_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    );
+
+    for _attempt in 0..FAMILY_QUERY_METRICS_LOCK_ATTEMPTS {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut file) => {
+                if file.write_all(token.as_bytes()).is_err() {
+                    drop(file);
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(invalid_input("failed to write family query metrics lock"));
+                }
+                return Ok(FamilyQueryMetricsLockGuard {
+                    path: lock_path,
+                    token,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                remove_stale_family_query_metrics_lock(&lock_path);
+                thread::sleep(FAMILY_QUERY_METRICS_LOCK_RETRY);
+            }
+            Err(_) => {
+                return Err(invalid_input("failed to acquire family query metrics lock"));
+            }
+        }
+    }
+
+    Err(invalid_input("family query metrics lock is busy"))
+}
+
+fn remove_stale_family_query_metrics_lock(path: &Path) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return;
+    };
+    if modified.elapsed().unwrap_or_default() < FAMILY_QUERY_METRICS_STALE_LOCK_AGE {
+        return;
+    }
+    let Ok(token) = fs::read_to_string(path) else {
+        return;
+    };
+    remove_family_query_metrics_lock_if_owned(path, &token);
+}
+
+fn remove_family_query_metrics_lock_if_owned(path: &Path, token: &str) {
+    if fs::read_to_string(path).is_ok_and(|contents| contents == token) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 pub fn family_query_metrics_rollup(
@@ -3559,6 +3646,52 @@ mod tests {
                 "v2 query metrics leaked forbidden token {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn atomic_v2_query_metrics_serialize_concurrent_writers_without_lost_counts() {
+        let workspace = TempWorkspace::new("family-query-metrics-v2-concurrent");
+        let request = repository_request(&workspace);
+        let workers = (0..8)
+            .map(|_| {
+                let request = request.clone();
+                std::thread::spawn(move || {
+                    let found = FamilyQueryOutcomeRecord {
+                        status: FamilyQueryOutcomeStatus::Found,
+                        entrypoint: FamilyQueryEntrypoint::Mcp,
+                        command_category: FamilyQueryCommandCategory::FindAnalogues,
+                        lookup_mode: FamilyQueryLookupMode::Fuzzy,
+                        unknowns: &[],
+                        abstention_reason: None,
+                        read_plan_item_count: Some(1),
+                        source_spans_requested: false,
+                        source_spans_included: false,
+                        source_span_omission_count: None,
+                    };
+                    let metric = EstimatedPotentialTokenSavings::new(100, 25);
+                    let savings = FamilyQuerySavingsRecord {
+                        metric: &metric,
+                        outcome_shape: "found",
+                        language: "python",
+                    };
+                    for _ in 0..20 {
+                        record_family_query_metric(request.clone(), &found, Some(savings))
+                            .expect("record concurrent invocation");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().expect("join metrics writer");
+        }
+
+        let rollup = family_query_metrics_rollup(request).expect("read concurrent rollup");
+        assert_eq!(rollup.query_outcomes.event_count, 160);
+        assert_eq!(rollup.savings.event_count, 160);
+        assert_eq!(
+            rollup.savings.total_estimated_potential_token_savings,
+            12_000
+        );
     }
 
     #[test]
