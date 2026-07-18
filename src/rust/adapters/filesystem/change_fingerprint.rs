@@ -4,17 +4,43 @@ use super::discovery::{
     is_default_excluded_directory_name, is_repogrammar_state_directory_name,
     supported_language_for_path,
 };
+use super::git::{GitContext, GitContextResolution};
 use super::resource_limits::{DiscoveryLimits, DiscoveryResourceBudget};
-use crate::ports::file_discovery::FileDiscoveryError;
+use crate::ports::file_discovery::{DiscoveredLanguage, FileDiscoveryError, GitIgnoreStatus};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+
+/// Result of one metadata fingerprint pass.
+///
+/// Alongside the content-free `digest`, the pass carries bounded, path-free
+/// observability counters so the daemon can log how Git ignore rules were
+/// applied. It never carries repository paths or source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryChangeFingerprint {
+    /// Stable content-free digest of the accepted supported-file inventory.
+    pub digest: String,
+    /// How this pass evaluated Git ignore rules, mirroring discovery's
+    /// applied/not-repository/unavailable classification.
+    pub git_ignore_status: GitIgnoreStatus,
+    /// Count of supported candidate files excluded because Git reported them
+    /// ignored this pass. Bounded by the visited-entry budget; never a path.
+    pub git_ignored_skipped: u64,
+}
 
 pub fn repository_change_fingerprint(
     repository_root: &str,
     max_file_bytes: u64,
 ) -> Result<String, FileDiscoveryError> {
+    Ok(repository_change_fingerprint_report(repository_root, max_file_bytes)?.digest)
+}
+
+pub fn repository_change_fingerprint_report(
+    repository_root: &str,
+    max_file_bytes: u64,
+) -> Result<RepositoryChangeFingerprint, FileDiscoveryError> {
     repository_change_fingerprint_with_limits(
         repository_root,
         max_file_bytes,
@@ -26,7 +52,7 @@ fn repository_change_fingerprint_with_limits(
     repository_root: &str,
     max_file_bytes: u64,
     limits: DiscoveryLimits,
-) -> Result<String, FileDiscoveryError> {
+) -> Result<RepositoryChangeFingerprint, FileDiscoveryError> {
     let root = PathBuf::from(repository_root);
     let metadata = fs::symlink_metadata(&root).map_err(|_| {
         FileDiscoveryError::InvalidRoot("repository root is not readable".to_string())
@@ -43,18 +69,27 @@ fn repository_change_fingerprint_with_limits(
         root,
         canonical_root,
         max_file_bytes,
-        entries: Vec::new(),
+        candidates: Vec::new(),
         budget: DiscoveryResourceBudget::new(limits),
     };
     state.walk(PathBuf::new())?;
-    state.finish()
+    state.finish(repository_root)
+}
+
+/// One accepted supported-file candidate, retained in walk order before Git
+/// ignore filtering and accepted-budget charging.
+struct FingerprintCandidate {
+    relative_path: String,
+    size: u64,
+    modified: Option<String>,
+    language: DiscoveredLanguage,
 }
 
 struct FingerprintState {
     root: PathBuf,
     canonical_root: PathBuf,
     max_file_bytes: u64,
-    entries: Vec<String>,
+    candidates: Vec<FingerprintCandidate>,
     budget: DiscoveryResourceBudget,
 }
 
@@ -114,30 +149,84 @@ impl FingerprintState {
                 continue;
             }
 
-            self.budget.record_accepted_file(metadata.len())?;
+            // Defer accepted-budget charging until after Git ignore filtering so
+            // ignored candidates never consume the accepted-file/byte ceilings,
+            // matching the population manual Git-aware discovery charges.
             let modified = metadata.modified().ok().and_then(|value| {
                 value.duration_since(UNIX_EPOCH).ok().map(|duration| {
                     format!("{}.{:09}", duration.as_secs(), duration.subsec_nanos())
                 })
             });
-            self.entries.push(format!(
-                "{relative_path}\0{}\0{}\0{}",
-                metadata.len(),
-                modified.as_deref().unwrap_or("unknown"),
-                language.as_str()
-            ));
+            self.candidates.push(FingerprintCandidate {
+                relative_path,
+                size: metadata.len(),
+                modified,
+                language,
+            });
         }
         Ok(())
     }
 
-    fn finish(mut self) -> Result<String, FileDiscoveryError> {
-        self.entries.sort();
+    fn finish(
+        mut self,
+        repository_root: &str,
+    ) -> Result<RepositoryChangeFingerprint, FileDiscoveryError> {
+        let (git_ignore_status, ignored) = resolve_git_ignored(repository_root, &self.candidates);
+        let git_ignored_skipped = u64::try_from(ignored.len()).unwrap_or(u64::MAX);
+
+        let mut entries: Vec<String> = Vec::with_capacity(self.candidates.len());
+        for candidate in &self.candidates {
+            if ignored.contains(&candidate.relative_path) {
+                continue;
+            }
+            // Charge in walk order so a breached ceiling reports the same
+            // deterministic observed value regardless of Git ignore state.
+            self.budget.record_accepted_file(candidate.size)?;
+            entries.push(format!(
+                "{}\0{}\0{}\0{}",
+                candidate.relative_path,
+                candidate.size,
+                candidate.modified.as_deref().unwrap_or("unknown"),
+                candidate.language.as_str()
+            ));
+        }
+        entries.sort();
         let mut hasher = Sha256::new();
-        for entry in self.entries {
+        for entry in entries {
             hasher.update(entry.as_bytes());
             hasher.update([0xff]);
         }
-        Ok(bytes_to_lower_hex(hasher.finalize().as_ref()))
+        Ok(RepositoryChangeFingerprint {
+            digest: bytes_to_lower_hex(hasher.finalize().as_ref()),
+            git_ignore_status,
+            git_ignored_skipped,
+        })
+    }
+}
+
+/// Evaluate Git ignore for the candidate inventory with the same status
+/// classification and warning-fallback semantics as manual discovery: when Git
+/// is unavailable or errors, fall back to no-ignore filtering (keep every
+/// candidate) instead of silently dropping files.
+fn resolve_git_ignored(
+    repository_root: &str,
+    candidates: &[FingerprintCandidate],
+) -> (GitIgnoreStatus, BTreeSet<String>) {
+    match GitContext::resolve(Path::new(repository_root)) {
+        Ok(context) => {
+            let paths: Vec<String> = candidates
+                .iter()
+                .map(|candidate| candidate.relative_path.clone())
+                .collect();
+            match context.check_ignore_batch(&paths) {
+                Ok(ignored) => (GitIgnoreStatus::Applied, ignored),
+                Err(()) => (GitIgnoreStatus::Unavailable, BTreeSet::new()),
+            }
+        }
+        Err(GitContextResolution::NotRepository) => {
+            (GitIgnoreStatus::NotRepository, BTreeSet::new())
+        }
+        Err(GitContextResolution::Unavailable) => (GitIgnoreStatus::Unavailable, BTreeSet::new()),
     }
 }
 
@@ -167,10 +256,19 @@ fn bytes_to_lower_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::ports::file_discovery::{
-        FileDiscoveryLimitExceeded, FileDiscoveryLimitKind, DEFAULT_MAX_FILE_BYTES,
+        FileDiscoveryLimitExceeded, FileDiscoveryLimitKind, GitIgnoreStatus, DEFAULT_MAX_FILE_BYTES,
     };
     use crate::test_support::TempWorkspace;
     use std::process::Command;
+
+    fn git_init(workspace: &TempWorkspace) -> bool {
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 
     fn limits(
         accepted_files: u64,
@@ -412,31 +510,120 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_deliberately_charges_git_ignored_supported_files() {
-        let workspace = TempWorkspace::new("fingerprint-resource-git-ignored");
-        assert!(
-            Command::new("git")
-                .args(["init", "-q"])
-                .current_dir(workspace.path())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false),
-            "Git is required for this regression"
-        );
+    fn fingerprint_excludes_git_ignored_supported_files_from_budget_and_digest() {
+        let workspace = TempWorkspace::new("fingerprint-git-ignored-parity");
+        if !git_init(&workspace) {
+            return;
+        }
         fs::write(workspace.path().join(".gitignore"), "ignored.ts\n").expect("write gitignore");
         fs::write(workspace.path().join("ignored.ts"), "ignored").expect("write ignored source");
+        fs::write(workspace.path().join("kept.ts"), "kept").expect("write kept source");
         let root = workspace.path().display().to_string();
 
-        assert_limit(
-            repository_change_fingerprint_with_limits(&root, 64, limits(0, 0, 3, 0)),
-            FileDiscoveryLimitKind::AcceptedFiles,
-            0,
-            1,
-        );
+        let report = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint with Git ignore parity");
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::Applied);
+        assert_eq!(report.git_ignored_skipped, 1);
+        let baseline = report.digest.clone();
+
+        // A change confined to the Git-ignored file must not move the digest,
+        // so autosync does not trigger a sync discovery would then exclude.
+        fs::write(
+            workspace.path().join("ignored.ts"),
+            "ignored content changed to a different length",
+        )
+        .expect("rewrite ignored source");
+        let after_ignored = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint after ignored change");
+        assert_eq!(after_ignored.digest, baseline);
+        assert_eq!(after_ignored.git_ignored_skipped, 1);
+
+        // A change to the unignored file still moves the digest.
+        fs::write(workspace.path().join("kept.ts"), "kept changed").expect("rewrite kept source");
+        let after_kept = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint after tracked change");
+        assert_ne!(after_kept.digest, baseline);
+    }
+
+    #[test]
+    fn fingerprint_git_ignored_files_do_not_breach_accepted_ceiling() {
+        let workspace = TempWorkspace::new("fingerprint-git-ignored-ceiling");
+        if !git_init(&workspace) {
+            return;
+        }
+        // `gen` is not a default-excluded directory, so only Git ignore keeps
+        // its supported files out of the accepted population.
+        fs::write(workspace.path().join(".gitignore"), "gen/\n").expect("write gitignore");
+        fs::create_dir(workspace.path().join("gen")).expect("create gen dir");
+        for index in 0..20 {
+            fs::write(workspace.path().join(format!("gen/f{index}.ts")), "x")
+                .expect("write git-ignored source");
+        }
+        for name in ["a.ts", "b.ts", "c.ts"] {
+            fs::write(workspace.path().join(name), "1").expect("write tracked source");
+        }
+        let root = workspace.path().display().to_string();
+
+        // Only three unignored supported files exist; a ceiling of three
+        // accepted files accepts the repository, matching manual Git-aware
+        // discovery, instead of failing on the 20 Git-ignored candidates.
+        let report = repository_change_fingerprint_with_limits(&root, 64, limits(3, 64, 100, 10))
+            .expect("Git-ignored files must not breach the accepted ceiling");
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::Applied);
+        assert_eq!(report.git_ignored_skipped, 20);
+    }
+
+    #[test]
+    fn fingerprint_without_git_repository_applies_no_ignore_filtering() {
+        let workspace = TempWorkspace::new("fingerprint-no-git-fallback");
+        // No Git repository: a `.gitignore` is present but must not filter.
+        fs::write(workspace.path().join(".gitignore"), "ignored.ts\n").expect("write gitignore");
+        fs::write(workspace.path().join("ignored.ts"), "kept without git")
+            .expect("write candidate");
+        let root = workspace.path().display().to_string();
+
+        let report = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint outside a Git repository");
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::NotRepository);
+        assert_eq!(report.git_ignored_skipped, 0);
+    }
+
+    #[test]
+    fn fingerprint_falls_back_to_no_ignore_filtering_when_git_metadata_invalid() {
+        let workspace = TempWorkspace::new("fingerprint-invalid-git-fallback");
+        fs::create_dir_all(workspace.path().join(".git")).expect("create invalid git dir");
+        fs::write(workspace.path().join(".gitignore"), "ignored.ts\n").expect("write gitignore");
+        fs::write(workspace.path().join("ignored.ts"), "kept on fallback")
+            .expect("write candidate");
+        let root = workspace.path().display().to_string();
+
+        let report = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint with unavailable Git");
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::Unavailable);
+        assert_eq!(report.git_ignored_skipped, 0);
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic_across_repeated_passes() {
+        let workspace = TempWorkspace::new("fingerprint-determinism");
+        if !git_init(&workspace) {
+            return;
+        }
+        fs::write(workspace.path().join(".gitignore"), "gen/\n").expect("write gitignore");
+        fs::create_dir(workspace.path().join("gen")).expect("create gen dir");
+        fs::write(workspace.path().join("gen/ignored.ts"), "ignored").expect("write ignored");
+        fs::write(workspace.path().join("kept.ts"), "kept").expect("write kept source");
+        let root = workspace.path().display().to_string();
+
+        let first = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("first pass");
+        let second = repository_change_fingerprint_report(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("second pass");
+        assert_eq!(first, second);
     }
 
     fn assert_limit(
-        result: Result<String, FileDiscoveryError>,
+        result: Result<RepositoryChangeFingerprint, FileDiscoveryError>,
         kind: FileDiscoveryLimitKind,
         limit: u64,
         observed: u64,

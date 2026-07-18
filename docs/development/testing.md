@@ -110,8 +110,13 @@ allowed.
   deduplication. Application coverage must prove typed invalid-input mapping and
   that failure precedes generation preparation/activation. Autosync fingerprint
   tests must independently prove its exact/plus-one accepted-file,
-  accepted-byte, visited-entry, and depth gates, intentional Git-ignored
-  supported-file charging, and no-path/source-leak errors.
+  accepted-byte, visited-entry, and depth gates, Git-ignore parity with manual
+  discovery (Git-ignored supported files are excluded from the accepted-file and
+  byte budgets and from the digest, and a lowered accepted ceiling still accepts
+  a repository whose only over-ceiling files are Git-ignored), the safe
+  no-ignore fallback when Git is absent or errors, determinism across repeated
+  passes, and no-path/source-leak errors. The batched `git check-ignore --stdin`
+  helper must be covered against its per-file, index-aware equivalent.
   Python discovery coverage must
   include common virtualenv/cache/dependency/build directories such as
   `.venv`, `venv`, `env`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`,
@@ -164,7 +169,7 @@ allowed.
   families. Mixed repositories retain `syntax_only_code_units`. Incremental
   tests must prove token-based add/modify/remove metadata deltas and purge
   seeded legacy Ruby claims while preserving file metadata; autosync
-  fingerprint tests must preserve its intentional Git-independent charging.
+  fingerprint tests must prove its Git-ignore parity with manual discovery.
   Ruby project-context invalidation remains a later frontend obligation.
 - Swift discovery-only coverage must include stable `swift`/`swift-config`
   tokens; exact case-sensitive `.swift` including basename `.swift`; exact

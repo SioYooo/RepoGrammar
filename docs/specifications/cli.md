@@ -589,11 +589,21 @@ before generation preparation, an over-limit repository cannot activate a new
 generation. During `init`, the same failure remains an initialization
 `failed_step: "resync"`; state initialization may have succeeded, but the
 `resync` sub-result is null and autosync is not started.
-Autosync polling does not evaluate Git ignore. Supported Git-ignored candidates
-count toward its aggregate fingerprint file/byte ceilings, so `autosync run`
-may fail conservatively even when a manual Git-aware `sync` would fit. Narrow
-the watched root or exclude dependency/build/cache trees by layout when this
-occurs; `sync` remains the authoritative Git-aware indexing operation.
+Autosync polling evaluates Git ignore with the same accepted-manifest policy as
+manual discovery, batching every supported candidate through one
+`git check-ignore -z --stdin` subprocess per fingerprint pass (about 10 ms for a
+few hundred paths, roughly one percent of the default 1000 ms poll) rather than
+one process per file. Supported Git-ignored candidates are excluded before the
+aggregate fingerprint file/byte ceilings are charged, so `autosync run` and a
+manual Git-aware `sync` no longer disagree about whether a repository is within
+accepted limits. When Git is absent or errors, the pass falls back to safe
+no-ignore filtering exactly as discovery does. The fingerprint stays
+metadata-only, so a same-size, same-modification-time edit is invisible to
+polling until another change or a manual `sync`; `sync` remains the
+authoritative Git-aware indexing operation and always recomputes content hashes.
+Each pass counts the Git-ignored supported files it excluded and records that
+bounded, path-free count with the Git-ignore status to the daemon log on change;
+surfacing it through `autosync status --json` is a deferred follow-up.
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -644,8 +654,9 @@ error and remains alive when a later polling fingerprint transiently fails;
 such a post-ready runtime failure is not retroactively presented as an
 unverified startup success.
 lightweight detector must skip RepoGrammar state directories, default excluded
-directories, unsupported extensions, oversized files, symlinks, and paths
-outside the repository; the following `sync` remains the authoritative
+directories, unsupported extensions, oversized files, symlinks, Git-ignored
+supported files (with the same fallback discovery uses when Git is unavailable),
+and paths outside the repository; the following `sync` remains the authoritative
 content-hash, Git-ignore, parsing, semantic-fact, and generation-activation
 step, whether it completes incrementally or reports a full-rebuild fallback. It
 must not scan repositories that have not explicitly run `init`, and it must not

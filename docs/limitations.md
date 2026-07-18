@@ -159,11 +159,22 @@ These are intentional current behaviors or tracked deferrals, not defects:
   files, 512 MiB accepted bytes, 250,000 visited entries, or depth-256 ceilings;
   discovery additionally caps reported skips at 100,000. An exact boundary is
   accepted, while plus one fails the operation without a partial generation.
-  Autosync polling does not evaluate Git ignore, so supported Git-ignored files
-  count toward its file/byte ceilings and may make polling reject a repository
-  that manual Git-aware discovery would accept.
+  Autosync polling evaluates Git ignore with the same accepted-manifest policy as
+  manual discovery (one batched `git check-ignore` subprocess per fingerprint
+  pass), so Git-ignored supported files no longer count toward its file/byte
+  ceilings and polling and manual `sync` agree on whether a repository is within
+  limits.
   Narrow the repository root or exclude generated, dependency, build, and cache
   content when a ceiling is reached.
+- **Autosync change detection is metadata-only, not content-hashed.** Idle
+  polling fingerprints each supported file's path, size, modification time, and
+  language rather than hashing its bytes, to keep the ~1s poll cheap. An edit
+  that leaves both the size and the modification time unchanged is therefore
+  invisible to polling and does not trigger a background `sync` until another
+  change moves the fingerprint. This blind spot is intentional; a manual
+  `repogrammar sync` (or any later size/mtime-visible change) recomputes content
+  hashes authoritatively, so freshness is never silently claimed from the
+  fingerprint alone.
 - **Concurrent filesystem tree replacement remains a confinement gap.** The
   aggregate bounds cap traversal and retained output, and current walkers reject
   observed symlinks and canonical paths outside the repository, but a concurrent

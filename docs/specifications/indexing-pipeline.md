@@ -668,8 +668,8 @@ PHP-only generations are `file_manifest_only`; mixed generations remain
 `syntax_only_code_units`. While the tokens are absent from
 `ParserProjectContext`, add/modify/remove deltas stay incremental and generation
 copy-forward purges legacy PHP unit, IR, fact, support, evidence, and family
-records while retaining file metadata. Discovery honors Git ignore; autosync
-fingerprinting retains its generic Git-independent conservative charging. This
+records while retaining file metadata. Discovery and autosync fingerprinting
+both honor Git ignore over the same accepted manifest. This
 stage decodes/parses no source or configuration and creates no PHP unit, IR,
 fact, `UNKNOWN`, family, project model, or readiness/support claim.
 
@@ -707,8 +707,8 @@ accepted token. Swift-only generations are `file_manifest_only`; mixed
 generations retain `syntax_only_code_units`. While the tokens are absent from
 `ParserProjectContext`, add/modify/remove deltas stay incremental and copy-
 forward purges legacy Swift units, IR, facts, support, evidence, and families
-while retaining file metadata. Discovery honors Git ignore; autosync retains
-its generic Git-independent conservative charging. This stage decodes/parses
+while retaining file metadata. Discovery and autosync fingerprinting both honor
+Git ignore over the same accepted manifest. This stage decodes/parses
 no source or configuration and creates no Swift unit, IR, fact, `UNKNOWN`,
 family, project model, or readiness/support claim.
 
@@ -740,9 +740,9 @@ token from the whole accepted manifest. Ruby-only generations are
 when an incremental round dispatches no parser. While the tokens are absent from
 `ParserProjectContext`, add/modify/remove deltas remain incremental and
 generation copy-forward purges any legacy Ruby unit, IR, fact, derived support,
-or family while retaining file metadata. Discovery honors Git ignore; the
-autosync fingerprint intentionally retains its generic Git-independent
-conservative charging. This stage creates no Ruby unit, IR, fact, `UNKNOWN`,
+or family while retaining file metadata. Discovery and the autosync fingerprint
+both honor Git ignore over the same accepted manifest. This stage creates no
+Ruby unit, IR, fact, `UNKNOWN`,
 family, project model, or support and never evaluates project files or selects an
 ambient engine.
 
@@ -1158,12 +1158,25 @@ as discovery and fails closed before retaining an over-limit directory entry or
 fingerprint record. Although it hashes path, size, modification-time, and
 language metadata rather than content, accepted-byte accounting uses each
 supported file's metadata size to align its admission units with indexing.
-Polling deliberately does not run Git-ignore checks: supported Git-ignored
-candidates therefore count toward the fingerprint file/byte budgets, so
-autosync can conservatively refuse a repository that manual Git-aware discovery
-would accept. The subsequent `sync` remains the authoritative Git-aware path.
-The reported-skipped-path budget does not apply because the fingerprint emits
-no skip report. Incremental `sync`
+Polling evaluates Git ignore with the same accepted-manifest policy as manual
+discovery so the two paths agree on which files are in scope. To keep the ~1s
+poll cheap, one fingerprint pass batches every supported candidate through a
+single `git check-ignore -z --stdin` subprocess (measured at roughly 10 ms for a
+few hundred paths, about one percent of the default 1000 ms poll) instead of one
+process per file; when Git is absent or errors, the pass applies the same safe
+no-ignore warning fallback discovery uses and reports `unavailable`. Because
+Git-ignored supported files are excluded before accepted-file/byte charging,
+they no longer count toward the fingerprint budgets, so `autosync run` and manual
+`sync` no longer disagree about whether the same repository is within accepted
+limits. Each pass also counts, but never logs by path, the number of Git-ignored
+supported files it excluded; the daemon records that bounded count and the
+Git-ignore status to its log on change, and surfacing it through
+`autosync status --json` is deferred. The subsequent `sync` remains the
+authoritative Git-aware path. The reported-skipped-path budget does not apply
+because the fingerprint emits no skip report. The fingerprint remains
+metadata-only and does not hash content, so a same-size, same-modification-time
+edit is invisible to polling until another change or a manual `sync` runs; the
+authoritative `sync` always recomputes content hashes. Incremental `sync`
 copy-forwards unchanged active records into a new building generation only
 after the project-context gate passes. A content-only edit of a Rust or TS/JS
 source file takes the incremental fast path; adding or removing any

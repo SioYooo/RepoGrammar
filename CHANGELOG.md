@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed
+
+- Aligned the autosync change fingerprint with the manual discovery
+  manifest. The fingerprint now evaluates gitignore through one batched
+  git check-ignore subprocess per pass (measured about ten milliseconds
+  for six hundred candidates, roughly one percent of the default poll
+  interval) with the same warning fallback as discovery, and git-ignored
+  supported files no longer trigger spurious syncs or count toward the
+  fingerprint's accepted-limit ceilings, so autosync and manual sync
+  agree on whether a repository fits the accepted limits. Skipped-path
+  counts are logged as bounded path-free counters, and the remaining
+  metadata-only blind spot (same-size same-mtime edits) is documented
+  explicitly.
+
 ### Added
 
 - Decomposed product readiness and stamped schema versions on every

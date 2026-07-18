@@ -1,4 +1,7 @@
-use repogrammar::adapters::filesystem::change_fingerprint::repository_change_fingerprint;
+use repogrammar::adapters::filesystem::change_fingerprint::{
+    repository_change_fingerprint, repository_change_fingerprint_report,
+    RepositoryChangeFingerprint,
+};
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
@@ -237,6 +240,32 @@ fn append_autosync_daemon_log(path: Option<&Path>, line: &str) {
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{line}");
     }
+}
+
+/// Append a bounded, path-free line describing how the latest fingerprint pass
+/// evaluated Git ignore and how many supported files it excluded as ignored.
+/// The line is deduplicated against the last logged observation so the polling
+/// loop cannot spam the daemon log. Surfacing these counters through
+/// `autosync status --json` is a Phase 6 follow-up owned by the interfaces lane.
+fn log_autosync_fingerprint_observation(
+    log_path: &Path,
+    last: &mut Option<String>,
+    fingerprint: &RepositoryChangeFingerprint,
+    quiet: bool,
+) {
+    let line = format!(
+        "autosync: fingerprint git-ignore={} ignored-skipped={}",
+        fingerprint.git_ignore_status.as_str(),
+        fingerprint.git_ignored_skipped
+    );
+    if last.as_deref() == Some(line.as_str()) {
+        return;
+    }
+    append_autosync_daemon_log(Some(log_path), &line);
+    if !quiet {
+        eprintln!("{line}");
+    }
+    *last = Some(line);
 }
 
 fn autosync_semantic_worker_environment_from_lookup<F>(
@@ -571,6 +600,14 @@ impl ProductCliRuntime {
             .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))
     }
 
+    fn repository_fingerprint_report(
+        &self,
+        request: &CliAutosyncRequest,
+    ) -> Result<RepositoryChangeFingerprint, RepoGrammarError> {
+        repository_change_fingerprint_report(&request.repository_root, DEFAULT_MAX_FILE_BYTES)
+            .map_err(|error| RepoGrammarError::InvalidInput(error.to_string()))
+    }
+
     fn run_autosync_loop(
         &self,
         request: CliAutosyncRequest,
@@ -633,6 +670,7 @@ impl ProductCliRuntime {
             eprintln!("autosync: watching repository for changes");
         }
         let mut failure_log = AutosyncFailureLogState::default();
+        let mut fingerprint_observation: Option<String> = None;
         loop {
             std::thread::sleep(Duration::from_millis(settings.poll_ms));
             match autosync_status(autosync_request.clone()) {
@@ -720,7 +758,7 @@ impl ProductCliRuntime {
             }
             std::thread::sleep(Duration::from_millis(settings.debounce_ms));
             let fingerprint_started = Instant::now();
-            let stable = match self.repository_fingerprint(&request) {
+            let stable = match self.repository_fingerprint_report(&request) {
                 Ok(stable) => stable,
                 Err(_) => {
                     record_autosync_runtime_failure(
@@ -734,10 +772,16 @@ impl ProductCliRuntime {
                     continue;
                 }
             };
-            if stable == current {
+            if stable.digest == current {
                 continue;
             }
-            current = stable;
+            current = stable.digest.clone();
+            log_autosync_fingerprint_observation(
+                &log_path,
+                &mut fingerprint_observation,
+                &stable,
+                request.quiet,
+            );
             if !request.quiet {
                 eprintln!("autosync: change detected; running sync");
             }
@@ -3072,6 +3116,59 @@ mod tests {
             repository_change_fingerprint(&workspace.path().display().to_string(), 1_048_576)
                 .expect("modified fingerprint");
         assert_ne!(after_modified, after_swiftpm_cross_language);
+    }
+
+    #[test]
+    fn autosync_change_fingerprint_honors_gitignore_and_is_deterministic() {
+        let workspace = TempWorkspace::new("autosync-fingerprint-gitignore");
+        let git_ready = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.path())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !git_ready {
+            return;
+        }
+        let root = workspace.path().display().to_string();
+        fs::write(workspace.path().join(".gitignore"), "secret.ts\n").expect("write gitignore");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const tracked = 1;\n",
+        )
+        .expect("write tracked source");
+
+        let baseline =
+            repository_change_fingerprint_report(&root, 1_048_576).expect("baseline fingerprint");
+        assert_eq!(baseline.git_ignore_status.as_str(), "applied");
+        assert_eq!(baseline.git_ignored_skipped, 0);
+        // Two passes over the same tree are identical.
+        let repeat =
+            repository_change_fingerprint_report(&root, 1_048_576).expect("repeat fingerprint");
+        assert_eq!(repeat, baseline);
+
+        // Adding a Git-ignored supported file does not move the digest, so the
+        // daemon would not trigger a sync discovery then excludes.
+        fs::write(
+            workspace.path().join("secret.ts"),
+            "export const secret = true;\n",
+        )
+        .expect("write git-ignored source");
+        let after_ignored = repository_change_fingerprint_report(&root, 1_048_576)
+            .expect("fingerprint after ignored add");
+        assert_eq!(after_ignored.digest, baseline.digest);
+        assert_eq!(after_ignored.git_ignored_skipped, 1);
+
+        // Adding an unignored supported file still moves the digest.
+        fs::write(
+            workspace.path().join("feature.ts"),
+            "export const feature = 2;\n",
+        )
+        .expect("write tracked source");
+        let after_tracked = repository_change_fingerprint_report(&root, 1_048_576)
+            .expect("fingerprint after tracked add");
+        assert_ne!(after_tracked.digest, baseline.digest);
+        assert_eq!(after_tracked.git_ignored_skipped, 1);
     }
 
     fn release_fixture_root() -> PathBuf {
