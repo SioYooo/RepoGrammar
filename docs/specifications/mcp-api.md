@@ -38,9 +38,15 @@ The current input schema is intentionally small:
   `mode`, which selects evidence detail. It is additive under
   `product-schemas.v1`: `standard` is the current, byte-stable response shape,
   `minimal` opts into the lean shape, and `full` retains every diagnostic field.
-  An unrecognized value is an invalid-operation schema error, never a silent
-  fallback. The per-field reductions that make the tiers diverge land in later
-  precision slices; in the current schema all three tiers are byte-identical.
+  `standard` and `full` are byte-identical to each other and to the
+  pre-precision response; each precision slice suppresses its demoted fields
+  only at `minimal`, and every removal is a demotion `full` restores. The
+  current `minimal` reductions are the `query_route` slimming, the
+  `resolved_target`/certificate dedup, and the `read_plan`/`source_spans`
+  reductions (honest truncation flags, read-plan/span dedup, and the dropped
+  empty `source_spans` stub). An unrecognized value is an invalid-operation
+  schema error, never a silent fallback. The per-operation reductions are
+  documented with their output contracts below.
 - optional `include_variations` and `include_exceptions`: booleans requesting
   those evidence-coverage labels. Current output reports them as missing unless
   stored family evidence explicitly covers them.
@@ -239,7 +245,14 @@ yields null counts with an `unavailable_reason` rather than a guess.
 preserves the raw target, resolved kind, repo-relative path, optional line,
 optional byte range, optional family/member ids, symbol hints, residue terms,
 candidate paths/ids, confidence, and match kind. It is local read-planning
-context, not family evidence or conformance evidence. Exact `show_family`
+context, not family evidence or conformance evidence. At `verbosity: minimal`
+the shared `resolved_target` serializer suppresses the pure input echo
+(`original_target`), the normalizer internals (`residue_terms`), and each
+`candidate_paths`/`candidate_family_ids`/`candidate_code_unit_ids` list that only
+echoes an already-resolved locus (the `check_conformance` target echo); when
+resolution stayed genuinely ambiguous — no single path, family, or unit pinned —
+the corresponding candidate list is retained as the caller's narrowing handle.
+`standard` and `full` keep the complete field set byte-for-byte. Exact `show_family`
 lookups still require an exact family id and return typed `UNKNOWN` when that
 family id is missing. `check_conformance` responses carry the static-alignment
 certificate fields: `alignment_status`, `runtime_equivalence` (always
@@ -252,7 +265,20 @@ partial certificate also carries the `estimated_potential_token_savings` block
 with `outcome_shape: alignment`; an abstaining certificate reports the null
 block. They must omit
 the legacy nested `check` advisory object and any proof-like fields such as
-`pass`, `conforms`, or `fail_on`. `static_deviations[].kind` is one of the
+`pass`, `conforms`, or `fail_on`. The top-level `status` is the alignment status
+token and `alignment_status` duplicates it byte-for-byte; the `alignment_status`
+duplicate is dropped at `verbosity: minimal` while `standard` and `full` keep it.
+The top-level `selected_family_id` is the authoritative carrier of the
+selected-family handle and is retained at every tier, including `minimal`: the
+`query_route.selected_family_id` copy is the one the route lane suppresses at
+`minimal`, so dropping the certificate top-level copy too would leave "which
+family was selected" undeterminable (`follow_up_family_ids` is an unordered set).
+The invariant `runtime_equivalence: "UNKNOWN"` is emitted at every tier and never
+suppressed. As a scale guard, `alignment.static_deviations[]` and
+`alignment.legal_observed_variations[]` are capped at a fixed bound in every
+tier; when a target exceeds the cap the array is truncated to the bound and the
+computation gains an honest `<name>_truncated: true` flag and a `<name>_count`
+total. Below the cap the full arrays are emitted with no truncation metadata. `static_deviations[].kind` is one of the
 required-feature violations (`required_mismatch`, `must_be_empty_violation`,
 `missing_required_core`, `prohibited_presence`) or a non-violating partial signal
 (`unobserved_variation`, `truncated_observation`, `blocking_suppressed_requirement`)
@@ -270,7 +296,17 @@ state that family ids are returned follow-up handles rather than required initia
 inputs. `selected_family_id` is present only when RepoGrammar actually selected
 one supported family. `candidate_family_ids` and `follow_up_family_ids` may be
 present on `PARTIAL_CONTEXT` or `UNKNOWN`; those ids are narrowing handles, not a
-family or conformance claim. When a natural-language, synonym, or
+family or conformance claim. At `verbosity: minimal` the `query_route` object
+collapses to its two decision-critical fields — `route` and
+`follow_up_family_ids` (the single canonical handle list, a superset of both
+`candidate_family_ids` and `selected_family_id`, so no id is lost). On a matched
+family the duplicate `candidate_family_ids` is dropped as well; on
+`PARTIAL_CONTEXT`, `UNKNOWN`, and conformance abstentions it is retained at
+`minimal` as a narrowing recovery handle. `selected_family_id`, `input_kind`,
+`pipeline`, `family_id_policy`, `candidate_limit`, `why_selected`,
+`hydrated_family_count`, `retrieval_stage_count`, and `term_retrieval` are
+diagnostic and appear only at `standard` and `full`. When a natural-language,
+synonym, or
 framework-plus-concept target is resolved by the deterministic term-retrieval
 fallback, `query_route` additionally carries `hydrated_family_count`,
 `retrieval_stage_count`, and a source-free `term_retrieval` object with `route`
@@ -310,7 +346,16 @@ ranges must preserve the read-plan item and add `line_range_omissions`
 guidance. When `include_source_spans: true` is requested, RepoGrammar renders
 only selected read-plan spans after source-store path and content-hash
 validation, fills line ranges for rendered spans, and returns line-numbered
-text under a separate `source_spans` object. The read plan never includes
+text under a separate `source_spans` object. Read-plan items are ordered by
+purpose priority (target body, then canonical, support, and guard spans) so a
+budget-truncated plan always keeps the most decision-critical prefix. At
+`verbosity: minimal` the read plan adds an honest `truncated` flag and
+`item_count`; a span that has been rendered into `source_spans` is not repeated
+as a full read-plan item but left as a `{purpose, path, rendered: true}`
+back-reference, because the rendered `source_spans` entry is the single source
+of truth and must be treated as already read; and the empty `source_spans` stub
+is omitted entirely when spans are not requested. `standard` and `full` keep the
+full read-plan items and the stub unchanged. The read plan never includes
 absolute paths and does not imply source edits are safe outside listed ranges.
 Output metadata includes the selection strategy, estimated evidence tokens,
 estimated read-plan tokens, `estimated_potential_token_savings` with

@@ -931,6 +931,13 @@ pub struct ReadPlan {
     pub requires_source_before_edit: bool,
     pub selection_strategy: &'static str,
     pub budget_satisfied: bool,
+    /// Whether budget selection dropped one or more candidate spans from
+    /// [`ReadPlan::items`]. Serializers surface this as the honest
+    /// `read_plan.truncated` flag (mirroring the member cap's
+    /// `members_truncated`) so a trimmed plan never silently hides that the
+    /// consumer's decision set was capped. Always `false` for the unbudgeted
+    /// local-context and conformance plans.
+    pub truncated: bool,
     pub line_range_omissions: Vec<ReadPlanLineRangeOmission>,
 }
 
@@ -3791,6 +3798,7 @@ fn empty_alignment_read_plan() -> ReadPlan {
         requires_source_before_edit: false,
         selection_strategy: "conformance_no_read_plan",
         budget_satisfied: true,
+        truncated: false,
         line_range_omissions: Vec::new(),
     }
 }
@@ -4183,7 +4191,9 @@ pub fn build_read_plan(
     options: FamilyOutputOptions,
 ) -> ReadPlan {
     let candidates = read_plan_candidates(family, target, mode, options);
+    let candidate_count = candidates.len();
     let selected = select_budgeted_read_plan(candidates, options.token_budget);
+    let truncated = selected.len() < candidate_count;
     let estimated_tokens = selected.iter().map(|item| item.estimated_tokens).sum();
     ReadPlan {
         requires_source_before_edit: selected.iter().any(|item| item.source_required_before_edit),
@@ -4192,6 +4202,7 @@ pub fn build_read_plan(
             Some(budget) => estimated_tokens <= budget,
             None => true,
         },
+        truncated,
         estimated_tokens,
         selection_strategy: "deterministic_read_plan_v1",
         items: selected,
@@ -4809,6 +4820,7 @@ fn local_context_read_plan(item: ReadPlanItem) -> ReadPlan {
         requires_source_before_edit: true,
         selection_strategy: "deterministic_local_context_v1",
         budget_satisfied: true,
+        truncated: false,
         items: vec![item],
         line_range_omissions: Vec::new(),
     }
@@ -5533,7 +5545,7 @@ fn read_plan_candidates(
         }
     }
 
-    candidates
+    let mut unique = candidates
         .into_iter()
         .fold(Vec::new(), |mut unique, candidate| {
             if !unique
@@ -5543,7 +5555,15 @@ fn read_plan_candidates(
                 unique.push(candidate);
             }
             unique
-        })
+        });
+    // Order by `ReadPlanPurpose` priority (target/canonical/support first) so
+    // budget selection keeps the most decision-critical prefix and never drops
+    // a canonical span in favour of optional context. Candidates are already
+    // generated in enum order, so this stable sort is currently an identity; it
+    // makes the truncation-prefix guarantee explicit and drift-resistant, and
+    // keeps every verbosity tier byte-identical.
+    unique.sort_by_key(|item| item.purpose);
+    unique
 }
 
 fn select_budgeted_read_plan(
@@ -10614,6 +10634,7 @@ mod tests {
             requires_source_before_edit: true,
             selection_strategy: "deterministic_local_context_v1",
             budget_satisfied: true,
+            truncated: false,
             line_range_omissions: Vec::new(),
         };
         FamilyPartialContextReport {
@@ -10676,6 +10697,7 @@ mod tests {
             requires_source_before_edit: true,
             selection_strategy: "deterministic_local_context_v1",
             budget_satisfied: true,
+            truncated: false,
             line_range_omissions: Vec::new(),
         };
         AlignmentCertificateReport {
@@ -10883,8 +10905,75 @@ mod tests {
             requires_source_before_edit: false,
             selection_strategy: "deterministic_read_plan_v1",
             budget_satisfied: true,
+            truncated: false,
             line_range_omissions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn read_plan_purpose_priority_orders_decision_critical_first() {
+        // `read_plan_candidates` sorts by this order so budget truncation keeps
+        // the target/canonical/contrast prefix and never drops a canonical span
+        // in favour of optional context.
+        let ordered = [
+            ReadPlanPurpose::TargetBodyRequiredForEdit,
+            ReadPlanPurpose::CanonicalEvidence,
+            ReadPlanPurpose::SupportEvidence,
+            ReadPlanPurpose::VariationGuard,
+            ReadPlanPurpose::ExceptionGuard,
+            ReadPlanPurpose::UnknownBlocker,
+            ReadPlanPurpose::StaleEvidenceCheck,
+            ReadPlanPurpose::OptionalContext,
+        ];
+        for pair in ordered.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "{:?} must sort before {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn build_read_plan_truncated_flag_reflects_dropped_candidates() {
+        let canonical = family_evidence("src/a_canon.ts", 0, "canonical support evidence");
+        let plain = family_evidence("src/b_plain.ts", 1, "plain support member");
+        let mut contrast = family_evidence("src/c_contrast.ts", 2, "farthest contrast witness");
+        contrast.covered_claims = vec!["support".to_string(), "contrast".to_string()];
+        let detail = family_detail_with_evidence(vec![canonical, plain, contrast]);
+
+        let unbudgeted = FamilyOutputOptions {
+            evidence_mode: FamilyEvidenceMode::Evidence,
+            token_budget: None,
+            include_variations: false,
+            include_exceptions: false,
+            verbosity: Verbosity::Standard,
+        };
+        // No budget: every candidate is retained, so the plan is not truncated.
+        let full = build_read_plan(&detail, None, FamilyLookupMode::ExactFamilyId, unbudgeted);
+        assert!(full.items.len() >= 2);
+        assert!(!full.truncated);
+
+        // A one-token budget drops all but the highest-priority prefix and sets
+        // the honest truncated flag rather than silently hiding the cap.
+        let capped = build_read_plan(
+            &detail,
+            None,
+            FamilyLookupMode::ExactFamilyId,
+            FamilyOutputOptions {
+                token_budget: Some(1),
+                ..unbudgeted
+            },
+        );
+        assert!(
+            capped.truncated,
+            "dropping candidates must set the honest truncated flag"
+        );
+        assert!(capped.items.len() < full.items.len());
+        // The retained prefix keeps the most decision-critical span (canonical),
+        // never an optional-context item at its expense.
+        assert_eq!(capped.items[0].purpose, ReadPlanPurpose::CanonicalEvidence);
     }
 
     #[test]

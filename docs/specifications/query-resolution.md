@@ -50,10 +50,20 @@ A resolved family detail carries a hydrated, metadata-only `constraint_profile`
 names the cluster medoid, `support_evidence` prefers the `contrast`-labelled
 support witness (hydration re-sorts evidence by path, so the label — not the
 write order — carries the choice; it falls back to the first distinct-path
-`support` member), and `variation_guard` a variation witness. Evidence-mode
-selection covers the canonical and support constraints plus one witness per
-observed variation dimension (and the anchor-target dimension) when the profile
-is hydrated. See the Representative selection rule and the
+`support` member), and `variation_guard` a variation witness. Read-plan items are ordered by purpose
+priority (`target_body_required_for_edit`, then `canonical_evidence`,
+`support_evidence`, the guard purposes, and `optional_context` last), so when a
+`token_budget` truncates the plan the retained prefix always keeps the most
+decision-critical spans. A truncated plan is honest: at `verbosity: minimal` it
+carries a `truncated` flag and `item_count`. When source spans are rendered
+(`include_source_spans`), the rendered locus is the single source of truth and
+is treated as already read; at `minimal` such an item is left as a
+`{purpose, path, rendered: true}` back-reference rather than duplicated in full,
+and the empty `source_spans` stub is omitted when spans are not requested.
+`standard` and `full` keep the full read-plan items and the stub unchanged.
+Evidence-mode selection covers the canonical and support constraints plus one
+witness per observed variation dimension (and the anchor-target dimension) when
+the profile is hydrated. See the Representative selection rule and the
 `FamilyConstraintProfile` in `docs/specifications/domain-model.md`.
 
 ### Abstention gates and reasons
@@ -123,6 +133,20 @@ term-retrieval match, `discovery_unknown` for a term-retrieval abstention), and
 `hydrated_family_count` / `retrieval_stage_count` are surfaced at the
 `query_route` top level. The abstention reason is additionally rolled up in
 anonymous telemetry as the enum-only `by_abstention_reason` dimension.
+
+Response density is gated by `verbosity` (orthogonal to `mode`). `standard` (the
+default) and `full` emit the full `query_route` object above and are
+byte-identical. `minimal` keeps only the two decision-critical fields — `route`
+and `follow_up_family_ids`, the single canonical handle list that is the
+normalized union of `candidate_family_ids` and `selected_family_id`, so no id is
+lost. `candidate_family_ids` is retained at `minimal` only where it is a
+narrowing recovery handle (`PARTIAL_CONTEXT`, `UNKNOWN`, and conformance
+abstentions); on a matched family it duplicates the follow-up handle and is
+dropped. `selected_family_id` and every diagnostic routing field (`input_kind`,
+`pipeline`, `family_id_policy`, `candidate_limit`, `why_selected`,
+`hydrated_family_count`, `retrieval_stage_count`, `term_retrieval`) are demoted
+out of the `minimal` shape. Abstention still never leaks a family: the reduction
+only removes ids already carried by `follow_up_family_ids`.
 
 ### Calibration summary
 
@@ -389,3 +413,22 @@ admitted); `OUT_OF_SCOPE` names an unsupported kind/role. `COMPETING_PATTERN` is
 **reserved and not yet emitted**: a member always compares against its own family,
 so no current path constructs it. Deviation summaries are RepoGrammar feature
 TOKENS, never repository source text.
+
+### Certificate serialization: scale guard and duplicate handles
+
+The serialized certificate (CLI and MCP, byte-parallel) applies a fixed
+scale-protection cap (`ALIGNMENT_DEVIATION_CAP`) to the otherwise structurally
+unbounded `static_deviations[]` and `legal_observed_variations[]` arrays. When a
+target exceeds the cap the array is truncated to the bound and the computation
+gains an honest `<name>_truncated: true` flag plus a `<name>_count` total; below
+the cap the full arrays are emitted with no extra fields. The certificate's
+top-level `status` and `alignment_status` carry the same token; the
+`alignment_status` duplicate is suppressed at `verbosity: minimal`. The top-level
+`selected_family_id` is the authoritative carrier of the selected-family handle
+and is retained at every tier — the `query_route.selected_family_id` copy is the
+one the route lane suppresses at `minimal`, so the certificate top-level copy is
+what keeps the selection determinable in the lean shape. The invariant
+`runtime_equivalence: "UNKNOWN"` is emitted at every tier and never suppressed.
+`standard` and `full` keep the complete certificate shape byte-for-byte. See
+`docs/specifications/mcp-api.md` and `docs/specifications/cli.md` for the full
+per-field output contracts.

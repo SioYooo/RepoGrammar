@@ -1290,6 +1290,11 @@ typed `UNKNOWN` when their exact ids are missing. `family`, `member`, `find`,
 `selected_family_id`, `candidate_family_ids`, `follow_up_family_ids`, and
 `why_selected`. Candidate/follow-up family ids are narrowing handles; only
 `selected_family_id` on a matched family response is a supported family claim.
+At `--verbosity minimal` this object is reduced to `route` and
+`follow_up_family_ids`; the duplicate `candidate_family_ids` is dropped on a
+matched family but kept as a recovery handle on `PARTIAL_CONTEXT`, `UNKNOWN`, and
+conformance abstentions, and the remaining diagnostic fields appear only at
+`standard`/`full`.
 When a natural-language, synonym, or framework-plus-concept target is resolved by
 the deterministic term-retrieval fallback, `query_route` additionally carries
 `hydrated_family_count`, `retrieval_stage_count`, and a source-free
@@ -1348,7 +1353,15 @@ read-plan spans through the hash-checked source-store boundary, fills line
 ranges for rendered spans, and places line-numbered text under a separate
 `source_spans` block. Stale, missing, hash-mismatched, too-large, unsupported,
 dynamic, insufficient, or conflicting cases must omit rendered spans and tell
-the user to use normal Read/Grep for the affected file or claim. The read plan
+the user to use normal Read/Grep for the affected file or claim. Read-plan items
+are ordered by purpose priority so a budget-truncated plan keeps the most
+decision-critical prefix. At `--verbosity minimal` the read plan adds an honest
+`truncated` flag and `item_count`; a span rendered into `source_spans` is left
+as a `{purpose, path, rendered: true}` back-reference rather than a repeated full
+item, because the rendered `source_spans` entry is the single source of truth and
+is treated as already read; and the empty `source_spans` stub is omitted when
+spans are not requested. `standard` and `full` keep the full items and the stub
+unchanged, byte-identical to the pre-precision shape. The read plan
 must never include absolute paths or a claim that editing is safe outside
 listed ranges.
 `--token-budget <n>` validates a positive bounded integer and implies
@@ -1381,34 +1394,56 @@ metadata-first and does not imply source output without `--include-source-spans`
 orthogonal to `--mode`, which selects evidence detail; the two never interact.
 It defaults to `standard`, the current byte-stable structured payload, and is
 additive under `product-schemas.v1`: `minimal` opts into the lean shape and
-`full` retains every diagnostic field. An unrecognized value is rejected rather
-than silently defaulted. The per-field reductions that make the tiers diverge
-land in later precision slices; in the current schema all three tiers emit
-byte-identical output. This CLI flag stays byte-parallel with the MCP
-`verbosity` request field.
+`full` retains every diagnostic field. `standard` and `full` emit byte-identical
+output (equal to the pre-precision response); each precision slice suppresses
+its demoted fields only at `minimal`, and every removal is a demotion `full`
+restores. An unrecognized value is rejected rather than silently defaulted. At
+`minimal` the `query_route` object keeps only `route` and `follow_up_family_ids`
+(dropping the duplicate `candidate_family_ids` on a matched family, retaining it
+as a recovery handle on `PARTIAL_CONTEXT`/`UNKNOWN`/conformance abstentions) and
+suppresses the diagnostic routing fields; the `read_plan`/`source_spans`
+reductions (honest truncation flags, read-plan/span dedup, and the dropped empty
+`source_spans` stub) also apply only at `minimal`, and further per-field
+reductions are documented with their output contracts. This CLI flag stays
+byte-parallel with the MCP `verbosity` request field.
 None of these modes may include absolute paths. `check` returns a static
 alignment certificate. Its top-level `status` is the alignment status token
 (`STATICALLY_ALIGNED`, `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`,
 `INSUFFICIENT_EVIDENCE`, or `UNKNOWN`) and the JSON carries these fields:
 
-- `alignment_status` — the same token as `status`.
+- `alignment_status` — the same token as `status`; dropped at
+  `verbosity: minimal` as a duplicate, retained byte-for-byte at `standard`/`full`.
 - `runtime_equivalence` — always the literal `"UNKNOWN"`; static alignment
-  never proves runtime equivalence.
+  never proves runtime equivalence. This invariant is emitted at every verbosity
+  and is never suppressed.
 - `target_relationship` — `MEMBER`, `NEAR_MISS`, `BLOCKED_UNKNOWN`,
   `OUT_OF_SCOPE`, or `EXCEPTION` (null while abstaining before a family is
   compared). `COMPETING_PATTERN` is a reserved token that no current path emits
   (a member always compares against its own family).
 - `selected_family_id` and `query_route.selected_family_id` — the comparison
   family, present only when one was confidently selected; `null` for every
-  abstaining outcome.
-- `target` — the resolved code-unit locator (id, path, byte range).
+  abstaining outcome. The top-level `selected_family_id` is the authoritative
+  carrier of the selected-family handle and is retained at every tier, including
+  `minimal`; the `query_route.selected_family_id` copy is the one suppressed at
+  `minimal` (by the route lane), so the certificate top-level copy is what keeps
+  the selection determinable in the lean shape.
+- `target` — the resolved code-unit locator (id, path, byte range). It shares the
+  `resolved_target` serializer, so at `verbosity: minimal` it drops the input echo
+  (`original_target`), normalizer internals (`residue_terms`), and the
+  `candidate_*` lists that only echo an already-resolved locus, while retaining
+  those candidate lists when resolution stayed genuinely ambiguous.
 - `alignment` — the computation, or `null` when abstaining: `outcome_reason`,
   `required_features_matched[]` (`prefix`, `semantics`, `expected_summary`,
   `satisfied_summary`), `static_deviations[]` (`prefix`, `kind`,
   `semantics_token`, `expected_summary`, `observed_summary`),
   `legal_observed_variations[]`, `blocking_unknowns[]`, and
   `unresolved_runtime_obligations[]` (always non-empty — it carries the
-  runtime-equivalence obligation verbatim).
+  runtime-equivalence obligation verbatim). As a scale guard,
+  `static_deviations[]` and `legal_observed_variations[]` are capped at a fixed
+  bound in every tier; a target that exceeds the cap truncates the array to the
+  bound and the computation gains an honest `<name>_truncated: true` flag and a
+  `<name>_count` total. Below the cap the full arrays are emitted with no
+  truncation metadata.
 - `read_plan` — the comparison family's evidence read plan, leading with the
   contrast witness.
 

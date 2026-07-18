@@ -23,11 +23,45 @@
   `repogrammar_context` input, additive under `product-schemas.v1` and
   orthogonal to `--mode`: `mode` selects how much evidence the
   resolver gathers, `verbosity` selects the response field density the
-  serializers emit. In this release all three tiers are byte-identical
-  (golden tests pin `standard` to the pre-change response bytes on
-  both surfaces); later precision slices suppress demoted diagnostic
-  fields at `minimal`. Invalid values are explicit protocol errors,
-  never a silent fallback.
+  serializers emit. `standard` (the default) and `full` are
+  byte-identical to the pre-change response (golden tests pin them to
+  captured pre-change bytes on both surfaces); precision slices
+  suppress demoted diagnostic fields only at `minimal`. Invalid values
+  are explicit protocol errors, never a silent fallback.
+
+- Realized the lean `verbosity: minimal` tier across the query
+  serializers, additive under `product-schemas.v1` with `standard` and
+  `full` proven byte-stable by the payload-measure harness (44 of 44
+  standard/full matrix rows byte-identical before vs after). At
+  `minimal`: the `query_route` envelope keeps only `route` and
+  `follow_up_family_ids` (a normalized superset of the candidate and
+  selected ids, so no handle is lost; `candidate_family_ids` stays on
+  `PARTIAL_CONTEXT`/`UNKNOWN`/conformance abstentions as a narrowing
+  recovery handle); `resolved_target` drops the `original_target` input
+  echo, normalizer residue, and pinned-target candidate echoes while
+  retaining candidates whenever resolution was ambiguous; the alignment
+  certificate drops the duplicate `alignment_status` token (the
+  top-level `selected_family_id` is kept at every tier as the
+  authoritative selected-family carrier, and `runtime_equivalence:
+  "UNKNOWN"` is never removed); the read plan gains honest `truncated`
+  and `item_count` flags, items whose content is already rendered into
+  `source_spans` collapse to a back-reference, and the empty
+  `source_spans` stub disappears. Deviation and variation lists on
+  alignment computations are capped at 24 entries at every tier with
+  `_truncated`/`_count` flags on actual truncation only. Measured on
+  the committed payload fixture: the minimal tier is 16,351 bytes
+  (14.2%) smaller than standard across the matrix, with abstention
+  responses 58-67% smaller; savings figures cite the two-run
+  payload-measure byte table.
+
+- Added a `repo-guard payload-measure` subcommand and a committed
+  deterministic payload fixture (a 31-member FastAPI family plus small
+  SQLAlchemy/Pydantic/pytest/Express families and a below-support file)
+  that indexes in an isolated temporary workspace and emits a stable
+  per-operation, per-verbosity response-byte table (67 matrix rows,
+  including source-span variants). Two runs are byte-identical by
+  construction and by test; any payload-savings claim must cite the
+  diff of two runs.
 
 - Extended estimated-potential token-savings accounting to every
   context-delivering outcome. A single estimator authority records an

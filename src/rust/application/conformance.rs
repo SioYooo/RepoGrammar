@@ -121,6 +121,20 @@ pub struct AlignmentComputation {
     pub outcome_reason: String,
 }
 
+/// Scale-protection cap on the alignment certificate's deviation-style arrays
+/// (`static_deviations` and `legal_observed_variations`).
+///
+/// Both arrays are per-family bounded in practice — a target only deviates on the
+/// constraint prefixes its family declares — but they are structurally unbounded,
+/// so an adversarial or pathological target could inflate the certificate past the
+/// transport request-line ceiling. When either array exceeds this cap the
+/// certificate serializers emit the first [`ALIGNMENT_DEVIATION_CAP`] entries plus
+/// an honest sibling `<name>_truncated: true` flag and `<name>_count` total; below
+/// the cap the full array is emitted with no extra fields (byte-stable). The cap
+/// is sized well above any observed per-family deviation count so a real
+/// certificate is never truncated.
+pub const ALIGNMENT_DEVIATION_CAP: usize = 24;
+
 fn render_values(values: &[String]) -> String {
     if values.is_empty() {
         ABSENT_PROFILE_TOKEN.to_string()

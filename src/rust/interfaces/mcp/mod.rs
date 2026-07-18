@@ -1,6 +1,6 @@
 //! Transport-neutral MCP contract and read-only JSON-RPC stdio handling.
 
-use crate::application::conformance::AlignmentComputation;
+use crate::application::conformance::{AlignmentComputation, ALIGNMENT_DEVIATION_CAP};
 use crate::application::install::AGENT_PREFLIGHT_GATE;
 use crate::application::query::{
     bounded_family_members, build_read_plan, estimate_alignment_potential_token_savings,
@@ -13,7 +13,7 @@ use crate::application::query::{
     FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
     FamilyQueryUnknown, OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation,
     QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, ResolvedQueryTarget,
-    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, Verbosity,
+    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, Verbosity, VerbosityTier,
     MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
@@ -500,7 +500,13 @@ pub fn handle_context_call(
                     "status": "UNKNOWN",
                     "implemented": true,
                     "active_generation": report.active_generation,
-                    "query_route": query_route_value(&route),
+                    // Abstention: `candidate_family_ids` is the narrowing recovery
+                    // handle, kept even at `minimal` (Minimal tier).
+                    "query_route": query_route_value(
+                        &route,
+                        arguments.output_options.verbosity,
+                        VerbosityTier::Minimal,
+                    ),
                     "unknowns": unknowns_value(&report.unknowns),
                 }))
             }
@@ -580,6 +586,7 @@ pub fn handle_context_call(
                     &route,
                     &read_plan,
                     source_spans.as_ref(),
+                    arguments.output_options.verbosity,
                 ))
             }
             Err(_) => {
@@ -1127,14 +1134,16 @@ fn family_detail_value(
     );
     let (rendered_members, members_truncated) =
         bounded_family_members(family, options.evidence_mode);
-    json!({
+    let mut payload = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
         "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "ok",
         "implemented": true,
         "active_generation": family.active_generation,
-        "query_route": query_route_value(route),
+        // Found: `candidate_family_ids` == the follow-up handle, so it is demoted
+        // out of the `minimal` shape (Standard tier).
+        "query_route": query_route_value(route, options.verbosity, VerbosityTier::Standard),
         "family": {
             "family_id": family.family_id,
             "classification": family.classification,
@@ -1189,10 +1198,12 @@ fn family_detail_value(
                 "covered_claims": evidence.covered_claims,
             })
         }).collect::<Vec<_>>(),
-        "read_plan": read_plan_value(read_plan),
+        "read_plan": read_plan_value(read_plan, options.verbosity),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&family.unknowns),
-    })
+    });
+    drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
+    payload
 }
 
 fn family_partial_context_value(
@@ -1204,15 +1215,17 @@ fn family_partial_context_value(
     source_spans: Option<&SourceSpanRenderReport>,
 ) -> Value {
     let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
-    json!({
+    let mut payload = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
         "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": "PARTIAL_CONTEXT",
         "implemented": true,
         "active_generation": report.active_generation,
-        "query_route": query_route_value(route),
-        "resolved_target": resolved_target_value(&report.resolved_target),
+        // PartialContext: `candidate_family_ids` is a narrowing recovery handle,
+        // kept even at `minimal` (Minimal tier).
+        "query_route": query_route_value(route, options.verbosity, VerbosityTier::Minimal),
+        "resolved_target": resolved_target_value(&report.resolved_target, options.verbosity),
         "output": {
             "mode": options.evidence_mode.as_str(),
             "token_budget": options.token_budget,
@@ -1222,10 +1235,12 @@ fn family_partial_context_value(
             "source_snippets_included": read_plan.source_snippets_included,
         },
         "estimated_potential_token_savings": savings_block_value(savings.as_ref(), "partial_context", "resolved file size unavailable; no estimate recorded"),
-        "read_plan": read_plan_value(read_plan),
+        "read_plan": read_plan_value(read_plan, options.verbosity),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
-    })
+    });
+    drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
+    payload
 }
 
 /// The shared MCP `estimated_potential_token_savings` block, at CLI parity: the
@@ -1267,36 +1282,56 @@ fn alignment_certificate_value(
     route: &FamilyQueryRouteReport,
     read_plan: &ReadPlan,
     source_spans: Option<&SourceSpanRenderReport>,
+    verbosity: Verbosity,
 ) -> Value {
     let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
-    json!({
+    let mut value = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
         "schema_version": PRODUCT_SCHEMA_VERSION,
         "status": certificate.alignment_status.as_token(),
         "implemented": true,
         "active_generation": certificate.active_generation,
-        "query_route": query_route_value(route),
+        // A `check` can abstain (INSUFFICIENT_EVIDENCE) with candidate handles, so
+        // `candidate_family_ids` is treated as a recovery handle, kept at `minimal`.
+        "query_route": query_route_value(route, verbosity, VerbosityTier::Minimal),
         "alignment_status": certificate.alignment_status.as_token(),
         "runtime_equivalence": "UNKNOWN",
         "target_relationship": certificate
             .target_relationship
             .map(|relationship| relationship.as_token()),
         "selected_family_id": certificate.selected_family_id,
-        "target": resolved_target_value(&certificate.resolved_target),
+        "target": resolved_target_value(&certificate.resolved_target, verbosity),
         "alignment": certificate
             .computation
             .as_deref()
             .map(alignment_computation_value),
         "estimated_potential_token_savings": savings_block_value(savings.as_ref(), "alignment", "abstaining certificate; no full read displaced"),
-        "read_plan": read_plan_value(read_plan),
+        "read_plan": read_plan_value(read_plan, verbosity),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&certificate.unknowns),
-    })
+    });
+    // `alignment_status` is byte-identical to the top-level `status` (both
+    // `alignment_status.as_token()`) and drops as a duplicate at `minimal`, while
+    // `standard`/`full` stay byte-stable. The top-level `selected_family_id` is
+    // KEPT at every tier: it is the authoritative carrier of the selected-family
+    // handle for the certificate. The `query_route.selected_family_id` copy is the
+    // one suppressed at `minimal` (by the route lane), so dropping the certificate
+    // top-level copy too would erase "which family was selected" at `minimal`
+    // (`follow_up_family_ids` is an unordered set that cannot single it out).
+    // `runtime_equivalence: "UNKNOWN"` is an invariant and is never removed here.
+    if !verbosity.renders(VerbosityTier::Standard) {
+        let object = value
+            .as_object_mut()
+            .expect("alignment certificate serializes to a JSON object");
+        object.remove("alignment_status");
+    }
+    drop_unrequested_source_spans(&mut value, source_spans, verbosity);
+    value
 }
 
 fn alignment_computation_value(computation: &AlignmentComputation) -> Value {
-    json!({
+    let mut value = json!({
         "outcome_reason": computation.outcome_reason,
         "required_features_matched": computation
             .required_features_matched
@@ -1311,6 +1346,7 @@ fn alignment_computation_value(computation: &AlignmentComputation) -> Value {
         "static_deviations": computation
             .static_deviations
             .iter()
+            .take(ALIGNMENT_DEVIATION_CAP)
             .map(|deviation| json!({
                 "prefix": deviation.prefix,
                 "kind": deviation.kind.as_token(),
@@ -1322,6 +1358,7 @@ fn alignment_computation_value(computation: &AlignmentComputation) -> Value {
         "legal_observed_variations": computation
             .legal_observed_variations
             .iter()
+            .take(ALIGNMENT_DEVIATION_CAP)
             .map(|variation| json!({
                 "dimension": variation.dimension,
                 "observed_profile": variation.observed_profile,
@@ -1337,7 +1374,39 @@ fn alignment_computation_value(computation: &AlignmentComputation) -> Value {
             .iter()
             .map(alignment_typed_unknown_value)
             .collect::<Vec<_>>(),
-    })
+    });
+    insert_deviation_cap_flags(
+        value
+            .as_object_mut()
+            .expect("alignment computation serializes to a JSON object"),
+        computation,
+    );
+    value
+}
+
+/// Emit the honest sibling truncation metadata for the capped deviation-style
+/// arrays. A `<name>_truncated: true` flag plus a `<name>_count` total are
+/// inserted only when the source array exceeds [`ALIGNMENT_DEVIATION_CAP`]; below
+/// the cap nothing is inserted, so the object is byte-identical to the pre-cap
+/// shape. Shared by the MCP and CLI computation serializers (both
+/// `serde_json::Map`) so the two surfaces stay byte-parallel.
+fn insert_deviation_cap_flags(
+    object: &mut serde_json::Map<String, Value>,
+    computation: &AlignmentComputation,
+) {
+    let arrays = [
+        ("static_deviations", computation.static_deviations.len()),
+        (
+            "legal_observed_variations",
+            computation.legal_observed_variations.len(),
+        ),
+    ];
+    for (name, total) in arrays {
+        if total > ALIGNMENT_DEVIATION_CAP {
+            object.insert(format!("{name}_truncated"), json!(true));
+            object.insert(format!("{name}_count"), json!(total));
+        }
+    }
 }
 
 fn alignment_typed_unknown_value(unknown: &crate::core::model::TypedUnknown) -> Value {
@@ -1349,29 +1418,79 @@ fn alignment_typed_unknown_value(unknown: &crate::core::model::TypedUnknown) -> 
     })
 }
 
-fn query_route_value(route: &FamilyQueryRouteReport) -> Value {
-    json!({
-        "route": route.route,
-        "input_kind": route.input_kind,
-        "pipeline": route.pipeline,
-        "family_id_policy": route.family_id_policy,
-        "candidate_limit": route.candidate_limit,
-        "selected_family_id": route.selected_family_id,
-        "candidate_family_ids": route.candidate_family_ids,
-        "follow_up_family_ids": route.follow_up_family_ids,
-        "why_selected": route.why_selected,
+/// Source-free MCP value for the `query_route` envelope.
+///
+/// The single serialization authority every family response routes through, so
+/// slimming here slims Found, PartialContext, UNKNOWN, and alignment alike. Two
+/// tiers of field are demoted out of the `minimal` shape via the
+/// [`Verbosity::renders`] gate; `standard` (the byte-stable v1 default) and
+/// `full` render every field, so both remain byte-identical to the
+/// pre-precision response.
+///
+/// - `route` and `follow_up_family_ids` are core (`minimal`): the machine route
+///   token and the single canonical handle list. `follow_up_family_ids` is the
+///   normalized union of `candidate_family_ids` and `selected_family_id`, so it
+///   is a superset — demoting those two at `minimal` loses no id.
+/// - `candidate_family_ids` renders at `candidate_family_ids_tier`. On an
+///   abstention or partial route it is a narrowing recovery handle
+///   (`VerbosityTier::Minimal`, kept even at `minimal`); on a resolved Found
+///   route it duplicates the follow-up handle byte-for-byte
+///   (`VerbosityTier::Standard`, dropped at `minimal`).
+/// - `selected_family_id` and the static routing prose / term-retrieval
+///   telemetry are diagnostic (`VerbosityTier::Standard`): they never change the
+///   consumer's next action and are demoted out of `minimal`.
+fn query_route_value(
+    route: &FamilyQueryRouteReport,
+    verbosity: Verbosity,
+    candidate_family_ids_tier: VerbosityTier,
+) -> Value {
+    let mut value = serde_json::Map::new();
+    value.insert("route".to_string(), json!(route.route));
+    value.insert(
+        "follow_up_family_ids".to_string(),
+        json!(route.follow_up_family_ids),
+    );
+    if verbosity.renders(candidate_family_ids_tier) {
+        value.insert(
+            "candidate_family_ids".to_string(),
+            json!(route.candidate_family_ids),
+        );
+    }
+    if verbosity.renders(VerbosityTier::Standard) {
+        value.insert(
+            "selected_family_id".to_string(),
+            json!(route.selected_family_id),
+        );
+        value.insert("input_kind".to_string(), json!(route.input_kind));
+        value.insert("pipeline".to_string(), json!(route.pipeline));
+        value.insert(
+            "family_id_policy".to_string(),
+            json!(route.family_id_policy),
+        );
+        value.insert("candidate_limit".to_string(), json!(route.candidate_limit));
+        value.insert("why_selected".to_string(), json!(route.why_selected));
         // Numeric fields the product-eval harness reads directly; null unless the
         // deterministic term-retrieval fallback produced this route.
-        "hydrated_family_count": route
-            .term_retrieval
-            .as_ref()
-            .map(|term| term.hydrated_candidate_count),
-        "retrieval_stage_count": route
-            .term_retrieval
-            .as_ref()
-            .map(|term| term.retrieval_stage_count),
-        "term_retrieval": route.term_retrieval.as_ref().map(term_retrieval_value),
-    })
+        value.insert(
+            "hydrated_family_count".to_string(),
+            json!(route
+                .term_retrieval
+                .as_ref()
+                .map(|term| term.hydrated_candidate_count)),
+        );
+        value.insert(
+            "retrieval_stage_count".to_string(),
+            json!(route
+                .term_retrieval
+                .as_ref()
+                .map(|term| term.retrieval_stage_count)),
+        );
+        value.insert(
+            "term_retrieval".to_string(),
+            json!(route.term_retrieval.as_ref().map(term_retrieval_value)),
+        );
+    }
+    Value::Object(value)
 }
 
 /// Source-free JSON for a term-retrieval route (MCP shape). Carries only enum
@@ -1398,8 +1517,8 @@ fn term_retrieval_value(term: &TermRetrievalRoute) -> Value {
     })
 }
 
-fn resolved_target_value(target: &ResolvedQueryTarget) -> Value {
-    json!({
+fn resolved_target_value(target: &ResolvedQueryTarget, verbosity: Verbosity) -> Value {
+    let mut value = json!({
         "original_target": target.original_target,
         "kind": target.kind,
         "path": target.path,
@@ -1414,19 +1533,67 @@ fn resolved_target_value(target: &ResolvedQueryTarget) -> Value {
         "candidate_code_unit_ids": target.candidate_code_unit_ids,
         "confidence": target.confidence,
         "match_kind": target.match_kind,
-    })
+    });
+    thin_resolved_target(
+        value
+            .as_object_mut()
+            .expect("resolved target serializes to a JSON object"),
+        target,
+        verbosity,
+    );
+    value
 }
 
-fn read_plan_value(read_plan: &ReadPlan) -> Value {
-    json!({
+/// Trim the shared `resolved_target` object for the `minimal` tier. Standard and
+/// full are byte-stable (this is a no-op there); at `minimal` the pure input echo
+/// (`original_target`) and normalizer internals (`residue_terms`) always drop, and
+/// each `candidate_*` narrowing list drops only when its concrete counterpart
+/// resolved — i.e. the echo is redundant. When resolution stayed genuinely
+/// ambiguous (no single unit / path / family pinned), that list is the caller's
+/// recovery handle and is retained even at `minimal`
+/// (`docs/specifications/query-resolution.md` multi-eligible-unit abstention).
+fn thin_resolved_target(
+    object: &mut serde_json::Map<String, Value>,
+    target: &ResolvedQueryTarget,
+    verbosity: Verbosity,
+) {
+    if verbosity.renders(VerbosityTier::Standard) {
+        return;
+    }
+    object.remove("original_target");
+    object.remove("residue_terms");
+    if target.code_unit_id.is_some() {
+        object.remove("candidate_code_unit_ids");
+    }
+    if !target.path.is_empty() {
+        object.remove("candidate_paths");
+    }
+    if target.family_id.is_some() {
+        object.remove("candidate_family_ids");
+    }
+}
+
+fn read_plan_value(read_plan: &ReadPlan, verbosity: Verbosity) -> Value {
+    let mut plan = json!({
         "estimated_tokens": read_plan.estimated_tokens,
         "source_snippets_included": read_plan.source_snippets_included,
         "requires_source_before_edit": read_plan.requires_source_before_edit,
         "selection_strategy": read_plan.selection_strategy,
         "budget_satisfied": read_plan.budget_satisfied,
-        "items": read_plan.items.iter().map(read_plan_item_value).collect::<Vec<_>>(),
+        "items": read_plan.items.iter().map(|item| read_plan_item_value(item, verbosity)).collect::<Vec<_>>(),
         "line_range_omissions": read_plan.line_range_omissions.iter().map(read_plan_line_range_omission_value).collect::<Vec<_>>(),
-    })
+    });
+    if !verbosity.renders(VerbosityTier::Standard) {
+        // Minimal-only honesty flags (additive; `standard`/`full` keep the
+        // pre-precision bytes). `item_count` mirrors the member cap's
+        // `member_count`; `truncated` reveals that budget selection dropped
+        // candidate spans so a trimmed plan never hides its own capping.
+        if let Some(object) = plan.as_object_mut() {
+            object.insert("item_count".to_string(), json!(read_plan.items.len()));
+            object.insert("truncated".to_string(), json!(read_plan.truncated));
+        }
+    }
+    plan
 }
 
 fn read_plan_line_range_omission_value(omission: &ReadPlanLineRangeOmission) -> Value {
@@ -1440,7 +1607,19 @@ fn read_plan_line_range_omission_value(omission: &ReadPlanLineRangeOmission) -> 
     })
 }
 
-fn read_plan_item_value(item: &ReadPlanItem) -> Value {
+fn read_plan_item_value(item: &ReadPlanItem, verbosity: Verbosity) -> Value {
+    if !verbosity.renders(VerbosityTier::Standard) && item.source_snippets_included {
+        // Dedup: this item's content is already inlined under `source_spans`
+        // (a strict superset of the item's locus metadata), so at `minimal` the
+        // plan carries only a back-reference stub. The plan still enumerates
+        // what to read; the consumer treats the rendered span as already read
+        // and does not pay for the repeated hash/byte/line locus.
+        return json!({
+            "purpose": item.purpose.as_str(),
+            "path": item.path,
+            "rendered": true,
+        });
+    }
     json!({
         "purpose": item.purpose.as_str(),
         "path": item.path,
@@ -1497,6 +1676,22 @@ fn source_spans_value(source_spans: Option<&SourceSpanRenderReport>) -> Value {
                 })
             }).collect::<Vec<_>>(),
         }),
+    }
+}
+
+/// At `minimal` verbosity, omit the `source_spans` key entirely when spans were
+/// not requested rather than shipping the empty `{requested:false, spans:[],
+/// omissions:[]}` stub. `standard`/`full` keep the stub for byte stability; the
+/// key omission is an opt-in `minimal`-only reduction.
+fn drop_unrequested_source_spans(
+    payload: &mut Value,
+    source_spans: Option<&SourceSpanRenderReport>,
+    verbosity: Verbosity,
+) {
+    if !verbosity.renders(VerbosityTier::Standard) && source_spans.is_none() {
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("source_spans");
+        }
     }
 }
 
@@ -1636,7 +1831,7 @@ mod tests {
                 abstention_reason: Some(TermRetrievalAbstention::BelowMinScore),
             }),
         };
-        let value = query_route_value(&route);
+        let value = query_route_value(&route, Verbosity::Standard, VerbosityTier::Minimal);
         assert_eq!(value["hydrated_family_count"], 0);
         assert_eq!(value["retrieval_stage_count"], 4);
         let term = &value["term_retrieval"];
@@ -1646,6 +1841,367 @@ mod tests {
         assert_eq!(term["top_score_bucket"], "below_min");
         assert_eq!(term["ranked_candidate_count"], 1);
         assert_eq!(term["matched_signals"]["concept"], true);
+    }
+
+    fn resolved_unit_target() -> ResolvedQueryTarget {
+        ResolvedQueryTarget {
+            original_target: "src/api/routes.py get_users".to_string(),
+            kind: "code_unit",
+            path: "src/api/routes.py".to_string(),
+            line: Some(12),
+            byte_range: Some((0, 40)),
+            family_id: Some("family:python:fastapi_route:framework_fastapi_route".to_string()),
+            code_unit_id: Some("unit:src/api/routes.py#fastapi_route:get:0-40:1".to_string()),
+            symbol_hints: vec!["get_users".to_string()],
+            residue_terms: vec!["get".to_string(), "users".to_string()],
+            candidate_paths: vec!["src/api/routes.py".to_string()],
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            candidate_code_unit_ids: vec![
+                "unit:src/api/routes.py#fastapi_route:get:0-40:1".to_string()
+            ],
+            confidence: "high",
+            match_kind: "exact_path",
+        }
+    }
+
+    /// Golden byte-parity: under `product-schemas.v1` the `standard` and `full`
+    /// tiers reproduce the pre-precision `resolved_target` shape byte-for-byte.
+    #[test]
+    fn resolved_target_standard_and_full_are_byte_stable() {
+        let target = resolved_unit_target();
+        let standard = resolved_target_value(&target, Verbosity::Standard);
+        let full = resolved_target_value(&target, Verbosity::Full);
+        let golden = json!({
+            "original_target": "src/api/routes.py get_users",
+            "kind": "code_unit",
+            "path": "src/api/routes.py",
+            "line": 12,
+            "byte_range": {"start": 0, "end": 40},
+            "family_id": "family:python:fastapi_route:framework_fastapi_route",
+            "code_unit_id": "unit:src/api/routes.py#fastapi_route:get:0-40:1",
+            "symbol_hints": ["get_users"],
+            "residue_terms": ["get", "users"],
+            "candidate_paths": ["src/api/routes.py"],
+            "candidate_family_ids": ["family:python:fastapi_route:framework_fastapi_route"],
+            "candidate_code_unit_ids": ["unit:src/api/routes.py#fastapi_route:get:0-40:1"],
+            "confidence": "high",
+            "match_kind": "exact_path",
+        });
+        assert_eq!(
+            serde_json::to_string(&standard).unwrap(),
+            serde_json::to_string(&golden).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string(&full).unwrap(),
+            serde_json::to_string(&golden).unwrap()
+        );
+    }
+
+    /// `minimal` drops the input echo, normalizer internals, and the `candidate_*`
+    /// lists that merely echo an already-resolved locus (R6's check-target echo).
+    #[test]
+    fn resolved_target_minimal_thins_echo_and_redundant_candidates() {
+        let target = resolved_unit_target();
+        let minimal = resolved_target_value(&target, Verbosity::Minimal);
+        let object = minimal.as_object().expect("resolved_target object");
+        for dropped in [
+            "original_target",
+            "residue_terms",
+            "candidate_code_unit_ids",
+            "candidate_paths",
+            "candidate_family_ids",
+        ] {
+            assert!(!object.contains_key(dropped), "minimal must drop {dropped}");
+        }
+        for kept in [
+            "kind",
+            "path",
+            "line",
+            "byte_range",
+            "family_id",
+            "code_unit_id",
+            "symbol_hints",
+            "confidence",
+            "match_kind",
+        ] {
+            assert!(object.contains_key(kept), "minimal must keep {kept}");
+        }
+    }
+
+    /// A genuinely ambiguous resolution (no single unit/path/family pinned) keeps
+    /// the `candidate_*` narrowing handles even at `minimal` — they are the
+    /// caller's recovery path, not a redundant echo.
+    #[test]
+    fn resolved_target_minimal_retains_candidates_when_ambiguous() {
+        let mut target = resolved_unit_target();
+        target.code_unit_id = None;
+        target.family_id = None;
+        target.path = String::new();
+        target.candidate_code_unit_ids = vec!["unit:a".to_string(), "unit:b".to_string()];
+        target.candidate_paths = vec!["a.py".to_string(), "b.py".to_string()];
+        target.candidate_family_ids = vec!["family:a".to_string(), "family:b".to_string()];
+        let minimal = resolved_target_value(&target, Verbosity::Minimal);
+        let object = minimal.as_object().expect("resolved_target object");
+        assert!(!object.contains_key("original_target"));
+        assert!(!object.contains_key("residue_terms"));
+        assert!(object.contains_key("candidate_code_unit_ids"));
+        assert!(object.contains_key("candidate_paths"));
+        assert!(object.contains_key("candidate_family_ids"));
+    }
+
+    fn deviation_computation(count: usize) -> AlignmentComputation {
+        use crate::application::conformance::{LegalVariation, StaticDeviation};
+        use crate::core::policy::alignment::{AlignmentStatus, StaticDeviationKind};
+        AlignmentComputation {
+            status: AlignmentStatus::StaticDeviation,
+            required_features_matched: Vec::new(),
+            static_deviations: (0..count)
+                .map(|index| StaticDeviation {
+                    prefix: format!("prefix_{index}"),
+                    kind: StaticDeviationKind::RequiredMismatch,
+                    semantics_token: "equal".to_string(),
+                    expected_summary: "expected".to_string(),
+                    observed_summary: "observed".to_string(),
+                })
+                .collect(),
+            legal_observed_variations: (0..count)
+                .map(|index| LegalVariation {
+                    dimension: format!("dimension_{index}"),
+                    observed_profile: "profile".to_string(),
+                })
+                .collect(),
+            blocking_unknowns: Vec::new(),
+            unresolved_runtime_obligations: Vec::new(),
+            outcome_reason: "a required feature deviated".to_string(),
+        }
+    }
+
+    /// Scale-protection: over-cap deviation arrays are truncated to the cap and
+    /// carry an honest `<name>_truncated` flag plus the full `<name>_count`.
+    #[test]
+    fn alignment_computation_caps_deviation_arrays_with_honest_flags() {
+        let total = ALIGNMENT_DEVIATION_CAP + 3;
+        let value = alignment_computation_value(&deviation_computation(total));
+        assert_eq!(
+            value["static_deviations"].as_array().unwrap().len(),
+            ALIGNMENT_DEVIATION_CAP
+        );
+        assert_eq!(value["static_deviations_truncated"], json!(true));
+        assert_eq!(value["static_deviations_count"], json!(total));
+        assert_eq!(
+            value["legal_observed_variations"].as_array().unwrap().len(),
+            ALIGNMENT_DEVIATION_CAP
+        );
+        assert_eq!(value["legal_observed_variations_truncated"], json!(true));
+        assert_eq!(value["legal_observed_variations_count"], json!(total));
+    }
+
+    /// Below the cap the additive metadata is absent, keeping the object
+    /// byte-identical to the pre-cap shape (v1 additivity).
+    #[test]
+    fn alignment_computation_below_cap_emits_no_truncation_metadata() {
+        let value = alignment_computation_value(&deviation_computation(2));
+        let object = value.as_object().expect("computation object");
+        assert_eq!(object["static_deviations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            object["legal_observed_variations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        for absent in [
+            "static_deviations_truncated",
+            "static_deviations_count",
+            "legal_observed_variations_truncated",
+            "legal_observed_variations_count",
+        ] {
+            assert!(!object.contains_key(absent), "{absent} must be absent");
+        }
+    }
+
+    fn empty_conformance_read_plan() -> ReadPlan {
+        ReadPlan {
+            items: Vec::new(),
+            estimated_tokens: 0,
+            source_snippets_included: false,
+            requires_source_before_edit: false,
+            selection_strategy: "greedy_marginal_coverage_v1",
+            budget_satisfied: true,
+            line_range_omissions: Vec::new(),
+            truncated: false,
+        }
+    }
+
+    fn member_certificate() -> AlignmentCertificateReport {
+        use crate::core::policy::alignment::{AlignmentStatus, TargetRelationship};
+        AlignmentCertificateReport {
+            active_generation: "gen-000001".to_string(),
+            alignment_status: AlignmentStatus::StaticallyAligned,
+            target_relationship: Some(TargetRelationship::Member),
+            selected_family_id: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            resolved_target: resolved_unit_target(),
+            computation: None,
+            read_plan: empty_conformance_read_plan(),
+            unknowns: Vec::new(),
+            resolved_target_file_size_bytes: None,
+            resolved_target_language: String::new(),
+            family_evidence_baseline_tokens: 0,
+        }
+    }
+
+    fn member_route() -> FamilyQueryRouteReport {
+        FamilyQueryRouteReport {
+            route: "conformance_member",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["resolve_target", "select_family", "align"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            candidate_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            follow_up_family_ids: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
+            why_selected: "resolved unit is a member of its family",
+            term_retrieval: None,
+        }
+    }
+
+    /// S8 dedup + the `runtime_equivalence` invariant. `standard`/`full` keep the
+    /// `alignment_status` and top-level `selected_family_id` duplicates
+    /// byte-for-byte; `minimal` drops both while `status` and the invariant
+    /// `runtime_equivalence: "UNKNOWN"` always survive.
+    #[test]
+    fn alignment_certificate_dedups_duplicates_only_at_minimal() {
+        let certificate = member_certificate();
+        let route = member_route();
+        let read_plan = certificate.read_plan.clone();
+        let render = |verbosity| {
+            alignment_certificate_value(
+                McpOperation::CheckConformance,
+                &certificate,
+                &route,
+                &read_plan,
+                None,
+                verbosity,
+            )
+        };
+
+        let standard = render(Verbosity::Standard);
+        let full = render(Verbosity::Full);
+        assert_eq!(standard["status"], "STATICALLY_ALIGNED");
+        assert_eq!(standard["alignment_status"], "STATICALLY_ALIGNED");
+        assert_eq!(
+            standard["selected_family_id"],
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert_eq!(standard["runtime_equivalence"], "UNKNOWN");
+        assert_eq!(
+            serde_json::to_string(&standard).unwrap(),
+            serde_json::to_string(&full).unwrap()
+        );
+
+        let minimal = render(Verbosity::Minimal);
+        let object = minimal.as_object().expect("certificate object");
+        assert!(!object.contains_key("alignment_status"));
+        assert_eq!(object["status"], "STATICALLY_ALIGNED");
+        assert_eq!(
+            object["runtime_equivalence"], "UNKNOWN",
+            "runtime_equivalence is an invariant and is never removed"
+        );
+        // The top-level `selected_family_id` is the authoritative selected-family
+        // handle and is retained at every tier, including `minimal` — the route
+        // lane suppresses the `query_route.selected_family_id` copy at `minimal`,
+        // so this top-level carrier is what keeps "which family was selected"
+        // determinable in the lean certificate.
+        assert_eq!(
+            object["selected_family_id"],
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+    }
+
+    #[test]
+    fn query_route_value_minimal_slims_by_candidate_tier() {
+        let route = FamilyQueryRouteReport {
+            route: "discover_hydrate_compose",
+            input_kind: "path_symbol_role_or_pattern_target",
+            pipeline: vec!["discover_candidates", "hydrate_bounded_candidates"],
+            family_id_policy:
+                "family_ids_are_returned_follow_up_handles_not_required_initial_inputs",
+            candidate_limit: Some(5),
+            selected_family_id: Some("family:python:fastapi_route".to_string()),
+            candidate_family_ids: vec!["family:python:fastapi_route".to_string()],
+            follow_up_family_ids: vec!["family:python:fastapi_route".to_string()],
+            why_selected: "target resolved to one fresh candidate family",
+            term_retrieval: None,
+        };
+        const ALL_FIELDS: [&str; 12] = [
+            "route",
+            "input_kind",
+            "pipeline",
+            "family_id_policy",
+            "candidate_limit",
+            "selected_family_id",
+            "candidate_family_ids",
+            "follow_up_family_ids",
+            "why_selected",
+            "hydrated_family_count",
+            "retrieval_stage_count",
+            "term_retrieval",
+        ];
+
+        // v1 discipline: `standard` and `full` render every field regardless of
+        // the candidate tier, so both stay byte-identical to the prior shape.
+        for verbosity in [Verbosity::Standard, Verbosity::Full] {
+            for tier in [VerbosityTier::Minimal, VerbosityTier::Standard] {
+                let value = query_route_value(&route, verbosity, tier);
+                let object = value.as_object().expect("query_route object");
+                assert_eq!(object.len(), ALL_FIELDS.len());
+                for key in ALL_FIELDS {
+                    assert!(object.contains_key(key), "{verbosity:?} must render {key}");
+                }
+            }
+        }
+
+        // Minimal on a resolved Found route (candidate tier Standard): the
+        // duplicate candidate handle and every diagnostic drop away.
+        let found = query_route_value(&route, Verbosity::Minimal, VerbosityTier::Standard);
+        let found_keys: Vec<&String> = found.as_object().unwrap().keys().collect();
+        assert_eq!(found_keys, vec!["follow_up_family_ids", "route"]);
+
+        // Minimal on a recovery route (candidate tier Minimal): the narrowing
+        // candidate handle survives alongside the two core fields.
+        let recovery = query_route_value(&route, Verbosity::Minimal, VerbosityTier::Minimal);
+        let recovery_keys: Vec<&String> = recovery.as_object().unwrap().keys().collect();
+        assert_eq!(
+            recovery_keys,
+            vec!["candidate_family_ids", "follow_up_family_ids", "route"],
+        );
+
+        // Neither minimal shape leaks `selected_family_id`; the follow-up handle
+        // (a superset of candidate + selected) carries every id.
+        assert!(found.get("selected_family_id").is_none());
+        assert!(recovery.get("selected_family_id").is_none());
+        assert_eq!(
+            found["follow_up_family_ids"],
+            json!(route.follow_up_family_ids)
+        );
+        assert_eq!(
+            recovery["candidate_family_ids"],
+            json!(route.candidate_family_ids),
+        );
     }
 
     #[test]
@@ -1755,25 +2311,38 @@ mod tests {
         }
     }
 
+    /// The exact bytes the Found `find_analogues` response serialized to at
+    /// commit 8337c1a (the S0 verbosity foundation), captured before any
+    /// precision slice landed. Anchoring `standard`/`full` to this literal
+    /// proves the query_route rewrite is byte-neutral above `minimal` even
+    /// though both the assertion and the response now run the rewritten code.
+    const FIND_ANALOGUES_FOUND_PREGOLDEN_V0: &str = r#"{"active_generation":"gen-000001","command":"find","constraint_profile":null,"evidence":[],"family":{"classification":"DOMINANT_PATTERN","family_id":"family:typescript:express_route:express","prevalence":{"blocked_peer_count":0,"classification_reason":"coverage 2/2 with no competing ready family","competing_ready_family_count":0,"coverage_ratio":1.0,"eligible_peer_count":2,"largest_competing_support":0,"supported_member_count":2,"unsupported_peer_count":0},"support":2},"implemented":true,"member_count":1,"members":[{"code_unit_id":"unit:src/routes/a.ts#express_route:get:0-20:1","family_id":"family:typescript:express_route:express","role":"framework:express.route_handler"}],"members_truncated":false,"operation":"find_analogues","output":{"budget_satisfied":true,"covered_claims":[],"estimated_baseline_tokens":135,"estimated_evidence_tokens":0,"estimated_potential_token_savings":65,"estimated_potential_token_savings_caveat":"estimated potential only; not measured token savings","estimated_potential_token_savings_kind":"ESTIMATED","estimated_read_plan_tokens":70,"estimated_returned_tokens":70,"missing_claims":[],"mode":"compact","selection_strategy":"greedy_marginal_coverage_v1","source_snippets_included":false,"token_budget":null},"query_route":{"candidate_family_ids":["family:typescript:express_route:express"],"candidate_limit":5,"family_id_policy":"family_ids_are_returned_follow_up_handles_not_required_initial_inputs","follow_up_family_ids":["family:typescript:express_route:express"],"hydrated_family_count":null,"input_kind":"path_symbol_role_or_pattern_target","pipeline":["discover_candidates","hydrate_bounded_candidates","select_single_fresh_family","compose_context_bundle"],"retrieval_stage_count":null,"route":"discover_hydrate_compose","selected_family_id":"family:typescript:express_route:express","term_retrieval":null,"why_selected":"target resolved to one fresh candidate family; RepoGrammar hydrated that family and composed bounded context"},"read_plan":{"budget_satisfied":true,"estimated_tokens":70,"items":[{"content_hash":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","end_byte":20,"end_line":2,"estimated_tokens":70,"path":"src/routes/a.ts","purpose":"target_body_required_for_edit","source_required_before_edit":true,"source_snippets_included":false,"start_byte":0,"start_line":1,"why":"read this target body before editing; family metadata is context only"}],"line_range_omissions":[],"requires_source_before_edit":true,"selection_strategy":"deterministic_read_plan_v1","source_snippets_included":false},"schema_version":"product-schemas.v1","source_spans":{"omissions":[],"requested":false,"source_snippets_included":false,"spans":[]},"status":"ok","unknowns":[{"affected_claim":"runtime_equivalence","class":"non_blocking_unknown","reason":"FrameworkMagic","recovery":"add semantic-worker or framework adapter evidence"}],"variation_slots":[{"description":"non_blocking_unknown:FrameworkMagic","family_id":"family:typescript:express_route:express","slot_id":"slot:runtime_unknown"}]}"#;
+
     #[test]
-    fn verbosity_standard_matches_default_and_all_tiers_byte_for_byte() {
+    fn find_standard_and_full_match_pregolden_byte_for_byte() {
         let workspace = TempWorkspace::new("mcp-verbosity-byte-parity");
         let context = context_for_workspace(&workspace);
         let target = "src/routes/a.ts";
 
-        let baseline = handle_context_call(
+        let default = handle_context_call(
             &FakeMcpRuntime::ready_found(),
             &context,
             &json!({"operation": "find_analogues", "target": target}),
         )
-        .expect("baseline found response");
-        assert_eq!(baseline["status"], "ok");
+        .expect("default found response");
+        assert_eq!(default["status"], "ok");
         // v1 must not introduce a `verbosity` echo in the response envelope.
-        assert!(baseline.get("verbosity").is_none());
+        assert!(default.get("verbosity").is_none());
+        assert_eq!(
+            serde_json::to_string(&default).expect("serialize default"),
+            FIND_ANALOGUES_FOUND_PREGOLDEN_V0,
+            "default (implicit standard) response drifted from the pre-precision golden",
+        );
 
-        // S0 is additive: the explicit `standard` default and the skeleton
-        // `minimal`/`full` tiers each reproduce the pre-precision bytes exactly.
-        for verbosity in ["standard", "minimal", "full"] {
+        // v1 discipline: `standard` (the default) and `full` reproduce the
+        // pre-precision bytes exactly. All minimal-tier reductions are opt-in;
+        // see the dedicated minimal-shape tests below.
+        for verbosity in ["standard", "full"] {
             let response = handle_context_call(
                 &FakeMcpRuntime::ready_found(),
                 &context,
@@ -1786,10 +2355,162 @@ mod tests {
             .expect("verbosity found response");
             assert_eq!(
                 serde_json::to_string(&response).expect("serialize response"),
-                serde_json::to_string(&baseline).expect("serialize baseline"),
-                "verbosity={verbosity} must be byte-identical to the default response in S0",
+                FIND_ANALOGUES_FOUND_PREGOLDEN_V0,
+                "verbosity={verbosity} must match the pre-precision golden byte-for-byte",
             );
         }
+
+        // `minimal` must genuinely diverge (a regression that silently made it
+        // equal `standard` would mean the precision reductions stopped firing).
+        let minimal = handle_context_call(
+            &FakeMcpRuntime::ready_found(),
+            &context,
+            &json!({
+                "operation": "find_analogues",
+                "target": target,
+                "verbosity": "minimal",
+            }),
+        )
+        .expect("minimal found response");
+        assert_ne!(
+            serde_json::to_string(&minimal).expect("serialize minimal"),
+            FIND_ANALOGUES_FOUND_PREGOLDEN_V0,
+            "minimal must diverge from the standard default shape",
+        );
+    }
+
+    #[test]
+    fn find_minimal_adds_honest_truncation_flags_and_drops_source_spans_stub() {
+        let response = handle_context_call(
+            &FakeMcpRuntime::ready_found(),
+            &context(),
+            &json!({
+                "operation": "find_analogues",
+                "target": "src/routes/a.ts",
+                "verbosity": "minimal",
+            }),
+        )
+        .expect("minimal found response");
+
+        assert_eq!(response["status"], "ok");
+        let read_plan = &response["read_plan"];
+        // Honest truncation flag is always present at minimal (mirroring the
+        // member cap); item_count equals the retained item length. The concrete
+        // `truncated: true` capping path is exercised on the CLI fixture, which
+        // carries more than one read-plan candidate.
+        assert!(read_plan["truncated"].is_boolean());
+        assert_eq!(
+            read_plan["item_count"].as_u64().expect("item_count"),
+            read_plan["items"].as_array().expect("items").len() as u64
+        );
+        // The empty source_spans stub is omitted entirely when not requested.
+        assert!(response.get("source_spans").is_none());
+
+        // Standard keeps the pre-precision shape: no honesty flags, stub retained.
+        let standard = handle_context_call(
+            &FakeMcpRuntime::ready_found(),
+            &context(),
+            &json!({"operation": "find_analogues", "target": "src/routes/a.ts"}),
+        )
+        .expect("standard found response");
+        assert!(standard["read_plan"].get("truncated").is_none());
+        assert!(standard["read_plan"].get("item_count").is_none());
+        assert_eq!(standard["source_spans"]["requested"], false);
+    }
+
+    #[test]
+    fn find_minimal_dedups_rendered_read_plan_items_into_source_spans() {
+        let response = handle_context_call(
+            &FakeMcpRuntime::ready_found_with_source_spans(),
+            &context(),
+            &json!({
+                "operation": "check_conformance",
+                "target": "src/routes/a.ts",
+                "include_source_spans": true,
+                "verbosity": "minimal",
+            }),
+        )
+        .expect("minimal found response with spans");
+
+        // The rendered item is a back-reference stub: it still names what to read
+        // but does not repeat the locus already carried by the inlined span.
+        let item = &response["read_plan"]["items"][0];
+        assert_eq!(item["rendered"], true);
+        assert!(item.get("path").is_some());
+        assert!(item.get("purpose").is_some());
+        assert!(item.get("content_hash").is_none());
+        assert!(item.get("start_byte").is_none());
+        // The content is the single source of truth under source_spans.
+        assert_eq!(response["source_spans"]["source_snippets_included"], true);
+        assert!(response["source_spans"]["spans"][0]["content_hash"].is_string());
+        assert!(response["source_spans"]["spans"][0]["text"].is_string());
+
+        // Standard renders the full item metadata (no dedup) for byte stability.
+        let standard = handle_context_call(
+            &FakeMcpRuntime::ready_found_with_source_spans(),
+            &context(),
+            &json!({
+                "operation": "check_conformance",
+                "target": "src/routes/a.ts",
+                "include_source_spans": true,
+            }),
+        )
+        .expect("standard found response with spans");
+        let standard_item = &standard["read_plan"]["items"][0];
+        assert_eq!(standard_item["source_snippets_included"], true);
+        assert!(standard_item["content_hash"].is_string());
+        assert!(standard_item.get("rendered").is_none());
+    }
+
+    #[test]
+    fn find_minimal_slims_query_route_only() {
+        let workspace = TempWorkspace::new("mcp-verbosity-minimal-shape");
+        let context = context_for_workspace(&workspace);
+        let target = "src/routes/a.ts";
+
+        let baseline = handle_context_call(
+            &FakeMcpRuntime::ready_found(),
+            &context,
+            &json!({"operation": "find_analogues", "target": target}),
+        )
+        .expect("baseline found response");
+
+        // `minimal` on a resolved Found route collapses `query_route` to the two
+        // core fields; every diagnostic and duplicate handle is suppressed.
+        let minimal = handle_context_call(
+            &FakeMcpRuntime::ready_found(),
+            &context,
+            &json!({
+                "operation": "find_analogues",
+                "target": target,
+                "verbosity": "minimal",
+            }),
+        )
+        .expect("minimal found response");
+        assert_ne!(
+            serde_json::to_string(&minimal).expect("serialize minimal"),
+            serde_json::to_string(&baseline).expect("serialize baseline"),
+            "verbosity=minimal must slim the Found query_route",
+        );
+        let route = &minimal["query_route"];
+        let route_keys: Vec<&String> = route
+            .as_object()
+            .expect("query_route object")
+            .keys()
+            .collect();
+        assert_eq!(
+            route_keys,
+            vec!["follow_up_family_ids", "route"],
+            "minimal Found query_route keeps only route + follow_up_family_ids",
+        );
+        assert_eq!(route["route"], baseline["query_route"]["route"]);
+        assert_eq!(
+            route["follow_up_family_ids"],
+            baseline["query_route"]["follow_up_family_ids"],
+        );
+        // The rest of the response is unchanged by the query_route slice.
+        assert_eq!(minimal["family"], baseline["family"]);
+        assert_eq!(minimal["members"], baseline["members"]);
     }
 
     #[test]
@@ -2888,6 +3609,7 @@ mod tests {
                 requires_source_before_edit: true,
                 selection_strategy: "deterministic_local_context_v1",
                 budget_satisfied: true,
+                truncated: false,
                 line_range_omissions: Vec::new(),
             },
             // A 4 KiB TypeScript file resolves to a 20-byte read-plan span: the
