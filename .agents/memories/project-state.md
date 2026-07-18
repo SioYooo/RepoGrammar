@@ -896,6 +896,17 @@ tests, generators, installed gems, repository tooling, or request-time network
 for default Ruby analysis. No dependency, Ruby/Bundler command, tool probe, or
 network access is part of the discovery slice; every later gate remains open.
 
+Indexing performance now has two correctness-preserving fast paths. The private
+Python parse-document contract returns the exact interface hash that the host
+persists, eliminating the former second interface-extraction worker process for
+every full-build Python file; a body-only incremental edit still runs one
+preflight interface probe. After schema, engine-version, dirty-record,
+semantic-worker, and lock gates pass, an empty supported-file delta retains the
+validated active generation and reports zero copy-forward, reparse, and family
+recomputation instead of hydrating and rewriting the full generation. Any real
+delta continues through the canonical project-context and sync-equivalence
+gates.
+
 Future agents must not claim compiler-backed TypeScript analysis,
 provider-backed Python semantic analysis, full pattern-family mining,
 freshness-validated semantic claims, installer writes beyond global

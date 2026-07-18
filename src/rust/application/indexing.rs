@@ -1208,11 +1208,71 @@ fn sync_repository_with_optional_semantic_worker(
         );
     }
 
+    let active_files = runtime
+        .store
+        .list_active_indexed_files()
+        .map_err(index_store_error)?;
+    let delta = compute_sync_delta_from_files(&active_files.files, &report);
+    if delta.is_empty() {
+        let stats = runtime
+            .store
+            .active_repo_shape_stats()
+            .map_err(index_store_error)?;
+        if active_files.generation_id != base_generation || stats.generation_id != base_generation {
+            return Err(RepoGrammarError::InvalidInput(
+                "active generation changed during unchanged sync".to_string(),
+            ));
+        }
+        emit_progress(
+            runtime.progress,
+            ProgressStage::FileScanning,
+            "no indexed file changes",
+            known_work_units(report.files.len(), report.files.len()),
+        );
+        emit_progress(
+            runtime.progress,
+            ProgressStage::PersistenceValidation,
+            "retained current active generation",
+            WorkUnits::Unknown,
+        );
+        let mut warnings = report.warnings.clone();
+        extend_inventory_only_language_warnings(&mut warnings, &report);
+        return Ok(IndexingOutcome {
+            indexing_mode: indexing_generation_mode(&report),
+            parser_attempted_files: 0,
+            indexed_units: stats.indexed_code_unit_count,
+            semantic_facts: stats.semantic_fact_count,
+            discovered_files: report.files.len(),
+            skipped_paths: report.skipped.len(),
+            active_generation: Some(base_generation.clone()),
+            semantic_worker: SemanticWorkerRunStatus::Deferred,
+            sync_report: Some(IndexingSyncReport {
+                base_generation: Some(base_generation),
+                sync_mode: IndexingSyncMode::Incremental,
+                fallback_reason: None,
+                added_files: 0,
+                modified_files: 0,
+                removed_files: 0,
+                unchanged_files: delta.unchanged_files.len(),
+                copied_forward_files: 0,
+                reparsed_files: 0,
+                families_recomputed: 0,
+                dirty_records_cleared: 0,
+                family_identity_delta: None,
+            }),
+            warnings,
+        });
+    }
+
     let snapshot = runtime
         .store
         .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
-    let delta = compute_sync_delta(&snapshot, &report);
+    if snapshot.generation_id != base_generation {
+        return Err(RepoGrammarError::InvalidInput(
+            "active generation changed during incremental sync".to_string(),
+        ));
+    }
     let decision = classify_sync_context_gate(
         &request,
         &delta,
@@ -1299,14 +1359,26 @@ impl SyncDelta {
         files.sort_by(|left, right| left.path.cmp(&right.path));
         files
     }
+
+    fn is_empty(&self) -> bool {
+        self.added_files.is_empty()
+            && self.modified_files.is_empty()
+            && self.removed_files.is_empty()
+    }
 }
 
 fn compute_sync_delta(
     snapshot: &ActiveClaimInputSnapshot,
     report: &FileDiscoveryReport,
 ) -> SyncDelta {
-    let active_by_path = snapshot
-        .files
+    compute_sync_delta_from_files(&snapshot.files, report)
+}
+
+fn compute_sync_delta_from_files(
+    active_files: &[IndexedFileRecord],
+    report: &FileDiscoveryReport,
+) -> SyncDelta {
+    let active_by_path = active_files
         .iter()
         .map(|file| (file.path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
@@ -1334,7 +1406,7 @@ fn compute_sync_delta(
             modified_files.push(file.clone());
         }
     }
-    for active in &snapshot.files {
+    for active in active_files {
         if !current_by_path.contains_key(active.path.as_str()) {
             removed_files.push(active.clone());
         }
@@ -5474,7 +5546,7 @@ mod tests {
     }
 
     #[test]
-    fn committed_pydantic_fixture_survives_full_index_and_incremental_copy_forward() {
+    fn committed_pydantic_fixture_survives_unchanged_sync_without_copy_forward() {
         let workspace = TempWorkspace::new("indexing-pydantic-contract-lifecycle");
         let source = include_str!("../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
         fs::write(workspace.path().join("schemas.py"), source)
@@ -5497,6 +5569,7 @@ mod tests {
         .expect("fully index committed Pydantic fixture");
         assert_eq!(full.discovered_files, 1);
         assert_eq!(full.parser_attempted_files, 1);
+        let full_generation = full.active_generation.expect("full generation");
         assert_active_pydantic_validator_evidence(&store);
 
         let incremental = sync_repository_with_discovery_parser_frameworks_and_store(
@@ -5507,13 +5580,22 @@ mod tests {
             &detector,
             &store,
         )
-        .expect("incrementally copy forward committed Pydantic fixture");
+        .expect("sync unchanged committed Pydantic fixture");
+        assert_eq!(
+            incremental.active_generation.as_deref(),
+            Some(full_generation.as_str())
+        );
         let report = incremental.sync_report.expect("incremental sync report");
+        assert_eq!(
+            report.base_generation.as_deref(),
+            Some(full_generation.as_str())
+        );
         assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(report.modified_files, 0);
         assert_eq!(report.unchanged_files, 1);
         assert_eq!(report.reparsed_files, 0);
-        assert_eq!(report.copied_forward_files, 1);
+        assert_eq!(report.copied_forward_files, 0);
+        assert_eq!(report.families_recomputed, 0);
         assert_active_pydantic_validator_evidence(&store);
     }
 
@@ -5552,6 +5634,12 @@ mod tests {
             "full pipeline must checkpoint at phase boundaries, saw {after_full}"
         );
         assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 1);
+
+        fs::write(
+            workspace.path().join("schemas.py"),
+            format!("{source}\n# body-only change keeps the interface stable\n"),
+        )
+        .expect("edit fixture without changing its interface");
 
         let synced = sync_repository_with_discovery_parser_frameworks_and_store(
             request(),

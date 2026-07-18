@@ -1178,8 +1178,15 @@ authoritative Git-aware path. The reported-skipped-path budget does not apply
 because the fingerprint emits no skip report. The fingerprint remains
 metadata-only and does not hash content, so a same-size, same-modification-time
 edit is invisible to polling until another change or a manual `sync` runs; the
-authoritative `sync` always recomputes content hashes. Incremental `sync`
-copy-forwards unchanged active records into a new building generation only
+authoritative `sync` always recomputes content hashes. After the schema,
+engine-version, dirty-record, semantic-worker, and index-lock preconditions pass,
+an empty supported-file delta is an explicit no-write fast path: `sync` retains
+the already validated active generation, reports `sync_mode: incremental`, zero
+copied/reparsed/recomputed records, and the unchanged-file count, and does not
+hydrate the full claim snapshot or create another generation. This is safe only
+because discovery has re-established the same path/hash/size/language manifest;
+any delta continues through the gates below. Incremental `sync` with a non-empty
+delta copy-forwards unchanged active records into a new building generation only
 after the project-context gate passes. A content-only edit of a Rust or TS/JS
 source file takes the incremental fast path, as does a content-only edit of a
 `.py` module whose interface projection is unchanged (see the Python
