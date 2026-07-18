@@ -3213,11 +3213,12 @@ mod tests {
         assert!(instructions.contains("pre-flight gate"));
         assert!(instructions.contains("before any non-trivial code location"));
         assert!(instructions.contains("operation: \"find_analogues\""));
-        assert!(instructions.contains("repo-relative path, symbol/member id"));
+        assert!(instructions.contains("exact repo-relative path or locator"));
+        assert!(instructions.contains("exact `unit:`/member/symbol"));
         assert!(instructions.contains("mode: \"compact\""));
         assert!(instructions.contains("CodeGraph"));
-        assert!(instructions.contains("State that fallback reason"));
-        assert!(instructions.contains("Do not repeat the same RepoGrammar call"));
+        assert!(instructions.contains("state that reason before CodeGraph"));
+        assert!(instructions.contains("Call a given target only once"));
         assert!(instructions.contains("show_family"));
         assert!(instructions.contains("include_source_spans"));
         assert!(instructions.contains("repogrammar stats"));

@@ -16419,7 +16419,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_json_performs_incremental_copy_forward_when_manifest_is_unchanged() {
+    fn sync_json_retains_active_generation_when_manifest_is_unchanged() {
         let workspace = TempWorkspace::new("cli-sync-real-runtime");
         let env = |_: &str| None;
         let runtime = TestRuntime;
@@ -16449,7 +16449,7 @@ mod tests {
         assert_eq!(output.status, 0);
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
         assert_eq!(value["command"], "sync");
-        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["generation_id"], "gen-000001");
         assert_eq!(value["sync_mode"], "incremental");
         assert_eq!(value["fallback_reason"], Value::Null);
         assert_eq!(value["base_generation"], "gen-000001");
@@ -16459,15 +16459,12 @@ mod tests {
         assert_eq!(value["modified_files"], 0);
         assert_eq!(value["removed_files"], 0);
         assert_eq!(value["unchanged_files"], 3);
-        assert_eq!(value["copied_forward_files"], 3);
+        assert_eq!(value["copied_forward_files"], 0);
         assert_eq!(value["reparsed_files"], 0);
         assert_eq!(value["dirty_records_cleared"], 0);
-        assert!(value["families_recomputed"].is_u64());
-        // The interactive `sync` path recomputes code units and framework roles
-        // but does not rebuild families (no family store), so the family-identity
-        // delta fields are always present yet null here, mirroring the zero
-        // `families_recomputed`. The populated delta is covered by the
-        // family-recomputing sync test in `application::indexing`.
+        assert_eq!(value["families_recomputed"], 0);
+        // No generation comparison occurs on the zero-delta path, so family
+        // identity deltas remain present and null.
         let sync_object = value.as_object().expect("sync JSON object");
         assert!(sync_object.contains_key("families_added"));
         assert!(sync_object.contains_key("families_removed"));
@@ -16495,13 +16492,13 @@ mod tests {
         );
         assert_eq!(
             indexed_paths(&workspace, "gen-000002"),
-            vec!["a.ts", "copied.ts", "stable.ts"]
+            Vec::<String>::new()
         );
 
         let status =
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
-        assert_eq!(value["active_generation"], "gen-000002");
+        assert_eq!(value["active_generation"], "gen-000001");
     }
 
     #[test]

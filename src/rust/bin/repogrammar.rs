@@ -9722,11 +9722,12 @@ export class UserService {
             .join(".repogrammar")
             .join("telemetry")
             .join("local-metrics")
-            .join("estimated_potential_token_savings.json");
+            .join("family_query_metrics.json");
         let rollup: Value =
             serde_json::from_str(&fs::read_to_string(&rollup_path).expect("savings rollup"))
                 .expect("savings rollup JSON");
-        assert!(rollup["event_count"].as_u64().expect("event count") >= 1);
+        assert!(rollup["total_queries"].as_u64().expect("query count") >= 1);
+        assert!(rollup["savings_events"].as_u64().expect("event count") >= 1);
         assert_eq!(
             rollup["by_outcome_shape"]["partial_context"]["estimated_potential_token_savings"]
                 .as_u64()
@@ -10479,14 +10480,14 @@ project_includes = ["src"]
         assert_eq!(sync.status, 0);
         assert!(sync.stderr.is_empty());
         let value: Value = serde_json::from_str(sync.stdout.trim()).expect("sync JSON");
-        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["generation_id"], "gen-000001");
         assert!(
             value["semantic_facts"].as_u64().unwrap_or_default() > 3,
-            "sync should persist Python parse facts again"
+            "unchanged sync should retain Python parse facts"
         );
 
         let facts = list_semantic_facts(&store).expect("list synced semantic facts");
-        assert_eq!(facts.active_generation, "gen-000002");
+        assert_eq!(facts.active_generation, "gen-000001");
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"

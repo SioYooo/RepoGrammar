@@ -13883,9 +13883,9 @@ mod tests {
             3
         );
 
-        // A worker-less incremental sync (no file changes) must recompute the
-        // provider-resolved support from the copied-forward worker facts instead
-        // of dropping it, so the family stays DOMINANT and support matches base.
+        // A worker-less sync with no file changes retains the already validated
+        // generation, including provider-resolved support, without copy-forward
+        // or family recomputation.
         let mut progress = |_event: ProgressEvent| {};
         let outcome = sync_repository_with_optional_semantic_worker(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -13906,24 +13906,18 @@ mod tests {
         let sync_report = outcome.sync_report.clone().expect("sync report");
         assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(sync_report.fallback_reason, None);
-        // A family-recomputing incremental sync with no file changes reproduces
-        // the base generation's family ids exactly, so the cross-generation
-        // identity delta is present and empty (not null, and not a rename).
-        let delta = sync_report
-            .family_identity_delta
-            .clone()
-            .expect("family identity delta present when families are recomputed against a base");
-        assert_eq!(delta.added_count, 0);
-        assert_eq!(delta.removed_count, 0);
-        assert!(delta.added_sample.is_empty());
-        assert!(delta.removed_sample.is_empty());
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert_eq!(sync_report.copied_forward_files, 0);
+        assert_eq!(sync_report.reparsed_files, 0);
+        assert_eq!(sync_report.families_recomputed, 0);
+        assert_eq!(sync_report.family_identity_delta, None);
         assert_eq!(
-            provider_resolved_tsjs_support_fact_count(&state, "gen-000002"),
+            provider_resolved_tsjs_support_fact_count(&state, "gen-000001"),
             3
         );
         assert_eq!(
             outcome.semantic_facts as u32,
-            semantic_fact_count(&state, "gen-000002")
+            semantic_fact_count(&state, "gen-000001")
         );
         let families = store.list_active_families().expect("list families");
         assert_eq!(families.families.len(), 1);
