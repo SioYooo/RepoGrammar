@@ -10,8 +10,9 @@ use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
 use repogrammar::adapters::semantic_workers::rust::CargoMetadataRustProvider;
 use repogrammar::adapters::semantic_workers::typescript::TypeScriptSemanticWorkerBoundary;
 use repogrammar::application::autosync::{
-    acquire_autosync_daemon, autosync_status, classify_autosync_repository_status, daemon_log_path,
-    disable_autosync, enable_autosync, inspect_autosync_startup, record_autosync_run,
+    acquire_autosync_daemon, autosync_daemon_superseded_by, autosync_status,
+    classify_autosync_repository_status, daemon_log_path, disable_autosync, enable_autosync,
+    inspect_autosync_startup, reclaim_autosync_daemon_version, record_autosync_run,
     record_autosync_startup_failure, record_autosync_startup_ready, stop_autosync,
     AutosyncDaemonState, AutosyncReport, AutosyncRepositoryUnavailable, AutosyncRequest,
     AutosyncRunResult, AutosyncSettings, AutosyncStartupFailureCode, AutosyncStartupReadiness,
@@ -666,6 +667,18 @@ impl ProductCliRuntime {
             persist_startup_failure(&autosync_request, startup_nonce.as_deref(), code);
             return Err(AutosyncStartupFailure::Classified(code).into_error());
         }
+        // An explicit start is the operator's intent to run THIS engine, so
+        // reclaim any higher version stamp a previously-run newer engine left in
+        // the run state. Without this, a deliberate downgrade would read the
+        // persistent high-water version and refuse to run forever. After the
+        // reset, only a newer stamp written *after* startup steps this daemon
+        // down. Best-effort: a write failure is logged, not fatal.
+        if reclaim_autosync_daemon_version(&autosync_request).is_err() {
+            append_autosync_daemon_log(
+                Some(&log_path),
+                "autosync: could not reclaim run-state version stamp at startup",
+            );
+        }
         if !request.quiet {
             eprintln!("autosync: watching repository for changes");
         }
@@ -673,6 +686,41 @@ impl ProductCliRuntime {
         let mut fingerprint_observation: Option<String> = None;
         loop {
             std::thread::sleep(Duration::from_millis(settings.poll_ms));
+            // Best-effort cross-version step-down. If the run state shows a
+            // strictly newer engine stamped it after this daemon reclaimed the
+            // stamp at startup, step down early to avoid needless cross-version
+            // churn. This is advisory only: the stamp has known best-effort gaps
+            // (a same-poll overwrite race, an unparseable stamp, and a
+            // schema-gated stamp are all invisible here), and because a newer
+            // daemon stamps the version only after its first successful sync
+            // while an older daemon can overwrite it, this never guarantees
+            // single-writer operation. True mutual exclusion on index writes is
+            // enforced by acquire_index_lock, not by this check. The exit does
+            // not record a run, so it preserves the newer version stamp.
+            if let Some(newer) = autosync_daemon_superseded_by(&autosync_request) {
+                let line = format!(
+                    "autosync: stopping because a newer RepoGrammar version {newer} has written this repository's auto-sync state"
+                );
+                append_autosync_daemon_log(Some(&log_path), &line);
+                if !request.quiet {
+                    eprintln!("{line}");
+                }
+                return Ok(AutosyncReport {
+                    state_dir: initial_report.state_dir.clone(),
+                    enabled: initial_report.enabled,
+                    running: false,
+                    daemon_state: AutosyncDaemonState::Stopped,
+                    pid: None,
+                    poll_ms: settings.poll_ms,
+                    debounce_ms: settings.debounce_ms,
+                    last_run: initial_report.last_run.clone(),
+                    startup: initial_report.startup.clone(),
+                    repository_ready: false,
+                    message: format!(
+                        "auto-sync stopped because a newer RepoGrammar version {newer} has written this repository's auto-sync state"
+                    ),
+                });
+            }
             match autosync_status(autosync_request.clone()) {
                 Ok(status) if status.enabled => {}
                 Ok(status) => {

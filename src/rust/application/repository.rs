@@ -365,6 +365,7 @@ pub enum RepositoryDoctorCode {
     IndexLockActive,
     IndexLockStale,
     IndexLockUnknown,
+    IndexLockLegacy,
     IndexLockInvalid,
     StorageNotImplemented,
     StorageReady,
@@ -535,6 +536,12 @@ pub fn acquire_index_lock(
                     IndexLockState::Unknown => {
                         return Err(invalid_input(
                             "index lock ownership is unknown; run repogrammar doctor",
+                        ));
+                    }
+                    IndexLockState::Legacy => {
+                        return Err(invalid_input(
+                            "index lock uses a legacy pre-host format; run \
+                             repogrammar unlock --force --yes to remove it",
                         ));
                     }
                     IndexLockState::Invalid => {
@@ -795,6 +802,14 @@ fn inspect_index_lock(state_dir: &Path, findings: &mut Vec<RepositoryDoctorFindi
             code: RepositoryDoctorCode::IndexLockUnknown,
             detail: "index.lock ownership cannot be confirmed on this host".to_string(),
         }),
+        IndexLockState::Legacy => findings.push(RepositoryDoctorFinding {
+            severity: RepositoryDoctorSeverity::Warning,
+            code: RepositoryDoctorCode::IndexLockLegacy,
+            detail: "index.lock uses a legacy pre-host format from an older RepoGrammar build; \
+                     its owner cannot be soundly proven dead, so confirm no older repogrammar \
+                     process is still running, then run repogrammar unlock --force --yes to remove it"
+                .to_string(),
+        }),
         IndexLockState::Invalid => findings.push(doctor_error(
             RepositoryDoctorCode::IndexLockInvalid,
             "index.lock metadata is malformed or unreadable",
@@ -1009,6 +1024,15 @@ enum IndexLockState {
     Active,
     Stale,
     Unknown,
+    /// A pre-host-field ("legacy") index lock written by a RepoGrammar build that
+    /// predates ownership tracking (the `<= 0.2.0-preview` daemon format). The
+    /// distinguishing marker is a valid `kind: "index"` object with the `host`
+    /// key entirely absent. This is deliberately kept separate from `Unknown`:
+    /// `Unknown` is a new-format lock whose owner genuinely cannot be decided and
+    /// must stay refused, whereas a legacy lock is a known-removable compatibility
+    /// artifact that `unlock --force --yes` may clear after printing its
+    /// best-effort provenance. It is never auto-removed during acquisition.
+    Legacy,
     Invalid,
 }
 
@@ -1036,12 +1060,9 @@ impl IndexLockMetadata {
         format!("{value}\n")
     }
 
-    fn parse(contents: &str) -> Option<Self> {
-        let value = serde_json::from_str::<serde_json::Value>(contents).ok()?;
-        let object = value.as_object()?;
-        if object.get("kind").and_then(serde_json::Value::as_str) != Some("index") {
-            return None;
-        }
+    /// Strict parse of a modern index lock whose `host` key is already known to
+    /// be present (possibly `null`). Every other field is required and validated.
+    fn parse_modern(object: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
         let pid = object.get("pid")?.as_u64()?;
         let pid = u32::try_from(pid).ok()?;
         let host = match object.get("host") {
@@ -1075,6 +1096,102 @@ impl IndexLockMetadata {
             repogrammar_version: repogrammar_version.to_string(),
             token: token.to_string(),
         })
+    }
+}
+
+/// Best-effort provenance recovered from a pre-host-field ("legacy") index lock.
+/// The pre-host daemon format predates ownership tracking, so any field may be
+/// absent; missing fields stay `None` and are surfaced to the operator as
+/// `unknown` rather than being guessed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct LegacyLockProvenance {
+    pid: Option<u32>,
+    started_unix_seconds: Option<u64>,
+    repogrammar_version: Option<String>,
+}
+
+impl LegacyLockProvenance {
+    fn from_object(object: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let pid = object
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok());
+        let started_unix_seconds = object
+            .get("started_unix_seconds")
+            .and_then(serde_json::Value::as_u64);
+        let repogrammar_version = object
+            .get("repogrammar_version")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|version| !version.is_empty() && lock_text_field_is_safe(version))
+            .map(str::to_string);
+        Self {
+            pid,
+            started_unix_seconds,
+            repogrammar_version,
+        }
+    }
+
+    /// Render the recoverable provenance as a single source-free line for the
+    /// unlock report, marking each unavailable field explicitly.
+    fn summary(&self) -> String {
+        let pid = self
+            .pid
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let started = self
+            .started_unix_seconds
+            .map(|started| started.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let version = self
+            .repogrammar_version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        format!("pid={pid}, started_unix_seconds={started}, repogrammar_version={version}")
+    }
+
+    /// Best-effort liveness note for the provenance pid. A legacy lock omits the
+    /// host, so the owner cannot be soundly proven dead the way a stale modern
+    /// lock can (that asymmetry is the deliberate trade-off: `--force --yes`
+    /// still removes it). But if the recorded pid looks alive on this host, the
+    /// operator must be told before trusting the removal. Returns `None` when no
+    /// pid is recorded or the pid is not confirmed alive; a coincidental local
+    /// pid match only produces a warning, never a refusal.
+    fn live_pid_warning(&self) -> Option<String> {
+        let pid = self.pid?;
+        matches!(
+            process_liveness_for_lock(pid, self.started_unix_seconds),
+            ProcessLiveness::Live
+        )
+        .then(|| {
+            format!(
+                " WARNING: a process with pid={pid} appears to be alive on this host; \
+                 confirm no older repogrammar daemon is still running before relying on this removal"
+            )
+        })
+    }
+}
+
+/// Classified parse of an index lock file. A missing `host` key on an otherwise
+/// well-formed `kind: "index"` object is the legacy pre-host format; anything
+/// with the key present takes the strict modern path.
+enum ParsedIndexLock {
+    Modern(IndexLockMetadata),
+    Legacy(LegacyLockProvenance),
+}
+
+fn parse_index_lock(contents: &str) -> Option<ParsedIndexLock> {
+    let value = serde_json::from_str::<serde_json::Value>(contents).ok()?;
+    let object = value.as_object()?;
+    if object.get("kind").and_then(serde_json::Value::as_str) != Some("index") {
+        return None;
+    }
+    if object.contains_key("host") {
+        IndexLockMetadata::parse_modern(object).map(ParsedIndexLock::Modern)
+    } else {
+        Some(ParsedIndexLock::Legacy(LegacyLockProvenance::from_object(
+            object,
+        )))
     }
 }
 
@@ -1129,14 +1246,13 @@ fn inspect_index_lock_path_with_contents(path: &Path) -> IndexLockInspection {
                     contents: None,
                 };
             };
-            let Some(lock) = IndexLockMetadata::parse(&contents) else {
-                return IndexLockInspection {
-                    state: IndexLockState::Invalid,
-                    contents: Some(contents),
-                };
+            let state = match parse_index_lock(&contents) {
+                Some(ParsedIndexLock::Modern(lock)) => classify_index_lock(&lock),
+                Some(ParsedIndexLock::Legacy(_)) => IndexLockState::Legacy,
+                None => IndexLockState::Invalid,
             };
             IndexLockInspection {
-                state: classify_index_lock(&lock),
+                state,
                 contents: Some(contents),
             }
         }
@@ -1261,41 +1377,73 @@ pub fn unlock_repository(
             } => {
                 if remove_index_lock_if_contents_match(&lock_path, &contents)? {
                     removed_locks = 1;
-                    "unlock removed confirmed stale index lock"
+                    "unlock removed confirmed stale index lock".to_string()
                 } else {
-                    "unlock skipped: stale index lock changed before removal"
+                    "unlock skipped: stale index lock changed before removal".to_string()
                 }
             }
             IndexLockInspection {
                 state: IndexLockState::Stale,
                 contents: None,
-            } => "unlock refused: stale index lock metadata is invalid",
+            } => "unlock refused: stale index lock metadata is invalid".to_string(),
+            // A legacy pre-host-format lock is a known-removable compatibility
+            // artifact. Removal still requires the explicit `--force --yes` gate
+            // and a content match, and the best-effort provenance is printed so
+            // the operator can see which build wrote it before it is cleared.
+            IndexLockInspection {
+                state: IndexLockState::Legacy,
+                contents: Some(contents),
+            } => {
+                let provenance = match parse_index_lock(&contents) {
+                    Some(ParsedIndexLock::Legacy(provenance)) => provenance,
+                    _ => LegacyLockProvenance::default(),
+                };
+                // Probe the recorded pid before removal so a still-running old
+                // daemon is surfaced to the operator (removal still proceeds).
+                let liveness_warning = provenance.live_pid_warning().unwrap_or_default();
+                if remove_index_lock_if_contents_match(&lock_path, &contents)? {
+                    removed_locks = 1;
+                    format!(
+                        "unlock removed legacy-format index lock (missing host field); \
+                         provenance: {}{}",
+                        provenance.summary(),
+                        liveness_warning
+                    )
+                } else {
+                    "unlock skipped: legacy index lock changed before removal".to_string()
+                }
+            }
+            IndexLockInspection {
+                state: IndexLockState::Legacy,
+                contents: None,
+            } => "unlock refused: legacy index lock metadata is invalid".to_string(),
             IndexLockInspection {
                 state: IndexLockState::Active,
                 ..
-            } => "unlock refused: index lock is active",
+            } => "unlock refused: index lock is active".to_string(),
             IndexLockInspection {
                 state: IndexLockState::Unknown,
                 ..
-            } => "unlock refused: index lock ownership is unknown",
+            } => "unlock refused: index lock ownership is unknown".to_string(),
             IndexLockInspection {
                 state: IndexLockState::Invalid,
                 ..
-            } => "unlock refused: index lock metadata is invalid",
+            } => "unlock refused: index lock metadata is invalid".to_string(),
             IndexLockInspection {
                 state: IndexLockState::Missing,
                 ..
-            } => "unlock complete: no index lock is present",
+            } => "unlock complete: no index lock is present".to_string(),
         }
     } else {
         "unlock inspected repository-local locks; pass --force --yes to remove a confirmed stale index lock"
+            .to_string()
     };
 
     Ok(RepositoryUnlockReport {
         state_dir: resolved.relative,
         removed_locks,
         inspected_locks,
-        message: message.to_string(),
+        message,
     })
 }
 
@@ -1736,7 +1884,10 @@ fn recovery_lock_state(state_dir: &Path) -> RecoveryLockState {
     match inspect_index_lock_path(&state_dir.join("locks").join(INDEX_LOCK_FILE)) {
         IndexLockState::Missing | IndexLockState::Stale => RecoveryLockState::Clear,
         IndexLockState::Active | IndexLockState::Invalid => RecoveryLockState::Blocking,
-        IndexLockState::Unknown => RecoveryLockState::Unknown,
+        // A legacy lock blocks indexing until it is explicitly removed, so it
+        // routes to the same ResolveLock recovery as an undecidable owner; the
+        // distinct doctor finding carries the exact `unlock --force --yes` fix.
+        IndexLockState::Unknown | IndexLockState::Legacy => RecoveryLockState::Unknown,
     }
 }
 
@@ -3501,6 +3652,225 @@ mod tests {
 
         drop(guard);
         assert!(!lock_path.exists());
+    }
+
+    /// Write a raw index-lock fixture, bypassing `IndexLockMetadata::to_json` so
+    /// a test can construct the pre-host ("legacy") format that omits the `host`
+    /// key entirely.
+    fn write_index_lock_fixture(workspace: &TempWorkspace, contents: &str) -> PathBuf {
+        let lock_path = workspace
+            .path()
+            .join(DEFAULT_STATE_DIR)
+            .join("locks")
+            .join(INDEX_LOCK_FILE);
+        fs::write(&lock_path, contents).expect("write index lock fixture");
+        lock_path
+    }
+
+    /// A pre-host-field lock: valid `kind: "index"` with every provenance field
+    /// present but no `host` key. This is the shape the `<= 0.2.0-preview` daemon
+    /// wrote, which the current owner probe used to collapse to `Unknown`.
+    fn legacy_index_lock_json() -> String {
+        serde_json::json!({
+            "kind": "index",
+            "pid": 4242,
+            "os": std::env::consts::OS,
+            "started_unix_seconds": 1_700_000_000u64,
+            "repogrammar_version": "0.2.0-preview.0",
+            "token": "legacy-token",
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn three_index_lock_owner_states_classify_distinctly() {
+        // host-missing (legacy), new-format-undecidable (unknown), and a normal
+        // well-formed lock must each land in a distinct owner classification.
+        let workspace = TempWorkspace::new("repository-lock-three-states");
+        init_repository(init_request(workspace.path())).expect("init repository");
+
+        // 1) legacy: host key absent -> IndexLockLegacy, never IndexLockUnknown.
+        write_index_lock_fixture(&workspace, &legacy_index_lock_json());
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report.findings.iter().any(|finding| {
+            finding.code == RepositoryDoctorCode::IndexLockLegacy
+                && finding.severity == RepositoryDoctorSeverity::Warning
+        }));
+        assert!(!report
+            .findings
+            .iter()
+            .any(|finding| finding.code == RepositoryDoctorCode::IndexLockUnknown));
+
+        // 2) unknown: new format (host present) whose owner cannot be decided
+        // (foreign OS) -> IndexLockUnknown, never IndexLockLegacy.
+        let unknown = IndexLockMetadata {
+            pid: 0,
+            host: current_host(),
+            os: "other-os".to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "unknown-token".to_string(),
+        };
+        write_index_lock_fixture(&workspace, &unknown.to_json());
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == RepositoryDoctorCode::IndexLockUnknown));
+        assert!(!report
+            .findings
+            .iter()
+            .any(|finding| finding.code == RepositoryDoctorCode::IndexLockLegacy));
+
+        // 3) normal: well-formed current-format lock with a dead pid -> Stale.
+        let stale = IndexLockMetadata {
+            pid: 0,
+            host: current_host(),
+            os: std::env::consts::OS.to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "stale-token".to_string(),
+        };
+        write_index_lock_fixture(&workspace, &stale.to_json());
+        let report = repository_doctor(RepositoryDoctorRequest::new(root_string(workspace.path())))
+            .expect("doctor report");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == RepositoryDoctorCode::IndexLockStale));
+    }
+
+    #[test]
+    fn unlock_force_yes_removes_legacy_lock_and_prints_provenance() {
+        let workspace = TempWorkspace::new("repository-unlock-legacy");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock = write_index_lock_fixture(&workspace, &legacy_index_lock_json());
+
+        let report = unlock_repository(RepositoryUnlockRequest {
+            path: root_string(workspace.path()),
+            state_dir_override: None,
+            force: true,
+            yes: true,
+        })
+        .expect("unlock report");
+
+        assert_eq!(report.removed_locks, 1);
+        assert!(
+            !lock.exists(),
+            "legacy lock must be removed with --force --yes"
+        );
+        assert!(report.message.contains("legacy-format index lock"));
+        // All recoverable provenance is surfaced.
+        assert!(report.message.contains("pid=4242"));
+        assert!(report.message.contains("started_unix_seconds=1700000000"));
+        assert!(report
+            .message
+            .contains("repogrammar_version=0.2.0-preview.0"));
+        assert!(!report.message.contains(&root_string(workspace.path())));
+    }
+
+    #[test]
+    fn unlock_force_yes_removes_legacy_lock_noting_missing_provenance() {
+        // A legacy lock that carries only `kind` is still removable; each
+        // unavailable provenance field is reported as `unknown` rather than guessed.
+        let workspace = TempWorkspace::new("repository-unlock-legacy-bare");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock = write_index_lock_fixture(&workspace, "{\"kind\":\"index\"}\n");
+
+        let report = unlock_repository(RepositoryUnlockRequest {
+            path: root_string(workspace.path()),
+            state_dir_override: None,
+            force: true,
+            yes: true,
+        })
+        .expect("unlock report");
+
+        assert_eq!(report.removed_locks, 1);
+        assert!(!lock.exists());
+        assert!(report.message.contains("pid=unknown"));
+        assert!(report.message.contains("started_unix_seconds=unknown"));
+        assert!(report.message.contains("repogrammar_version=unknown"));
+    }
+
+    #[test]
+    fn unlock_force_yes_removes_legacy_lock_but_warns_when_pid_looks_alive() {
+        // Legacy locks cannot soundly prove their owner dead, so a recorded pid
+        // that is alive on this host must produce a prominent warning even though
+        // the operator-confirmed removal still proceeds.
+        let workspace = TempWorkspace::new("repository-unlock-legacy-live");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        // Use this test process's own pid (definitely alive) with no start time,
+        // so the best-effort liveness probe reports Live.
+        let legacy = serde_json::json!({
+            "kind": "index",
+            "pid": std::process::id(),
+            "repogrammar_version": "0.2.0-preview.0",
+            "token": "legacy-live-token",
+        })
+        .to_string();
+        let lock = write_index_lock_fixture(&workspace, &legacy);
+
+        let report = unlock_repository(RepositoryUnlockRequest {
+            path: root_string(workspace.path()),
+            state_dir_override: None,
+            force: true,
+            yes: true,
+        })
+        .expect("unlock report");
+
+        // Removal still happens under --force --yes ...
+        assert_eq!(report.removed_locks, 1);
+        assert!(!lock.exists());
+        // ... but the operator is warned the pid appears alive.
+        assert!(report.message.contains("WARNING"));
+        assert!(report.message.contains("appears to be alive"));
+        assert!(report.message.contains("still running"));
+        assert!(!report.message.contains(&root_string(workspace.path())));
+    }
+
+    #[test]
+    fn acquire_index_lock_refuses_legacy_lock_without_auto_removal() {
+        let workspace = TempWorkspace::new("repository-acquire-legacy");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let lock = write_index_lock_fixture(&workspace, &legacy_index_lock_json());
+
+        let error = acquire_index_lock(&root_string(workspace.path()), None)
+            .expect_err("legacy lock must block acquisition");
+
+        assert!(error.to_string().contains("legacy pre-host format"));
+        // Conservative: acquisition never silently deletes a legacy lock.
+        assert!(lock.exists(), "legacy lock must not be auto-removed");
+    }
+
+    #[test]
+    fn unlock_force_yes_still_refuses_new_format_undecidable_lock() {
+        // A modern lock whose owner cannot be confirmed is not legacy and must
+        // stay refused even under --force --yes.
+        let workspace = TempWorkspace::new("repository-unlock-unknown-guard");
+        init_repository(init_request(workspace.path())).expect("init repository");
+        let unknown = IndexLockMetadata {
+            pid: 0,
+            host: current_host(),
+            os: "other-os".to_string(),
+            started_unix_seconds: 1,
+            repogrammar_version: env!("CARGO_PKG_VERSION").to_string(),
+            token: "unknown-token".to_string(),
+        };
+        let lock = write_index_lock_fixture(&workspace, &unknown.to_json());
+
+        let report = unlock_repository(RepositoryUnlockRequest {
+            path: root_string(workspace.path()),
+            state_dir_override: None,
+            force: true,
+            yes: true,
+        })
+        .expect("unlock report");
+
+        assert_eq!(report.removed_locks, 0);
+        assert!(lock.exists(), "undecidable-owner lock must not be removed");
+        assert!(report.message.contains("ownership is unknown"));
     }
 
     #[test]

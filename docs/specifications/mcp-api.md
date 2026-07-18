@@ -438,6 +438,35 @@ fields may be added within a version; removing or renaming a field, or changing
 its meaning, requires a version bump and a CHANGELOG entry. Consumers must ignore
 unknown fields.
 
+### Recovery from consumer-side truncation
+
+RepoGrammar cannot prevent a consuming client from truncating a tool response
+when it compacts its own context window; that is outside the server's control.
+It does, however, guarantee a deterministic recovery path. The server is
+read-only and stateless across calls: it holds no per-caller cursor, session,
+or continuation token. For a fixed active generation, a given
+`repogrammar_context` call is deterministic, so a caller whose context
+compaction dropped or truncated a response recovers the full result by
+re-issuing the identical call — the same arguments return the same bytes. The
+only thing that changes a result is the underlying index: if a `resync` or a
+background autosync `sync` activated a new generation between calls, family ids
+and evidence may differ, so a caller that persisted handles across an index
+change must re-resolve them rather than assume byte-stability across generations.
+
+Three response-shaping rules make that recovery cheap and reduce how much a
+single response can be truncated in the first place. First,
+`follow_up_family_ids` is the canonical, precise handle for the selected and
+candidate families and is retained at every verbosity tier, including `minimal`;
+a caller that kept only the follow-up handles can re-issue an exact
+`show_family` or `check_conformance` against them. Second, the inline `members`
+array is bounded to the first 20 members outside `deep` mode, with a true
+`member_count` and a `members_truncated` flag, so a large family cannot inflate
+one response into the range where truncation is likely. Third,
+`verbosity: minimal` demotes diagnostic fields to shrink the payload further
+while preserving the decision-critical route and handle fields. None of these
+prevent client-side compression; they narrow the exposed surface and keep the
+re-request path exact.
+
 Missing state, missing active indexes, and typed analysis uncertainty are normal
 tool results. Unknown JSON-RPC methods, unknown tool names, invalid operations,
 blank, oversized, or control-character-containing targets, oversized token

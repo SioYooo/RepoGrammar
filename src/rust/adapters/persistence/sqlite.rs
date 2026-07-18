@@ -152,10 +152,17 @@ impl SqliteIndexStore {
     }
 
     /// Recreate the repo-local mutable database when its stored schema version is
-    /// older than the current build. Only the mutable SQLite file and its
-    /// WAL/SHM sidecars under `.repogrammar` are removed — nothing else. Reads
-    /// never call this; only the full-rebuild path does, so the existing active
-    /// generation is untouched until a rebuild is actually requested.
+    /// strictly older than the current build. Only the mutable SQLite file and
+    /// its WAL/SHM sidecars under `.repogrammar` are removed — nothing else.
+    /// Reads never call this; only the full-rebuild path does, so the existing
+    /// active generation is untouched until a rebuild is actually requested.
+    ///
+    /// This recreation loses no user-authored data: the mutable database is a
+    /// fully derived index (code units, families, evidence) reconstructible from
+    /// repository source by `repogrammar resync`; the repository's own source is
+    /// never touched. The `< STORAGE_SCHEMA_VERSION` guard is deliberately
+    /// strict: a future (`>`) schema is never treated as outdated here, so it is
+    /// never silently recreated — `apply_migrations` fails it closed instead.
     fn recreate_mutable_database_if_outdated(&self) -> Result<(), IndexStoreError> {
         let outdated = match self.try_open_mutable_database_read_only()? {
             Some(connection) => matches!(
@@ -6725,7 +6732,9 @@ mod tests {
 
     /// Stamp the mutable database with an older schema version to simulate a
     /// pre-current index. The read gate and rebuild recreate key on this
-    /// version, so a version downgrade exercises both migration paths.
+    /// version, so a version downgrade exercises both migration paths. Recreating
+    /// this database loses no user-authored data: it is a derived index fully
+    /// rebuildable from repository source by `resync`.
     fn stamp_previous_schema_version(store: &SqliteIndexStore) {
         let connection =
             Connection::open(store.mutable_database_path()).expect("open mutable database");
@@ -6735,6 +6744,112 @@ mod tests {
                 params![STORAGE_SCHEMA_VERSION - 1],
             )
             .expect("downgrade stored schema version");
+    }
+
+    /// Stamp the mutable database with a schema version far newer than this build
+    /// (a hypothetical `v99`) to simulate an index written by a newer RepoGrammar.
+    /// The current binary must refuse it fail-closed, never treat it as outdated.
+    fn stamp_future_schema_version(store: &SqliteIndexStore) {
+        let connection =
+            Connection::open(store.mutable_database_path()).expect("open mutable database");
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) \
+                 VALUES (?1, 'future', datetime('now'))",
+                params![STORAGE_SCHEMA_VERSION + 89],
+            )
+            .expect("stamp future schema version");
+    }
+
+    #[test]
+    fn schema_version_read_gate_is_fail_closed_by_version_band() {
+        // The current version is servable.
+        assert!(schema_version_read_gate(Some(STORAGE_SCHEMA_VERSION)).is_ok());
+        // An older version is a typed, resync-recoverable condition.
+        assert!(matches!(
+            schema_version_read_gate(Some(STORAGE_SCHEMA_VERSION - 1)),
+            Err(IndexStoreError::SchemaVersionOutdated(_))
+        ));
+        // A future version is refused as unsupported — never routed to the
+        // outdated branch, which would recreate/rebuild it, and never accepted.
+        assert!(matches!(
+            schema_version_read_gate(Some(STORAGE_SCHEMA_VERSION + 89)),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+        // A missing version is unsupported, not outdated.
+        assert!(matches!(
+            schema_version_read_gate(None),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn future_schema_mutable_database_is_never_silently_recreated() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-future-no-recreate");
+        stamp_future_schema_version(&store);
+
+        // The rebuild pre-step must leave a future-version database intact: only
+        // strictly-older schemas are recreated, so no data is silently dropped.
+        store
+            .recreate_mutable_database_if_outdated()
+            .expect("recreate check must succeed without removing a future database");
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION + 89)
+        );
+    }
+
+    #[test]
+    fn future_schema_rebuild_is_fail_closed_without_data_loss() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-future-rebuild-fail-closed");
+        stamp_future_schema_version(&store);
+
+        // A rebuild against a future schema must fail closed with a typed
+        // "newer" error, not silently recreate the database (a future schema is
+        // not the same as an outdated one).
+        let error = store
+            .prepare_next_generation()
+            .expect_err("a future schema rebuild must be refused");
+        assert!(format!("{error:?}").contains("newer"));
+
+        // The future database is preserved — nothing was recreated or lost.
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION + 89)
+        );
+    }
+
+    #[test]
+    fn future_schema_read_is_fail_closed_and_leaves_the_database_intact() {
+        let (_workspace, store, _generation) = store_with_active_family("sqlite-future-read");
+        stamp_future_schema_version(&store);
+
+        let error = store
+            .list_active_family_summaries()
+            .expect_err("a future schema read must fail");
+        // Not a resync-recoverable outdated error: a future schema is unsupported.
+        assert!(!matches!(error, StoreError::SchemaVersionOutdated(_)));
+        assert!(matches!(error, StoreError::InvalidState(_)));
+
+        // The read must not delete or rebuild the future database.
+        assert!(store.mutable_database_path().is_file());
+        assert_eq!(
+            stored_schema_version(
+                &Connection::open(store.mutable_database_path()).expect("reopen database")
+            )
+            .expect("read stored version"),
+            Some(STORAGE_SCHEMA_VERSION + 89)
+        );
     }
 
     #[test]

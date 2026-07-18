@@ -637,7 +637,7 @@ fn full_usage() -> String {
         "  doctor [--project <path>] [--json]",
         "      Inspect lifecycle hygiene, storage health, locks, and repair guidance.",
         "  unlock [--project <path>] [--force --yes] [--json]",
-        "      Inspect locks; remove only confirmed stale index locks with --force --yes.",
+        "      Inspect locks; remove confirmed stale or legacy pre-host-format index locks with --force --yes.",
         "  logs [--project <path>] [--component index|daemon|mcp|telemetry] [--tail [n]] [--since <duration>] [--json]",
         "      Read redacted repo-local diagnostics.",
         "",
@@ -816,11 +816,13 @@ pub fn command_usage(command: &str) -> Option<String> {
             "Usage: repogrammar unlock [--project <path>|--path <path>] [--force --yes] [--json] [--quiet|--verbose]",
             "",
             "Inspects RepoGrammar locks. Without --force --yes it is inspection-only.",
-            "With --force --yes it removes only confirmed stale index locks; daemon and SQLite locks are preserved.",
+            "With --force --yes it removes confirmed stale index locks and legacy pre-host-format index",
+            "locks (printing their best-effort provenance); daemon and SQLite locks are preserved, and a",
+            "new-format lock whose owner cannot be confirmed stays refused.",
             "",
             "Options:",
             "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
-            "  --force                            Request stale index-lock removal.",
+            "  --force                            Request stale or legacy index-lock removal.",
             "  --yes                              Confirm --force removal.",
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
@@ -3547,7 +3549,9 @@ where
         } else if doctor.findings.iter().any(|finding| {
             matches!(
                 finding.code,
-                RepositoryDoctorCode::IndexLockUnknown | RepositoryDoctorCode::IndexLockInvalid
+                RepositoryDoctorCode::IndexLockUnknown
+                    | RepositoryDoctorCode::IndexLockLegacy
+                    | RepositoryDoctorCode::IndexLockInvalid
             )
         }) {
             RecoveryLockState::Unknown
@@ -9419,6 +9423,7 @@ fn lock_check(report: &RepositoryDoctorReport) -> &'static str {
             finding.code,
             RepositoryDoctorCode::IndexLockActive
                 | RepositoryDoctorCode::IndexLockUnknown
+                | RepositoryDoctorCode::IndexLockLegacy
                 | RepositoryDoctorCode::IndexLockInvalid
         )
     }) {
@@ -9669,6 +9674,7 @@ fn doctor_code(code: RepositoryDoctorCode) -> &'static str {
         RepositoryDoctorCode::IndexLockActive => "INDEX_LOCK_ACTIVE",
         RepositoryDoctorCode::IndexLockStale => "INDEX_LOCK_STALE",
         RepositoryDoctorCode::IndexLockUnknown => "INDEX_LOCK_UNKNOWN",
+        RepositoryDoctorCode::IndexLockLegacy => "INDEX_LOCK_LEGACY",
         RepositoryDoctorCode::IndexLockInvalid => "INDEX_LOCK_INVALID",
         RepositoryDoctorCode::StorageNotImplemented => "STORAGE_NOT_IMPLEMENTED",
         RepositoryDoctorCode::StorageReady => "STORAGE_READY",

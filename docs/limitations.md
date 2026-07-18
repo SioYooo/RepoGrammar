@@ -169,6 +169,20 @@ These are intentional current behaviors or tracked deferrals, not defects:
   compaction truncation. Family identity is metadata-first: the response always
   reports the true `member_count` and a `members_truncated` flag, and `--mode
   deep` returns the full list.
+- **Consumer-side context compression is a recovery contract, not a prevention
+  guarantee.** RepoGrammar cannot stop a client from truncating a response when
+  it compacts its own context window. What it guarantees is a deterministic way
+  back: the MCP server is read-only and stateless across calls (no cursor,
+  session, or continuation token), and for a fixed active generation every
+  `repogrammar_context` result is deterministic, so re-issuing the identical
+  call returns the same bytes and recovers a truncated response. The recovery
+  stays exact because `follow_up_family_ids` is a persistent, precise handle
+  retained at every verbosity tier (including `minimal`); the 20-member inline
+  cap and `verbosity: minimal` shrink the exposed surface so a single response
+  is less likely to be truncated at all. If a `resync` or a background autosync
+  `sync` activated a new generation between calls, handles may have changed and
+  must be re-resolved rather than assumed byte-stable across generations. See
+  `docs/specifications/mcp-api.md`.
 - **File-discovery excludes are basename-based.** Common build/output/cache
   directory names (for example `generated`, `out`, `cache`, `env`, `build`,
   `dist`) are skipped at any depth. A real source directory that happens to use
@@ -196,6 +210,17 @@ These are intentional current behaviors or tracked deferrals, not defects:
   `repogrammar sync` (or any later size/mtime-visible change) recomputes content
   hashes authoritatively, so freshness is never silently claimed from the
   fingerprint alone.
+- **Cross-version autosync step-down is best-effort, not a single-writer
+  guarantee.** After a binary upgrade, a still-running older autosync daemon
+  observes the newer engine's version stamp in the run state and steps down on
+  its next poll. This is advisory and eventual, not immediate or exclusive:
+  a newer daemon writes its version stamp only after its first successful sync,
+  an older daemon can overwrite that stamp, and a same-poll race, an unparseable
+  stamp, or a schema-gated stamp is invisible to the check. A daemon started
+  explicitly (including a deliberate downgrade) reclaims the stamp to its own
+  version so a persistent high-water version never locks it out. The authoritative
+  mutual exclusion on index writes is the index lock acquired per build, not the
+  version stamp; the stamp only reduces needless cross-version churn.
 - **Concurrent filesystem tree replacement remains a confinement gap.** The
   aggregate bounds cap traversal and retained output, and current walkers reject
   observed symlinks and canonical paths outside the repository, but a concurrent

@@ -48,6 +48,32 @@
 
 ### Added
 
+- Hardened cross-version compatibility around locks, daemons, and
+  schema versions. A preview-era index lock whose record lacks the
+  `host` field is now classified as a distinct legacy state (not
+  undecidable): `unlock --force --yes` may remove it, printing every
+  recoverable provenance field plus a prominent warning when a process
+  with the recorded pid still appears alive (host-less ownership can
+  never be soundly proven dead), while doctor reports
+  `INDEX_LOCK_LEGACY` with the exact recovery command and the same
+  caveat; modern locks with undecidable owners remain refused, and
+  acquire never auto-removes any lock. The autosync daemon stamps its
+  version into the run state additively and steps down when a strictly
+  newer version has written the state after its own startup — a
+  best-effort early exit, honestly documented as advisory (index-write
+  mutual exclusion stays with the index lock), with the startup
+  reclaiming the stamp so a deliberate binary downgrade is never
+  permanently locked out. Databases from a future schema version are
+  proven fail-closed by new tests: the read gate reports an invalid
+  state rather than the recoverable-outdated path, and the
+  mutable-store rebuild never deletes them. The MCP spec and
+  limitations now document recovery from consumer-side response
+  truncation: responses are deterministic and stateless for a fixed
+  active generation, so re-issuing the identical call recovers a
+  truncated result, with `follow_up_family_ids` as the persistent
+  handle — re-resolve handles if a resync or background autosync
+  activated a new generation between calls.
+
 - Added a `verbosity` request parameter (`minimal | standard | full`,
   default `standard`) to the CLI query flags and the MCP
   `repogrammar_context` input, additive under `product-schemas.v1` and

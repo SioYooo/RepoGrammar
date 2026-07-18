@@ -705,12 +705,17 @@ fn write_run_state(
     let synced_generation =
         synced_generation.filter(|generation| valid_autosync_generation_id(generation));
     let error = sanitized_autosync_run_error(result, error);
+    // Stamp the writing binary's version so a cross-version daemon can detect
+    // that a newer engine now writes this repository's run state and exit. The
+    // field is additive under the same schema version: older readers ignore it,
+    // and a run state written before this field yields no recorded version.
     let value = json!({
         "schema_version": AUTOSYNC_SCHEMA_VERSION,
         "last_sync_unix_seconds": last_sync_unix_seconds,
         "result": result.as_str(),
         "synced_generation": synced_generation,
         "error": error,
+        "repogrammar_version": env!("CARGO_PKG_VERSION"),
     });
     fs::write(&tmp, value.to_string())
         .map_err(|_| invalid_input("failed to write auto-sync run state"))?;
@@ -744,6 +749,157 @@ fn read_run_state(state_dir: &Path) -> Option<AutosyncRunReport> {
         synced_generation,
         error,
     })
+}
+
+/// Read only the RepoGrammar version recorded in the run state, if any. Returns
+/// `None` for a missing, schema-mismatched, or version-less run state so a
+/// caller never acts on absent evidence.
+fn read_run_state_recorded_version(state_dir: &Path) -> Option<String> {
+    let text = read_limited_text(&run_state_path(state_dir)).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    if value.get("schema_version").and_then(Value::as_u64) != Some(AUTOSYNC_SCHEMA_VERSION) {
+        return None;
+    }
+    value
+        .get("repogrammar_version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+}
+
+/// Compare two RepoGrammar version strings using the Semantic Versioning subset
+/// the crate actually emits: a `MAJOR.MINOR.PATCH` core with an optional
+/// dot-separated pre-release suffix (for example `0.2.0-preview.0`). Build
+/// metadata after `+` does not affect precedence. Returns `None` when either
+/// string cannot be parsed, so callers stay conservative on ambiguity.
+fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    let (left_core, left_pre) = split_version(left)?;
+    let (right_core, right_pre) = split_version(right)?;
+    for (left_part, right_part) in left_core.iter().zip(right_core.iter()) {
+        match left_part.cmp(right_part) {
+            Ordering::Equal => {}
+            other => return Some(other),
+        }
+    }
+    Some(compare_prerelease(&left_pre, &right_pre))
+}
+
+fn split_version(version: &str) -> Option<([u64; 3], Vec<String>)> {
+    let core_and_pre = version.trim().split('+').next()?;
+    let mut parts = core_and_pre.splitn(2, '-');
+    let core = parts.next()?;
+    let pre = parts.next();
+    let mut numbers = core.split('.');
+    let major = numbers.next()?.parse::<u64>().ok()?;
+    let minor = numbers.next()?.parse::<u64>().ok()?;
+    let patch = numbers.next()?.parse::<u64>().ok()?;
+    if numbers.next().is_some() {
+        return None;
+    }
+    let pre = match pre {
+        None => Vec::new(),
+        Some("") => return None,
+        Some(pre) => pre.split('.').map(str::to_string).collect(),
+    };
+    Some(([major, minor, patch], pre))
+}
+
+fn compare_prerelease(left: &[String], right: &[String]) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => return Ordering::Equal,
+        // A version with no pre-release outranks one that has a pre-release.
+        (true, false) => return Ordering::Greater,
+        (false, true) => return Ordering::Less,
+        (false, false) => {}
+    }
+    for (left_id, right_id) in left.iter().zip(right.iter()) {
+        let ordering = compare_prerelease_identifier(left_id, right_id);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn compare_prerelease_identifier(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left.parse::<u64>().ok(), right.parse::<u64>().ok()) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        // Numeric identifiers have lower precedence than alphanumeric ones.
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => left.cmp(right),
+    }
+}
+
+/// Decide whether a running daemon of `self_version` is superseded by a strictly
+/// newer `recorded_version`. Only a confidently-newer recorded version returns
+/// true; a missing, equal, older, or unparseable version keeps the daemon
+/// running (fail-safe: never terminate a daemon on an ambiguous comparison).
+fn daemon_is_superseded(self_version: &str, recorded_version: Option<&str>) -> bool {
+    let Some(recorded) = recorded_version else {
+        return false;
+    };
+    matches!(
+        compare_versions(recorded, self_version),
+        Some(std::cmp::Ordering::Greater)
+    )
+}
+
+/// If the run state records a strictly newer RepoGrammar version than this
+/// binary, return that version. A daemon uses this to detect that a newer engine
+/// now writes this repository's index and to exit before a cross-version engine
+/// keeps writing. Best-effort: an unreadable run state, a version-less run state,
+/// or an unparseable version returns `None` and the daemon keeps running.
+pub fn autosync_daemon_superseded_by(request: &AutosyncRequest) -> Option<String> {
+    let state = require_initialized_state(request).ok()?;
+    let recorded = read_run_state_recorded_version(&state.state_dir)?;
+    daemon_is_superseded(env!("CARGO_PKG_VERSION"), Some(&recorded)).then_some(recorded)
+}
+
+/// At daemon startup, reclaim the run-state version stamp down to this binary's
+/// own version when a previously-run newer engine left a higher one. The version
+/// stamp is a persistent high-water mark: without this reset a deliberate
+/// downgrade (an explicit start of an older binary) would read the newer stamp,
+/// judge itself superseded on every poll, and refuse to run forever. An explicit
+/// start is the operator's intent to run THIS engine, so the high-water mark is
+/// reclaimed here; afterwards only a stamp written by a newer engine *after*
+/// startup makes `autosync_daemon_superseded_by` step this daemon down.
+///
+/// Only the version field is rewritten, preserving the historical run fields.
+/// Best-effort: a missing, schema-mismatched, or unparseable run state, or one
+/// whose recorded version is not newer than this binary, is left untouched.
+pub fn reclaim_autosync_daemon_version(request: &AutosyncRequest) -> Result<(), RepoGrammarError> {
+    let state = require_initialized_state(request)?;
+    let path = run_state_path(&state.state_dir);
+    let Ok(text) = read_limited_text(&path) else {
+        return Ok(());
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
+        return Ok(());
+    };
+    if value.get("schema_version").and_then(Value::as_u64) != Some(AUTOSYNC_SCHEMA_VERSION) {
+        return Ok(());
+    }
+    let recorded = value.get("repogrammar_version").and_then(Value::as_str);
+    if !daemon_is_superseded(env!("CARGO_PKG_VERSION"), recorded) {
+        // Nothing newer to reclaim; leave the run state untouched.
+        return Ok(());
+    }
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    object.insert(
+        "repogrammar_version".to_string(),
+        json!(env!("CARGO_PKG_VERSION")),
+    );
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, value.to_string())
+        .map_err(|_| invalid_input("failed to write auto-sync run state"))?;
+    fs::rename(&tmp, &path).map_err(|_| invalid_input("failed to replace auto-sync run state"))
 }
 
 fn sanitized_autosync_run_error(result: AutosyncRunResult, error: Option<&str>) -> Option<&str> {
@@ -2119,6 +2275,193 @@ mod tests {
             fs::read_to_string(run_state_path(workspace.path()))
                 .expect("malformed legacy file preserved"),
             malformed
+        );
+    }
+
+    #[test]
+    fn run_state_records_the_writing_binary_version() {
+        let workspace = TempWorkspace::new("autosync-run-version-stamp");
+        write_run_state(
+            workspace.path(),
+            AutosyncRunResult::Ok,
+            Some("gen-000001"),
+            None,
+        )
+        .expect("write run state");
+        assert_eq!(
+            read_run_state_recorded_version(workspace.path()).as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        // The added field is additive: existing run-state readers still parse.
+        assert!(read_run_state(workspace.path()).is_some());
+    }
+
+    #[test]
+    fn versionless_run_state_records_no_version() {
+        let workspace = TempWorkspace::new("autosync-run-versionless");
+        let raw = json!({
+            "schema_version": AUTOSYNC_SCHEMA_VERSION,
+            "last_sync_unix_seconds": 1_700_000_000_u64,
+            "result": "ok",
+            "synced_generation": null,
+            "error": null,
+        })
+        .to_string();
+        fs::write(run_state_path(workspace.path()), raw).expect("write versionless run state");
+        assert_eq!(read_run_state_recorded_version(workspace.path()), None);
+    }
+
+    #[test]
+    fn version_comparison_orders_core_and_prerelease() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_versions("0.2.2", "0.2.2"), Some(Ordering::Equal));
+        // The concrete preview-vs-release case that motivated this guard.
+        assert_eq!(
+            compare_versions("0.2.2", "0.2.0-preview.0"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_versions("0.2.0-preview.0", "0.2.2"),
+            Some(Ordering::Less)
+        );
+        // Same core: a release outranks its own pre-release.
+        assert_eq!(
+            compare_versions("0.2.2", "0.2.2-preview.0"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_versions("0.2.2-preview.1", "0.2.2-preview.0"),
+            Some(Ordering::Greater)
+        );
+        // Multi-digit core parts compare numerically, not lexically: a naive
+        // string comparison would wrongly rank 0.2.9 above 0.2.10.
+        assert_eq!(compare_versions("0.2.10", "0.2.9"), Some(Ordering::Greater));
+        assert_eq!(compare_versions("0.10.0", "0.9.9"), Some(Ordering::Greater));
+        assert_eq!(
+            compare_versions("10.0.0", "9.99.99"),
+            Some(Ordering::Greater)
+        );
+        // Numeric pre-release identifiers sort below alphanumeric ones.
+        assert_eq!(
+            compare_versions("1.0.0-1", "1.0.0-alpha"),
+            Some(Ordering::Less)
+        );
+        // Build metadata does not affect precedence.
+        assert_eq!(
+            compare_versions("0.2.2+build", "0.2.2"),
+            Some(Ordering::Equal)
+        );
+        // Unparseable input stays conservative.
+        assert_eq!(compare_versions("not-a-version", "0.2.2"), None);
+        assert_eq!(compare_versions("0.2", "0.2.2"), None);
+    }
+
+    #[test]
+    fn daemon_is_superseded_only_on_strictly_newer_recorded_version() {
+        let me = env!("CARGO_PKG_VERSION");
+        assert!(daemon_is_superseded(me, Some("999.0.0")));
+        assert!(!daemon_is_superseded(me, Some(me)));
+        assert!(!daemon_is_superseded(me, Some("0.0.1")));
+        assert!(!daemon_is_superseded(me, None));
+        assert!(!daemon_is_superseded(me, Some("garbage")));
+    }
+
+    #[test]
+    fn daemon_superseded_by_reports_a_strictly_newer_recorded_version() {
+        let workspace = initialized_autosync_workspace("autosync-superseded");
+        let req = request(&workspace);
+        let state = require_initialized_state(&req).expect("state");
+
+        // No run state yet, then a current-version run state: not superseded.
+        assert_eq!(autosync_daemon_superseded_by(&req), None);
+        write_run_state(&state.state_dir, AutosyncRunResult::Ok, None, None)
+            .expect("write current run state");
+        assert_eq!(autosync_daemon_superseded_by(&req), None);
+
+        // A run state stamped by a strictly newer engine reports that version so
+        // the daemon can log the successor and exit.
+        let raw = json!({
+            "schema_version": AUTOSYNC_SCHEMA_VERSION,
+            "last_sync_unix_seconds": 1_700_000_000_u64,
+            "result": "ok",
+            "synced_generation": null,
+            "error": null,
+            "repogrammar_version": "999.0.0",
+        })
+        .to_string();
+        fs::write(run_state_path(&state.state_dir), raw).expect("write newer run state");
+        assert_eq!(
+            autosync_daemon_superseded_by(&req).as_deref(),
+            Some("999.0.0")
+        );
+    }
+
+    fn write_run_state_with_version(state_dir: &Path, version: &str, result: &str) {
+        let raw = json!({
+            "schema_version": AUTOSYNC_SCHEMA_VERSION,
+            "last_sync_unix_seconds": 1_700_000_000_u64,
+            "result": result,
+            "synced_generation": null,
+            "error": null,
+            "repogrammar_version": version,
+        })
+        .to_string();
+        fs::write(run_state_path(state_dir), raw).expect("write run state with version");
+    }
+
+    #[test]
+    fn daemon_version_reclaim_unlocks_a_deliberate_downgrade() {
+        let workspace = initialized_autosync_workspace("autosync-downgrade");
+        let req = request(&workspace);
+        let state = require_initialized_state(&req).expect("state");
+
+        // A previously-run newer engine left a high-water version stamp; without
+        // reclaim this older binary would judge itself superseded forever.
+        write_run_state_with_version(&state.state_dir, "999.0.0", "ok");
+        assert_eq!(
+            autosync_daemon_superseded_by(&req).as_deref(),
+            Some("999.0.0")
+        );
+
+        // Startup reclaim resets the stamp to this binary, so the downgrade runs.
+        reclaim_autosync_daemon_version(&req).expect("reclaim");
+        assert_eq!(autosync_daemon_superseded_by(&req), None);
+        assert_eq!(
+            read_run_state_recorded_version(&state.state_dir).as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        // The version-only reclaim preserves the historical run fields.
+        let run = read_run_state(&state.state_dir).expect("run state");
+        assert_eq!(run.result, AutosyncRunResult::Ok);
+        assert_eq!(run.last_sync_unix_seconds, 1_700_000_000);
+
+        // A newer engine stamping AFTER startup still steps this daemon down.
+        write_run_state_with_version(&state.state_dir, "999.0.0", "ok");
+        assert_eq!(
+            autosync_daemon_superseded_by(&req).as_deref(),
+            Some("999.0.0")
+        );
+    }
+
+    #[test]
+    fn daemon_version_reclaim_is_a_noop_when_not_superseded() {
+        let workspace = initialized_autosync_workspace("autosync-reclaim-noop");
+        let req = request(&workspace);
+        let state = require_initialized_state(&req).expect("state");
+        write_run_state(
+            &state.state_dir,
+            AutosyncRunResult::Ok,
+            Some("gen-000001"),
+            None,
+        )
+        .expect("write current run state");
+
+        let before = fs::read_to_string(run_state_path(&state.state_dir)).expect("read before");
+        reclaim_autosync_daemon_version(&req).expect("reclaim");
+        let after = fs::read_to_string(run_state_path(&state.state_dir)).expect("read after");
+        assert_eq!(
+            before, after,
+            "reclaim must not rewrite a run state that is not newer than this binary"
         );
     }
 
