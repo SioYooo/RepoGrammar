@@ -47,7 +47,7 @@ use crate::ports::index_store::{
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
-    PythonInterfaceProbe, SourceDocument, SourceParser,
+    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -773,7 +773,10 @@ where
             })
             .map_err(source_store_error)?;
         parser_attempted_files += 1;
-        let parse_report = match parser.parse_with_context(
+        let SourceParseOutput {
+            report: parse_report,
+            python_interface_hash,
+        } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
                 language: language_from_discovered(file.language),
@@ -784,7 +787,7 @@ where
             },
             &parser_context,
         ) {
-            Ok(report) => report,
+            Ok(output) => output,
             Err(ParseError::UnsupportedLanguage) => {
                 warnings.push(format!(
                     "parser skipped unsupported language: {}",
@@ -821,7 +824,11 @@ where
             options.framework_roles,
             &mut warnings,
         )?;
-        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
+        record_python_module_interface_if_python(
+            session.as_mut(),
+            file,
+            python_interface_hash.as_deref(),
+        )?;
         indexed_units += parse_outcome.indexed_units;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
@@ -1201,11 +1208,71 @@ fn sync_repository_with_optional_semantic_worker(
         );
     }
 
+    let active_files = runtime
+        .store
+        .list_active_indexed_files()
+        .map_err(index_store_error)?;
+    let delta = compute_sync_delta_from_files(&active_files.files, &report);
+    if delta.is_empty() {
+        let stats = runtime
+            .store
+            .active_repo_shape_stats()
+            .map_err(index_store_error)?;
+        if active_files.generation_id != base_generation || stats.generation_id != base_generation {
+            return Err(RepoGrammarError::InvalidInput(
+                "active generation changed during unchanged sync".to_string(),
+            ));
+        }
+        emit_progress(
+            runtime.progress,
+            ProgressStage::FileScanning,
+            "no indexed file changes",
+            known_work_units(report.files.len(), report.files.len()),
+        );
+        emit_progress(
+            runtime.progress,
+            ProgressStage::PersistenceValidation,
+            "retained current active generation",
+            WorkUnits::Unknown,
+        );
+        let mut warnings = report.warnings.clone();
+        extend_inventory_only_language_warnings(&mut warnings, &report);
+        return Ok(IndexingOutcome {
+            indexing_mode: indexing_generation_mode(&report),
+            parser_attempted_files: 0,
+            indexed_units: stats.indexed_code_unit_count,
+            semantic_facts: stats.semantic_fact_count,
+            discovered_files: report.files.len(),
+            skipped_paths: report.skipped.len(),
+            active_generation: Some(base_generation.clone()),
+            semantic_worker: SemanticWorkerRunStatus::Deferred,
+            sync_report: Some(IndexingSyncReport {
+                base_generation: Some(base_generation),
+                sync_mode: IndexingSyncMode::Incremental,
+                fallback_reason: None,
+                added_files: 0,
+                modified_files: 0,
+                removed_files: 0,
+                unchanged_files: delta.unchanged_files.len(),
+                copied_forward_files: 0,
+                reparsed_files: 0,
+                families_recomputed: 0,
+                dirty_records_cleared: 0,
+                family_identity_delta: None,
+            }),
+            warnings,
+        });
+    }
+
     let snapshot = runtime
         .store
         .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
-    let delta = compute_sync_delta(&snapshot, &report);
+    if snapshot.generation_id != base_generation {
+        return Err(RepoGrammarError::InvalidInput(
+            "active generation changed during incremental sync".to_string(),
+        ));
+    }
     let decision = classify_sync_context_gate(
         &request,
         &delta,
@@ -1292,14 +1359,26 @@ impl SyncDelta {
         files.sort_by(|left, right| left.path.cmp(&right.path));
         files
     }
+
+    fn is_empty(&self) -> bool {
+        self.added_files.is_empty()
+            && self.modified_files.is_empty()
+            && self.removed_files.is_empty()
+    }
 }
 
 fn compute_sync_delta(
     snapshot: &ActiveClaimInputSnapshot,
     report: &FileDiscoveryReport,
 ) -> SyncDelta {
-    let active_by_path = snapshot
-        .files
+    compute_sync_delta_from_files(&snapshot.files, report)
+}
+
+fn compute_sync_delta_from_files(
+    active_files: &[IndexedFileRecord],
+    report: &FileDiscoveryReport,
+) -> SyncDelta {
+    let active_by_path = active_files
         .iter()
         .map(|file| (file.path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
@@ -1327,7 +1406,7 @@ fn compute_sync_delta(
             modified_files.push(file.clone());
         }
     }
-    for active in &snapshot.files {
+    for active in active_files {
         if !current_by_path.contains_key(active.path.as_str()) {
             removed_files.push(active.clone());
         }
@@ -1542,7 +1621,10 @@ where
             })
             .map_err(source_store_error)?;
         parser_attempted_files += 1;
-        let parse_report = match parser.parse_with_context(
+        let SourceParseOutput {
+            report: parse_report,
+            python_interface_hash,
+        } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
                 language: language_from_discovered(file.language),
@@ -1553,7 +1635,7 @@ where
             },
             &parser_context,
         ) {
-            Ok(report) => report,
+            Ok(output) => output,
             Err(ParseError::UnsupportedLanguage) => {
                 warnings.push(format!(
                     "parser skipped unsupported language: {}",
@@ -1590,12 +1672,15 @@ where
             options.framework_roles,
             &mut warnings,
         )?;
-        // A reparsed `.py` module stores its freshly probed interface hash, exactly
-        // as a full rebuild would. Modified modules reached here only with an
-        // unchanged interface, so the fresh hash equals the copied-forward base
-        // hash of an unchanged module — both paths converge on the full-rebuild
-        // interface table.
-        record_python_module_interface_if_python(session.as_mut(), parser, file, &source.text)?;
+        // A reparsed `.py` module stores the interface hash returned by that same
+        // parse request. Modified modules reached here only with an unchanged
+        // interface, so the fresh hash equals the copied-forward base hash of an
+        // unchanged module — both paths converge on the full-rebuild table.
+        record_python_module_interface_if_python(
+            session.as_mut(),
+            file,
+            python_interface_hash.as_deref(),
+        )?;
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
@@ -2708,27 +2793,22 @@ fn extract_python_source_roots_from_project_config_facts(facts: &[SemanticFact])
     roots.into_iter().collect()
 }
 
-/// Record the interface hash of a just-parsed `.py` module (schema v10
-/// `python_module_interfaces`), so a later sync can decide whether an edit to it
-/// is file-local. Uses the same worker probe the preflight uses, so build-time
-/// and preflight hashes are computed by identical code. Non-Python files store
-/// nothing. An `Unverified` probe during a build is not fatal — the module keeps
-/// no stored hash and the next sync conservatively rebuilds — so a transient
-/// worker hiccup can never corrupt the build.
+/// Record the interface hash returned by the same parse request that produced a
+/// just-parsed `.py` module (schema v10 `python_module_interfaces`), so a later
+/// sync can decide whether an edit to it is file-local. Non-Python files and
+/// parsers that return no verified hash store nothing; the next Python sync then
+/// conservatively falls back through `python_interface_unverified`.
 fn record_python_module_interface_if_python(
     session: &mut dyn GenerationWriteSession,
-    parser: &impl SourceParser,
     file: &DiscoveredFile,
-    text: &str,
+    interface_hash: Option<&str>,
 ) -> Result<(), RepoGrammarError> {
     if file.language != DiscoveredLanguage::Python {
         return Ok(());
     }
-    if let PythonInterfaceProbe::Computed(interface_hash) =
-        parser.extract_python_interface(&file.path, text)
-    {
+    if let Some(interface_hash) = interface_hash {
         session
-            .record_python_module_interface(&file.path, &interface_hash)
+            .record_python_module_interface(&file.path, interface_hash)
             .map_err(index_store_error)?;
     }
     Ok(())
@@ -5378,7 +5458,95 @@ mod tests {
     }
 
     #[test]
-    fn committed_pydantic_fixture_survives_full_index_and_incremental_copy_forward() {
+    fn python_indexing_persists_parse_hash_without_a_second_interface_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingPythonParser {
+            parse_requests: AtomicUsize,
+            interface_probes: AtomicUsize,
+        }
+
+        impl SourceParser for CountingPythonParser {
+            fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                RepoGrammarSourceParser::default().parse(document)
+            }
+
+            fn parse_with_context_output(
+                &self,
+                document: SourceDocument<'_>,
+                context: &ParserProjectContext,
+            ) -> Result<SourceParseOutput, ParseError> {
+                self.parse_requests.fetch_add(1, Ordering::SeqCst);
+                RepoGrammarSourceParser::default().parse_with_context_output(document, context)
+            }
+
+            fn extract_python_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
+                self.interface_probes.fetch_add(1, Ordering::SeqCst);
+                RepoGrammarSourceParser::default().extract_python_interface(path, text)
+            }
+        }
+
+        let workspace = TempWorkspace::new("indexing-python-single-worker-request");
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"default\"\n",
+        )
+        .expect("write Python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = CountingPythonParser {
+            parse_requests: AtomicUsize::new(0),
+            interface_probes: AtomicUsize::new(0),
+        };
+        let detector = SyntaxFrameworkRoleDetector;
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("fully index Python source");
+        assert_eq!(parser.parse_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(parser.interface_probes.load(Ordering::SeqCst), 0);
+        let interfaces = store
+            .active_python_module_interfaces()
+            .expect("read stored Python interface hashes");
+        assert_eq!(interfaces.len(), 1);
+        assert_eq!(interfaces[0].path, "app.py");
+        assert!(interfaces[0].interface_hash.starts_with("sha256:"));
+
+        fs::write(
+            workspace.path().join("app.py"),
+            "def current_tenant() -> str:\n    return \"primary\"\n",
+        )
+        .expect("edit Python function body");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &detector,
+            &store,
+        )
+        .expect("incrementally sync Python body edit");
+        let report = synced.sync_report.expect("Python sync report");
+        assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(report.reparsed_files, 1);
+        assert_eq!(parser.parse_requests.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            parser.interface_probes.load(Ordering::SeqCst),
+            1,
+            "only the incremental preflight may launch extract_interface"
+        );
+    }
+
+    #[test]
+    fn committed_pydantic_fixture_survives_unchanged_sync_without_copy_forward() {
         let workspace = TempWorkspace::new("indexing-pydantic-contract-lifecycle");
         let source = include_str!("../../fixtures/python/release/v0_1/pydantic-basic/schemas.py");
         fs::write(workspace.path().join("schemas.py"), source)
@@ -5401,6 +5569,7 @@ mod tests {
         .expect("fully index committed Pydantic fixture");
         assert_eq!(full.discovered_files, 1);
         assert_eq!(full.parser_attempted_files, 1);
+        let full_generation = full.active_generation.expect("full generation");
         assert_active_pydantic_validator_evidence(&store);
 
         let incremental = sync_repository_with_discovery_parser_frameworks_and_store(
@@ -5411,13 +5580,22 @@ mod tests {
             &detector,
             &store,
         )
-        .expect("incrementally copy forward committed Pydantic fixture");
+        .expect("sync unchanged committed Pydantic fixture");
+        assert_eq!(
+            incremental.active_generation.as_deref(),
+            Some(full_generation.as_str())
+        );
         let report = incremental.sync_report.expect("incremental sync report");
+        assert_eq!(
+            report.base_generation.as_deref(),
+            Some(full_generation.as_str())
+        );
         assert_eq!(report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(report.modified_files, 0);
         assert_eq!(report.unchanged_files, 1);
         assert_eq!(report.reparsed_files, 0);
-        assert_eq!(report.copied_forward_files, 1);
+        assert_eq!(report.copied_forward_files, 0);
+        assert_eq!(report.families_recomputed, 0);
         assert_active_pydantic_validator_evidence(&store);
     }
 
@@ -5456,6 +5634,12 @@ mod tests {
             "full pipeline must checkpoint at phase boundaries, saw {after_full}"
         );
         assert_eq!(instrumentation.connection_opens.load(Ordering::Relaxed), 1);
+
+        fs::write(
+            workspace.path().join("schemas.py"),
+            format!("{source}\n# body-only change keeps the interface stable\n"),
+        )
+        .expect("edit fixture without changing its interface");
 
         let synced = sync_repository_with_discovery_parser_frameworks_and_store(
             request(),
@@ -13699,9 +13883,9 @@ mod tests {
             3
         );
 
-        // A worker-less incremental sync (no file changes) must recompute the
-        // provider-resolved support from the copied-forward worker facts instead
-        // of dropping it, so the family stays DOMINANT and support matches base.
+        // A worker-less sync with no file changes retains the already validated
+        // generation, including provider-resolved support, without copy-forward
+        // or family recomputation.
         let mut progress = |_event: ProgressEvent| {};
         let outcome = sync_repository_with_optional_semantic_worker(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -13722,24 +13906,18 @@ mod tests {
         let sync_report = outcome.sync_report.clone().expect("sync report");
         assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(sync_report.fallback_reason, None);
-        // A family-recomputing incremental sync with no file changes reproduces
-        // the base generation's family ids exactly, so the cross-generation
-        // identity delta is present and empty (not null, and not a rename).
-        let delta = sync_report
-            .family_identity_delta
-            .clone()
-            .expect("family identity delta present when families are recomputed against a base");
-        assert_eq!(delta.added_count, 0);
-        assert_eq!(delta.removed_count, 0);
-        assert!(delta.added_sample.is_empty());
-        assert!(delta.removed_sample.is_empty());
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        assert_eq!(sync_report.copied_forward_files, 0);
+        assert_eq!(sync_report.reparsed_files, 0);
+        assert_eq!(sync_report.families_recomputed, 0);
+        assert_eq!(sync_report.family_identity_delta, None);
         assert_eq!(
-            provider_resolved_tsjs_support_fact_count(&state, "gen-000002"),
+            provider_resolved_tsjs_support_fact_count(&state, "gen-000001"),
             3
         );
         assert_eq!(
             outcome.semantic_facts as u32,
-            semantic_fact_count(&state, "gen-000002")
+            semantic_fact_count(&state, "gen-000001")
         );
         let families = store.list_active_families().expect("list families");
         assert_eq!(families.families.len(), 1);

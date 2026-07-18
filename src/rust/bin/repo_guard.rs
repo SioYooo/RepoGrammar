@@ -1088,9 +1088,11 @@ fn smoke_packaged_artifact(
         || incremental["sync_mode"] != "incremental"
         || incremental["base_generation"].as_str() != Some(resync_generation.as_str())
         || incremental["reparsed_files"] != 0
-        || incremental_generation == resync_generation
+        || incremental["copied_forward_files"] != 0
+        || incremental["families_recomputed"] != 0
+        || incremental_generation != resync_generation
     {
-        return Err("unchanged Pydantic incremental sync was not a copy-forward".to_string());
+        return Err("unchanged Pydantic sync did not retain the current generation".to_string());
     }
 
     let started = smoke.run_json(

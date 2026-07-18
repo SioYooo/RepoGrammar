@@ -23,7 +23,7 @@ PYDANTIC_FIXTURE = (
     / "pydantic-basic"
     / "schemas.py"
 )
-PARSE_DOCUMENT_CONTRACT_REVISION = 1
+PARSE_DOCUMENT_CONTRACT_REVISION = 2
 
 
 def run_worker_exact(payload):
@@ -4288,10 +4288,10 @@ assert len(self_response["units"]) > 100
 assert 1_000 < len(self_response["facts"]) <= 2_000
 assert_no_fact_source_payloads(self_response["facts"])
 
-# `interface_hash` is the deterministic hash carried by the parse_document
-# response's untouched contract? No: the interface probe is a separate mode so
-# parse_document's response shape is unchanged (regression guard).
-assert "interface_hash" not in self_response
+# Revision 2 carries the exact deterministic interface hash computed during the
+# same parse request, so indexing does not need a second worker process.
+assert len(self_response["interface_hash"]) == len("sha256:") + 64
+assert self_response["interface_hash"].startswith("sha256:")
 
 
 def extract_interface_hash(path: str, text: str):
@@ -4313,6 +4313,11 @@ def extract_interface_hash(path: str, text: str):
     interface = response["interface_hash"]
     assert isinstance(interface, str) and interface.startswith("sha256:")
     return interface
+
+
+assert self_response["interface_hash"] == extract_interface_hash(
+    "src/workers/python/worker.py", self_source
+)
 
 
 # A body-only edit leaves the module interface projection — and its hash —

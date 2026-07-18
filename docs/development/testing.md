@@ -547,8 +547,9 @@ allowed.
   must keep newly configured targets separate from reconfigured pre-existing
   targets. Any real native-agent CLI integration test must be explicitly
   ignored or feature-gated outside default CI.
-- Managed-instruction tests must cover exact current content version `2`, the
-  exact unmarked legacy body classified as logical version `1`, exact
+- Managed-instruction tests must cover exact current content version `3`, exact
+  version `2` as a safely refreshable outdated body, the exact unmarked legacy
+  body classified as logical version `1`, exact
   unversioned global legacy `0`, single-byte/body
   drift becoming `foreign`, partial/duplicated
   markers becoming `malformed`, foreign/malformed preservation, exact legacy
@@ -727,8 +728,10 @@ allowed.
   errors.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output with the exact
-  request/response tuple `protocol_version=1, contract_revision=1`, and prove
-  that a missing or different revision returns only the low-cardinality
+  request/response tuple `protocol_version=1, contract_revision=2`, require the
+  normal response's strict interface hash to equal `extract_interface` for the
+  same path and source, and prove that a missing or different revision returns
+  only the low-cardinality
   `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope without paths, source, or raw
   payload. They must also cover syntax-error
   diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
@@ -1282,6 +1285,10 @@ file-local fast paths: each edits one function body (a Rust test fn under
 `service/rust/`, a TS ambient test under `web/`, a Python function under
 `analytics/`), and the incremental generation must be canonically equal to a
 clean rebuild while reparsing exactly one file (`expected_reparsed_files: 1`).
+`docs_noop` is the empty-delta fast-path oracle: because the Markdown edit is
+outside discovery, sync must retain the current active generation, report zero
+copied-forward files, zero reparses, and zero family recomputation, and remain
+canonically equal to a clean rebuild.
 `python_body_edit` is specifically the proof of the Python interface-hash gate:
 the body edit leaves `analytics/app.py`'s interface projection unchanged, so only
 that module reparses while its sibling `analytics/conftest.py` copies forward.
@@ -1302,6 +1309,12 @@ scenario is the end-to-end regression for the Mocha-runner-config gate fix: if
 that gate regressed, the removal would run incrementally, copy forward the stale
 flag-on TS families, and diverge from the clean rebuild — a real inequality on top
 of the expected-outcome check.
+
+Application indexing tests additionally count Python frontend operations: a
+full build must persist the parse-document response hash with zero
+`extract_interface` calls, while an interface-stable body edit may call
+`extract_interface` once in sync preflight and must not call it again after the
+file is reparsed.
 
 ## Response payload byte measurement (payload-measure)
 

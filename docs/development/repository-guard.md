@@ -171,7 +171,7 @@ failure.
 
 The gate proves exact version agreement before making repository state. It then
 runs the packaged `instructions sync` path against an explicit `AGENTS.md` in
-the isolated HOME, requires managed-contract version 2 and exact managed-block
+the isolated HOME, requires managed-contract version 3 and exact managed-block
 content, and proves that this operation neither creates a `CLAUDE.md` mirror nor
 repository `.repogrammar` state. It also proves truthful setup dry-run and live
 setup JSON, the product MCP self-test, explicit full `resync`, unchanged

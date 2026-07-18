@@ -22,9 +22,9 @@ use crate::application::query::{
 };
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
 use crate::application::telemetry::{
-    record_estimated_potential_token_savings, record_family_query_outcome,
-    FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
-    FamilyQueryOutcomeRecord, FamilyQueryOutcomeStatus,
+    record_family_query_metric, FamilyQueryCommandCategory, FamilyQueryEntrypoint,
+    FamilyQueryLookupMode, FamilyQueryOutcomeRecord, FamilyQueryOutcomeStatus,
+    FamilyQuerySavingsRecord,
 };
 use crate::core::model::{
     EstimatedPotentialTokenSavings, FamilyConstraintProfile, FamilyPrevalence, FeatureConstraint,
@@ -373,11 +373,8 @@ pub fn handle_context_call(
                     &read_plan,
                     source_spans.as_ref(),
                 );
-                record_mcp_estimated_potential_token_savings(
-                    request.clone(),
-                    Some(found_outcome_token_savings(&family, estimated_potential)),
-                );
-                record_mcp_family_query_outcome(
+                let savings = found_outcome_token_savings(&family, estimated_potential);
+                record_mcp_family_query_metric(
                     request,
                     arguments.operation,
                     FamilyQueryOutcomeStatus::Found,
@@ -386,6 +383,7 @@ pub fn handle_context_call(
                     Some(&read_plan),
                     source_spans.as_ref(),
                     arguments.include_source_spans,
+                    Some(&savings),
                 );
                 Ok(family_detail_value(
                     arguments.operation,
@@ -394,6 +392,7 @@ pub fn handle_context_call(
                     &read_plan,
                     arguments.output_options,
                     source_spans.as_ref(),
+                    &savings.metric,
                 ))
             }
             Ok(FamilyLookupReport::PartialContext(report)) => {
@@ -447,15 +446,12 @@ pub fn handle_context_call(
                 } else {
                     None
                 };
-                record_mcp_estimated_potential_token_savings(
-                    request.clone(),
-                    estimate_partial_context_potential_token_savings(
-                        &report,
-                        &read_plan,
-                        source_spans.as_ref(),
-                    ),
+                let savings = estimate_partial_context_potential_token_savings(
+                    &report,
+                    &read_plan,
+                    source_spans.as_ref(),
                 );
-                record_mcp_family_query_outcome(
+                record_mcp_family_query_metric(
                     request,
                     arguments.operation,
                     FamilyQueryOutcomeStatus::PartialContext,
@@ -464,6 +460,7 @@ pub fn handle_context_call(
                     Some(&read_plan),
                     source_spans.as_ref(),
                     arguments.include_source_spans,
+                    savings.as_ref(),
                 );
                 Ok(family_partial_context_value(
                     arguments.operation,
@@ -472,6 +469,7 @@ pub fn handle_context_call(
                     &read_plan,
                     arguments.output_options,
                     source_spans.as_ref(),
+                    savings.as_ref(),
                 ))
             }
             Ok(FamilyLookupReport::Unknown(report)) => {
@@ -479,7 +477,7 @@ pub fn handle_context_call(
                     &FamilyLookupReport::Unknown(report.clone()),
                     lookup_mode_for_operation(arguments.operation),
                 );
-                record_mcp_family_query_outcome(
+                record_mcp_family_query_metric(
                     request,
                     arguments.operation,
                     FamilyQueryOutcomeStatus::Unknown,
@@ -492,6 +490,7 @@ pub fn handle_context_call(
                     None,
                     None,
                     arguments.include_source_spans,
+                    None,
                 );
                 Ok(json!({
                     "operation": arguments.operation.as_str(),
@@ -562,15 +561,12 @@ pub fn handle_context_call(
                     None
                 };
                 let outcome_status = alignment_outcome_status(certificate.alignment_status);
-                record_mcp_estimated_potential_token_savings(
-                    request.clone(),
-                    estimate_alignment_potential_token_savings(
-                        &certificate,
-                        &read_plan,
-                        source_spans.as_ref(),
-                    ),
+                let savings = estimate_alignment_potential_token_savings(
+                    &certificate,
+                    &read_plan,
+                    source_spans.as_ref(),
                 );
-                record_mcp_family_query_outcome(
+                record_mcp_family_query_metric(
                     request,
                     arguments.operation,
                     outcome_status,
@@ -579,6 +575,7 @@ pub fn handle_context_call(
                     Some(&read_plan),
                     source_spans.as_ref(),
                     arguments.include_source_spans,
+                    savings.as_ref(),
                 );
                 Ok(alignment_certificate_value(
                     arguments.operation,
@@ -587,6 +584,7 @@ pub fn handle_context_call(
                     &read_plan,
                     source_spans.as_ref(),
                     arguments.output_options.verbosity,
+                    savings.as_ref(),
                 ))
             }
             Err(_) => {
@@ -635,7 +633,7 @@ fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn record_mcp_family_query_outcome(
+fn record_mcp_family_query_metric(
     request: RepositoryStatusRequest,
     operation: McpOperation,
     status: FamilyQueryOutcomeStatus,
@@ -644,6 +642,7 @@ fn record_mcp_family_query_outcome(
     read_plan: Option<&ReadPlan>,
     source_spans: Option<&SourceSpanRenderReport>,
     source_spans_requested: bool,
+    savings: Option<&OutcomeTokenSavings>,
 ) {
     let unknown_metrics = unknowns
         .iter()
@@ -662,24 +661,12 @@ fn record_mcp_family_query_outcome(
             .is_some_and(|read_plan| read_plan.source_snippets_included),
         source_span_omission_count: source_spans.map(|source_spans| source_spans.omissions.len()),
     };
-    let _ = record_family_query_outcome(request, &record);
-}
-
-/// Record one all-scope potential-token-savings event through the telemetry
-/// authority. `None` (an abstention or a PARTIAL_CONTEXT/certificate with no
-/// stored file size) records nothing, keeping the query in the denominator only.
-fn record_mcp_estimated_potential_token_savings(
-    request: RepositoryStatusRequest,
-    savings: Option<OutcomeTokenSavings>,
-) {
-    if let Some(savings) = savings {
-        let _ = record_estimated_potential_token_savings(
-            request,
-            &savings.metric,
-            savings.shape.as_str(),
-            savings.language,
-        );
-    }
+    let savings = savings.map(|savings| FamilyQuerySavingsRecord {
+        metric: &savings.metric,
+        outcome_shape: savings.shape.as_str(),
+        language: savings.language,
+    });
+    let _ = record_family_query_metric(request, &record, savings);
 }
 
 fn record_mcp_family_query_fallback(
@@ -699,7 +686,7 @@ fn record_mcp_family_query_fallback(
         source_spans_included: false,
         source_span_omission_count: None,
     };
-    let _ = record_family_query_outcome(request, &record);
+    let _ = record_family_query_metric(request, &record, None);
 }
 
 fn family_query_operation_category(operation: McpOperation) -> FamilyQueryCommandCategory {
@@ -1124,14 +1111,9 @@ fn family_detail_value(
     read_plan: &ReadPlan,
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
+    estimated_potential: &EstimatedPotentialTokenSavings,
 ) -> Value {
     let selected_evidence = select_family_evidence(family, options);
-    let estimated_potential = estimate_family_output_potential_token_savings(
-        family,
-        &selected_evidence,
-        read_plan,
-        source_spans,
-    );
     let (rendered_members, members_truncated) =
         bounded_family_members(family, options.evidence_mode);
     let mut payload = json!({
@@ -1213,8 +1195,8 @@ fn family_partial_context_value(
     read_plan: &ReadPlan,
     options: FamilyOutputOptions,
     source_spans: Option<&SourceSpanRenderReport>,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> Value {
-    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
     let mut payload = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
@@ -1234,7 +1216,7 @@ fn family_partial_context_value(
             "budget_satisfied": read_plan.budget_satisfied,
             "source_snippets_included": read_plan.source_snippets_included,
         },
-        "estimated_potential_token_savings": savings_block_value(savings.as_ref(), "partial_context", "resolved file size unavailable; no estimate recorded"),
+        "estimated_potential_token_savings": savings_block_value(savings, "partial_context", "resolved file size unavailable; no estimate recorded"),
         "read_plan": read_plan_value(read_plan, options.verbosity),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
@@ -1283,8 +1265,8 @@ fn alignment_certificate_value(
     read_plan: &ReadPlan,
     source_spans: Option<&SourceSpanRenderReport>,
     verbosity: Verbosity,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> Value {
-    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
     let mut value = json!({
         "operation": operation.as_str(),
         "command": operation.cli_command(),
@@ -1306,7 +1288,7 @@ fn alignment_certificate_value(
             .computation
             .as_deref()
             .map(alignment_computation_value),
-        "estimated_potential_token_savings": savings_block_value(savings.as_ref(), "alignment", "abstaining certificate; no full read displaced"),
+        "estimated_potential_token_savings": savings_block_value(savings, "alignment", "abstaining certificate; no full read displaced"),
         "read_plan": read_plan_value(read_plan, verbosity),
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&certificate.unknowns),
@@ -2096,6 +2078,7 @@ mod tests {
                 &read_plan,
                 None,
                 verbosity,
+                None,
             )
         };
 
@@ -2832,6 +2815,7 @@ mod tests {
             &FamilyLookupReport::Found(family.clone()),
             FamilyLookupMode::FuzzyQuery,
         );
+        let estimate = EstimatedPotentialTokenSavings::new(1, 1);
 
         let value = family_detail_value(
             McpOperation::FindAnalogues,
@@ -2840,6 +2824,7 @@ mod tests {
             &read_plan,
             options,
             None,
+            &estimate,
         );
         assert_eq!(value["member_count"], total);
         assert_eq!(value["members_truncated"], true);
@@ -2859,6 +2844,7 @@ mod tests {
             &read_plan,
             deep_options,
             None,
+            &estimate,
         );
         assert_eq!(deep["member_count"], total);
         assert_eq!(deep["members_truncated"], false);
@@ -3104,12 +3090,14 @@ mod tests {
             .join(".repogrammar")
             .join("telemetry")
             .join("local-metrics")
-            .join("family_query_outcomes.json");
+            .join("family_query_metrics.json");
         let rollup: Value =
             serde_json::from_str(&fs::read_to_string(rollup_path).expect("query rollup JSON"))
                 .expect("query rollup");
-        assert_eq!(rollup["schema_version"], "family-query-outcomes.v1");
-        assert_eq!(rollup["event_count"], 4);
+        assert_eq!(rollup["schema_version"], "family-query-metrics.v2");
+        assert_eq!(rollup["epoch"], "atomic-query-accounting.v2");
+        assert_eq!(rollup["total_queries"], 4);
+        assert_eq!(rollup["savings_events"], 2);
         assert_eq!(rollup["by_entrypoint"]["mcp"], 4);
         assert_eq!(rollup["by_status"]["found"], 1);
         assert_eq!(rollup["by_status"]["partial_context"], 1);
@@ -3225,11 +3213,12 @@ mod tests {
         assert!(instructions.contains("pre-flight gate"));
         assert!(instructions.contains("before any non-trivial code location"));
         assert!(instructions.contains("operation: \"find_analogues\""));
-        assert!(instructions.contains("repo-relative path, symbol/member id"));
+        assert!(instructions.contains("exact repo-relative path or locator"));
+        assert!(instructions.contains("exact `unit:`/member/symbol"));
         assert!(instructions.contains("mode: \"compact\""));
         assert!(instructions.contains("CodeGraph"));
-        assert!(instructions.contains("State that fallback reason"));
-        assert!(instructions.contains("Do not repeat the same RepoGrammar call"));
+        assert!(instructions.contains("state that reason before CodeGraph"));
+        assert!(instructions.contains("Call a given target only once"));
         assert!(instructions.contains("show_family"));
         assert!(instructions.contains("include_source_spans"));
         assert!(instructions.contains("repogrammar stats"));

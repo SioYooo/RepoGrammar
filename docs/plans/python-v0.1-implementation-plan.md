@@ -94,8 +94,15 @@ parent-directory fixture-edge facts can be persisted as approved parser-origin
 unresolved imports, dynamic fixture names, nonliteral `getfixturevalue`, plugin
 fixtures, and duplicate applicable fixture definitions remain typed `UNKNOWN`.
 Because module source context can change imported-symbol resolution, Python
-`.py` deltas now force full project-context sync rather than copy-forwarding
-stale cross-file graph facts. Default indexing also discovers root
+`.py` edits use the persisted exact interface projection as the gate: an
+interface-stable body edit reparses only that module, while changed or
+unverifiable interfaces still force full project-context sync rather than
+copy-forwarding stale cross-file graph facts. The private parse-document
+response now carries that strict interface hash, so full indexing persists it
+from the same worker request instead of launching a second per-file extraction
+process. An empty discovered-file delta retains the current validated generation
+without snapshot hydration, copy-forward, or family recomputation. Default
+indexing also discovers root
 `pyproject.toml`, reads it through the Rust source-store boundary, and persists
 only a `python-config`/`project_config` structural summary or typed config
 `UNKNOWN`; these records are not provider facts and cannot become family claim

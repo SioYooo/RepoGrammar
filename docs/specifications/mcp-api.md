@@ -475,18 +475,18 @@ budgets, and malformed argument types are transport/schema errors.
 MCP calls must not wait on telemetry network activity and must not trigger
 telemetry upload. Anonymous telemetry upload is only attempted by explicit
 `repogrammar telemetry upload` after consent and endpoint validation.
-Successful family-context MCP calls may best-effort update the repo-local
-aggregate `.repogrammar/telemetry/local-metrics/estimated_potential_token_savings.json`.
-That local file stores only aggregate estimated token counts, event count,
-`ESTIMATED` kind, and caveat text; it must not store operation targets, paths,
-content hashes, prompts, source, evidence text, symbols, or raw errors.
-MCP `repogrammar_context` calls may also best-effort update
-`.repogrammar/telemetry/local-metrics/family_query_outcomes.json`, including
-preflight fallback, successful family context, deterministic
+Each MCP `repogrammar_context` invocation may best-effort update the repo-local
+`.repogrammar/telemetry/local-metrics/family_query_metrics.json` atomic cohort,
+including preflight fallback, successful family context, deterministic
 `PARTIAL_CONTEXT`, typed query-time `UNKNOWN`, and runtime fallback outcomes.
-This local file stores only low-cardinality aggregate buckets for operation
-category, lookup mode, status, UNKNOWN class/reason/required-mechanism/recovery
-code, read-plan item counts, and source-span request/inclusion/omission counts.
+Schema `family-query-metrics.v2` increments the query denominator exactly once
+and records any estimated-savings event in the same file replacement. It carries
+the explicit `atomic-query-accounting.v2` epoch, epoch start, and producer
+version. Legacy v1 savings and query-outcome files are unpaired historical
+evidence and are excluded from v2 stats. The v2 file stores only aggregate token
+totals and low-cardinality buckets for operation category, lookup mode, status,
+UNKNOWN class/reason/required-mechanism/recovery code, read-plan item counts,
+source-span request/inclusion/omission counts, outcome shape, and language.
 It must not store raw arguments, targets, paths, repository names, content
 hashes, prompts, source, evidence text, symbols, family ids, member ids,
 code-unit ids, raw tool input/output, raw errors, diffs, or patches.
@@ -514,19 +514,24 @@ prompt-output, or Meaning Contract qualification, conformance, or drift. A
 mixed contract task remains covered even when its immediate target is an exact
 file, YAML, configuration, or generated prompt.
 
-The first call for covered work is `repogrammar_context` with
-`operation: "find_analogues"`, `target: "<the repo-relative path, symbol/member
-id, framework role, or concrete code-work question from the task>"`, and
-`mode: "compact"`. It occurs before CodeGraph or source search/read. Agents must
-use the returned `read_plan` before editing and treat included line-numbered
-`source_spans` as already read. They may fall back when RepoGrammar is
-unavailable or explicitly returns `UNKNOWN`, `FALLBACK`, stale, omitted, or
-insufficient evidence, and must state that reason before doing so. CodeGraph may
-then provide exact source or call-path detail that RepoGrammar did not supply.
-Agents must not repeat an identical RepoGrammar call unless the target or
-indexed evidence changed. Agents use `show_family` only with exact family ids
-returned earlier and leave `include_source_spans` unset unless bounded source
-is explicitly needed.
+Before the first call, the agent builds one precision-first target in this
+strict order: exact repo-relative path or locator, exact `unit:`/member/symbol,
+exact framework role, then a concise pattern question only when no stronger
+anchor is available. It must not replace a concrete locus with broad task or
+governance prose. A prose target preserves any task-provided language/framework
+and a supported concept (`route`, `fixture`, `validation model`, `data access`,
+or `test`). The agent then calls `find_analogues` in compact mode once for that
+target before CodeGraph or source search/read.
+
+Agents use the returned `read_plan` before editing and treat included
+line-numbered `source_spans` as already read. They state the reason before
+falling back on unavailable, `FALLBACK`, stale, omitted, or insufficient
+evidence. On `UNKNOWN`, exactly one returned candidate family id may be inspected
+once with exact `show_family` as candidate context only, never as selected-family
+or conformance proof; multiple candidates require a stronger target or fallback.
+A given target is called only once; a materially narrower locator is a new
+target. Agents leave `include_source_spans` unset unless bounded source is
+explicitly needed.
 
 Pure prose documentation, operational release/Git/environment/credential
 inspection, syntax-only YAML/configuration validation, and exact one-symbol,

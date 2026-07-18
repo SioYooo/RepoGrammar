@@ -62,20 +62,19 @@ use crate::application::setup::{
 };
 use crate::application::storage::DEFAULT_RETAINED_INACTIVE_GENERATIONS;
 use crate::application::telemetry::{
-    estimated_potential_token_savings_rollup, experiment_export, experiment_purge,
-    experiment_record, experiment_report, experiment_report_json, experiment_start,
-    experiment_stop, export_anonymous_telemetry, family_query_outcome_rollup,
-    latest_comparable_experiment_report, purge_telemetry, record_estimated_potential_token_savings,
-    record_family_query_outcome, record_passive_diagnostics_rollup, research_export,
-    research_purge, savings_breakdown_map_json, set_anonymous_telemetry, set_research_trace,
+    experiment_export, experiment_purge, experiment_record, experiment_report,
+    experiment_report_json, experiment_start, experiment_stop, export_anonymous_telemetry,
+    family_query_metrics_rollup, latest_comparable_experiment_report, purge_telemetry,
+    record_family_query_metric, record_passive_diagnostics_rollup, research_export, research_purge,
+    savings_breakdown_map_json, set_anonymous_telemetry, set_research_trace,
     telemetry_disabled_by_environment, telemetry_status, upload_anonymous_telemetry,
-    validate_telemetry_endpoint, EstimatedPotentialTokenSavingsRollup, ExperimentMode,
-    ExperimentRecordRequest, ExperimentStartRequest, ExperimentWorkflowMode,
-    FamilyQueryCommandCategory, FamilyQueryEntrypoint, FamilyQueryLookupMode,
-    FamilyQueryOutcomeRecord, FamilyQueryOutcomeRollup, FamilyQueryOutcomeStatus,
-    MeasurementSource, SavingsBreakdown, TelemetryDiagnostics, TelemetryExportReport,
-    TelemetryPaths, TelemetryPurgeReport, TelemetryStatusReport, TelemetryUploadReceipt,
-    TelemetryUploadReport, TelemetryUploadRequest, TelemetryUploadTransport, TestOutcome,
+    validate_telemetry_endpoint, ExperimentMode, ExperimentRecordRequest, ExperimentStartRequest,
+    ExperimentWorkflowMode, FamilyQueryCommandCategory, FamilyQueryEntrypoint,
+    FamilyQueryLookupMode, FamilyQueryMetricsRollup, FamilyQueryOutcomeRecord,
+    FamilyQueryOutcomeStatus, FamilyQuerySavingsRecord, MeasurementSource, SavingsBreakdown,
+    TelemetryDiagnostics, TelemetryExportReport, TelemetryPaths, TelemetryPurgeReport,
+    TelemetryStatusReport, TelemetryUploadReceipt, TelemetryUploadReport, TelemetryUploadRequest,
+    TelemetryUploadTransport, TestOutcome,
 };
 use crate::core::model::{
     EstimatedPotentialTokenSavings, FamilyConstraintProfile, FamilyPrevalence, MeasurementKind,
@@ -1322,21 +1321,21 @@ where
                             );
                         }
                     };
-                    record_cli_family_query_outcome(
+                    let savings = family_query_outcome_token_savings(
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        prepared_output.as_ref(),
+                    );
+                    record_cli_family_query_metric(
                         request.clone(),
                         command,
                         lookup_mode_for_command(command),
                         &report,
                         prepared_output.as_ref(),
                         options.include_source_spans,
-                    );
-                    record_family_query_estimated_potential_token_savings(
-                        request.clone(),
-                        &report,
-                        options.target.as_deref(),
-                        lookup_mode_for_command(command),
-                        options.output_options(),
-                        prepared_output.as_ref(),
+                        savings.as_ref(),
                     );
                     CliOutput::success(family_lookup_json(
                         command,
@@ -1345,6 +1344,7 @@ where
                         lookup_mode_for_command(command),
                         options.output_options(),
                         prepared_output.as_ref(),
+                        savings.as_ref(),
                     ))
                 }
                 Ok(report) => {
@@ -1374,21 +1374,21 @@ where
                             );
                         }
                     };
-                    record_cli_family_query_outcome(
+                    let savings = family_query_outcome_token_savings(
+                        &report,
+                        options.target.as_deref(),
+                        lookup_mode_for_command(command),
+                        options.output_options(),
+                        prepared_output.as_ref(),
+                    );
+                    record_cli_family_query_metric(
                         request.clone(),
                         command,
                         lookup_mode_for_command(command),
                         &report,
                         prepared_output.as_ref(),
                         options.include_source_spans,
-                    );
-                    record_family_query_estimated_potential_token_savings(
-                        request.clone(),
-                        &report,
-                        options.target.as_deref(),
-                        lookup_mode_for_command(command),
-                        options.output_options(),
-                        prepared_output.as_ref(),
+                        savings.as_ref(),
                     );
                     CliOutput::success(family_lookup_human(
                         command,
@@ -1397,6 +1397,7 @@ where
                         lookup_mode_for_command(command),
                         options.output_options(),
                         prepared_output.as_ref(),
+                        savings.as_ref(),
                     ))
                 }
                 Err(_) => {
@@ -1474,26 +1475,6 @@ fn prepare_family_output(
     }))
 }
 
-fn record_family_query_estimated_potential_token_savings(
-    request: RepositoryStatusRequest,
-    report: &FamilyLookupReport,
-    target: Option<&str>,
-    mode: FamilyLookupMode,
-    options: FamilyOutputOptions,
-    prepared_output: Option<&PreparedFamilyOutput>,
-) {
-    if let Some(savings) =
-        family_query_outcome_token_savings(report, target, mode, options, prepared_output)
-    {
-        let _ = record_estimated_potential_token_savings(
-            request,
-            &savings.metric,
-            savings.shape.as_str(),
-            savings.language,
-        );
-    }
-}
-
 /// The single all-scope potential-token-savings event for a lookup outcome, or
 /// `None` for an abstention (Unknown), a PARTIAL_CONTEXT with no stored file
 /// size, or an abstaining certificate. Delegates every estimate to the query
@@ -1508,7 +1489,7 @@ fn family_query_outcome_token_savings(
     match report {
         FamilyLookupReport::Found(family) => {
             let output_components =
-                family_output_components(family, target, mode, options, prepared_output);
+                family_output_components(family, target, mode, options, prepared_output, None);
             Some(found_outcome_token_savings(
                 family,
                 output_components.estimated_potential_token_savings,
@@ -1546,13 +1527,14 @@ fn estimated_potential_token_savings_json(savings: &OutcomeTokenSavings) -> serd
     })
 }
 
-fn record_cli_family_query_outcome(
+fn record_cli_family_query_metric(
     request: RepositoryStatusRequest,
     command: &str,
     mode: FamilyLookupMode,
     report: &FamilyLookupReport,
     prepared_output: Option<&PreparedFamilyOutput>,
     source_spans_requested: bool,
+    savings: Option<&OutcomeTokenSavings>,
 ) {
     let Some(command_category) = cli_family_query_command_category(command) else {
         return;
@@ -1573,7 +1555,12 @@ fn record_cli_family_query_outcome(
             .and_then(|output| output.source_spans.as_ref())
             .map(|source_spans| source_spans.omissions.len()),
     };
-    let _ = record_family_query_outcome(request, &record);
+    let savings = savings.map(|savings| FamilyQuerySavingsRecord {
+        metric: &savings.metric,
+        outcome_shape: savings.shape.as_str(),
+        language: savings.language,
+    });
+    let _ = record_family_query_metric(request, &record, savings);
 }
 
 fn record_cli_family_query_fallback(
@@ -1597,7 +1584,7 @@ fn record_cli_family_query_fallback(
         source_spans_included: false,
         source_span_omission_count: None,
     };
-    let _ = record_family_query_outcome(request, &record);
+    let _ = record_family_query_metric(request, &record, None);
 }
 
 fn cli_family_query_command_category(command: &str) -> Option<FamilyQueryCommandCategory> {
@@ -2104,12 +2091,20 @@ fn family_lookup_human(
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> String {
     // The static-alignment certificate has its own actionable, result-first
     // rendering and never falls back to the family-context human surface.
     if let FamilyLookupReport::Alignment(certificate) = report {
         let route = family_query_route_report(report, mode);
-        return alignment_certificate_human(command, certificate, &route, options, prepared_output);
+        return alignment_certificate_human(
+            command,
+            certificate,
+            &route,
+            options,
+            prepared_output,
+            savings,
+        );
     }
     if matches!(command, "find" | "explain")
         && options.evidence_mode == FamilyEvidenceMode::Compact
@@ -2124,8 +2119,14 @@ fn family_lookup_human(
     let route = family_query_route_report(report, mode);
     match report {
         FamilyLookupReport::Found(family) => {
-            let output_components =
-                family_output_components(family, target, mode, options, prepared_output);
+            let output_components = family_output_components(
+                family,
+                target,
+                mode,
+                options,
+                prepared_output,
+                savings.map(|savings| &savings.metric),
+            );
             let selected_evidence = &output_components.selected_evidence;
             let read_plan = &output_components.read_plan;
             let estimated_potential = &output_components.estimated_potential_token_savings;
@@ -2235,7 +2236,7 @@ fn family_lookup_human(
             output
         }
         FamilyLookupReport::PartialContext(report) => {
-            family_partial_context_human(command, report, &route, options, prepared_output)
+            family_partial_context_human(command, report, &route, options, prepared_output, savings)
         }
         FamilyLookupReport::Unknown(report) => family_unknown_human(command, report, &route),
         FamilyLookupReport::Alignment(_) => unreachable!("alignment handled above"),
@@ -2251,6 +2252,7 @@ fn alignment_certificate_human(
     route: &FamilyQueryRouteReport,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> String {
     let read_plan = prepared_output
         .map(|prepared| &prepared.read_plan)
@@ -2334,8 +2336,7 @@ fn alignment_certificate_human(
         }
     }
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
-    push_estimated_potential_token_savings_human(&mut output, savings.as_ref());
+    push_estimated_potential_token_savings_human(&mut output, savings);
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
     if let Some(source_spans) = source_spans {
         push_source_spans_human(&mut output, source_spans);
@@ -2430,6 +2431,7 @@ fn family_partial_context_human(
     route: &FamilyQueryRouteReport,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> String {
     let read_plan = prepared_output
         .map(|prepared| &prepared.read_plan)
@@ -2467,8 +2469,7 @@ fn family_partial_context_human(
         snippets,
         read_plan.requires_source_before_edit
     );
-    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
-    push_estimated_potential_token_savings_human(&mut output, savings.as_ref());
+    push_estimated_potential_token_savings_human(&mut output, savings);
     push_query_route_human(&mut output, route);
     push_read_plan_human(&mut output, read_plan, options.evidence_mode);
     if let Some(source_spans) = source_spans {
@@ -2620,6 +2621,7 @@ fn family_lookup_json(
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> String {
     let route = family_query_route_report(report, mode);
     match report {
@@ -2631,9 +2633,10 @@ fn family_lookup_json(
             mode,
             options,
             prepared_output,
+            savings.map(|savings| &savings.metric),
         ),
         FamilyLookupReport::PartialContext(report) => {
-            family_partial_context_json(command, report, &route, options, prepared_output)
+            family_partial_context_json(command, report, &route, options, prepared_output, savings)
         }
         FamilyLookupReport::Unknown(report) => json_line(json!({
             "command": command,
@@ -2652,6 +2655,7 @@ fn family_lookup_json(
             &route,
             prepared_output,
             options.verbosity,
+            savings,
         )),
     }
 }
@@ -2666,12 +2670,12 @@ fn alignment_certificate_json(
     route: &FamilyQueryRouteReport,
     prepared_output: Option<&PreparedFamilyOutput>,
     verbosity: Verbosity,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> serde_json::Value {
     let read_plan = prepared_output
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&certificate.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let savings = estimate_alignment_potential_token_savings(certificate, read_plan, source_spans);
     let mut value = json!({
         "command": command,
         "schema_version": PRODUCT_SCHEMA_VERSION,
@@ -2692,7 +2696,7 @@ fn alignment_certificate_json(
             .computation
             .as_deref()
             .map(alignment_computation_json),
-        "estimated_potential_token_savings": alignment_savings_json(savings.as_ref()),
+        "estimated_potential_token_savings": alignment_savings_json(savings),
         "read_plan": read_plan_json(read_plan, verbosity),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&certificate.unknowns),
@@ -2825,12 +2829,12 @@ fn family_partial_context_json(
     route: &FamilyQueryRouteReport,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    savings: Option<&OutcomeTokenSavings>,
 ) -> String {
     let read_plan = prepared_output
         .map(|prepared| &prepared.read_plan)
         .unwrap_or(&report.read_plan);
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let savings = estimate_partial_context_potential_token_savings(report, read_plan, source_spans);
     let mut value = json!({
         "command": command,
         "schema_version": PRODUCT_SCHEMA_VERSION,
@@ -2849,7 +2853,7 @@ fn family_partial_context_json(
             "budget_satisfied": read_plan.budget_satisfied,
             "source_snippets_included": read_plan.source_snippets_included,
         },
-        "estimated_potential_token_savings": partial_context_savings_json(savings.as_ref()),
+        "estimated_potential_token_savings": partial_context_savings_json(savings),
         "read_plan": read_plan_json(read_plan, options.verbosity),
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
@@ -2876,6 +2880,7 @@ fn partial_context_savings_json(savings: Option<&OutcomeTokenSavings>) -> serde_
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn family_detail_json(
     command: &str,
     family: &FamilyDetailReport,
@@ -2884,9 +2889,16 @@ fn family_detail_json(
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    estimated_potential: Option<&EstimatedPotentialTokenSavings>,
 ) -> String {
-    let output_components =
-        family_output_components(family, target, mode, options, prepared_output);
+    let output_components = family_output_components(
+        family,
+        target,
+        mode,
+        options,
+        prepared_output,
+        estimated_potential,
+    );
     let selected_evidence = &output_components.selected_evidence;
     let read_plan = &output_components.read_plan;
     let estimated_potential = &output_components.estimated_potential_token_savings;
@@ -3066,18 +3078,21 @@ fn family_output_components(
     mode: FamilyLookupMode,
     options: FamilyOutputOptions,
     prepared_output: Option<&PreparedFamilyOutput>,
+    estimated_potential: Option<&EstimatedPotentialTokenSavings>,
 ) -> FamilyOutputComponents {
     let selected_evidence = select_family_evidence(family, options);
     let read_plan = prepared_output
         .map(|prepared| prepared.read_plan.clone())
         .unwrap_or_else(|| build_read_plan(family, target, mode, options));
     let source_spans = prepared_output.and_then(|prepared| prepared.source_spans.as_ref());
-    let estimated_potential_token_savings = estimate_family_output_potential_token_savings(
-        family,
-        &selected_evidence,
-        &read_plan,
-        source_spans,
-    );
+    let estimated_potential_token_savings = estimated_potential.cloned().unwrap_or_else(|| {
+        estimate_family_output_potential_token_savings(
+            family,
+            &selected_evidence,
+            &read_plan,
+            source_spans,
+        )
+    });
     FamilyOutputComponents {
         selected_evidence,
         read_plan,
@@ -4463,7 +4478,7 @@ fn instruction_outcome_human(outcome: &ManagedInstructionOutcome) -> String {
     );
     if instruction_session_restart_recommended(outcome) {
         rendered.push_str(
-            "next: start a new coding-agent session; running sessions may retain earlier instructions\n",
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
         );
     }
     rendered
@@ -5191,6 +5206,11 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
             if outcome.command_on_path { "yes" } else { "no" }
         ));
     }
+    if outcome.command == "install" {
+        output.push_str(
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
+        );
+    }
     output
 }
 
@@ -5346,10 +5366,8 @@ where
                 let measurement = telemetry_global_data_dir(env_lookup)
                     .ok()
                     .and_then(|dir| latest_comparable_experiment_report(&dir).ok().flatten());
-                let estimated_rollup =
-                    estimated_potential_token_savings_rollup(request.clone()).unwrap_or_default();
-                let query_outcome_rollup =
-                    family_query_outcome_rollup(request.clone()).unwrap_or_default();
+                let query_metrics =
+                    family_query_metrics_rollup(request.clone()).unwrap_or_default();
                 let unknown_inventory = if options.include_unknowns {
                     match runtime.unknown_inventory(request.clone()) {
                         Ok(report) => Some(report),
@@ -5376,8 +5394,7 @@ where
                     &report,
                     &status_report.readiness,
                     measurement.as_ref(),
-                    &estimated_rollup,
-                    &query_outcome_rollup,
+                    &query_metrics,
                     unknown_inventory.as_ref(),
                 ))
             }
@@ -5392,10 +5409,7 @@ where
 
     match runtime.repo_shape_diagnostics(request.clone()) {
         Ok(report) => {
-            let estimated_rollup =
-                estimated_potential_token_savings_rollup(request.clone()).unwrap_or_default();
-            let query_outcome_rollup =
-                family_query_outcome_rollup(request.clone()).unwrap_or_default();
+            let query_metrics = family_query_metrics_rollup(request.clone()).unwrap_or_default();
             let unknown_inventory = if options.include_unknowns {
                 match runtime.unknown_inventory(request) {
                     Ok(report) => Some(report),
@@ -5414,8 +5428,7 @@ where
             CliOutput::success(stats_human(
                 &report,
                 &status_report.readiness,
-                &estimated_rollup,
-                &query_outcome_rollup,
+                &query_metrics,
                 unknown_inventory.as_ref(),
             ))
         }
@@ -5539,8 +5552,7 @@ fn stats_fallback_blocking_reasons(reason: &str) -> Vec<&'static str> {
 fn stats_human(
     report: &RepoShapeDiagnosticsReport,
     readiness: &RepositoryReadiness,
-    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
-    query_outcome_rollup: &FamilyQueryOutcomeRollup,
+    query_metrics: &FamilyQueryMetricsRollup,
     unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
     // Lead with the essentials (~10 lines): readiness, indexed inventory,
@@ -5561,10 +5573,7 @@ fn stats_human(
         optional_ratio_human(report.family_support_coverage),
         report.token_saving_readiness.as_str(),
     );
-    output.push_str(&stats_all_scope_savings_human(
-        estimated_rollup,
-        query_outcome_rollup,
-    ));
+    output.push_str(&stats_all_scope_savings_human(query_metrics));
     output.push_str(&stats_scope_human(report));
     output.push_str(
         "detail: run `repogrammar stats --json` for full metrics, risk signals, blocking reasons, and per-language and per-outcome-shape breakdowns\n",
@@ -5582,10 +5591,10 @@ fn stats_json(
     report: &RepoShapeDiagnosticsReport,
     readiness: &RepositoryReadiness,
     measurement: Option<&crate::application::telemetry::ExperimentReport>,
-    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
-    query_outcome_rollup: &FamilyQueryOutcomeRollup,
+    query_metrics: &FamilyQueryMetricsRollup,
     unknown_inventory: Option<&UnknownInventoryReport>,
 ) -> String {
+    let estimated_rollup = &query_metrics.savings;
     let paired_measurement_available = measurement
         .and_then(|measurement| measurement.token_savings)
         .is_some();
@@ -5656,8 +5665,8 @@ fn stats_json(
             "total_estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
             "caveat": estimated_rollup.caveat,
         },
-        "all_scope_token_savings": stats_all_scope_savings_json(estimated_rollup, query_outcome_rollup),
-        "query_outcome_rollup": query_outcome_rollup_value(query_outcome_rollup),
+        "all_scope_token_savings": stats_all_scope_savings_json(query_metrics),
+        "query_outcome_rollup": query_outcome_rollup_value(query_metrics),
         "measurement_status": measurement_status,
         "measurement_reason": measurement.and_then(|measurement| measurement.reason.as_deref()),
         "claim_validity": measurement.map(|measurement| measurement.claim_validity.as_str()).unwrap_or("unknown"),
@@ -5761,11 +5770,14 @@ fn stats_tsjs_family_support(language: &RepoShapeLanguageDiagnostics) -> &'stati
 /// path to a MEASURED claim. This block covers all indexed languages and all
 /// context-delivering outcome shapes; the `python_family_eligible_units`
 /// repo-shape block is the official-scope subset.
-fn stats_all_scope_savings_json(
-    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
-    query_outcome_rollup: &FamilyQueryOutcomeRollup,
-) -> Value {
+fn stats_all_scope_savings_json(query_metrics: &FamilyQueryMetricsRollup) -> Value {
+    let estimated_rollup = &query_metrics.savings;
+    let query_outcome_rollup = &query_metrics.query_outcomes;
     json!({
+        "metric_epoch": query_metrics.epoch,
+        "epoch_started_unix_seconds": query_metrics.epoch_started_unix_seconds,
+        "producer_version": query_metrics.producer_version,
+        "cohort_status": "aligned_atomic_v2",
         "measurement_kind": estimated_rollup.measurement_kind.as_str(),
         "caveat": estimated_rollup.caveat,
         "scope": "all_languages_all_outcome_shapes",
@@ -5776,7 +5788,7 @@ fn stats_all_scope_savings_json(
         "estimated_potential_token_savings": estimated_rollup.total_estimated_potential_token_savings,
         "by_outcome_shape": savings_breakdown_map_json(&estimated_rollup.by_outcome_shape),
         "by_language": savings_breakdown_map_json(&estimated_rollup.by_language),
-        "note": "all-scope estimated potential across every indexed language and context-delivering outcome shape (found, partial_context, alignment); the python_family_eligible_units repo-shape block is the official-scope subset",
+        "note": "one atomic v2 cohort across every recorded query and optional context-delivering savings event; legacy v1 rollups are historical unpaired evidence and are excluded; python_family_eligible_units remains the official-scope subset",
     })
 }
 
@@ -5784,16 +5796,16 @@ fn stats_all_scope_savings_json(
 /// summary: the total (labeled ESTIMATED, never measured), the honest
 /// `savings_events / total_queries` denominator, and the per-outcome-shape and
 /// per-language breakdowns on one continuation line. The full block is in JSON.
-fn stats_all_scope_savings_human(
-    estimated_rollup: &EstimatedPotentialTokenSavingsRollup,
-    query_outcome_rollup: &FamilyQueryOutcomeRollup,
-) -> String {
+fn stats_all_scope_savings_human(query_metrics: &FamilyQueryMetricsRollup) -> String {
+    let estimated_rollup = &query_metrics.savings;
+    let query_outcome_rollup = &query_metrics.query_outcomes;
     format!(
-        "estimated_potential_token_savings: {}\tmeasurement_kind: {}\tsavings_events: {} / queries: {}\tcaveat: {}\nall_scope_by_outcome_shape: {}\tby_language: {}\n",
+        "estimated_potential_token_savings: {}\tmeasurement_kind: {}\tsavings_events: {} / queries: {}\tmetric_epoch: {}\tcaveat: {}\nall_scope_by_outcome_shape: {}\tby_language: {}\n",
         estimated_rollup.total_estimated_potential_token_savings,
         estimated_rollup.measurement_kind.as_str(),
         estimated_rollup.event_count,
         query_outcome_rollup.event_count,
+        query_metrics.epoch,
         estimated_rollup.caveat,
         savings_breakdown_map_human(&estimated_rollup.by_outcome_shape),
         savings_breakdown_map_human(&estimated_rollup.by_language),
@@ -5815,10 +5827,15 @@ fn savings_breakdown_map_human(map: &BTreeMap<String, SavingsBreakdown>) -> Stri
         .join(" ")
 }
 
-fn query_outcome_rollup_value(rollup: &FamilyQueryOutcomeRollup) -> Value {
+fn query_outcome_rollup_value(query_metrics: &FamilyQueryMetricsRollup) -> Value {
+    let rollup = &query_metrics.query_outcomes;
     json!({
-        "schema_version": crate::application::telemetry::FAMILY_QUERY_OUTCOMES_SCHEMA_VERSION,
+        "schema_version": crate::application::telemetry::FAMILY_QUERY_METRICS_SCHEMA_VERSION,
         "rollup_scope": "local_query_outcomes",
+        "metric_epoch": query_metrics.epoch,
+        "epoch_started_unix_seconds": query_metrics.epoch_started_unix_seconds,
+        "producer_version": query_metrics.producer_version,
+        "cohort_status": "aligned_atomic_v2",
         "event_count": rollup.event_count,
         "by_status": &rollup.by_status,
         "by_entrypoint": &rollup.by_entrypoint,
@@ -10025,8 +10042,9 @@ mod tests {
     fn alignment_certificate_json_dedups_duplicates_only_at_minimal() {
         let certificate = member_certificate();
         let route = member_route();
-        let render =
-            |verbosity| alignment_certificate_json("check", &certificate, &route, None, verbosity);
+        let render = |verbosity| {
+            alignment_certificate_json("check", &certificate, &route, None, verbosity, None)
+        };
 
         let standard = render(Verbosity::Standard);
         let full = render(Verbosity::Full);
@@ -11769,7 +11787,7 @@ mod tests {
         assert_eq!(status.status, 0, "{}", status.stderr);
         let status_json: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
         assert_eq!(status_json["state_before"], "missing");
-        assert_eq!(status_json["expected_content_version"], 2);
+        assert_eq!(status_json["expected_content_version"], 3);
         assert_eq!(status_json["changed"], false);
         assert_eq!(status_json["session_restart_recommended"], false);
         assert!(!status
@@ -11833,8 +11851,8 @@ mod tests {
         let with_gate = fs::read_to_string(&instruction_file).expect("synced guide");
         assert!(with_gate.contains("before any non-trivial code location"));
         assert!(with_gate.contains("operation: \"find_analogues\""));
-        assert!(with_gate.contains("State that fallback reason"));
-        assert!(with_gate.contains("Do not repeat the same RepoGrammar call"));
+        assert!(with_gate.contains("state that reason before CodeGraph"));
+        assert!(with_gate.contains("Call a given target only once"));
         assert!(!workspace.path().join("CLAUDE.md").exists());
         assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
 
@@ -11845,7 +11863,7 @@ mod tests {
         );
         assert_eq!(synced_human.status, 0, "{}", synced_human.stderr);
         assert!(synced_human.stdout.contains(
-            "next: start a new coding-agent session; running sessions may retain earlier instructions"
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
         ));
 
         let remove_plan = run_with_context(
@@ -13780,12 +13798,14 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("telemetry")
             .join("local-metrics")
-            .join("family_query_outcomes.json");
+            .join("family_query_metrics.json");
         let rollup: Value =
             serde_json::from_str(&fs::read_to_string(rollup_path).expect("query rollup JSON"))
                 .expect("query rollup");
-        assert_eq!(rollup["schema_version"], "family-query-outcomes.v1");
-        assert_eq!(rollup["event_count"], 1);
+        assert_eq!(rollup["schema_version"], "family-query-metrics.v2");
+        assert_eq!(rollup["epoch"], "atomic-query-accounting.v2");
+        assert_eq!(rollup["total_queries"], 1);
+        assert_eq!(rollup["savings_events"], 0);
         assert_eq!(rollup["by_status"]["fallback"], 1);
         assert_eq!(rollup["by_entrypoint"]["cli"], 1);
         assert_eq!(rollup["by_command_category"]["find"], 1);
@@ -14290,11 +14310,12 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("telemetry")
             .join("local-metrics")
-            .join("family_query_outcomes.json");
+            .join("family_query_metrics.json");
         let rollup: Value =
             serde_json::from_str(&fs::read_to_string(rollup_path).expect("query rollup JSON"))
                 .expect("query rollup");
-        assert_eq!(rollup["event_count"], 1);
+        assert_eq!(rollup["total_queries"], 1);
+        assert_eq!(rollup["savings_events"], 0);
         assert_eq!(rollup["by_status"]["unknown"], 1);
         assert_eq!(rollup["by_reason_code"]["InsufficientSupport"], 1);
         assert_eq!(
@@ -14375,11 +14396,12 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("telemetry")
             .join("local-metrics")
-            .join("family_query_outcomes.json");
+            .join("family_query_metrics.json");
         let rollup: Value =
             serde_json::from_str(&fs::read_to_string(rollup_path).expect("query rollup JSON"))
                 .expect("query rollup");
-        assert_eq!(rollup["event_count"], 1);
+        assert_eq!(rollup["total_queries"], 1);
+        assert_eq!(rollup["savings_events"], 1);
         assert_eq!(rollup["by_status"]["partial_context"], 1);
         assert_eq!(rollup["read_plan_returned_count"], 1);
         assert_eq!(rollup["read_plan_item_count_bucket"]["1-2"], 1);
@@ -14387,17 +14409,7 @@ mod tests {
         // The all-scope savings rollup recorded this PARTIAL_CONTEXT as an event
         // under the partial_context outcome shape (proving partial-context read
         // plans now accrue savings accounting, not just found families).
-        let savings_rollup_path = workspace
-            .path()
-            .join(DEFAULT_STATE_DIR)
-            .join("telemetry")
-            .join("local-metrics")
-            .join("estimated_potential_token_savings.json");
-        let savings_rollup: Value = serde_json::from_str(
-            &fs::read_to_string(savings_rollup_path).expect("savings rollup JSON"),
-        )
-        .expect("savings rollup");
-        assert_eq!(savings_rollup["event_count"], 1);
+        let savings_rollup = &rollup;
         assert_eq!(
             savings_rollup["by_outcome_shape"]["partial_context"]["event_count"],
             1
@@ -14863,32 +14875,23 @@ mod tests {
             .join(DEFAULT_STATE_DIR)
             .join("telemetry")
             .join("local-metrics")
-            .join("estimated_potential_token_savings.json");
+            .join("family_query_metrics.json");
         let rollup: Value = serde_json::from_str(
             &fs::read_to_string(local_metric).expect("local estimated rollup"),
         )
         .expect("local estimated rollup JSON");
-        assert_eq!(rollup["metric_name"], "estimated_potential_token_savings");
+        assert_eq!(rollup["metric_name"], "family_query_metrics");
         assert_eq!(rollup["measurement_kind"], "ESTIMATED");
-        assert_eq!(rollup["event_count"], 3);
+        assert_eq!(rollup["savings_events"], 3);
+        assert_eq!(rollup["total_queries"], 3);
         assert!(
             rollup["total_estimated_potential_token_savings"]
                 .as_u64()
                 .expect("total estimated potential")
                 > 0
         );
-        let query_rollup_path = workspace
-            .path()
-            .join(DEFAULT_STATE_DIR)
-            .join("telemetry")
-            .join("local-metrics")
-            .join("family_query_outcomes.json");
-        let query_rollup: Value = serde_json::from_str(
-            &fs::read_to_string(query_rollup_path).expect("local query outcome rollup"),
-        )
-        .expect("local query outcome rollup JSON");
-        assert_eq!(query_rollup["metric_name"], "family_query_outcomes");
-        assert_eq!(query_rollup["event_count"], 3);
+        let query_rollup = &rollup;
+        assert_eq!(query_rollup["total_queries"], 3);
         assert_eq!(query_rollup["by_status"]["found"], 3);
         assert_eq!(query_rollup["by_entrypoint"]["cli"], 3);
         assert_eq!(query_rollup["by_command_category"]["find"], 3);
@@ -14923,7 +14926,7 @@ mod tests {
         );
         assert_eq!(
             stats_value["query_outcome_rollup"]["event_count"],
-            query_rollup["event_count"]
+            query_rollup["total_queries"]
         );
         assert_eq!(stats_value["query_outcome_rollup"]["by_status"]["found"], 3);
         assert_eq!(stats_value["token_savings"], Value::Null);
@@ -16416,7 +16419,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_json_performs_incremental_copy_forward_when_manifest_is_unchanged() {
+    fn sync_json_retains_active_generation_when_manifest_is_unchanged() {
         let workspace = TempWorkspace::new("cli-sync-real-runtime");
         let env = |_: &str| None;
         let runtime = TestRuntime;
@@ -16446,7 +16449,7 @@ mod tests {
         assert_eq!(output.status, 0);
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("sync JSON");
         assert_eq!(value["command"], "sync");
-        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["generation_id"], "gen-000001");
         assert_eq!(value["sync_mode"], "incremental");
         assert_eq!(value["fallback_reason"], Value::Null);
         assert_eq!(value["base_generation"], "gen-000001");
@@ -16456,15 +16459,12 @@ mod tests {
         assert_eq!(value["modified_files"], 0);
         assert_eq!(value["removed_files"], 0);
         assert_eq!(value["unchanged_files"], 3);
-        assert_eq!(value["copied_forward_files"], 3);
+        assert_eq!(value["copied_forward_files"], 0);
         assert_eq!(value["reparsed_files"], 0);
         assert_eq!(value["dirty_records_cleared"], 0);
-        assert!(value["families_recomputed"].is_u64());
-        // The interactive `sync` path recomputes code units and framework roles
-        // but does not rebuild families (no family store), so the family-identity
-        // delta fields are always present yet null here, mirroring the zero
-        // `families_recomputed`. The populated delta is covered by the
-        // family-recomputing sync test in `application::indexing`.
+        assert_eq!(value["families_recomputed"], 0);
+        // No generation comparison occurs on the zero-delta path, so family
+        // identity deltas remain present and null.
         let sync_object = value.as_object().expect("sync JSON object");
         assert!(sync_object.contains_key("families_added"));
         assert!(sync_object.contains_key("families_removed"));
@@ -16492,13 +16492,13 @@ mod tests {
         );
         assert_eq!(
             indexed_paths(&workspace, "gen-000002"),
-            vec!["a.ts", "copied.ts", "stable.ts"]
+            Vec::<String>::new()
         );
 
         let status =
             run_with_context_and_runtime(["status", "--json"], workspace.path(), &env, &runtime);
         let value: Value = serde_json::from_str(status.stdout.trim()).expect("status JSON");
-        assert_eq!(value["active_generation"], "gen-000002");
+        assert_eq!(value["active_generation"], "gen-000001");
     }
 
     #[test]
@@ -18773,6 +18773,9 @@ mod tests {
             .stdout
             .contains("install: agent MCP integration installed"));
         assert!(output.stdout.contains("configured_targets=codex"));
+        assert!(output.stdout.contains(
+            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
+        ));
     }
 
     #[test]

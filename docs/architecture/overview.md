@@ -94,6 +94,11 @@ query evidence remain later boundaries.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output.
+The application query boundary keeps exact identifiers authoritative, then uses
+the committed dependency-free query vocabulary for bounded normalization,
+ranking, calibrated abstention, and freshness hydration. Vocabulary v2 can
+qualify three exact two-term test/fixture phrases without lowering the absolute
+selection or competing-family margin gates; ambiguous families still abstain.
 Inventory-style queries such as `stats --json`, `families --json`, and MCP
 candidate discovery use bounded read-model ports so agent loops do not hydrate
 full family evidence, semantic facts, IR graphs, or all family details. The
