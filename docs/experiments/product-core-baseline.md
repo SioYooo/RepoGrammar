@@ -359,3 +359,53 @@ The per-query `hydrated_family_count` and `retrieval_stage_count` fields are
 `null` in this baseline: the current product `query_route` does not yet surface
 them. The harness reads them null-tolerantly so a later wave can populate them
 without a schema change.
+
+## Run conditions, token-overlap baseline, and safety counter (Phase 2-D)
+
+`product-eval-results.v2` gained two top-level provenance fields and one summary
+safety counter, all additive:
+
+- `condition` (string, default `"product"`): names what was measured.
+  `--condition <token>` records it verbatim (`[a-z0-9_-]+`, at most 40 characters,
+  not starting with `-`) for product-side ablation runs.
+- `baseline` (string or `null`, default `null`): names the control independently of
+  `condition`. `--baseline token-overlap` sets it to `"token-overlap"`, defaults
+  `condition` to `"baseline_token_overlap"`, and is rejected when combined with an
+  explicit `--condition product`.
+- `summary.selected_on_abstention_gold` (integer, also mirrored in
+  `summary.metrics`): a safety counter — queries whose gold outcome is `unknown`
+  where a family was nonetheless selected. It is the abstention-side complement of
+  `false_family_selections`, which requires a declared family constraint.
+
+The token-overlap baseline is an honest naive lower bound over the same corpus and
+schema. Per fixture it only indexes (`init`+`resync`) and reads `families --json`
+once; per query it lowercases the target, splits on non-ASCII-alphanumeric
+characters, drops sub-3-character tokens, deduplicates, scores each family by
+distinct query tokens that are substrings of its `family_id`, and selects the
+unique argmax at score `>= 2` (a strict tie or lower maximum abstains). It reports
+its own candidate ranking capped at `K = 5`. `mrr` credits only the committed
+answer (an abstention scores `0` regardless of its candidate list) and both
+`mrr`/`candidate_recall` evaluate candidates at `K = 5` for every condition.
+
+Contrast run at commit `a497dfb586f4beebe6c1badad52ef4ebaa8bea0d`,
+`platform os=macos arch=aarch64`, dev build, one repetition (verdict and metric
+counts stable; latency machine-dependent):
+
+- `product` condition: 73 queries, 47 match; `hit_at_1` 17/43, `mrr` 0.395,
+  `candidate_recall` 10/13, `correct_abstention` 24/24, `false_family_selections`
+  0, `selected_on_abstention_gold` 0. Matches the frozen Phase 2 baseline above.
+- `baseline_token_overlap` condition: 73 queries, 23 match; `hit_at_1` 11/43,
+  `mrr` 0.256 (equal to 11/43 — every credit is a rank-1 committed selection, no
+  partial-rank contribution), `candidate_recall` 2/13, `correct_abstention` 21/24,
+  `false_family_selections` 0, `selected_on_abstention_gold` 3. The three confident
+  wrong selections on abstention gold (e.g. the unsafe-typo `fastapi_rout`, which
+  scores two and selects the FastAPI family) show that tie-abstention does not make
+  the control safe; its weakness is visible in the retrieval metrics, the lower
+  `correct_abstention`, and the nonzero `selected_on_abstention_gold`, not in
+  `false_family_selections`.
+
+`matches`, `by_kind`, `by_intent`, and latency are not comparable across
+conditions: the baseline produces no route/unknown-reason fields (so its `matches`
+is mechanically lower) and its latencies measure in-process scoring, not a product
+subprocess. Cross-condition comparison uses the retrieval metrics and the two
+safety counters.

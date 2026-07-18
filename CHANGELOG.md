@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- Added evaluation run conditions and an honest naive control to the
+  product-core harness: `repo-guard product-eval` accepts `--condition
+  <token>` and `--baseline token-overlap`, results carry explicit
+  `condition` and `baseline` fields, and a new
+  `selected_on_abstention_gold` safety counter reports selections on
+  queries whose gold outcome is abstention for every condition.
+  Reciprocal rank now scores the committed answer only - abstentions
+  contribute zero for all conditions - and candidate metrics evaluate at
+  most the first five candidates, so cross-condition MRR comparisons no
+  longer credit uncommitted candidate lists. Measured on the corpus
+  after integration: product hit@1 21/42 with mrr 0.500 and zero
+  abstention-gold selections; the token-overlap control reaches hit@1
+  11/42 with 3 abstention-gold selections.
+
 ### Changed
 
 - Stabilized semantic family identity (pre-1.0 breaking change to the family-id

@@ -317,7 +317,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -2212,6 +2212,97 @@ fn executable_on_path(name: &str) -> Option<PathBuf> {
 const PRODUCT_EVAL_CORPUS_SCHEMA: &str = "product-eval-corpus.v1";
 const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v2";
 
+/// Default recorded `condition` for a plain product run. `--condition <token>`
+/// overrides it verbatim so ablation runs (product built with ablation
+/// env/flags) are recorded distinctly under the same results schema.
+const PRODUCT_EVAL_CONDITION_DEFAULT: &str = "product";
+/// Recorded `condition` for the token-overlap naive baseline control.
+const BASELINE_TOKEN_OVERLAP_CONDITION: &str = "baseline_token_overlap";
+/// Query tokens shorter than this (in characters) are dropped before scoring.
+const BASELINE_MIN_TOKEN_LEN: usize = 3;
+/// Minimum token-overlap score required before the baseline may select a family.
+const BASELINE_SELECT_MIN_SCORE: usize = 2;
+/// Candidate-list depth K at which `candidate_recall` and MRR are evaluated, for
+/// every condition. The baseline also caps its own reported ranking at this K, so
+/// list-quality metrics compare like for like across product and baseline runs.
+const RETRIEVAL_CANDIDATE_K: usize = 5;
+
+/// A naive deterministic retrieval control evaluated on the same corpus gold as
+/// the product, emitted in the same results schema. It exists to contrast the
+/// product against an honest lower bound; it must never be tuned to flatter or
+/// diminish either side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalBaseline {
+    TokenOverlap,
+}
+
+impl EvalBaseline {
+    fn from_token(token: &str) -> Result<Self, String> {
+        match token {
+            "token-overlap" => Ok(EvalBaseline::TokenOverlap),
+            other => Err(format!("unsupported --baseline '{other}'")),
+        }
+    }
+
+    /// Stable token recorded in the results document's `baseline` field.
+    fn as_str(self) -> &'static str {
+        match self {
+            EvalBaseline::TokenOverlap => "token-overlap",
+        }
+    }
+
+    /// The `condition` recorded when `--condition` is not given explicitly.
+    fn default_condition(self) -> &'static str {
+        match self {
+            EvalBaseline::TokenOverlap => BASELINE_TOKEN_OVERLAP_CONDITION,
+        }
+    }
+}
+
+/// Resolves the recorded `condition` from an optional explicit `--condition` and
+/// the selected baseline. An explicit `product` alongside a baseline is rejected
+/// (a baseline is not the product); otherwise an explicit token wins verbatim, a
+/// baseline contributes its default condition, and a plain run records `product`.
+fn resolve_eval_condition(
+    explicit: Option<String>,
+    baseline: Option<EvalBaseline>,
+) -> Result<String, String> {
+    if baseline.is_some() && explicit.as_deref() == Some(PRODUCT_EVAL_CONDITION_DEFAULT) {
+        return Err(
+            "--condition product is incompatible with --baseline; a baseline is not the product"
+                .to_string(),
+        );
+    }
+    Ok(explicit.unwrap_or_else(|| {
+        baseline
+            .map(|baseline| baseline.default_condition().to_string())
+            .unwrap_or_else(|| PRODUCT_EVAL_CONDITION_DEFAULT.to_string())
+    }))
+}
+
+/// Validates a low-cardinality condition token used to tag a results document.
+/// Accepts `[a-z0-9_-]+` up to 40 characters and returns it verbatim.
+fn validate_condition_token(token: &str) -> Result<String, String> {
+    if token.is_empty() {
+        return Err("--condition must not be empty".to_string());
+    }
+    // Reject a leading '-' so a forgotten flag value (e.g. `--condition --baseline`)
+    // is a hard error rather than a silently accepted condition token.
+    if token.starts_with('-') {
+        return Err("--condition must not start with '-'".to_string());
+    }
+    if !token
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Err("--condition must match [a-z0-9_-]+".to_string());
+    }
+    if token.chars().count() > 40 {
+        return Err("--condition must be at most 40 characters".to_string());
+    }
+    Ok(token.to_string())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvalOutcome {
     Ok,
@@ -2778,18 +2869,29 @@ fn selected_satisfies_family_gold(expected: &EvalExpected, actual: &EvalActual) 
         .is_some_and(|selected| id_satisfies_family_gold(expected, selected))
 }
 
-/// Reciprocal rank of the first gold-satisfying family. The selected family, when
-/// it satisfies gold, is rank 1; otherwise the first gold-satisfying id in the
-/// candidate list (1-based) sets the rank. Returns 0.0 when no gold-satisfying id
-/// is present or no family constraint is declared.
+/// Reciprocal rank of the committed answer. MRR credits only a run that commits
+/// (an `ok`/`partial_context` outcome): a selection satisfying gold is rank 1, and
+/// otherwise the first gold-satisfying id within the top `RETRIEVAL_CANDIDATE_K`
+/// candidates (1-based) sets the rank. A run that abstains (`unknown`/`fallback`)
+/// scores 0 regardless of its diagnostic candidate list, and a query with no
+/// family constraint scores 0. List construction is measured by `candidate_recall`,
+/// not here.
 fn reciprocal_rank(expected: &EvalExpected, actual: &EvalActual) -> f64 {
     if !has_family_constraint(expected) {
+        return 0.0;
+    }
+    if matches!(actual.outcome, EvalOutcome::Unknown | EvalOutcome::Fallback) {
         return 0.0;
     }
     if selected_satisfies_family_gold(expected, actual) {
         return 1.0;
     }
-    for (index, candidate) in actual.candidate_families.iter().enumerate() {
+    for (index, candidate) in actual
+        .candidate_families
+        .iter()
+        .take(RETRIEVAL_CANDIDATE_K)
+        .enumerate()
+    {
         if id_satisfies_family_gold(expected, candidate) {
             return 1.0 / (index as f64 + 1.0);
         }
@@ -2797,15 +2899,134 @@ fn reciprocal_rank(expected: &EvalExpected, actual: &EvalActual) -> f64 {
     0.0
 }
 
-/// True when every `candidates_include` prefix is matched by at least one actual
-/// candidate family. Empty gold vacuously holds, but such queries are excluded
-/// from the candidate-recall denominator by the caller.
+/// True when every `candidates_include` prefix is matched by some candidate family
+/// within the top `RETRIEVAL_CANDIDATE_K`. Empty gold vacuously holds, but such
+/// queries are excluded from the candidate-recall denominator by the caller.
 fn candidate_recall_satisfied(includes: &[String], candidates: &[String]) -> bool {
     includes.iter().all(|include| {
         candidates
             .iter()
+            .take(RETRIEVAL_CANDIDATE_K)
             .any(|candidate| candidate.starts_with(include.as_str()))
     })
+}
+
+/// A token-overlap selection: the family the baseline chose (if any) and its
+/// own ranked candidate list (already capped at `RETRIEVAL_CANDIDATE_K`).
+struct BaselineSelection {
+    selected_family: Option<String>,
+    candidate_families: Vec<String>,
+}
+
+/// Lowercases `target`, splits on non-ASCII-alphanumeric characters, drops tokens
+/// shorter than `BASELINE_MIN_TOKEN_LEN` characters, and deduplicates preserving
+/// first occurrence. Deterministic for a given input.
+fn baseline_tokenize(target: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for piece in target
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+    {
+        if piece.chars().count() < BASELINE_MIN_TOKEN_LEN {
+            continue;
+        }
+        let token = piece.to_string();
+        if !tokens.contains(&token) {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
+/// Number of distinct query tokens that occur as substrings of `family_id`
+/// (case-insensitive). `tokens` are already lowercased and deduplicated, so the
+/// count is bounded by `tokens.len()`.
+fn baseline_family_score(tokens: &[String], family_id: &str) -> usize {
+    let lowered = family_id.to_lowercase();
+    tokens
+        .iter()
+        .filter(|token| lowered.contains(token.as_str()))
+        .count()
+}
+
+/// Deterministic token-overlap selection. Scores every family, ranks families
+/// with a positive score by score descending then family id ascending (capped at
+/// `RETRIEVAL_CANDIDATE_K`), and selects the unique argmax only when its score is
+/// at least `BASELINE_SELECT_MIN_SCORE`. A strict tie at the maximum or a
+/// sub-threshold maximum abstains. No aliases, concepts, or margin calibration.
+fn baseline_select_family(tokens: &[String], family_ids: &[String]) -> BaselineSelection {
+    let mut scored: Vec<(usize, &String)> = family_ids
+        .iter()
+        .map(|id| (baseline_family_score(tokens, id), id))
+        .filter(|(score, _)| *score >= 1)
+        .collect();
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+    let candidate_families: Vec<String> = scored
+        .iter()
+        .take(RETRIEVAL_CANDIDATE_K)
+        .map(|(_, id)| (*id).clone())
+        .collect();
+    let max_score = scored.first().map(|(score, _)| *score).unwrap_or(0);
+    let top_count = scored
+        .iter()
+        .filter(|(score, _)| *score == max_score)
+        .count();
+    let selected_family = if max_score >= BASELINE_SELECT_MIN_SCORE && top_count == 1 {
+        scored.first().map(|(_, id)| (*id).clone())
+    } else {
+        None
+    };
+    BaselineSelection {
+        selected_family,
+        candidate_families,
+    }
+}
+
+/// Projects a baseline selection onto the same `EvalActual` shape the product
+/// path produces: a selection reports `ok`, an abstention reports `unknown`. The
+/// baseline has no route, typed unknown reason, or pipeline counters, so those
+/// stay `None`; `active_generation` carries the generation of the family listing.
+fn baseline_actual(selection: BaselineSelection, active_generation: Option<String>) -> EvalActual {
+    let outcome = if selection.selected_family.is_some() {
+        EvalOutcome::Ok
+    } else {
+        EvalOutcome::Unknown
+    };
+    EvalActual {
+        outcome,
+        route: None,
+        selected_family: selection.selected_family,
+        candidate_family_count: selection.candidate_families.len(),
+        candidate_families: selection.candidate_families,
+        hydrated_family_count: None,
+        retrieval_stage_count: None,
+        unknown_reason: None,
+        active_generation,
+    }
+}
+
+/// Runs the token-overlap baseline for one query against a fixture's family
+/// listing. Selection is deterministic, so the repetition loop only records
+/// scoring latencies for schema parity with the product path.
+fn run_baseline_query(
+    query: &EvalQuery,
+    active_generation: Option<&str>,
+    family_ids: &[String],
+    repetitions: usize,
+) -> (EvalActual, Vec<u128>) {
+    let tokens = baseline_tokenize(&query.target);
+    let mut latencies = Vec::with_capacity(repetitions);
+    let mut selection = BaselineSelection {
+        selected_family: None,
+        candidate_families: Vec::new(),
+    };
+    for _ in 0..repetitions {
+        let started = std::time::Instant::now();
+        selection = baseline_select_family(&tokens, family_ids);
+        latencies.push(started.elapsed().as_millis());
+    }
+    let actual = baseline_actual(selection, active_generation.map(str::to_string));
+    (actual, latencies)
 }
 
 /// One evaluated query reduced to the fields the retrieval metrics need.
@@ -2832,6 +3053,12 @@ struct ProductEvalMetrics {
     correct_abstention_den: usize,
     false_family_selections: usize,
     family_constrained_total: usize,
+    /// Safety counter: queries whose gold outcome is `unknown` (a family should not
+    /// be committed) where the run nonetheless selected a family. Independent of
+    /// `false_family_selections`, which needs a declared family constraint; an
+    /// abstention-gold query carries none, so a confident wrong selection there is
+    /// invisible to `false_family_selections` but counted here.
+    selected_on_abstention_gold: usize,
     unsupported_rejection_num: usize,
     unsupported_rejection_den: usize,
     ambiguity_precision_num: usize,
@@ -2878,6 +3105,11 @@ fn compute_product_eval_metrics(records: &[EvalMetricRecord]) -> ProductEvalMetr
             if is_false_family_selection(record.expected, record.actual) {
                 metrics.false_family_selections += 1;
             }
+        }
+        if record.expected.outcome == Some(EvalOutcome::Unknown)
+            && record.actual.selected_family.is_some()
+        {
+            metrics.selected_on_abstention_gold += 1;
         }
         if let Some(includes) = &record.expected.candidates_include {
             if !includes.is_empty() {
@@ -2946,6 +3178,7 @@ impl ProductEvalMetrics {
             ),
             "false_family_selections": self.false_family_selections,
             "family_constrained_total": self.family_constrained_total,
+            "selected_on_abstention_gold": self.selected_on_abstention_gold,
             "unsupported_rejection_rate": ratio_value(
                 self.unsupported_rejection_num,
                 self.unsupported_rejection_den,
@@ -3227,6 +3460,46 @@ impl EvalWorkspace {
         })
     }
 
+    /// Fetches the product's `families --json` listing once for an indexed
+    /// fixture. Returns the active generation and every reported `family_id`;
+    /// an empty (typed-`UNKNOWN`) listing yields an empty vector rather than an
+    /// error, so the baseline abstains everywhere for that fixture.
+    fn families(&self) -> Result<(Option<String>, Vec<String>), String> {
+        let project = self.project_arg()?;
+        let output = self
+            .command()
+            .args(["families", "--project", &project, "--json"])
+            .output()
+            .map_err(|_| "eval families listing could not execute".to_string())?;
+        if !output.status.success() {
+            return Err("eval families listing returned a failure status".to_string());
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| "eval families listing output was not UTF-8".to_string())?;
+        let value: serde_json::Value = serde_json::from_str(stdout.trim())
+            .map_err(|_| "eval families listing output was not JSON".to_string())?;
+        let active_generation = value
+            .get("active_generation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let family_ids = value
+            .get("families")
+            .and_then(serde_json::Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .get("family_id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok((active_generation, family_ids))
+    }
+
     fn apply_mutation(&self, mutation: &EvalMutation) -> Result<(), String> {
         if mutation.kind != "append_line" {
             return Err(format!("unsupported mutation kind '{}'", mutation.kind));
@@ -3349,6 +3622,8 @@ fn product_eval_command(root: &Path, args: &[String]) -> Result<String, String> 
     let mut out = None;
     let mut repetitions = 3usize;
     let mut bin = None;
+    let mut condition: Option<String> = None;
+    let mut baseline: Option<EvalBaseline> = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -3361,13 +3636,30 @@ fn product_eval_command(root: &Path, args: &[String]) -> Result<String, String> 
                     .map_err(|_| "--repetitions must be a positive integer".to_string())?;
             }
             "--bin" => bin = Some(product_eval_take_value(args, &mut index, "--bin")?),
+            "--condition" => {
+                let raw = product_eval_take_value(args, &mut index, "--condition")?;
+                condition = Some(validate_condition_token(&raw)?);
+            }
+            "--baseline" => {
+                let raw = product_eval_take_value(args, &mut index, "--baseline")?;
+                baseline = Some(EvalBaseline::from_token(&raw)?);
+            }
             other => return Err(format!("unknown product-eval argument '{other}'")),
         }
         index += 1;
     }
     let corpus = corpus.ok_or_else(|| "--corpus <path> is required".to_string())?;
     let out = out.ok_or_else(|| "--out <dir> is required".to_string())?;
-    run_product_eval(root, &corpus, &out, repetitions, bin.as_deref())
+    let condition = resolve_eval_condition(condition, baseline)?;
+    run_product_eval(
+        root,
+        &corpus,
+        &out,
+        repetitions,
+        bin.as_deref(),
+        &condition,
+        baseline,
+    )
 }
 
 fn product_eval_take_value(
@@ -3383,12 +3675,15 @@ fn product_eval_take_value(
     Ok(value)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_product_eval(
     root: &Path,
     corpus_path: &str,
     out_dir: &str,
     repetitions: usize,
     bin_override: Option<&str>,
+    condition: &str,
+    baseline: Option<EvalBaseline>,
 ) -> Result<String, String> {
     if repetitions == 0 {
         return Err("--repetitions must be at least 1".to_string());
@@ -3409,6 +3704,10 @@ fn run_product_eval(
     let started_at = rfc3339_utc(unix_seconds_now());
 
     let mut base_workspaces: Vec<(String, EvalWorkspace)> = Vec::new();
+    // Populated only in baseline mode: the product's `families --json` listing
+    // (active generation + family ids) captured once per indexed fixture.
+    let mut baseline_families: std::collections::BTreeMap<String, (Option<String>, Vec<String>)> =
+        std::collections::BTreeMap::new();
     let mut fixture_results: Vec<serde_json::Value> = Vec::new();
     for fixture in &corpus.fixtures {
         let source = fs::canonicalize(root.join(&fixture.root))
@@ -3440,6 +3739,18 @@ fn run_product_eval(
                 return Err(error);
             }
         };
+        if baseline.is_some() {
+            match workspace.families() {
+                Ok(families) => {
+                    baseline_families.insert(fixture.fixture_id.clone(), families);
+                }
+                Err(error) => {
+                    workspace.retain();
+                    retain_workspaces(&base_workspaces);
+                    return Err(error);
+                }
+            }
+        }
         fixture_results.push(serde_json::json!({
             "fixture_id": fixture.fixture_id,
             "fixture_version": fixture_version,
@@ -3463,52 +3774,70 @@ fn run_product_eval(
         Vec::new();
 
     for query in &corpus.queries {
-        let base = base_workspaces
-            .iter()
-            .find(|(fixture_id, _)| fixture_id == &query.fixture_id)
-            .map(|(_, workspace)| workspace)
-            .ok_or_else(|| {
-                format!(
-                    "query '{}' references unindexed fixture '{}'",
-                    query.query_id, query.fixture_id
-                )
-            })?;
-
-        let outcome = if let Some(mutation) = &query.mutation {
-            let fixture = corpus
-                .fixtures
-                .iter()
-                .find(|fixture| fixture.fixture_id == query.fixture_id)
-                .ok_or_else(|| "mutation query references an unknown fixture".to_string())?;
-            let source = fs::canonicalize(root.join(&fixture.root))
-                .map_err(|_| "fixture root is unavailable".to_string())?;
-            let mutation_workspace = match EvalWorkspace::new(&binary, &source) {
-                Ok(workspace) => workspace,
-                Err(error) => {
-                    retain_workspaces(&base_workspaces);
-                    return Err(error);
-                }
-            };
-            let run = (|| {
-                mutation_workspace.init()?;
-                mutation_workspace.resync()?;
-                mutation_workspace.apply_mutation(mutation)?;
-                mutation_workspace.run_query(query, repetitions)
-            })();
-            match run {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    mutation_workspace.retain();
-                    retain_workspaces(&base_workspaces);
-                    return Err(error);
-                }
+        let outcome = match baseline {
+            // Baseline mode scores the query against the fixture's pre-fetched
+            // family listing; it never drives the product per query and ignores
+            // source mutations, which the naive control does not model.
+            Some(EvalBaseline::TokenOverlap) => {
+                let (active_generation, family_ids) =
+                    baseline_families.get(&query.fixture_id).ok_or_else(|| {
+                        format!(
+                            "baseline is missing the family listing for fixture '{}'",
+                            query.fixture_id
+                        )
+                    })?;
+                run_baseline_query(query, active_generation.as_deref(), family_ids, repetitions)
             }
-        } else {
-            match base.run_query(query, repetitions) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    retain_workspaces(&base_workspaces);
-                    return Err(error);
+            None => {
+                let base = base_workspaces
+                    .iter()
+                    .find(|(fixture_id, _)| fixture_id == &query.fixture_id)
+                    .map(|(_, workspace)| workspace)
+                    .ok_or_else(|| {
+                        format!(
+                            "query '{}' references unindexed fixture '{}'",
+                            query.query_id, query.fixture_id
+                        )
+                    })?;
+                if let Some(mutation) = &query.mutation {
+                    let fixture = corpus
+                        .fixtures
+                        .iter()
+                        .find(|fixture| fixture.fixture_id == query.fixture_id)
+                        .ok_or_else(|| {
+                            "mutation query references an unknown fixture".to_string()
+                        })?;
+                    let source = fs::canonicalize(root.join(&fixture.root))
+                        .map_err(|_| "fixture root is unavailable".to_string())?;
+                    let mutation_workspace = match EvalWorkspace::new(&binary, &source) {
+                        Ok(workspace) => workspace,
+                        Err(error) => {
+                            retain_workspaces(&base_workspaces);
+                            return Err(error);
+                        }
+                    };
+                    let run = (|| {
+                        mutation_workspace.init()?;
+                        mutation_workspace.resync()?;
+                        mutation_workspace.apply_mutation(mutation)?;
+                        mutation_workspace.run_query(query, repetitions)
+                    })();
+                    match run {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            mutation_workspace.retain();
+                            retain_workspaces(&base_workspaces);
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    match base.run_query(query, repetitions) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            retain_workspaces(&base_workspaces);
+                            return Err(error);
+                        }
+                    }
                 }
             }
         };
@@ -3606,11 +3935,14 @@ fn run_product_eval(
         "latency_ms_p50": percentile(&all_latencies, 50),
         "latency_ms_p95": percentile(&all_latencies, 95),
         "false_family_selections": false_family_selections,
+        "selected_on_abstention_gold": metrics.selected_on_abstention_gold,
         "metrics": metrics.to_value(),
     });
 
     let results = serde_json::json!({
         "schema_version": PRODUCT_EVAL_RESULTS_SCHEMA,
+        "condition": condition,
+        "baseline": baseline.map(EvalBaseline::as_str),
         "repogrammar_commit": commit,
         "platform": { "os": env::consts::OS, "arch": env::consts::ARCH },
         "corpus_schema_version": PRODUCT_EVAL_CORPUS_SCHEMA,
@@ -3638,10 +3970,11 @@ fn run_product_eval(
 
     let mut report = String::new();
     report.push_str(&format!(
-        "product-eval corpus {} at commit {} ({} repetitions)\n",
+        "product-eval corpus {} at commit {} ({} repetitions, condition {})\n",
         corpus_relative_path(root, &corpus_absolute, corpus_path),
         commit,
-        repetitions
+        repetitions,
+        condition,
     ));
     report.push_str(&format!(
         "{:<34}{:<22}{:<10}{:>8}\n",
@@ -3653,9 +3986,10 @@ fn run_product_eval(
         ));
     }
     report.push_str(&format!(
-        "summary: {total} queries, {matches} match, {mismatches} mismatch | p50 {}ms p95 {}ms | false_family_selections {false_family_selections}\n",
+        "summary: {total} queries, {matches} match, {mismatches} mismatch | p50 {}ms p95 {}ms | false_family_selections {false_family_selections} | selected_on_abstention_gold {}\n",
         percentile(&all_latencies, 50),
         percentile(&all_latencies, 95),
+        metrics.selected_on_abstention_gold,
     ));
     report.push_str(&format!(
         "metrics: hit@1 {}/{} | candidate_recall {}/{} | mrr {} | correct_abstention {}/{} | false_family_rate {}/{} | unsupported_rejection {}/{} | ambiguity_precision {}/{}\n",
@@ -7041,16 +7375,45 @@ verify-stable-release-evidence --evidence-dir evidence
         // Selected satisfies gold -> rank 1.
         assert_eq!(reciprocal_rank(&expected, &sample_found_actual()), 1.0);
 
-        // Not selected, gold appears second in the candidate list -> 1/2.
-        let ranked = EvalActual {
-            selected_family: None,
+        // Committed a wrong selection (outcome ok), gold appears second in the
+        // candidate list -> 1/2. MRR credits the committed ranking.
+        let committed_ranked = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
             candidate_families: vec![
                 "family:python:pydantic_model:framework_pydantic_model".to_string(),
                 "family:python:fastapi_route:framework_fastapi_route".to_string(),
             ],
+            ..sample_found_actual()
+        };
+        assert_eq!(reciprocal_rank(&expected, &committed_ranked), 0.5);
+
+        // Abstention outcome scores 0 even when gold sits in the candidate list:
+        // MRR measures the committed answer, not list construction.
+        let abstained_with_gold = EvalActual {
+            candidate_families: vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string()
+            ],
             ..abstain_actual()
         };
-        assert_eq!(reciprocal_rank(&expected, &ranked), 0.5);
+        assert_eq!(reciprocal_rank(&expected, &abstained_with_gold), 0.0);
+
+        // Gold only beyond the top-K committed candidates -> 0 (K = 5).
+        let mut deep_candidates: Vec<String> = (0..5)
+            .map(|index| format!("family:python:pydantic_model:framework_pydantic_model_{index}"))
+            .collect();
+        deep_candidates.push("family:python:fastapi_route:framework_fastapi_route".to_string());
+        let committed_deep = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ),
+            candidate_families: deep_candidates,
+            ..sample_found_actual()
+        };
+        assert_eq!(reciprocal_rank(&expected, &committed_deep), 0.0);
 
         // Gold absent entirely -> 0.
         assert_eq!(reciprocal_rank(&expected, &abstain_actual()), 0.0);
@@ -7075,6 +7438,14 @@ verify-stable-release-evidence --evidence-dir evidence
         assert!(candidate_recall_satisfied(&includes, &both));
         let only_one = vec!["family:python:fastapi_route:framework_fastapi_route".to_string()];
         assert!(!candidate_recall_satisfied(&includes, &only_one));
+
+        // A prefix matched only beyond the top-K candidates does not count (K = 5).
+        let mut deep = vec!["family:python:fastapi_route:framework_fastapi_route".to_string()];
+        for index in 0..5 {
+            deep.push(format!("family:python:filler_{index}:framework_filler"));
+        }
+        deep.push("family:python:pydantic_model:framework_pydantic_model".to_string());
+        assert!(!candidate_recall_satisfied(&includes, &deep));
     }
 
     #[test]
@@ -7185,6 +7556,9 @@ verify-stable-release-evidence --evidence-dir evidence
         // no false family selections anywhere.
         assert_eq!(metrics.false_family_selections, 0);
         assert_eq!(metrics.family_constrained_total, 2);
+        // Every abstention-gold query here correctly abstains: no confident wrong
+        // selections on abstention gold.
+        assert_eq!(metrics.selected_on_abstention_gold, 0);
         // Unsupported rejection: the one unsupported_concept query is unknown.
         assert_eq!(
             (
@@ -7222,5 +7596,337 @@ verify-stable-release-evidence --evidence-dir evidence
         assert!(value["false_family_rate"].is_null());
         assert!(value["unsupported_rejection_rate"].is_null());
         assert!(value["ambiguity_precision"].is_null());
+    }
+
+    #[test]
+    fn product_eval_condition_token_validation() {
+        for valid in [
+            "product",
+            "baseline_token_overlap",
+            "ablation-1",
+            "abc123",
+            &"a".repeat(40),
+        ] {
+            assert_eq!(
+                validate_condition_token(valid).expect("token accepted"),
+                valid
+            );
+        }
+        for invalid in [
+            "",
+            "Product",
+            "has space",
+            "a.b",
+            "trailing\n",
+            "-leading",
+            "--baseline",
+            "-",
+            &"a".repeat(41),
+        ] {
+            assert!(
+                validate_condition_token(invalid).is_err(),
+                "expected '{invalid}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn product_eval_baseline_token_maps_to_default_condition() {
+        assert_eq!(
+            EvalBaseline::from_token("token-overlap").expect("baseline token"),
+            EvalBaseline::TokenOverlap
+        );
+        assert!(EvalBaseline::from_token("bm25").is_err());
+        assert_eq!(
+            EvalBaseline::TokenOverlap.default_condition(),
+            "baseline_token_overlap"
+        );
+        assert_eq!(EvalBaseline::TokenOverlap.as_str(), "token-overlap");
+    }
+
+    #[test]
+    fn product_eval_resolve_condition_couples_baseline_and_condition() {
+        // Defaults: plain product, and a baseline's own default condition.
+        assert_eq!(
+            resolve_eval_condition(None, None).expect("product default"),
+            "product"
+        );
+        assert_eq!(
+            resolve_eval_condition(None, Some(EvalBaseline::TokenOverlap))
+                .expect("baseline default"),
+            "baseline_token_overlap"
+        );
+        // An explicit token wins verbatim, with or without a baseline.
+        assert_eq!(
+            resolve_eval_condition(Some("ablation-1".to_string()), None).expect("explicit"),
+            "ablation-1"
+        );
+        assert_eq!(
+            resolve_eval_condition(
+                Some("ablation-1".to_string()),
+                Some(EvalBaseline::TokenOverlap)
+            )
+            .expect("labeled baseline"),
+            "ablation-1"
+        );
+        // Explicit `product` alone is fine; with a baseline it is rejected.
+        assert_eq!(
+            resolve_eval_condition(Some("product".to_string()), None).expect("explicit product"),
+            "product"
+        );
+        assert!(resolve_eval_condition(
+            Some("product".to_string()),
+            Some(EvalBaseline::TokenOverlap)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn product_eval_selected_on_abstention_gold_counts_confident_wrong_selections() {
+        // Abstention gold where a family is nonetheless selected: counted, even
+        // though the query declares no family constraint so false_family stays 0.
+        let abstention_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            ..EvalExpected::default()
+        };
+        let selected_actual = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        // A correctly abstaining run on the same gold is not counted.
+        let abstained_actual = abstain_actual();
+        let records = vec![
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "typo_unsafe",
+                expected: &abstention_expected,
+                actual: &selected_actual,
+                is_match: false,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "ambiguous",
+                expected: &abstention_expected,
+                actual: &abstained_actual,
+                is_match: true,
+            },
+        ];
+        let metrics = compute_product_eval_metrics(&records);
+        assert_eq!(metrics.selected_on_abstention_gold, 1);
+        assert_eq!(metrics.false_family_selections, 0);
+        assert_eq!(metrics.family_constrained_total, 0);
+        assert_eq!(metrics.to_value()["selected_on_abstention_gold"], 1);
+    }
+
+    #[test]
+    fn product_eval_baseline_tokenize_lowercases_splits_and_dedups() {
+        assert_eq!(
+            baseline_tokenize("How are FastAPI routes implemented?"),
+            vec!["how", "are", "fastapi", "routes", "implemented"]
+        );
+        // `py` (2 chars) and `3` (1 char) fall below the minimum length.
+        assert_eq!(baseline_tokenize("app.py:3"), vec!["app"]);
+        // The repeated `fastapi`/`route` tokens are recorded once each.
+        assert_eq!(
+            baseline_tokenize("family:python:fastapi_route:framework_fastapi_route"),
+            vec!["family", "python", "fastapi", "route", "framework"]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_score_counts_distinct_substring_tokens() {
+        let tokens = vec![
+            "fastapi".to_string(),
+            "route".to_string(),
+            "xyz".to_string(),
+        ];
+        assert_eq!(
+            baseline_family_score(
+                &tokens,
+                "family:python:fastapi_route:framework_fastapi_route"
+            ),
+            2
+        );
+        assert_eq!(
+            baseline_family_score(
+                &tokens,
+                "family:python:pydantic_model:framework_pydantic_model"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_selects_unique_argmax_above_threshold() {
+        let tokens = baseline_tokenize("family:python:fastapi_route:framework_fastapi_route");
+        let families = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model".to_string(),
+        ];
+        let selection = baseline_select_family(&tokens, &families);
+        assert_eq!(
+            selection.selected_family.as_deref(),
+            Some("family:python:fastapi_route:framework_fastapi_route")
+        );
+        // Both families share the structural `family`/`python` tokens, so both are
+        // ranked candidates; the fastapi family sorts first on its higher score.
+        assert_eq!(
+            selection.candidate_families,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                "family:python:pydantic_model:framework_pydantic_model".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_abstains_on_strict_tie() {
+        // Only the structural prefix tokens match, and they match both families
+        // equally, so the strict-tie rule abstains while still listing candidates.
+        let tokens = vec!["family".to_string(), "python".to_string()];
+        let families = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model".to_string(),
+        ];
+        let selection = baseline_select_family(&tokens, &families);
+        assert!(selection.selected_family.is_none());
+        assert_eq!(selection.candidate_families.len(), 2);
+    }
+
+    #[test]
+    fn product_eval_baseline_abstains_below_threshold() {
+        // A unique max of 1 is below the score-of-2 selection threshold.
+        let tokens = vec!["fastapi".to_string()];
+        let families = vec![
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "family:python:pydantic_model:framework_pydantic_model".to_string(),
+        ];
+        let selection = baseline_select_family(&tokens, &families);
+        assert!(selection.selected_family.is_none());
+        assert_eq!(
+            selection.candidate_families,
+            vec!["family:python:fastapi_route:framework_fastapi_route".to_string()]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_ranking_is_deterministic_and_capped() {
+        let tokens = vec!["alpha".to_string(), "beta".to_string()];
+        let families: Vec<String> = (0..7).map(|index| format!("alpha_beta_{index}")).collect();
+        let mut shuffled = families.clone();
+        shuffled.reverse();
+        let forward = baseline_select_family(&tokens, &families);
+        let reversed = baseline_select_family(&tokens, &shuffled);
+        // Seven families tie at score 2, so selection abstains; the candidate list
+        // is capped at five and ordered by id regardless of input order.
+        assert!(forward.selected_family.is_none());
+        assert_eq!(forward.candidate_families, reversed.candidate_families);
+        assert_eq!(
+            forward.candidate_families,
+            vec![
+                "alpha_beta_0".to_string(),
+                "alpha_beta_1".to_string(),
+                "alpha_beta_2".to_string(),
+                "alpha_beta_3".to_string(),
+                "alpha_beta_4".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn product_eval_baseline_actual_projects_outcome() {
+        let selected = baseline_actual(
+            BaselineSelection {
+                selected_family: Some("family:python:fastapi_route:x".to_string()),
+                candidate_families: vec!["family:python:fastapi_route:x".to_string()],
+            },
+            Some("gen-000002".to_string()),
+        );
+        assert_eq!(selected.outcome, EvalOutcome::Ok);
+        assert_eq!(selected.candidate_family_count, 1);
+        assert!(selected.route.is_none());
+        assert!(selected.unknown_reason.is_none());
+        assert_eq!(selected.active_generation.as_deref(), Some("gen-000002"));
+
+        let abstained = baseline_actual(
+            BaselineSelection {
+                selected_family: None,
+                candidate_families: Vec::new(),
+            },
+            None,
+        );
+        assert_eq!(abstained.outcome, EvalOutcome::Unknown);
+        assert!(abstained.selected_family.is_none());
+    }
+
+    #[test]
+    fn product_eval_results_serialize_condition_and_baseline_fields() {
+        // Build a results document with the same top-level and summary shape
+        // `run_product_eval` emits, so the new provenance/safety fields are
+        // asserted end-to-end through real serialization (no product binary).
+        let abstention_expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            ..EvalExpected::default()
+        };
+        let selected_actual = EvalActual {
+            outcome: EvalOutcome::Ok,
+            selected_family: Some(
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            ),
+            ..sample_found_actual()
+        };
+        let records = vec![EvalMetricRecord {
+            intent: Some(EvalIntent::Abstention),
+            kind: "typo_unsafe",
+            expected: &abstention_expected,
+            actual: &selected_actual,
+            is_match: false,
+        }];
+        let metrics = compute_product_eval_metrics(&records);
+
+        let build = |baseline: Option<EvalBaseline>,
+                     explicit: Option<String>|
+         -> serde_json::Value {
+            let condition = resolve_eval_condition(explicit, baseline).expect("condition resolves");
+            serde_json::json!({
+                "schema_version": PRODUCT_EVAL_RESULTS_SCHEMA,
+                "condition": condition,
+                "baseline": baseline.map(EvalBaseline::as_str),
+                "repetitions": 1,
+                "summary": {
+                    "total": 1,
+                    "false_family_selections": metrics.false_family_selections,
+                    "selected_on_abstention_gold": metrics.selected_on_abstention_gold,
+                    "metrics": metrics.to_value(),
+                },
+            })
+        };
+
+        // Baseline run: condition defaults, baseline field names the control, and
+        // the safety counter is surfaced both at summary top level and in metrics.
+        let baseline_doc = build(Some(EvalBaseline::TokenOverlap), None);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&baseline_doc).expect("serialize"))
+                .expect("parse");
+        assert_eq!(parsed["schema_version"], PRODUCT_EVAL_RESULTS_SCHEMA);
+        assert_eq!(parsed["condition"], "baseline_token_overlap");
+        assert_eq!(parsed["baseline"], "token-overlap");
+        assert_eq!(parsed["summary"]["selected_on_abstention_gold"], 1);
+        assert_eq!(
+            parsed["summary"]["metrics"]["selected_on_abstention_gold"],
+            1
+        );
+        assert_eq!(parsed["summary"]["metrics"]["false_family_selections"], 0);
+
+        // Product run: baseline field is explicit null.
+        let product_doc = build(None, None);
+        let parsed_product: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&product_doc).expect("serialize"))
+                .expect("parse");
+        assert_eq!(parsed_product["condition"], "product");
+        assert!(parsed_product["baseline"].is_null());
     }
 }

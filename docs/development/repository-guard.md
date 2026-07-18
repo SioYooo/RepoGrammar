@@ -10,7 +10,7 @@ cargo run --quiet --bin repo-guard -- check
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
-cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>]
+cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap]
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- smoke-npm-package --tarball <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version>
@@ -99,10 +99,16 @@ complete.
 report-only measurement infrastructure separate from the release gates: it
 changes no production behavior and never modifies the real repository. Given a
 committed query corpus (`--corpus`) it indexes each fixture in an isolated
-temporary workspace, drives the product binary through the corpus queries, and
-writes `product-eval-results.json` under `--out`. `--repetitions` (default 3)
-sets per-query latency samples and `--bin` overrides the product binary
-(otherwise the sibling `repogrammar` next to `repo-guard` is used). Mismatches
+temporary workspace and writes `product-eval-results.json` under `--out`. In the
+default `product` condition it drives the product binary through each corpus
+query; with `--baseline token-overlap` it instead runs a naive deterministic
+control that, per fixture, only indexes (`init`+`resync`) and fetches the
+`families --json` listing once, then scores each query by token overlap without
+driving the product. `--condition <token>` tags the recorded condition verbatim
+(for product-side ablation runs); a top-level `baseline` field records the control
+independently. `--repetitions` (default 3) sets per-query latency samples and
+`--bin` overrides the product binary (otherwise the sibling `repogrammar` next to
+`repo-guard` is used). Mismatches
 are baseline data, so the command exits `0` on completion and nonzero only on a
 harness error such as a missing binary, an unparseable corpus, a subprocess
 failure, or non-JSON query output. The corpus, result schema, and current

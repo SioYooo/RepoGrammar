@@ -960,7 +960,8 @@ infrastructure and changes no production behavior.
 ```text
 cargo run --quiet --bin repo-guard -- product-eval \
   --corpus src/fixtures/evaluation/query-corpus-v1.json \
-  --out <output-dir> [--repetitions <n>] [--bin <path-to-repogrammar>]
+  --out <output-dir> [--repetitions <n>] [--bin <path-to-repogrammar>] \
+  [--condition <token>] [--baseline token-overlap]
 ```
 
 For each corpus fixture the harness copies the committed fixture root into an
@@ -973,11 +974,14 @@ When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
 next to `repo-guard`; both build into the same target directory.
 
 The run writes `<output-dir>/product-eval-results.json`
-(`schema_version: product-eval-results.v2`) with per-fixture `resync` latency
+(`schema_version: product-eval-results.v2`) with top-level `condition` and
+`baseline` provenance tags
+(see [Run conditions and the token-overlap baseline](#run-conditions-and-the-token-overlap-baseline)),
+per-fixture `resync` latency
 and discovered/stored counts, per-query expected/actual/`match`/mismatch-field
 detail with all repetition latencies, and a summary of matches, per-kind and
-per-intent counts, p50/p95 latency, `false_family_selections`, and a `metrics`
-object. Each result also carries `intent`, `reciprocal_rank` (retrieval queries
+per-intent counts, p50/p95 latency, the `false_family_selections` and
+`selected_on_abstention_gold` safety counters, and a `metrics` object. Each result also carries `intent`, `reciprocal_rank` (retrieval queries
 only), and the actual's null-tolerant `hydrated_family_count` and
 `retrieval_stage_count` placeholders. Mismatches are baseline data, so the
 command exits `0` when the run completes; it exits nonzero only on a genuine
@@ -1023,21 +1027,104 @@ numerator/denominator (a rate over an empty denominator serializes as `null`):
 - `hit_at_1` — over retrieval-intent queries, the fraction whose selected family
   satisfies the family gold.
 - `candidate_recall` — over queries with `candidates_include`, the fraction where
-  every listed prefix is matched by some actual candidate family.
-- `mrr` — over retrieval-intent queries, mean reciprocal rank of the first
-  gold-satisfying id (the selected family is rank 1; a gold id in the candidate
-  list contributes `1/rank`; absence contributes `0`).
+  every listed prefix is matched by some candidate family within the first
+  `K = 5` candidates. `candidate_recall` measures list construction and is scored
+  whether or not the run commits a single family.
+- `mrr` — over retrieval-intent queries, mean reciprocal rank of the *committed*
+  answer. Only a run that commits (an `ok`/`partial_context` outcome) scores: its
+  selected family, when it satisfies gold, is rank 1, otherwise the first
+  gold-satisfying id within the first `K = 5` candidates contributes `1/rank`. A
+  run that abstains (`unknown`/`fallback`) scores `0` regardless of what its
+  diagnostic candidate list held — MRR is the committed-answer metric, distinct
+  from `candidate_recall`. The candidate depth `K = 5` is applied identically for
+  every condition (the product's list is truncated to five; the baseline already
+  reports at most five).
 - `correct_abstention_rate` — over abstention-intent queries, the fraction whose
   actual outcome is `unknown`.
 - `false_family_rate` — `false_family_selections` divided by the number of
-  queries that declare a family constraint; the absolute count is kept.
+  queries that declare a family constraint; the absolute count is kept. A query
+  whose gold is an abstention carries no family constraint, so a confident wrong
+  selection there is invisible to this metric (see `selected_on_abstention_gold`).
+- `selected_on_abstention_gold` — a safety counter, reported both in `metrics` and
+  at `summary` top level: the number of queries whose gold outcome is `unknown`
+  (no family should be committed) where the run nonetheless selected a family. It
+  is the abstention-side complement of `false_family_selections`; together they
+  cover confident wrong selection on both retrieval and abstention gold. It is not
+  a rate.
 - `unsupported_rejection_rate` — over `unsupported_concept` queries, the fraction
   that abstain.
 - `ambiguity_precision` — over abstention-intent `ambiguous`/`nl_pattern_question`
   queries, the fraction that abstain.
 
 `summary.by_intent` reports per-intent `{total, matches}` totals alongside the
-existing `summary.by_kind`.
+existing `summary.by_kind`. `summary.false_family_selections` and
+`summary.selected_on_abstention_gold` are surfaced at the summary top level as
+the two confident-wrong-selection safety counters.
+
+### Run conditions and the token-overlap baseline
+
+Every results document carries two top-level provenance fields — a `condition`
+string that names what was measured, and a `baseline` field (`"token-overlap"` or
+`null`) that names the control independently of the condition label — so product,
+ablation, and baseline runs over the same corpus are stored distinctly under one
+schema:
+
+- The default condition is `product` (the product runtime drives every query),
+  with `baseline: null`.
+- `--condition <token>` records an explicit condition verbatim. The token is
+  low-cardinality and validated as `[a-z0-9_-]+` up to 40 characters, and must not
+  start with `-` (so a forgotten flag value such as `--condition --baseline` is a
+  hard error, not a silently accepted token). Use it to tag an ablation run (the
+  product built with ablation env/flags); the harness records the tag but does not
+  itself change product behavior.
+- `--baseline token-overlap` runs the naive control described below, sets
+  `baseline: "token-overlap"`, and defaults the condition to
+  `baseline_token_overlap`. An explicit `--condition` still wins, so a labeled
+  baseline ablation is possible — but `--condition product` with a baseline is
+  rejected with a typed error, because a baseline is not the product.
+
+The token-overlap baseline is an honest naive lower bound evaluated on the same
+corpus gold and emitted in the same `product-eval-results.v2` schema. It indexes
+each fixture through the same isolated `init`+`resync` flow, then fetches the
+product's `families --json` listing once per fixture. For each query it does not
+drive the product; instead it:
+
+1. lowercases the query target, splits it on non-ASCII-alphanumeric characters,
+   drops tokens shorter than three characters, and deduplicates them;
+2. scores each family by the count of distinct query tokens that are substrings of
+   its `family_id` (the id embeds language/kind/role tokens);
+3. selects the unique argmax when its score is at least two, abstaining on a strict
+   tie at the maximum or a sub-threshold maximum; and
+4. reports its own candidate ranking (families with a positive score, ordered by
+   score then id, capped at the shared `K = 5`) so the same `hit@1`, `mrr`,
+   `candidate_recall`, abstention, `false_family`, and `selected_on_abstention_gold`
+   metrics are computed against the shared gold.
+
+The baseline has no aliases, concepts, margin calibration, route, or typed unknown
+reason. It also never receives the per-query source mutations: a stale-evidence
+query is graded against gold the baseline cannot observe, which penalizes the
+baseline only — a recorded asymmetry, not a defect. It exists only to contrast the
+product against a deterministic lower bound and must never be tuned to flatter or
+diminish either side; its metric line is recorded exactly as produced.
+
+Tie-abstention does **not** make the baseline safe from confident wrong selection:
+a query whose distinct tokens uniquely clear the threshold is selected even when the
+gold is an abstention — for example the unsafe-typo target `fastapi_rout` scores two
+(`fastapi`, `rout`) against the FastAPI family alone and is selected, which the
+product correctly abstains on. The baseline's weakness therefore surfaces as lower
+`hit_at_1`, `candidate_recall`, and context coverage, as a lower
+`correct_abstention_rate`, and as a nonzero `selected_on_abstention_gold`. A
+`false_family_selections` of `0` is corpus-contingent — the abstention-intent
+queries carry no family constraint, so wrong selections on them land in
+`selected_on_abstention_gold`, not `false_family_selections` — and is not a design
+guarantee of the baseline.
+
+The `matches`/`by_kind`/`by_intent` verdict counts and the latency figures are
+**not** comparable across conditions: verdict counts include route and
+unknown-reason fields the baseline never produces (so its `matches` is
+mechanically lower), and the baseline's per-query latency measures in-process
+scoring rather than a product subprocess (near `0 ms`). Compare conditions on the
+retrieval metrics and the two safety counters, not on `matches` or latency.
 
 ## Required local gate
 
