@@ -287,13 +287,18 @@ git -C "$DEMO_REPO" diff -- \
 docker compose -f "$DEMO_REPO/compose.yml" \
   -f "$DEMO_REPO/compose.override.yml" up -d --wait
 docker compose -f "$DEMO_REPO/compose.yml" \
+  -f "$DEMO_REPO/compose.override.yml" cp \
+  "$DEMO_REPO/backend/tests" backend:/app/backend/tests
+docker compose -f "$DEMO_REPO/compose.yml" \
   -f "$DEMO_REPO/compose.override.yml" exec backend \
-  bash scripts/tests-start.sh -x tests/api/routes/test_items.py
+  pytest -x tests/api/routes/test_items.py
 ```
 
 If the selected implementation does not need a model change, an empty
 `backend/app/models.py` diff is expected. Test success is target-repository
-runtime evidence; RepoGrammar's later certificate remains static-only.
+runtime evidence; RepoGrammar's later certificate remains static-only. The
+explicit `compose cp` is required because the target's production-oriented
+backend image does not copy its test tree.
 
 ## 6. Controlled stale-evidence rejection and explicit sync
 
