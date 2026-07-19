@@ -59,6 +59,10 @@ or measured-token-savings claim.
 - Removed stale public-release evidence that incorrectly associated the
   `v0.2.2` finalizer run `29591027524` with the unpublished `v0.3.2`
   candidate.
+- Pinned every `dtolnay/rust-toolchain` workflow step to reviewed commit
+  `4cda84d5c5c54efe2404f9d843567869ab1699d4`, kept the requested toolchain
+  explicit, and added a repository-guard regression so a mutable third-party
+  action ref cannot silently return.
 
 ## 0.3.2 — 2026-07-19 unpublished stable candidate
 
