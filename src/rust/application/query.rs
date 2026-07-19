@@ -65,7 +65,7 @@ const FUZZY_FAMILY_CANDIDATE_LIMIT: usize = 5;
 // residue hits can also clear the floor — the gates do not structurally require
 // a framework signal. The winner must also clear `MIN_RETRIEVAL_MARGIN` over any
 // competing family that itself clears the floor. Every other case abstains.
-// Calibrated against the v1 product-eval corpus (73 queries). See
+// Calibrated against the v1 product-eval corpus (79 queries). See
 // `docs/specifications/query-resolution.md`.
 // ---------------------------------------------------------------------------
 
@@ -6412,7 +6412,7 @@ pub const PRODUCT_SCHEMA_VERSION: &str = "product-schemas.v1";
 /// Committed query-retrieval vocabulary version (the small normalized-query
 /// tables in `query_terms`). Reported so consumers can detect a vocabulary change
 /// across index generations.
-const QUERY_RETRIEVAL_VOCABULARY_VERSION: &str = "query-vocabulary.v1";
+const QUERY_RETRIEVAL_VOCABULARY_VERSION: &str = "query-vocabulary.v2";
 
 /// Bounded cap on the top blocking-unknown mechanisms surfaced with the report.
 const READINESS_TOP_UNKNOWN_LIMIT: usize = 5;
@@ -8702,7 +8702,7 @@ mod tests {
         assert_eq!(value["family_evidence"]["stale_count"], 2);
         assert_eq!(
             value["query_retrieval"]["vocabulary_version"],
-            "query-vocabulary.v1"
+            "query-vocabulary.v2"
         );
         assert_eq!(value["measurement"]["token_saving_status"], "NOT_MEASURED");
         assert_eq!(value["recovery"]["executable"], true);
@@ -12455,6 +12455,70 @@ mod tests {
             term_route(&junk).abstention_reason,
             Some(TermRetrievalAbstention::NoCandidate)
         );
+    }
+
+    #[test]
+    fn term_retrieval_resolves_qualified_test_phrases_without_broadening_decoys() {
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:python:pytest_fixture:framework_pytest_fixture",
+                "framework:pytest.fixture",
+                "DOMINANT_PATTERN",
+                "tests/conftest.py",
+            ),
+            term_family(
+                "family:python:pytest_test:framework_pytest_test",
+                "framework:pytest.test",
+                "DOMINANT_PATTERN",
+                "tests/test_users.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+
+        for (target, expected_family) in [
+            (
+                "How are test fixtures defined?",
+                "family:python:pytest_fixture:framework_pytest_fixture",
+            ),
+            (
+                "unit tests",
+                "family:python:pytest_test:framework_pytest_test",
+            ),
+            (
+                "test cases",
+                "family:python:pytest_test:framework_pytest_test",
+            ),
+        ] {
+            let report = run_term_retrieval(
+                &family_freshness_request(),
+                &store,
+                &source,
+                target,
+                "gen-000001",
+            )
+            .expect("qualified term retrieval");
+            let FamilyLookupReport::Found(family) = &report else {
+                panic!("expected Found for {target}, got {report:?}");
+            };
+            assert_eq!(family.family_id, expected_family, "{target}");
+            assert_eq!(term_route(&report).top_score, Some(MIN_RETRIEVAL_SCORE));
+        }
+
+        for target in ["pytset fixture", "How are tests written?"] {
+            let report = run_term_retrieval(
+                &family_freshness_request(),
+                &store,
+                &source,
+                target,
+                "gen-000001",
+            )
+            .expect("decoy term retrieval");
+            assert_eq!(
+                term_route(&report).abstention_reason,
+                Some(TermRetrievalAbstention::BelowMinScore),
+                "{target}"
+            );
+        }
     }
 
     #[test]

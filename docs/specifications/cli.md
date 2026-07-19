@@ -270,12 +270,16 @@ builds or refreshes the active index by default.
 agents that have permission to create repo-local analysis state. It must run the
 normal init path, then run the same static-analysis path as
 `repogrammar resync`. `--resync` remains accepted as an explicit spelling of
-that default. `repogrammar init --autosync` must start auto-sync only after the
-default resync path produces a readable active generation. `--state-only`
-preserves lifecycle-only repair behavior: it creates or repairs repo-local
-state, must not run indexing, and must not start auto-sync. `init --state-only
---resync` and `init --state-only --autosync` must fail cleanly before creating
-state.
+that default. After the resync path produces a readable active generation,
+`init` starts repo-local auto-sync by default. `--no-autosync` explicitly keeps
+the successful active index without starting a background daemon; `--autosync`
+remains accepted as an explicit compatibility spelling of the default. The two
+auto-sync preference flags are mutually exclusive and must fail cleanly before
+creating state when combined. `--state-only` preserves lifecycle-only repair
+behavior: it creates or repairs repo-local state, must not run indexing, and
+must not start auto-sync. `init --state-only --resync` and `init --state-only
+--autosync` must fail cleanly before creating state; `init --state-only
+--no-autosync` is accepted as a redundant safe opt-out.
 
 JSON output for bootstrap must preserve the existing top-level init fields and
 include `resync` and `autosync` sub-results where applicable. If indexing fails
@@ -283,7 +287,9 @@ after state initialization, the error must preserve repo-local state, preserve
 any previously valid active generation, and guide the user to fix the indexing
 issue and run `repogrammar resync`. If auto-sync start fails after a successful
 resync, the JSON error must preserve the valid `resync` sub-result and must not
-roll back the active generation.
+roll back the active generation. Because auto-sync is the default, this partial
+failure contract applies to an unflagged `init` as well as explicit
+`init --autosync`.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive
@@ -364,6 +370,13 @@ mixed layout while retaining the mutable database as the active read source.
 Manifest status must be based on parsed JSON fields, not literal text layout,
 so valid reordered manifests are accepted and malformed required fields are
 reported as corrupted.
+Status and doctor must compare the inspected storage schema with the running
+binary's schema authority before reporting storage available or queries ready.
+An older stored schema is unhealthy with `repogrammar resync` guidance from the
+current binary. A stored schema newer than the binary is also unhealthy, but its
+guidance is to upgrade RepoGrammar and explicitly not to resync with the older
+binary; an old executable must never destroy a newer derived index while
+pretending to repair it.
 
 Status JSON must include a source-free `readiness` object so humans and agents
 can decide whether RepoGrammar can answer repository-local queries right now.
@@ -507,16 +520,19 @@ Python and conservative TS/JS exact-anchor derivation may also add separate
 bounded RepoGrammar support/context facts, not compiler/provider-backed facts.
 `sync` attempts a path-level incremental rebuild when the active generation is
 readable, mutable, schema-compatible, and dirty-free, no explicit semantic
-worker is configured, and the delta does not touch project-context files or
-source inventories such as any `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, or `.rs`
-file, TS/JS project config files, `pyproject.toml`, `conftest.py`,
-`setup.cfg`, root `setup.py`, `Cargo.toml`, or `Cargo.lock`. Incremental
-`sync` discovers the
-current manifest, copies unchanged active file/code-unit/IR/semantic records
-into a new building generation without reparsing those paths, reparses added
-and modified paths, omits removed paths, recomputes local derived support and
-families over the new generation, validates dirty/dependency state, and then
-activates the new generation. If a safe precondition is not met, `sync` must
+worker is configured, and the delta passes the project-context gate. Safe
+content-only edits of Rust and TS/JS sources and interface-stable Python modules
+may reparse only the changed paths; source-set changes and project-config,
+`conftest.py`, or unverifiable/interface-changing Python edits fall back as
+specified by the indexing pipeline. After those preconditions pass, a zero
+delta retains the existing validated active generation and reports zero
+copied-forward files, reparses, and family recomputations; it does not create a
+redundant generation. For a non-empty safe delta, sync copies unchanged active
+file/code-unit/IR/semantic records into a new building generation without
+reparsing those paths, reparses added and modified paths, omits removed paths,
+recomputes local derived support and families over the new generation, validates
+dirty/dependency state, and then activates the new generation. If a safe
+precondition is not met, `sync` must
 fall back to the full rebuild path and report `sync_mode:
 full_rebuild_fallback` with a `fallback_reason`.
 Inventory-only `go`, `go-config`, `php`, `php-config`, `ruby`, `ruby-config`,
@@ -624,8 +640,11 @@ supports subcommands:
 
 With no subcommand, `autosync` is equivalent to `autosync status`. `start`
 enables auto-sync for the current repository if needed and launches a
-background `repogrammar autosync run` worker. Before enabling or launching a
-new background worker, `start` validates the inherited semantic-worker
+background `repogrammar autosync run` worker. Normal `repogrammar init` already
+invokes this start path after a successful resync; the standalone command is
+the recovery path after a stop, reboot, or daemon failure, and remains
+available for repositories initialized with `--no-autosync`. Before enabling
+or launching a new background worker, `start` validates the inherited semantic-worker
 environment and reports invalid worker argv configuration synchronously rather
 than claiming the daemon started. The child first publishes a `starting`
 daemon-lock phase, then validates repository/config state, validates its own
@@ -964,6 +983,9 @@ full claim-input snapshots, or per-family detail. `stats` may report the
 repo-local aggregate
 `estimated_potential_token_savings` with event count, estimated baseline and
 returned token totals, `measurement_kind: ESTIMATED`, and a not-measured caveat.
+These values and `total_queries` come from one `family-query-metrics.v2` atomic
+cohort with an explicit epoch, start timestamp, and producer version. Legacy v1
+savings and query-outcome files are excluded because their events are unpaired.
 This aggregate is all-scope: it sums savings events across every indexed
 language and every context-delivering outcome shape (found, PARTIAL_CONTEXT, and
 committed/partial alignment certificates), not only Python found families.
@@ -974,7 +996,7 @@ same totals, `measurement_kind: ESTIMATED`, the caveat, the honest
 estimated baseline/returned/potential token counts). All existing Python-scoped
 repo-shape fields are unchanged and remain the official-scope subset; the block
 carries a note pointing to that relationship. It must also include
-`query_outcome_rollup`, a local-only source-free object
+`query_outcome_rollup`, the denominator side of that same local-only source-free cohort,
 with `rollup_scope: local_query_outcomes`, aggregate event count, status,
 entrypoint, CLI command/MCP operation category, lookup-mode, typed UNKNOWN
 class/reason/mechanism/recovery buckets, read-plan count buckets, and
@@ -1011,11 +1033,11 @@ count is zero, `scope_explanations` must include
 `recommended_next_action: use repogrammar find/check with exact repo-relative paths for PARTIAL_CONTEXT read plans`.
 The required language scopes are
 `python`/`official_v0_1`, `typescript/javascript`/`bounded_v0_2_preview`,
-`rust`/`internal_self_dogfood_preview`, and
-`java`/`bounded_v0_2_preview`. Python top-level repo-shape readiness remains
-separate from multi-language preview readiness. These diagnostics must not be
-described as React/RN family support, React/RN conformance, or measured token
-savings.
+`rust`/`bounded_v0_2_preview`, `java`/`bounded_v0_2_preview`,
+`csharp`/`bounded_v0_2_preview`, and `c/cpp`/`bounded_v0_2_preview`. Python
+top-level repo-shape readiness — including `family_count` — remains separate
+from multi-language preview readiness. These diagnostics must not be described
+as React/RN family support, React/RN conformance, or measured token savings.
 With `--unknowns --json`, stats must embed the same source-free
 persisted semantic `unknown_inventory` object produced by
 `repogrammar unknowns --json`; without `--unknowns`, that object must be
@@ -1523,6 +1545,10 @@ includes `sync_mode`, `fallback_reason`, `base_generation`, `added_files`,
 `families_added`, and `families_removed`.
 `reparsed_files` is the actual number of parser dispatches in the generation,
 not the number of changed or discovered inventory-only files.
+For the zero-delta fast path, `generation_id` equals `base_generation`,
+`sync_mode` remains `incremental`, `unchanged_files` reports the manifest size,
+and `copied_forward_files`, `reparsed_files`, and `families_recomputed` are all
+zero.
 `families_added` and `families_removed` report the cross-generation family
 identity change: each is either `null` (when the sync had no base generation to
 diff against, or did not recompute families) or an object `{ "count": <n>,

@@ -29,7 +29,7 @@ use repogrammar::application::install::{
     execute_install, execute_uninstall, inspect_agent_integration, AgentIntegrationInspection,
     AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
     McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator, NativeMcpServerConfig,
-    NativeMcpServerState, MCP_SERVER_NAME,
+    NativeMcpServerState, AGENT_PREFLIGHT_GATE, MCP_SERVER_NAME,
 };
 use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::providers::optional_provider_report;
@@ -62,7 +62,7 @@ use repogrammar::interfaces::cli::{
     CliRuntime, InstallTelemetryPrompt, ProgressMode,
 };
 use repogrammar::interfaces::mcp::{
-    serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName,
+    serve_json_lines, McpReadOnlyRuntime, McpServeContext, McpToolName, MCP_PROTOCOL_VERSION,
 };
 use repogrammar::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use repogrammar::ports::index_store::{
@@ -1971,13 +1971,40 @@ impl ProductMcpSelfTester {
             writeln!(
                 stdin,
                 "{}",
-                serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": MCP_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "repogrammar-self-test",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                    },
+                })
             )
             .map_err(|_| ProductMcpSelfTestError::Failed)?;
             writeln!(
                 stdin,
                 "{}",
-                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"shutdown"})
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                })
+            )
+            .map_err(|_| ProductMcpSelfTestError::Failed)?;
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})
+            )
+            .map_err(|_| ProductMcpSelfTestError::Failed)?;
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0","id":3,"method":"shutdown"})
             )
             .map_err(|_| ProductMcpSelfTestError::Failed)?;
         }
@@ -1987,21 +2014,68 @@ impl ProductMcpSelfTester {
         }
         let stdout =
             String::from_utf8(output.stdout).map_err(|_| ProductMcpSelfTestError::Failed)?;
-        let first = stdout
-            .lines()
-            .next()
-            .ok_or(ProductMcpSelfTestError::Failed)?;
-        let value: serde_json::Value =
-            serde_json::from_str(first).map_err(|_| ProductMcpSelfTestError::Failed)?;
-        let tools = value["result"]["tools"]
-            .as_array()
-            .ok_or(ProductMcpSelfTestError::Failed)?;
-        if tools.len() == 1 && tools[0]["name"] == McpToolName::Context.as_str() {
-            Ok(())
-        } else {
-            Err(ProductMcpSelfTestError::Failed)
-        }
+        validate_product_mcp_self_test_output(&stdout)
     }
+}
+
+fn validate_product_mcp_self_test_output(stdout: &str) -> Result<(), ProductMcpSelfTestError> {
+    let responses = stdout
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .map_err(|_| ProductMcpSelfTestError::Failed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if responses.len() != 3 {
+        return Err(ProductMcpSelfTestError::Failed);
+    }
+
+    let initialize = &responses[0];
+    if initialize["id"] != 1
+        || initialize["result"]["protocolVersion"] != MCP_PROTOCOL_VERSION
+        || initialize["result"]["serverInfo"]["name"] != "repogrammar"
+        || initialize["result"]["serverInfo"]["version"] != env!("CARGO_PKG_VERSION")
+        || initialize["result"]["instructions"] != AGENT_PREFLIGHT_GATE
+    {
+        return Err(ProductMcpSelfTestError::Failed);
+    }
+
+    let tools_response = &responses[1];
+    let tools = tools_response["result"]["tools"]
+        .as_array()
+        .ok_or(ProductMcpSelfTestError::Failed)?;
+    let Some(tool) = tools.first().filter(|_| tools.len() == 1) else {
+        return Err(ProductMcpSelfTestError::Failed);
+    };
+    let operation_enum = tool["inputSchema"]["properties"]["operation"]["enum"]
+        .as_array()
+        .ok_or(ProductMcpSelfTestError::Failed)?;
+    let expected_operations = [
+        "find_analogues",
+        "show_family",
+        "explain_deviation",
+        "check_conformance",
+        "inspect_readiness",
+    ];
+    if tools_response["id"] != 2
+        || tool["name"] != McpToolName::Context.as_str()
+        || !tool["description"].is_string()
+        || tool["inputSchema"]["type"] != "object"
+        || tool["inputSchema"]["additionalProperties"] != false
+        || operation_enum.len() != expected_operations.len()
+        || !expected_operations.iter().all(|expected| {
+            operation_enum
+                .iter()
+                .any(|value| value.as_str() == Some(*expected))
+        })
+    {
+        return Err(ProductMcpSelfTestError::Failed);
+    }
+
+    if responses[2]["id"] != 3 || !responses[2]["result"].is_null() {
+        return Err(ProductMcpSelfTestError::Failed);
+    }
+    Ok(())
 }
 
 impl McpSelfTestRunner for ProductMcpSelfTester {
@@ -2258,19 +2332,15 @@ fn classify_native_agent_probe(
 ) -> Result<NativeMcpServerState, RepoGrammarError> {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
-    let expected = match target {
-        AgentTarget::Codex => format!("Error: No MCP server named '{MCP_SERVER_NAME}' found."),
-        AgentTarget::ClaudeCode => {
-            format!("No MCP server named \"{MCP_SERVER_NAME}\". Run `claude mcp add` to add one.")
-        }
-        _ => {
-            return Err(RepoGrammarError::InvalidInput(
-                "native MCP probe requires a live agent target".to_string(),
-            ));
-        }
-    };
+    if !matches!(target, AgentTarget::Codex | AgentTarget::ClaudeCode) {
+        return Err(RepoGrammarError::InvalidInput(
+            "native MCP probe requires a live agent target".to_string(),
+        ));
+    }
     if !success {
-        return if stdout.trim() == expected || stderr.trim() == expected {
+        return if native_probe_reports_not_found(target, stdout.trim())
+            || native_probe_reports_not_found(target, stderr.trim())
+        {
             Ok(NativeMcpServerState::NotFound)
         } else {
             Err(RepoGrammarError::InvalidInput(format!(
@@ -2289,6 +2359,26 @@ fn classify_native_agent_probe(
         NativeMcpServerState::Malformed,
         NativeMcpServerState::Present,
     ))
+}
+
+fn native_probe_reports_not_found(target: AgentTarget, output: &str) -> bool {
+    match target {
+        AgentTarget::Codex => {
+            output == format!("Error: No MCP server named '{MCP_SERVER_NAME}' found.")
+        }
+        AgentTarget::ClaudeCode => {
+            let prefix = format!("No MCP server named \"{MCP_SERVER_NAME}\".");
+            if output == prefix {
+                return true;
+            }
+            let Some(suffix) = output.strip_prefix(&format!("{prefix} ")) else {
+                return false;
+            };
+            suffix == "Run `claude mcp add` to add one."
+                || suffix.starts_with("Configured servers:")
+        }
+        _ => false,
+    }
 }
 
 fn parse_codex_mcp_probe(output: &str, scope: InstallScope) -> Option<NativeMcpServerConfig> {
@@ -4451,6 +4541,47 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&path, permissions).expect("set executable script mode");
         path
+    }
+
+    #[cfg(unix)]
+    fn shell_single_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+
+    fn product_mcp_self_test_stdout(
+        version: &str,
+        instructions: &str,
+        operations: &[&str],
+    ) -> String {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "repogrammar", "version": version},
+                "instructions": instructions,
+            },
+        });
+        let tools = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "tools": [{
+                    "name": McpToolName::Context.as_str(),
+                    "description": "current RepoGrammar context tool",
+                    "inputSchema": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "operation": {"type": "string", "enum": operations},
+                        },
+                    },
+                }],
+            },
+        });
+        let shutdown = serde_json::json!({"jsonrpc": "2.0", "id": 3, "result": null});
+        format!("{initialize}\n{tools}\n{shutdown}\n")
     }
 
     #[test]
@@ -9189,12 +9320,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn product_mcp_self_test_accepts_exact_context_tool_list() {
+    fn product_mcp_self_test_accepts_current_initialize_and_context_tool_contract() {
         let workspace = TempWorkspace::new("product-mcp-self-test-tools-list");
+        let stdout = product_mcp_self_test_stdout(
+            env!("CARGO_PKG_VERSION"),
+            AGENT_PREFLIGHT_GATE,
+            &[
+                "find_analogues",
+                "show_family",
+                "explain_deviation",
+                "check_conformance",
+                "inspect_readiness",
+            ],
+        );
+        let initialize = shell_single_quote(stdout.lines().next().expect("initialize response"));
+        let tools = shell_single_quote(stdout.lines().nth(1).expect("tools response"));
+        let shutdown = shell_single_quote(stdout.lines().nth(2).expect("shutdown response"));
         let script = executable_script(
             &workspace,
             "mcp-self-test.sh",
-            "#!/bin/sh\nIFS= read -r _request\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"name\":\"repogrammar_context\"}]}}'\nIFS= read -r _shutdown\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":null}'\n",
+            &format!(
+                "#!/bin/sh\nIFS= read -r _initialize\nprintf '%s\\n' {initialize}\nIFS= read -r _initialized\nIFS= read -r _tools\nprintf '%s\\n' {tools}\nIFS= read -r _shutdown\nprintf '%s\\n' {shutdown}\n"
+            ),
         );
 
         ProductMcpSelfTester::with_timeout(std::time::Duration::from_secs(1))
@@ -9202,7 +9349,41 @@ mod tests {
                 script.to_str().expect("script path utf8"),
                 workspace.path().to_str().expect("workspace path utf8"),
             )
-            .expect("exact tools/list response should pass");
+            .expect("current initialize and tools/list responses should pass");
+    }
+
+    #[test]
+    fn product_mcp_self_test_rejects_stale_version_instruction_and_tool_schema() {
+        let operations = [
+            "find_analogues",
+            "show_family",
+            "explain_deviation",
+            "check_conformance",
+            "inspect_readiness",
+        ];
+        let stale_version =
+            product_mcp_self_test_stdout("0.0.0", AGENT_PREFLIGHT_GATE, &operations);
+        assert_eq!(
+            validate_product_mcp_self_test_output(&stale_version),
+            Err(ProductMcpSelfTestError::Failed)
+        );
+
+        let stale_instruction =
+            product_mcp_self_test_stdout(env!("CARGO_PKG_VERSION"), "stale", &operations);
+        assert_eq!(
+            validate_product_mcp_self_test_output(&stale_instruction),
+            Err(ProductMcpSelfTestError::Failed)
+        );
+
+        let stale_schema = product_mcp_self_test_stdout(
+            env!("CARGO_PKG_VERSION"),
+            AGENT_PREFLIGHT_GATE,
+            &operations[..operations.len() - 1],
+        );
+        assert_eq!(
+            validate_product_mcp_self_test_output(&stale_schema),
+            Err(ProductMcpSelfTestError::Failed)
+        );
     }
 
     #[test]
@@ -9211,7 +9392,10 @@ mod tests {
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
         let runtime = ProductCliRuntime;
 
-        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--no-autosync", "--json"]),
+            &runtime,
+        );
         let value = parse_machine_output("init", &init, &workspace);
         assert_eq!(value["resync"]["generation_id"], "gen-000001");
         assert_eq!(value["resync"]["indexed_units"], 1);
@@ -9241,7 +9425,7 @@ mod tests {
         assert_eq!(product_readiness["query_retrieval"]["exact_lookup"], true);
         assert_eq!(
             product_readiness["query_retrieval"]["vocabulary_version"],
-            "query-vocabulary.v1"
+            "query-vocabulary.v2"
         );
         assert_eq!(
             product_readiness["measurement"]["token_saving_status"],
@@ -9557,11 +9741,12 @@ export class UserService {
             .join(".repogrammar")
             .join("telemetry")
             .join("local-metrics")
-            .join("estimated_potential_token_savings.json");
+            .join("family_query_metrics.json");
         let rollup: Value =
             serde_json::from_str(&fs::read_to_string(&rollup_path).expect("savings rollup"))
                 .expect("savings rollup JSON");
-        assert!(rollup["event_count"].as_u64().expect("event count") >= 1);
+        assert!(rollup["total_queries"].as_u64().expect("query count") >= 1);
+        assert!(rollup["savings_events"].as_u64().expect("event count") >= 1);
         assert_eq!(
             rollup["by_outcome_shape"]["partial_context"]["estimated_potential_token_savings"]
                 .as_u64()
@@ -10314,14 +10499,14 @@ project_includes = ["src"]
         assert_eq!(sync.status, 0);
         assert!(sync.stderr.is_empty());
         let value: Value = serde_json::from_str(sync.stdout.trim()).expect("sync JSON");
-        assert_eq!(value["generation_id"], "gen-000002");
+        assert_eq!(value["generation_id"], "gen-000001");
         assert!(
             value["semantic_facts"].as_u64().unwrap_or_default() > 3,
-            "sync should persist Python parse facts again"
+            "unchanged sync should retain Python parse facts"
         );
 
         let facts = list_semantic_facts(&store).expect("list synced semantic facts");
-        assert_eq!(facts.active_generation, "gen-000002");
+        assert_eq!(facts.active_generation, "gen-000001");
         assert!(facts.facts.iter().any(|fact| {
             fact.path == "src/acme/api.py"
                 && fact.kind == "SYMBOL"
@@ -12381,6 +12566,29 @@ pythonpath = ["src"]
         )
         .expect("exact Claude absence");
         assert_eq!(claude_absent, NativeMcpServerState::NotFound);
+
+        let current_claude_absent = classify_native_agent_probe(
+            AgentTarget::ClaudeCode,
+            InstallScope::Global,
+            false,
+            b"No MCP server named \"repogrammar\". Configured servers: codegraph, planbridge\n",
+            b"",
+        )
+        .expect("current Claude absence with server inventory");
+        assert_eq!(current_claude_absent, NativeMcpServerState::NotFound);
+
+        let claude_unexpected = classify_native_agent_probe(
+            AgentTarget::ClaudeCode,
+            InstallScope::Global,
+            false,
+            b"No MCP server named \"repogrammar\". Permission denied\n",
+            b"",
+        )
+        .expect_err("unknown Claude suffix must fail closed");
+        assert_eq!(
+            claude_unexpected.to_string(),
+            "native claude-code MCP probe failed"
+        );
 
         let codex_present = classify_native_agent_probe(
             AgentTarget::Codex,

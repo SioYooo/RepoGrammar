@@ -139,7 +139,11 @@ that adds the persisted semantic unknown inventory. It may also report the
 repo-local aggregate
 `estimated_potential_token_savings` with `measurement_kind: ESTIMATED`,
 `event_count`, aggregate estimated baseline/returned token counts, and the
-caveat that it is not measured token savings. This aggregate is all-scope: it
+caveat that it is not measured token savings. The numerator and query
+denominator come from the same `family-query-metrics.v2` epoch and
+process-serialized atomic local file replacement, so concurrent agent processes
+do not lose read-modify-write increments; legacy v1 savings and outcome files are historical unpaired
+evidence and must not be imported into the ratio. This aggregate is all-scope: it
 sums savings events across every indexed language and every context-delivering
 outcome shape (found, partial_context, alignment), not only Python found
 families. Stats additionally reports an `all_scope_token_savings` block with the
@@ -152,8 +156,9 @@ are unchanged and remain the official-scope subset; `scope_explanations` and the
 rendering leads with a concise summary (readiness, indexed inventory, family
 coverage, the all-scope savings headline, and the scope note) and moves the full
 per-metric detail behind `--json`; no JSON field is removed.
-It also reports a separate local-only `query_outcome_rollup` with
-`rollup_scope: local_query_outcomes`. That rollup counts every recorded
+It also reports the query side of the same local-only atomic cohort as
+`query_outcome_rollup` with `rollup_scope: local_query_outcomes`. That rollup
+counts every recorded
 family-query outcome by low-cardinality status, entrypoint, command or MCP
 operation category, lookup mode, typed UNKNOWN class/reason/mechanism/recovery
 bucket, read-plan count bucket, and source-span request/inclusion/omission
@@ -203,23 +208,18 @@ rather than an internal crash.
 telemetry is effectively enabled, it may update a repo-local bucketed passive
 diagnostics rollup only; disabled telemetry keeps the same diagnostics
 local-only and must not create upload queue entries.
-Context-delivering responses may update a separate repo-local aggregate
-under `.repogrammar/telemetry/local-metrics/` for
-`estimated_potential_token_savings`. A found family, a PARTIAL_CONTEXT read
-plan, and a committed or partial alignment certificate each record one savings
-event under its outcome shape; abstentions record none. The aggregate adds
-additive `by_outcome_shape` and `by_language` breakdown objects (tolerated when
-absent in files written before they existed) while keeping the same
-`estimated-potential-token-savings.v1` schema token. It is local-only and must
-not include source snippets, prompts, query text, paths, repository names,
-symbols, content hashes, byte ranges, evidence text, or raw targets.
-Family query and MCP context calls may update a second repo-local aggregate in
-the same directory for `family_query_outcomes`. That aggregate counts every
-recorded outcome (`found`, `PARTIAL_CONTEXT`, `UNKNOWN`, fallback) and is the
-`total_queries` denominator; its outcome counts are distinct from
-`estimated_potential_token_savings` events and must not be described as
-successful family hits. A single query may appear in both aggregates (for
-example a PARTIAL_CONTEXT is one query outcome and one partial_context savings
-event), but the two aggregates stay separate metrics.
+Every CLI family query and MCP context call best-effort updates one repo-local
+`.repogrammar/telemetry/local-metrics/family_query_metrics.json` rollup with
+schema `family-query-metrics.v2`. Each invocation increments `total_queries`
+exactly once and may also increment one context-delivering savings event
+(`found`, `partial_context`, or `alignment`) in the same atomic file
+replacement. The file carries the explicit `atomic-query-accounting.v2` epoch,
+its start timestamp, and the producer version. Repeated identical requests are
+separate invocations and therefore separate denominator events. The legacy
+`estimated-potential-token-savings.v1` and `family-query-outcomes.v1` files stay
+readable historical artifacts but are never combined with the v2 ratio or
+rewritten by v2 producers. The v2 file is local-only and must not include source
+snippets, prompts, query text, paths, repository names, symbols, content hashes,
+byte ranges, evidence text, raw targets, or raw tool payloads.
 If treatment correctness fails, raw token deltas may still be reported, but the
 result must be marked invalid for product token-saving claims.

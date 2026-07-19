@@ -73,16 +73,19 @@ validated request envelopes, including from active-generation snapshot records;
 it is not worker execution, provider support, storage ingestion, or a
 family-claim upgrade.
 
-The checked-in CPython frontend worker also serves a single-file
-`extract_interface` mode for the incremental-sync interface-hash gate (see
+The checked-in CPython frontend worker also computes the module interface hash
+in private parse-document mode and serves a single-file `extract_interface`
+mode for the incremental-sync interface-hash gate (see
 `docs/specifications/python-analysis.md` and
-`docs/specifications/indexing-pipeline.md`). This is a *frontend* parse-worker
-mode, distinct from the streaming semantic worker: it takes one module's
-path and text with no whole-project context and returns one bounded, source-free
-`interface_hash`. Because the probe reuses the frontend worker and never the
-semantic worker, the `semantic_worker_requires_full_rebuild` preflight rule is
-unaffected — a configured semantic worker still forces a full rebuild every run,
-and that fallback fires before the interface gate is ever reached.
+`docs/specifications/indexing-pipeline.md`). Private parse-document revision 2
+returns the exact `interface_hash` beside the parse metadata, so build and
+reparse persistence do not launch a second worker. The `extract_interface` mode
+is a *frontend* preflight probe, distinct from the streaming semantic worker: it
+takes one module's path and text with no whole-project context and returns one
+bounded, source-free hash. Because the probe reuses the frontend worker and
+never the semantic worker, the `semantic_worker_requires_full_rebuild` preflight
+rule is unaffected — a configured semantic worker still forces a full rebuild
+every run, and that fallback fires before the interface gate is ever reached.
 
 Pyrefly and Pyright agreement may support a future cross-checked certainty tier
 only after Rust domain, protocol schemas, storage, CLI, MCP, and tests define
@@ -527,8 +530,9 @@ The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
 CPython `ast` code-unit metadata for `.py` files. This private mode has its own
 exact host/worker contract tuple, currently `protocol_version=1` and
-`contract_revision=1`; both fields are required in every parse-document request
-and normal response. A worker that receives a missing or different tuple emits
+`contract_revision=2`; both fields are required in every parse-document request
+and normal response, and the normal response requires a strict lowercase
+`sha256:` interface hash. A worker that receives a missing or different tuple emits
 only the low-cardinality `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope, without
 source, repository paths, environment values, or raw payloads. The Rust host
 in the current release treats that envelope, a missing or different normal-

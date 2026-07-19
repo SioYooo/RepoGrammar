@@ -53,6 +53,10 @@ The check command verifies:
 - GitHub workflow files do not use deprecated Node.js 20 action majors for
   first-party checkout or Node setup actions; currently `actions/checkout@v4`
   and `actions/setup-node@v4` are rejected in favor of `@v5` or newer.
+- Every `dtolnay/rust-toolchain` step uses the reviewed commit
+  `4cda84d5c5c54efe2404f9d843567869ab1699d4` and explicitly requests
+  `toolchain: stable`; mutable branches, tags, or a different implementation
+  commit fail the guard.
 - the release workflow classifies preview versus stable through `repo-guard`,
   keeps manual dispatch build-only, and creates one exact npm candidate that
   downstream jobs download rather than repack;
@@ -62,7 +66,7 @@ The check command verifies:
   mutation authority;
 - preview staging has one registered assignment for its exact
   `./npm-candidate/...tgz` local tarball, and stable staging has one registered
-  literal command for `./npm-candidate/sioyooo-repogrammar-0.3.2.tgz`; a bare
+  literal command for `./npm-candidate/sioyooo-repogrammar-0.4.0.tgz`; a bare
   package path that npm could parse as GitHub shorthand, dynamic npm
   subcommands, marker-only comments, or alternate packing and staging paths
   fail the guard;
@@ -171,7 +175,7 @@ failure.
 
 The gate proves exact version agreement before making repository state. It then
 runs the packaged `instructions sync` path against an explicit `AGENTS.md` in
-the isolated HOME, requires managed-contract version 2 and exact managed-block
+the isolated HOME, requires managed-contract version 3 and exact managed-block
 content, and proves that this operation neither creates a `CLAUDE.md` mirror nor
 repository `.repogrammar` state. It also proves truthful setup dry-run and live
 setup JSON, the product MCP self-test, explicit full `resync`, unchanged
@@ -219,7 +223,7 @@ launcher tool list that omits `git`.
 
 The npm provenance gate consumes only the structured output from
 `npm audit signatures --json --include-attestations`. It requires one verified
-`@sioyooo/repogrammar@0.3.2` entry from the exact registry and exactly one SLSA
+`@sioyooo/repogrammar@0.4.0` entry from the exact registry and exactly one SLSA
 Provenance v1 declaration. npm 11.18 reports that declaration under the
 `attestations.provenance` object and provides both npm publish-v0.1 and SLSA
 entries in `attestationBundles`; the guard requires that exact two-bundle
@@ -227,7 +231,7 @@ inventory, including exactly one publish-v0.1 bundle and exactly one SLSA v1
 bundle, then requires an in-toto JSON DSSE payload for SLSA provenance. Its
 bounded dependency-free base64 decoder binds the decoded predicate and subject
 digest to the candidate SHA-512, the GitHub-hosted workflow builder to
-`.github/workflows/release.yml`, the push tag to `refs/tags/v0.3.2`, the
+`.github/workflows/release.yml`, the push tag to `refs/tags/v0.4.0`, the
 resolved dependency URI to the same repository and tag, its git commit to the
 checked-out release SHA, and the invocation identity to the exact retained
 Actions run id and attempt. It does not inspect certificates, raw signature
@@ -262,10 +266,11 @@ The release dist-tag classifier verifies the complete public npm state after a
 publication becomes visible:
 
 - preview preserves the existing `preview-dist-tag-action` policy;
-- the registered stable `0.3.2` policy requires exact `latest=0.3.2`, exact
-  `preview=0.2.0-preview.0`, and both versions in the bounded complete
-  inventory. The failed, unpublished `0.2.0` and `0.2.1` candidates are
-  explicitly forbidden; either candidate's presence in the registry inventory
+- the registered stable `0.4.0` policy requires exact `latest=0.4.0`, exact
+  `preview=0.2.0-preview.0`, and the preview, prior public `0.2.2`, and new
+  stable versions in the bounded complete inventory. The failed or abandoned,
+  unpublished `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates are
+  explicitly forbidden; any candidate's presence in the registry inventory
   fails closed. Other stable versions fail closed until explicitly registered.
 
 For stable, the complete dist-tag object must contain exactly `latest` and
@@ -317,11 +322,11 @@ Release immutability remains a maintainer preflight before tag creation. The
 read-only finalizer needs no long-lived admin token: the public release API plus
 `gh release verify` and every `gh release verify-asset` result are the release
 evidence. The corrected post-public finalizer definition is dispatched from
-`main`, but its checkout remains pinned to immutable `v0.2.2` and its evidence
-remains bound to candidate run `29586694524`, attempt 1. Updating verifier
-orchestration therefore does not move the tag, rebuild release artifacts, or
-replace publication authority. Expired retained artifacts, unavailable
-attestations, absent provenance, or a failed public smoke prevents
+`main`, but its checkout remains pinned to immutable `v0.4.0` and its inputs
+must identify the exact successful `v0.4.0` tag-run attempt. Updating verifier
+orchestration after tagging therefore cannot move the tag, rebuild release
+artifacts, or replace publication authority. Expired retained artifacts,
+unavailable attestations, absent provenance, or a failed public smoke prevents
 `STABLE_RELEASE_READY`.
 
 ## Exit codes
@@ -357,6 +362,6 @@ execution, runs each public npm channel from a separate external lane working
 directory, and delegates the final verdict to `repo-guard`. Manual verification
 uses `release-dist-tag-action` against public tags and the complete inventory;
 stable requires exact
-`latest=0.3.2`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
+`latest=0.4.0`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
 without registry writes. Manual release dispatch remains build-only and manual
 finalization remains read-only.

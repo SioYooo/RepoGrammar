@@ -17,7 +17,7 @@ development, and governance documentation.
   specifications.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
-- `release/`: maintainer-owned release runbooks. The stable `0.3.2` checklist
+- `release/`: maintainer-owned release runbooks. The stable `0.4.0` checklist
   is the canonical two-phase immutable publication gate; the public-preview
   checklist remains historical evidence for the prerelease.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
@@ -87,8 +87,8 @@ context lives under `.agents/memories/`.
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
-- Stable `0.3.2` two-phase immutable publication and instruction-adoption gate:
-  `release/stable-v0.3.2-release-checklist.md`.
+- Stable `0.4.0` two-phase immutable publication and instruction-adoption gate:
+  `release/stable-v0.4.0-release-checklist.md`.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
 - Build Week zero-friction onboarding authority and execution evidence:
@@ -113,6 +113,8 @@ context lives under `.agents/memories/`.
 - Storage boundaries: `specifications/storage.md`.
 - Repo-local state boundary: `decisions/ADR-0008-repo-local-state-boundary.md`
   and `specifications/storage.md`.
+- Default repository auto-sync after init:
+  `decisions/ADR-0027-init-default-repository-autosync.md`.
 - Concurrent filesystem confinement preflight:
   `decisions/ADR-0023-handle-relative-filesystem-confinement-preflight.md`.
   The decision requires

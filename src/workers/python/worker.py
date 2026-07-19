@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # Python < 3.11.
     tomllib = None
 
 PROTOCOL_VERSION = 1
-PARSE_DOCUMENT_CONTRACT_REVISION = 1
+PARSE_DOCUMENT_CONTRACT_REVISION = 2
 DEFAULT_REQUEST_ID = "repogrammar-python-semantic-worker"
 MAX_STDIN_BYTES = 1_048_576
 MAX_PROJECT_ROOT_CHARS = 4096
@@ -5318,6 +5318,7 @@ def parse_document(payload: dict[str, Any]) -> int:
             "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
             "path": payload["path"],
+            "interface_hash": interface_hash(text, payload["path"]),
             "units": units,
             "facts": facts,
             "diagnostics": diagnostics,

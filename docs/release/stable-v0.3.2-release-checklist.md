@@ -1,13 +1,11 @@
-# Stable v0.3.2 Release Checklist
+# Stable v0.3.2 Release Checklist — ABANDONED / UNPUBLISHED
 
-This checklist records the canonical gate for RepoGrammar `0.3.2`, the
-stable-channel release that succeeds the published `0.2.2` and follows the
-retained, unpublished `0.3.0` and `0.3.1` candidates. It makes `0.3.2` the npm `latest`
-version while the `preview` dist-tag stays on the immutable `0.2.0-preview.0`
-prerelease. It does not claim production readiness, 1.0 API stability, a stable
-MCP API, sound static analysis, measured token savings, runtime equivalence,
-Windows support, or support beyond the documented bounded language and framework
-evidence.
+This checklist is the retained audit record for the abandoned RepoGrammar
+`0.3.2` stable candidate. It is not the canonical current release checklist;
+`stable-v0.4.0-release-checklist.md` owns the patch-forward publication gate.
+`0.3.2` never became a public GitHub Release or npm version and never became
+npm `latest`. The published stable version remained `0.2.2`, while the
+`preview` dist-tag remained on immutable `0.2.0-preview.0`.
 
 `0.3.2` is a release-gate verifier fix. Its product behavior is identical to the
 `0.3.0` and `0.3.1` candidates; the only substantive changes are that the end-to-end
@@ -15,15 +13,29 @@ payload-measure smoke self-builds the product binary rather than requiring a
 sibling artifact, plus the version advance and release-mechanism pins.
 
 The published `0.2.2` release is unchanged. The retained annotated `v0.2.0`,
-`v0.2.1`, `v0.3.0`, and `v0.3.1` candidate tags remain non-reusable historical
-evidence;
-no failed, unpublished candidate version (`0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`)
-may be
-moved, reused, or allowed to appear in the stable registry inventory. This
-checklist does not restate their failure histories, which stay recorded in
-`stable-v0.2.2-release-checklist.md`, `stable-v0.3.0-release-checklist.md`,
-`stable-v0.3.1-release-checklist.md`, and
-the CHANGELOG.
+`v0.2.1`, `v0.3.0`, `v0.3.1`, and `v0.3.2` candidate tags remain non-reusable
+historical evidence. No failed or abandoned unpublished candidate version
+(`0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, `0.3.2`) may be moved, reused, or allowed
+to appear in the stable registry inventory. Their failure histories remain in
+the versioned checklists and CHANGELOG.
+
+## Final candidate disposition
+
+- Annotated `v0.3.2` remains at
+  `26ce59e098d18f3c7ca976de4c76ff13643285f5`.
+- Tag workflow run `29654842298`, attempt 1, passed source classification,
+  release verification, npm/installer packaging, all four platform builds, and
+  private draft creation.
+- GitHub draft id `356161935` retained the exact 11 candidate assets. It was
+  never published and is not immutable public release evidence.
+- The protected stable npm staging job executed no steps. No `0.3.2` npm stage
+  was created by the workflow.
+- The staging job and overall run were cancelled. Consequently there is no
+  successful candidate run attempt eligible for public finalization.
+- Public npm versions remained `0.2.0-preview.0` and `0.2.2`, with
+  `preview=0.2.0-preview.0` and `latest=0.2.2`.
+- The tag and draft are retained for audit. They must not be deleted, moved,
+  republished, or used as `0.4.0` byte authority.
 
 Publication is a two-phase process. GitHub and npm cannot be committed
 atomically, so the workflow must keep npm non-public until the exact GitHub
@@ -61,25 +73,19 @@ binary from the current workspace instead of requiring a prebuilt sibling
 artifact next to the test harness, so a fresh CI checkout no longer panics before
 measuring.
 
-## Immutable identities
+## Planned immutable identities (not completed)
 
-To be filled after the `v0.3.2` tag run and before any public approval:
-
-- Cargo, Cargo lockfile, and npm manifest versions are exactly `0.3.2`. The
-  source state is prepared; verify it on the tagged commit.
-- The publication tag is `v0.3.2` at `<tag commit — to be filled after the tag
-  run>`, the exact `origin/main` commit when the tag is created.
-- npm `@sioyooo/repogrammar@0.3.2` is a new immutable version. The existing
-  `0.2.0-preview.0` tarball and `preview` dist-tag are never replaced,
-  unpublished, or repurposed.
-- The expected final dist-tags are `latest=0.3.2` and `preview=0.2.0-preview.0`.
-- The candidate tag-run id, successful run attempt, npm stage id, and expected
-  integrity are `<to be filled after the tag run>`; record them in the
-  maintainer release record without exposing credentials.
-- Any correction after public npm approval is a patch-forward `0.3.2`; never
-  reuse `0.3.2`, move `v0.3.2`, or replace immutable release assets. The failed
-  `v0.2.0`, `v0.2.1`, `v0.3.0`, and `v0.3.1` candidate tags remain retained and
-  non-reusable under this release policy.
+- Cargo, Cargo lockfile, and npm manifest versions were exactly `0.3.2` at the
+  retained tag commit.
+- The candidate tag is `v0.3.2` at
+  `26ce59e098d18f3c7ca976de4c76ff13643285f5`.
+- Candidate run `29654842298`, attempt 1, created draft id `356161935`; it did
+  not create an npm stage and did not complete successfully.
+- The planned final dist-tags `latest=0.3.2` and
+  `preview=0.2.0-preview.0` were never reached.
+- The source correction and final Build Week release proceed as patch-forward
+  `0.4.0`; never reuse `0.3.2`, move `v0.3.2`, publish its retained draft, or
+  substitute its candidate assets.
 
 ## Product-truth gate
 
@@ -199,7 +205,11 @@ Before creating the stable tag:
    immutable `softprops/action-gh-release` v3.0.2 commit
    `3d0d9888cb7fd7b750713d6e236d1fcb99157228`, not a mutable tag.
 
-## Two-phase publication
+## Planned two-phase publication (stopped before npm staging)
+
+The following was the planned procedure. Execution stopped after step 3 had
+created the private draft and before the protected npm staging job ran. Steps
+4–7 were never completed for `0.3.2`.
 
 1. Merge the reviewed release source to `main` and repeat the local gate on
    exact merged HEAD. An optional manual build-only run is rehearsal only.
@@ -238,14 +248,18 @@ Before creating the stable tag:
    external working directory; the repository root is not a valid `npx
    --package` smoke cwd.
 
-## Final public postconditions
+## Planned final public postconditions (not achieved)
+
+None of these postconditions became true for `0.3.2`; they are retained only to
+show the gate the candidate failed to complete.
 
 - GitHub `v0.3.2` is public, non-prerelease, immutable, and contains exactly 11
   assets: four supported archives, their checksums, `install.sh`, its checksum,
   and `npm-candidate-manifest.json`.
 - npm published versions contain `0.2.0-preview.0`, the published `0.2.2`, and
   the new `0.3.2`, and do not contain the failed, unpublished `0.2.0`, `0.2.1`,
-  or `0.3.0` candidates. Any candidate's presence fails closed.
+  `0.3.0`, or `0.3.1` candidates. Any failed candidate's presence fails
+  closed.
 - npm dist-tags are exactly compatible with `latest=0.3.2` and
   `preview=0.2.0-preview.0`.
 - npm registry integrity equals the public candidate-manifest integrity and
@@ -266,13 +280,14 @@ Before creating the stable tag:
 
 | State | Required action |
 |---|---|
-| Candidate run failed before a draft exists | Rerun only for an external/transient failure. A source correction is `v0.3.2`; never move `v0.3.2` or manufacture authority from rehearsal artifacts. |
+| Candidate run failed before a draft exists | Rerun only for an external/transient failure. A source correction is `v0.4.0`; never move `v0.3.2` or manufacture authority from rehearsal artifacts. |
+| Actual `v0.3.2` state: draft exists, npm staging never ran, workflow cancelled | Retain tag and draft as audit evidence, do not publish or rerun the candidate, and patch-forward to `v0.4.0`. |
 | Draft upload failed with no surviving draft or npm stage | A full rerun is permitted only after proving both private candidates are absent. |
 | Existing draft detected during a full rerun | Fail closed; never overwrite draft assets. Rerun only failed jobs when that preserves the original candidate. |
 | npm stage failed after the draft succeeded | Keep GitHub draft-only and rerun only the failed staging job. Record the successful run attempt. |
 | npm staged, GitHub publish failed | Never approve npm; retry GitHub or reject the stage with 2FA. |
 | GitHub public, npm awaiting approval | Report a visible partial release; retry review/approval, with finalizer still pending. |
-| npm approved, final verification failed | `0.3.2` is consumed forever; deprecate if necessary and fix forward in `0.3.2`. |
+| npm approved, final verification failed | `0.3.2` would be consumed forever; deprecate if necessary and fix forward in `0.4.0`. |
 
 A full workflow rerun must reject an existing release or draft. Rerunning only
 failed staging jobs is supported because it preserves the original draft and

@@ -1,10 +1,70 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-07-20 stable channel
 
-No unreleased changes.
+RepoGrammar `0.4.0` is the forward-only Build Week stable candidate. The
+retained `v0.3.2` tag and 11-asset private draft are bound to the earlier
+`26ce59e` source; its release workflow was cancelled before the protected npm
+staging job ran. The tag, draft, and candidate bytes remain historical audit
+evidence and are not moved, replaced, published, or reused. Current source
+changes therefore advance to the unoccupied `0.4.0` identity.
 
-## 0.3.2 — 2026-07-19 stable channel
+This source record does not prove that the `v0.4.0` tag, immutable GitHub
+Release, npm package, provenance, dist-tags, or public finalizer exist. Those
+facts must be independently recorded only after the canonical stable checklist
+completes. The release makes no production-readiness, 1.0 API-stability,
+sound-analysis, runtime-equivalence, Windows-support, hallucination-prevention,
+or measured-token-savings claim.
+
+### Added
+
+- Added source-free, all-language query-outcome accounting and all-scope
+  estimated potential token-savings breakdowns. The atomic v2 cohort keeps each
+  savings event paired with its query denominator and serializes concurrent
+  writers without importing legacy unpaired evidence.
+- Added qualified concept-phrase routing for specific family queries while
+  retaining conservative `UNKNOWN` and `PARTIAL_CONTEXT` behavior.
+- Added a judge-first no-Rust/Cargo path and a pinned real-repository recording
+  runbook that make bounded read obligations, static-alignment limits, typed
+  abstention, and the mechanics-only `0/4` proactive MCP-adoption result
+  explicit.
+
+### Changed
+
+- Made standalone `repogrammar init` start its repo-local auto-sync daemon after
+  the default resync succeeds. `--no-autosync` provides an explicit CI,
+  experiment, and one-shot opt-out; `--autosync` remains a compatible explicit
+  spelling, and `--state-only` remains daemon-free.
+- Made managed agent instructions precision-first so covered repository
+  contract lookups use RepoGrammar before broad source search.
+- Reused the Python parse-interface hash across compatible indexing work and
+  retained the active generation when an incremental sync proves that source
+  and project context are unchanged.
+- Advanced Cargo, npm, release-source, installer, workflow, finalizer, and
+  stable-checklist authority to `0.4.0`. The historical
+  `preview=0.2.0-preview.0` dist-tag remains unchanged.
+- Python remains the official v0.1 family scope. TypeScript/JavaScript, Rust,
+  Java, C#, and C/C++ remain bounded preview scopes; their source-free readiness
+  and query-savings records are reported separately rather than promoted to an
+  official support claim.
+
+### Fixed
+
+- Kept top-level `stats` `family_count` inside the Python official-family scope
+  instead of combining an all-language family total with Python-only eligible
+  units and coverage. Per-language preview counts and all-scope savings remain
+  available under `stats --json`.
+- Made source installation verify the running MCP contract and accept the
+  current Claude Code absence probe without weakening ownership checks.
+- Removed stale public-release evidence that incorrectly associated the
+  `v0.2.2` finalizer run `29591027524` with the unpublished `v0.3.2`
+  candidate.
+- Pinned every `dtolnay/rust-toolchain` workflow step to reviewed commit
+  `4cda84d5c5c54efe2404f9d843567869ab1699d4`, kept the requested toolchain
+  explicit, and added a repository-guard regression so a mutable third-party
+  action ref cannot silently return.
+
+## 0.3.2 — 2026-07-19 unpublished stable candidate
 
 RepoGrammar `0.3.2` is the second verifier-fix patch-forward, succeeding the
 retained, unpublished `0.3.0` and `0.3.1` candidates. Its product behavior is
@@ -34,7 +94,7 @@ completed.
   candidate among the failed stable versions that must never appear in the
   registry inventory alongside `0.2.0`, `0.2.1`, and `0.3.0`.
 
-## 0.3.1 — 2026-07-19 stable channel
+## 0.3.1 — 2026-07-19 unpublished stable candidate
 
 RepoGrammar `0.3.1` is the verifier-fix patch-forward that succeeds the retained,
 unpublished `0.3.0` candidate. Its `v0.3.1` tag run failed at the release-gate
@@ -69,7 +129,7 @@ prove that GitHub or npm publication completed.
   inventory. The published `0.2.2` release and the retained `v0.2.0`/`v0.2.1`
   candidate tags are unchanged.
 
-## 0.3.0 — 2026-07-19 stable channel
+## 0.3.0 — 2026-07-19 unpublished stable candidate
 
 RepoGrammar `0.3.0` is the stable-channel candidate that succeeds the published
 `0.2.2`, intended to become the next published stable-channel pre-1.0 release.
@@ -683,7 +743,7 @@ because the workflow used a runner-incompatible `gh api --slurp --jq`
 combination. GitHub `v0.2.0` and npm `@sioyooo/repogrammar@0.2.0` were never
 published. The tag is retained and must not be moved, deleted, or reused.
 `0.2.1` was the next patch-forward candidate but also remained unpublished;
-`0.2.2` is the current publication candidate.
+`0.2.2` subsequently became the first published stable-channel release.
 
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 

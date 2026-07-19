@@ -81,7 +81,10 @@ The current implementation covers a bounded static CPython `ast` slice only:
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
 - an exact private parse-document host/worker tuple of
-  `protocol_version=1` and `contract_revision=1` on requests and responses.
+  `protocol_version=1` and `contract_revision=2` on requests and responses.
+  The normal response includes the strict `sha256:` hash of the same module
+  interface projection described below, allowing indexing to persist it without
+  a second worker process.
   The current Rust host maps the new worker's low-cardinality rejection, a
   missing or different normal-response revision, or an old worker's bounded
   rejection to typed `PythonFrontendContractMismatch`. A previously published
@@ -104,11 +107,12 @@ The current implementation covers a bounded static CPython `ast` slice only:
   exposes to other files, so two files with an equal hash are interchangeable to
   every other module's parse. A syntactically invalid module projects to a
   distinct unparseable marker (the symbol indexer skips it, so it contributes
-  nothing). The mode shares the `contract_revision=1` tuple: an old host never
+  nothing). The mode shares the `contract_revision=2` tuple: an old host never
   sends it, and a mismatched revision receives the same low-cardinality rejection
   as parse-document so the Rust caller treats the probe as unverified and rebuilds
-  fully rather than guessing. Build-time storage of these hashes and the preflight
-  gate that consumes them are specified in
+  fully rather than guessing. Build-time storage uses the hash already returned
+  by parse-document; `extract_interface` is reserved for sync preflight. The
+  persistence and preflight gate are specified in
   `docs/specifications/indexing-pipeline.md`;
 - source-ordered per-name module-scope event histories and immutable AST range
   caching for bounded large-module analysis. Point-in-source framework alias

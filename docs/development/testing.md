@@ -295,6 +295,11 @@ allowed.
   tests must not start or kill real user background services;
   product-runtime background behavior may be covered through
   temporary-repository smoke tests or ignored/manual tests.
+- Init bootstrap tests must additionally prove that unflagged `init` indexes
+  before starting auto-sync, `--no-autosync` retains the active generation
+  without a daemon, explicit `--autosync` remains compatible, conflicting
+  preferences fail before writes, `--state-only` remains daemon-free, and a
+  default auto-sync startup failure preserves the successful resync sub-result.
 - Family storage tests must cover generation-scoped family records, members,
   variation slots, family-bound evidence, building-only writes, non-`UNKNOWN`
   family validation requiring evidence, active-generation list/show reads,
@@ -536,7 +541,8 @@ allowed.
   Default tests must not invoke real `codex` or `claude` binaries; validate
   native integration through dry-run output, command-vector construction, fake
   configurators, fake prompts, and receipt behavior. Native probe tests must
-  cover exact target-specific not-found classification, successful config
+  cover the allowlisted target-specific not-found classifications (including
+  both supported Claude Code output variants), successful config
   parsing, unexpected failed output fail-closed behavior, successful
   unrecognized output becoming a preserved malformed state without raw output
   or path leakage, no-receipt foreign entries, receipt/native missing or command
@@ -547,8 +553,9 @@ allowed.
   must keep newly configured targets separate from reconfigured pre-existing
   targets. Any real native-agent CLI integration test must be explicitly
   ignored or feature-gated outside default CI.
-- Managed-instruction tests must cover exact current content version `2`, the
-  exact unmarked legacy body classified as logical version `1`, exact
+- Managed-instruction tests must cover exact current content version `3`, exact
+  version `2` as a safely refreshable outdated body, the exact unmarked legacy
+  body classified as logical version `1`, exact
   unversioned global legacy `0`, single-byte/body
   drift becoming `foreign`, partial/duplicated
   markers becoming `malformed`, foreign/malformed preservation, exact legacy
@@ -727,8 +734,10 @@ allowed.
   errors.
 - Python worker executable tests must run the checked-in CPython AST worker
   through `python3`, validate private parse-document JSON output with the exact
-  request/response tuple `protocol_version=1, contract_revision=1`, and prove
-  that a missing or different revision returns only the low-cardinality
+  request/response tuple `protocol_version=1, contract_revision=2`, require the
+  normal response's strict interface hash to equal `extract_interface` for the
+  same path and source, and prove that a missing or different revision returns
+  only the low-cardinality
   `PYTHON_FRONTEND_CONTRACT_MISMATCH` envelope without paths, source, or raw
   payload. They must also cover syntax-error
   diagnostics, generic `module`/`function`/`async_function`/`class`/`method`
@@ -995,8 +1004,8 @@ process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
 tool names, CLI command surface, missing-index fallback human/JSON output,
 repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
 default `init` active-index bootstrap, `--state-only` lifecycle repair,
-auto-sync-after-index sequencing, and bootstrap failure preservation, bounded
-redacted repo-local log tails,
+default auto-sync-after-index sequencing, explicit `--no-autosync`, and
+bootstrap failure preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
 TS/JS, Python, Go, PHP, Ruby, and Swift discovery filtering/hash/path-safety behavior,
 SQLite storage migration and generation-activation safety behavior, validated
@@ -1044,10 +1053,11 @@ cargo run --quiet --bin repo-guard -- product-eval \
 
 For each corpus fixture the harness copies the committed fixture root into an
 isolated temporary workspace with an isolated `HOME`/XDG/`CODEX_HOME` and a
-tool-only `PATH`, runs `init` then `resync`, applies any per-query source
-mutation to that copy, and drives the product binary through the query. It
-never modifies the real repository and never enables auto-sync. Workspaces are
-removed on success and retained (path printed to stderr) on a harness error.
+tool-only `PATH`, runs `init --state-only` then `resync`, applies any per-query
+source mutation to that copy, and drives the product binary through the query.
+It never modifies the real repository and never enables auto-sync. Workspaces
+are removed on success and retained (path printed to stderr) on a harness
+error.
 When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
 next to `repo-guard`; both build into the same target directory.
 
@@ -1222,9 +1232,10 @@ cargo run --quiet --bin repo-guard -- sync-equivalence \
 For each scenario the harness copies the committed fixture root into an
 isolated temporary workspace (isolated `HOME`/XDG/`CODEX_HOME`, tool-only
 `PATH`, telemetry disabled — identical to the product-eval harness). It builds
-state A with `init` then `resync`, applies the scenario's scripted patch, and
-runs `sync` to produce state B (incremental). It then builds a separate clean
-workspace C by applying the same patch first and running `init`+`resync`
+state A with `init --state-only` then `resync`, applies the scenario's scripted
+patch, and runs `sync` to produce state B (incremental). It then builds a
+separate clean workspace C by applying the same patch first and running
+`init --state-only` + `resync`
 (clean full build). It compares canonical dumps of B and C across the product's
 own read surfaces — `files`, `units`, `families`, `family <id> --mode deep`
 (deep mode is required; compact mode returns an empty selected-evidence array so
@@ -1282,6 +1293,10 @@ file-local fast paths: each edits one function body (a Rust test fn under
 `service/rust/`, a TS ambient test under `web/`, a Python function under
 `analytics/`), and the incremental generation must be canonically equal to a
 clean rebuild while reparsing exactly one file (`expected_reparsed_files: 1`).
+`docs_noop` is the empty-delta fast-path oracle: because the Markdown edit is
+outside discovery, sync must retain the current active generation, report zero
+copied-forward files, zero reparses, and zero family recomputation, and remain
+canonically equal to a clean rebuild.
 `python_body_edit` is specifically the proof of the Python interface-hash gate:
 the body edit leaves `analytics/app.py`'s interface projection unchanged, so only
 that module reparses while its sibling `analytics/conftest.py` copies forward.
@@ -1302,6 +1317,12 @@ scenario is the end-to-end regression for the Mocha-runner-config gate fix: if
 that gate regressed, the removal would run incrementally, copy forward the stale
 flag-on TS families, and diverge from the clean rebuild — a real inequality on top
 of the expected-outcome check.
+
+Application indexing tests additionally count Python frontend operations: a
+full build must persist the parse-document response hash with zero
+`extract_interface` calls, while an interface-stable body edit may call
+`extract_interface` once in sync preflight and must not call it again after the
+file is reparsed.
 
 ## Response payload byte measurement (payload-measure)
 
@@ -1449,9 +1470,10 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. Stable requires exact `latest=0.3.2`, exact
-`preview=0.2.0-preview.0`, both immutable versions in the registry inventory,
-the explicit absence of the failed `0.2.0` and `0.2.1` candidates, and a
+state. The current stable gate requires exact `latest=0.4.0`, exact
+`preview=0.2.0-preview.0`, the preview, prior public `0.2.2`, and new stable
+versions in the registry inventory, the explicit absence of the failed or
+abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates, and a
 retained-candidate SRI match. Any other prerelease under `preview`, any
 prerelease-valued `latest` after stable, either failed candidate appearing as
 published, malformed inventories, or unpublished tag targets fail closed. The

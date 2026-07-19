@@ -1,5 +1,17 @@
 # Project State
 
+## Build Week stable-release line
+
+The current release source identity is `0.4.0`. The earlier annotated
+`v0.3.2` candidate is bound to `26ce59e`; its 11-asset GitHub draft is retained
+as private audit evidence, and its release run was cancelled before the
+protected npm staging job executed. It must not be moved, reused, or published
+as the current product. The forward-only `v0.4.0` checklist is the canonical
+stable gate. Source manifests, tags, drafts, workflows, registry publication,
+and the public finalizer remain distinct evidence states; only the finalizer's
+`STABLE_RELEASE_READY` marker proves the complete public path. The historical
+preview dist-tag remains `0.2.0-preview.0`.
+
 - Status: Bootstrap plus conservative v0.2 TS/JS exact-anchor family substrate
   for Express, Jest/Vitest (with Mocha/`node:test` `runner_kind` aliasing), Zod,
   NestJS, Hono, Next.js, Fastify, Prisma, and Drizzle, internal v0.2
@@ -217,7 +229,8 @@
   This is preview scope and does not change the ADR-0011 v0.1 focus statement.
   `repogrammar setup` is now the primary zero-decision onboarding entrypoint.
   It creates one application-layer plan over the existing agent-install,
-  repository-init/index, optional auto-sync, and product MCP self-test
+  repository-init/index, default-on auto-sync with an explicit opt-out, and
+  product MCP self-test
   boundaries; interactive execution confirms once, `--yes` is agent-safe,
   `--dry-run` is zero-write, and telemetry remains disabled. Missing live agents
   preserve repository-only setup and do not receive a suggested coding-agent
@@ -246,10 +259,12 @@
   doctor, query preflight, setup, and MCP-facing recommendations do not derive
   conflicting next actions.
   `repogrammar init --yes` remains the agent-safe one-command repository
-  bootstrap: it initializes repo-local state and builds or refreshes the active
-  index by default, while `--autosync` starts auto-sync only after that readable
-  active generation exists. `--state-only` preserves lifecycle-only repair
-  without indexing. `repogrammar status --json` and `repogrammar doctor --json`
+  bootstrap: it initializes repo-local state, builds or refreshes the active
+  index, and starts auto-sync only after that readable generation exists.
+  `--no-autosync` preserves one-shot indexing without a daemon; explicit
+  `--autosync` remains compatible. `--state-only` preserves lifecycle-only
+  repair without indexing or auto-sync. `repogrammar status --json` and
+  `repogrammar doctor --json`
   now expose a source-free repository readiness object that separates
   not-initialized, state-only/no-active-index, ready active index,
   unhealthy/stale active index, autosync, and storage-hygiene states from
@@ -895,6 +910,17 @@ Never evaluate Gemfiles/gemspecs or run Ruby, Bundler, RubyGems, Rake, Rails,
 tests, generators, installed gems, repository tooling, or request-time network
 for default Ruby analysis. No dependency, Ruby/Bundler command, tool probe, or
 network access is part of the discovery slice; every later gate remains open.
+
+Indexing performance now has two correctness-preserving fast paths. The private
+Python parse-document contract returns the exact interface hash that the host
+persists, eliminating the former second interface-extraction worker process for
+every full-build Python file; a body-only incremental edit still runs one
+preflight interface probe. After schema, engine-version, dirty-record,
+semantic-worker, and lock gates pass, an empty supported-file delta retains the
+validated active generation and reports zero copy-forward, reparse, and family
+recomputation instead of hydrating and rewriting the full generation. Any real
+delta continues through the canonical project-context and sync-equivalence
+gates.
 
 Future agents must not claim compiler-backed TypeScript analysis,
 provider-backed Python semantic analysis, full pattern-family mining,

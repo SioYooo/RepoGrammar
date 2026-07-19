@@ -36,3 +36,4 @@ Current accepted ADRs:
 - ADR-0024: PHP sandboxed frontend and PHPUnit preflight.
 - ADR-0025: SwiftSyntax, isolated semantic verification, and XCTest preflight.
 - ADR-0026: Zero-friction onboarding orchestration.
+- ADR-0027: Init starts repository auto-sync by default.

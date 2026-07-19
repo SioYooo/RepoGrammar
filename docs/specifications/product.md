@@ -43,7 +43,8 @@ local Python analysis for recurring repository pattern families in:
 - SQLAlchemy;
 - Pydantic.
 
-The v0.1 product claim is: RepoGrammar provides sound-by-abstention,
+The v0.1 product claim is: RepoGrammar provides evidence-gated,
+abstention-first,
 metadata-only, repo-local Python implementation/integration-family evidence and
 read planning for FastAPI, pytest, Pydantic, and SQLAlchemy. It can reduce
 coding-agent context acquisition cost when local repeated patterns exist, and it
@@ -332,7 +333,7 @@ blocking `UNKNOWN`.
 
 | Area | Status | Public claim |
 |---|---|---|
-| Python FastAPI | Supported | Bounded framework-family evidence under sound-by-abstention gates; literal `include_router(..., prefix="...")` is context only, and dynamic prefixes/router factories remain `UNKNOWN`. |
+| Python FastAPI | Supported | Bounded framework-family evidence under evidence-gated, abstention-first rules; literal `include_router(..., prefix="...")` is context only, and dynamic prefixes/router factories remain `UNKNOWN`. |
 | Python pytest | Supported | Bounded test/fixture family evidence with typed fixture ambiguity `UNKNOWN`. |
 | Python Pydantic | Supported | Bounded model/settings family evidence; validator side effects, external bases, and dynamic factories remain `UNKNOWN`. |
 | Python SQLAlchemy | Supported | Bounded model/repository evidence; raw SQL, external bases, custom query wrappers, and dynamic declarative patterns remain conservative. |
@@ -560,8 +561,9 @@ Machine-level `install` and `uninstall` are separate from repository-level
 `init`, `resync`, `autosync`, and `uninit`. Installer behavior must be
 reversible, scoped, and dry-run friendly. Repository bootstrap is explicit:
 `repogrammar init` creates repo-local analysis state and rebuilds or refreshes
-the active generation by default. Users or agents add `--autosync` only when
-they have permission to start repository-local auto-sync.
+the active generation, then starts repository-local auto-sync by default.
+Users or agents use `--no-autosync` when authorization covers only a one-shot
+index or when CI/experiment determinism forbids a background process.
 
 End-user installation must be binary-first. Public-preview users should be able
 to install and run the RepoGrammar CLI from a prebuilt release artifact without

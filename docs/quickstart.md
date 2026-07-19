@@ -1,164 +1,125 @@
 # Quickstart
 
-This guide does not infer publication from its own version. Use the exact
-availability gate below; if any check fails, use source-checkout contributor
-dogfood.
+This guide keeps source, candidate, and public release state separate. A source
+manifest or Git tag does not prove that either public registry is ready.
 
-## 1. Verify And Acquire Exact 0.3.2
+## 1. Verify exact stable availability
 
-```text
-npm view @sioyooo/repogrammar@0.3.2 version
+```bash
+npm view @sioyooo/repogrammar@0.4.0 version
 npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.3.2/install.sh.sha256
-npx @sioyooo/repogrammar@0.3.2 version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.0/install.sh.sha256
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar version
 ```
 
-Continue with the no-build path only when the exact-version and GitHub checks
-succeed, the dist-tag object contains exactly `"latest":"0.3.2"` and
-`"preview":"0.2.0-preview.0"`, and the pinned launcher reports `0.3.2`. The
-npm launcher requires Node/npm for acquisition, but the installed product does
-not require Rust/Cargo, Docker, the SQLite CLI, a local model, an embedding
-model, an OpenAI API key, or a cloud API. The bounded Python analyzer requires
-Python 3.10 or newer as `python3` at runtime.
+Use the no-build path only when the exact package and GitHub asset exist and
+the dist-tags are `latest=0.4.0` and `preview=0.2.0-preview.0`. The preview tag
+must continue to resolve the immutable historical preview; stable publication
+must not rewrite it.
 
-If any check fails, use contributor source acquisition:
+The npm package is a thin launcher. It downloads and verifies the matching
+native archive, then executes the Rust binary; it does not compile Rust and it
+does not install a bare `repogrammar` command onto `PATH`. Use the full pinned
+`npx --yes --package ... repogrammar` form for reproducible commands.
 
-```text
-git clone https://github.com/SioYooo/RepoGrammar.git
-cd RepoGrammar
-cargo build --release
-bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
+## 2. Set up one repository
+
+Python 3.10 or newer is required for the bundled bounded Python analyzer. The
+release path does not require Rust/Cargo, Docker, an LLM, embeddings, a vector
+database, or an API key.
+
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar setup --project /path/to/repo --target auto
+```
+
+Setup reviews one plan, configures a safely owned detected Codex or Claude Code
+integration, initializes and indexes the repository, starts that repository's
+autosync daemon, and runs the read-only product MCP self-test. Foreign,
+malformed, or drifted agent configuration is preserved and reported.
+
+For CI or a deterministic one-shot index without a daemon:
+
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar setup --project /path/to/repo --target auto \
+  --yes --no-autosync --progress never
+```
+
+`init` is the repository-only entrypoint when machine integration is already
+configured. It starts repo-local autosync by default; add `--no-autosync` for a
+one-shot index. RepoGrammar does not run a global repository scanner.
+
+## 3. Ask for bounded context
+
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar find "FastAPI route" \
+  --project /path/to/repo --mode compact --verbosity minimal
+
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar check "path/to/file.py:LINE" \
+  --project /path/to/repo --mode compact --verbosity minimal
+```
+
+Consume the returned `read_plan` before broad source reads. A successful
+`check` is a static-alignment certificate; it always keeps
+`runtime_equivalence: UNKNOWN`. `UNKNOWN` and `PARTIAL_CONTEXT` are normal
+typed results with source fallback or sync recovery, not silent failures.
+
+If query-time hashes reject stale evidence, refresh explicitly:
+
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar sync --project /path/to/repo
+```
+
+Autosync is a best-effort convenience. Explicit sync is the authoritative
+refresh path.
+
+## 4. Optional permanent managed command
+
+After the public asset check succeeds, download and verify `install.sh` and its
+checksum from the exact `v0.4.0` release, then run:
+
+```bash
+bash install.sh --version v0.4.0 --install-cli-only --yes
 repogrammar version
 ```
 
-## 2. Run One Setup Command
+The installer acquires the same verified native archive and bundled worker. It
+may also configure supported agents when explicitly requested; it never creates
+repository `.repogrammar/` state on its own.
 
-Change into the repository you want to analyze:
+Contributor-only source builds remain available from a checkout:
 
-```text
-cd /path/to/your/repo
-repogrammar setup --target auto
+```bash
+cargo build --release
+bash src/install/repogrammar-install.sh \
+  --install-cli-only --from-source --yes
 ```
 
-Setup presents one plan and requests one confirmation. It then:
+## 5. Cleanup
 
-1. detects a supported agent with a reversible writer;
-2. configures only RepoGrammar-owned MCP state when possible;
-3. creates or reuses safe repository-local state;
-4. builds the active index;
-5. starts auto-sync unless `--no-autosync` is present;
-6. runs a read-only product MCP self-test; and
-7. prints each current limitation or recovery action, and prints a coding-agent
-   question only when at least one native agent integration is verified ready.
-
-No detected Codex or Claude Code CLI is not fatal: setup still completes the
-repository-only path and tells you how to add a supported agent later. Setup
-never enables telemetry.
-
-Useful variants:
-
-```text
-# Preview the complete plan without any writes.
-repogrammar setup --target auto --dry-run
-
-# Explicit noninteractive authorization for automation.
-repogrammar setup --target auto --yes
-
-# Initialize and index without a background refresher.
-repogrammar setup --target auto --yes --no-autosync
-
-# Stable machine-readable final output and no progress stream.
-repogrammar setup --target auto --yes --json --progress never
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar uninit --project /path/to/repo --yes
 ```
 
-Re-running setup is idempotent. It preserves valid pre-existing machine and
-repository state. If a later stage fails, rollback removes only machine-level
-integration written by that setup attempt; it does not delete an existing
-index or foreign agent configuration.
+`uninit` is the only repository lifecycle command that removes
+`.repogrammar/`. Machine-level agent integration has its own reversible
+`repogrammar uninstall` receipt boundary.
 
-## 3. Ask For Repository Context
+## Platform and scope boundary
 
-In a configured coding agent, try the question printed by setup:
-
-```text
-How are API routes implemented in this repository?
-```
-
-Or use the CLI directly:
-
-```text
-repogrammar families
-repogrammar find --project . --token-budget 8000 <repo-relative-path-or-symbol>
-repogrammar explain --project . --token-budget 8000 <repo-relative-path-or-symbol>
-repogrammar check --project . --token-budget 8000 <repo-relative-path-or-symbol>
-```
-
-Default output is metadata-only. Add `--include-source-spans` only when bounded
-line-numbered source is needed. `UNKNOWN` and `PARTIAL_CONTEXT` are truthful
-outcomes, not setup failures; follow the single recovery action or use ordinary
-source search for unsupported evidence.
-
-## Supported Platforms
-
-The stable `0.3.2` binary matrix is:
+Stable release archives cover:
 
 - macOS arm64 and x86_64;
-- glibc 2.35+ Linux x86_64; and
-- glibc 2.39+ Linux arm64.
+- glibc Linux x86_64 with glibc 2.35 or newer; and
+- glibc Linux arm64 with glibc 2.39 or newer.
 
-Musl-based Linux, older glibc, and Linux systems where glibc cannot be confirmed
-fail closed before download. Windows is not in the stable matrix. Live agent writers currently cover
-global Codex and global Claude Code only. Source-checkout installation has been
-tested locally on Unix-like paths; Windows source acquisition uses
-`src/install/install.ps1` and remains subject to the Windows proof recorded in
-the [install proof matrix](reports/public-preview-install-proof-matrix.md).
-
-## Verify The Journey
-
-From the RepoGrammar checkout:
-
-```text
-cargo test --lib application::setup::tests
-cargo test --lib interfaces::cli::tests
-node src/npm/repogrammar.test.js
-bash src/install/repogrammar-install.test.sh
-cargo run --quiet --bin repo-guard -- check
-```
-
-For a safe product smoke, build the binary, use an isolated temporary HOME and
-target repository, and run `setup --dry-run --json --progress never`. Verify
-that stdout is one JSON value, stderr is empty, `.repogrammar/` is absent, and
-the temporary HOME remains empty. The complete release gate is in the
-[stable release checklist](release/stable-v0.3.2-release-checklist.md).
-
-## Exact Published-Version Gate
-
-First verify the exact npm version, complete npm channel mapping, and matching
-GitHub asset:
-
-```text
-npm view @sioyooo/repogrammar@0.3.2 version
-npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.3.2/install.sh.sha256
-```
-
-Continue only when the version and GitHub checks succeed and the dist-tag object
-contains exactly `"latest":"0.3.2"` and
-`"preview":"0.2.0-preview.0"`. The pinned no-build path is:
-
-```text
-npx @sioyooo/repogrammar@0.3.2 setup --project /path/to/your/repo --target auto
-```
-
-After publication verification, unversioned `npx @sioyooo/repogrammar` uses
-npm `latest` and must resolve the same `0.3.2`. The separate `@preview` tag
-continues to resolve immutable `0.2.0-preview.0`; use the exact stable version
-for reproducible automation.
-
-If any check fails, stay on the source path above. The npm wrapper is a thin
-downloader/launcher for checksummed release binaries; it does not compile
-RepoGrammar or implement analysis in JavaScript.
-
-See the [Codex quickstart](quickstart-codex.md) and
-[Build Week demo](demo/build-week-demo.md) for the agent-specific and
-submission-ready flows.
+Windows, musl Linux, older/unknown libc, and unsupported architectures fail
+closed before download. See [limitations](limitations.md),
+[installation specification](specifications/installation.md), and the
+[Codex quickstart](quickstart-codex.md) for exact boundaries.

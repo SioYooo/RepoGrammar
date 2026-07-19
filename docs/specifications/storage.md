@@ -410,7 +410,7 @@ least:
 ```json
 {
   "schema_version": 1,
-  "repogrammar_version": "0.3.2",
+  "repogrammar_version": "0.4.0",
   "created_at": "2026-06-24T00:00:00Z",
   "last_indexed_at": "2026-06-24T00:00:00Z",
   "repository": {
@@ -838,7 +838,7 @@ yet. The lock must contain:
   "host": "workstation-name",
   "os": "darwin",
   "started_unix_seconds": 1782200000,
-  "repogrammar_version": "0.3.2",
+  "repogrammar_version": "0.4.0",
   "token": "12345-1782200000000000000-1"
 }
 ```
@@ -907,11 +907,11 @@ fact with typed `StaleEvidence`.
 Repository-revision, worktree-wide, and persisted family freshness remain
 deferred.
 
-Auto-sync is optional. The baseline remains explicit repo-local bootstrap,
-freshness warnings in `status`, and freshness checks before MCP claims. For
-first setup, users and agents may run `repogrammar init`; agents may add
-`--yes`, and either may add `--autosync` when auto-sync should start after the
-first active index succeeds.
+Auto-sync remains repo-local and explicitly initiated through repository
+bootstrap. For first setup, users and agents may run `repogrammar init`; agents
+may add `--yes`. After the first active index succeeds, init starts auto-sync by
+default. `--no-autosync` retains the active index without starting a background
+daemon for CI, experiments, or one-shot use.
 When enabled with `repogrammar autosync start`, RepoGrammar stores
 `.repogrammar/autosync.json`, uses `.repogrammar/locks/daemon.lock` for the
 running worker, and writes diagnostics to `.repogrammar/logs/daemon.log`.

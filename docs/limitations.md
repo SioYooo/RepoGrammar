@@ -1,21 +1,23 @@
 # Limitations
 
-RepoGrammar `0.3.2` is the stable-channel candidate. Its MCP API
-and bounded analyzers remain experimental. It is designed to be conservative
-and local-first, not a sound general static analyzer or a production-readiness
-claim.
+RepoGrammar's current source identity is `0.4.0`; that manifest value does not
+prove a matching tag, GitHub Release, artifact, or npm package exists. Public
+availability requires the independent registry and finalizer evidence in the
+stable checklist. The MCP API and bounded analyzers remain experimental. RepoGrammar
+is designed to be conservative and local-first, not a sound general static
+analyzer or a production-readiness claim.
 
 ## Release Availability
 
-- Stable artifacts are available only after the exact `v0.3.2` GitHub release
-  is public and immutable and npm `@sioyooo/repogrammar@0.3.2` is independently
+- Stable artifacts are available only after the exact `v0.4.0` GitHub release
+  is public and immutable and npm `@sioyooo/repogrammar@0.4.0` is independently
   verified.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood is the safe contributor path before release and npm
   publication exist.
 - The two-phase immutable rollout and recovery states are tracked in
-  `release/stable-v0.3.2-release-checklist.md`. The earlier preview record
+  `release/stable-v0.4.0-release-checklist.md`. The earlier preview record
   remains in `release/public-preview-release-checklist.md`.
 
 ## Language And Framework Scope
@@ -29,8 +31,9 @@ claim.
 - React, full JS/TS semantic analysis, dynamic wrappers, broad re-export
   analysis, executable config semantics, and general runtime behavior are not
   supported.
-- Rust support is internal self-dogfood only and does not claim general Rust
-  semantic analysis.
+- Rust support is a bounded v0.2 structural/framework preview covering
+  self-dogfood roles plus serde, thiserror, tokio, clap, and axum families. It
+  does not claim rustc-level or general Rust semantic analysis.
 - Java/Spring support is structural preview only and does not execute classpath,
   build, DI, proxy, or generated repository semantics.
 - Go is discovered-only and unsupported: `.go`, `go.mod`, and `go.work` may
@@ -151,6 +154,16 @@ comparable measurement source and valid treatment correctness. The all-scope
 estimate adds no new path to a measured claim; the paired-experiment recorder
 remains the only source of measured savings.
 
+## Agent-adoption evidence
+
+The mechanics-only N=2 pilot is not an impact study. In its four treatment
+runs, the RepoGrammar MCP server connected successfully but the small headless
+model made `0/4` proactive `repogrammar_context` calls. This is an adoption
+finding, not a product correctness failure or savings result. Current recording
+instructions explicitly tell the agent to use RepoGrammar and must not be
+described as spontaneous adoption. A larger, isolated, correctness-gated study
+remains deferred.
+
 ## Telemetry
 
 Anonymous telemetry is off by default. Telemetry must not include source code,
@@ -210,6 +223,13 @@ These are intentional current behaviors or tracked deferrals, not defects:
   `repogrammar sync` (or any later size/mtime-visible change) recomputes content
   hashes authoritatively, so freshness is never silently claimed from the
   fingerprint alone.
+- **Autosync is a repo-local detached process, not a global OS service.** Each
+  repository needs its own initialized state and daemon. A reboot, explicit
+  stop, crash, or managed command runner that reclaims detached descendants can
+  leave the repository index readable but auto-sync stopped; use
+  `repogrammar autosync status --project <path>` and restart it from a persistent
+  user terminal when needed. CI and managed runners should normally initialize
+  with `--no-autosync`.
 - **Cross-version autosync step-down is best-effort, not a single-writer
   guarantee.** After a binary upgrade, a still-running older autosync daemon
   observes the newer engine's version stamp in the run state and steps down on
@@ -278,7 +298,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   parse-document response is a future optimization. Adds/removes that only touch
   an isolated path also remain future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in `0.3.2`; a dedicated `ready`
+  signal reports at most `partial` in `0.4.0`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and

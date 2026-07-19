@@ -9,8 +9,8 @@ The ownership model has three separate layers:
 2. run `repogrammar install` to wire machine-level coding-agent MCP
    integration;
 3. run `repogrammar init` inside each repository that should have a local
-   RepoGrammar index, or `repogrammar init --autosync` when agent-session
-   auto-sync should start after the first index succeeds.
+   RepoGrammar index and daemon, or `repogrammar init --no-autosync` for a
+   deterministic one-shot index without background sync.
 
 `repogrammar setup` is the primary onboarding journey after the CLI has been
 acquired. It composes layers 2 and 3 in one reviewed plan and one confirmation,
@@ -43,9 +43,12 @@ The resulting ownership states are intentionally distinct:
 - `Malformed`: the receipt or successful native response cannot be recognized;
   preserve and refuse automatic overwrite.
 
-An exact native not-found response means absent. A failed probe with unexpected
-output remains unknown and blocks setup because native state could not be
-inspected safely. Setup may continue repository-only for a successfully probed
+An allowlisted native not-found response means absent. Codex requires its exact
+not-found sentence. Claude Code accepts the exact server-name sentence followed
+by either its legacy add-command guidance or its current configured-server
+inventory prefix; arbitrary suffixes remain rejected. A failed probe with
+unexpected output remains unknown and blocks setup because native state could
+not be inspected safely. Setup may continue repository-only for a successfully probed
 but unrecognized malformed configuration and recommends `repogrammar doctor`.
 The install service snapshots an `OwnedOutdated` integration before removing
 and re-adding it, and restores the exact native entry, receipt, receipt backup,
@@ -149,11 +152,13 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-documentation should pin `v0.3.2` for reproducible acquisition even after the
-normal release becomes GitHub `latest`. When a `latest` or explicit artifact
-lookup fails, installers must report that the release artifact was not found,
-suggest the exact `--version <release-tag>`, and mention
-`REPOGRAMMAR_RELEASE_DIR` for local artifact testing.
+candidate and post-publication documentation should pin `v0.4.0` for
+reproducible acquisition, but public-install claims must remain on the last
+verified public stable (`v0.2.2`) until GitHub, npm, and finalizer evidence all
+pass. When a `latest` or explicit artifact lookup fails, installers must report
+that the release artifact was not found, suggest the exact
+`--version <release-tag>`, and mention `REPOGRAMMAR_RELEASE_DIR` for local
+artifact testing.
 Installers must validate archive entry names before extraction: absolute paths,
 Windows absolute paths, traversal components, URI-like names, backslashes, and
 unexpected files are rejected even when the archive checksum matches. Entry
@@ -174,6 +179,13 @@ display PATH guidance, or build from source only when the user explicitly
 chooses the contributor source-build path. It must not
 duplicate native agent configuration logic outside the Rust installer, and it
 must not create or modify `.repogrammar/`.
+
+The current release-source manifests use stable identity `0.4.0`. A source
+build or source install must report that identity consistently across Cargo and
+npm, but the manifest value alone does not establish a tag, release artifact,
+registry publication, or public stable channel. Stable acquisition is pinned
+to `0.4.0` only after exact-version GitHub and npm checks confirm publication;
+until then `0.2.2` remains the last verified public stable release.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
@@ -289,7 +301,8 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.3.2.tgz`;
+  `npm install -g ./sioyooo-repogrammar-0.4.0.tgz` for the current
+  source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
 `REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute
@@ -373,11 +386,12 @@ remove project indexes, logs, caches, locks, or repository-local receipts.
 They must not run `init`, `index`, `sync`, or `resync`.
 Agent-safe bootstrap is explicit and per repository: after machine-level
 installation, an agent may run `repogrammar init --yes` only when the user has
-allowed repo-local analysis state. That command does not broaden `init` writes,
-does not start auto-sync, and does not imply telemetry consent, but it builds or
-refreshes the active index by default. Agents may add `--autosync` when the user
-wants coding-agent edits to enter RepoGrammar results without repeated manual
-`resync`. Use `--state-only` only for lifecycle repair that must not index.
+allowed repo-local analysis state and the default repo-local background daemon.
+That command does not broaden tracked-file writes or imply telemetry consent;
+it builds or refreshes the active index and then starts auto-sync by default.
+Agents use `--no-autosync` when authorization covers one-shot indexing but not a
+background process. Use `--state-only` only for lifecycle repair that must not
+index or start auto-sync.
 
 Repository lifecycle state is owned by `repogrammar init`,
 `repogrammar index`, `repogrammar sync`, `repogrammar resync`, and
@@ -408,8 +422,11 @@ The installer must:
 - validate every configured MCP integration by launching a self-test;
 - verify the native entry is present and still points at the expected installed
   executable with exactly the `serve` argument after configuration;
-- run the product binary's bounded `tools/list` self-test again after native
-  configuration and receipt creation, before reporting success;
+- run the product binary's bounded MCP self-test again after native
+  configuration and receipt creation, before reporting success; the test sends
+  `initialize` first, requires the current RepoGrammar server version and exact
+  managed instruction contract, then validates the exact context-tool operation
+  schema through `tools/list`;
 - store an installation receipt sufficient for precise, reversible uninstall;
 - never remove configuration that was not created by RepoGrammar;
 - treat instruction-file modification as optional and marker-fenced.
@@ -463,8 +480,10 @@ RepoGrammar must use this exact marker fence:
 <!-- END REPOGRAMMAR MANAGED SECTION -->
 ```
 
-The current managed content version is `2`. The block and MCP initialize
-guidance share one authoritative pre-flight contract. After mandatory
+The current managed content version is `3`; exact version `2` content remains a
+known outdated body eligible for automatic refresh, alongside the earlier v1
+and unversioned bodies. The block and MCP initialize guidance share one
+authoritative pre-flight contract. After mandatory
 repository authority and instruction documents have been read, the gate applies
 when `.repogrammar/` exists and an implementation, fix, refactor, test, or
 diagnosis requires a repository-local contract or convention, repeated
@@ -474,21 +493,30 @@ Contract qualification, conformance, or drift. File type and an exact target do
 not exempt a mixed task, such as a YAML-generated prompt that must conform to a
 repeated Meaning Contract.
 
-For covered work the agent calls `repogrammar_context` exactly once before
-CodeGraph or source search/read, with `operation: "find_analogues"`, a target
-built from the concrete repo-relative path, symbol/member id, framework role,
-or code-work question in the task, and `mode: "compact"`. It consumes the
-returned `read_plan` and may fall back when the tool is unavailable or the
-result explicitly reports `UNKNOWN`, `FALLBACK`, stale, omitted, or
-insufficient evidence. The agent records that fallback reason before
-proceeding and does not repeat an identical context call unless the target or
-indexed evidence changed. CodeGraph may then supply exact source or call-path
-detail not supplied by RepoGrammar.
+For covered work the agent builds one precision-first target before calling
+`repogrammar_context`: exact repo-relative path or locator first, then exact
+`unit:`/member/symbol, then exact framework role, and only then a concise
+pattern question. It must not replace a concrete locus with broad task or
+governance prose. A prose target preserves any task-provided language/framework
+plus a supported concept (`route`, `fixture`, `validation model`, `data access`,
+or `test`). The agent calls `find_analogues` in compact mode once for that
+target, consumes its `read_plan`, and never repeats the same target; a materially
+narrower locator is a new target.
 
-Instruction-file synchronization does not guarantee hot reload for agent
-sessions that are already running. After a successful live `repogrammar
-instructions sync`, the CLI recommends starting a new coding-agent session; an
-older session may retain the instruction snapshot it loaded at startup.
+When the tool is unavailable or reports `FALLBACK`, stale, omitted, or
+insufficient evidence, the agent records that reason before proceeding. On
+`UNKNOWN`, exactly one returned candidate family id may be inspected once with
+`show_family` as candidate context only; it is not a selected family or
+conformance proof. Multiple candidates require a stronger target or source/
+CodeGraph fallback. CodeGraph may then supply exact source or call-path detail
+not supplied by RepoGrammar.
+
+Neither a successful live install nor instruction-file synchronization can hot
+swap an agent session that is already running. After a successful live
+`repogrammar install` or `repogrammar instructions sync`, the CLI recommends
+restarting the coding-agent session. Already-open Codex or Claude MCP child
+processes continue running the binary they started with, and an older session
+may retain the instruction snapshot it loaded at startup.
 
 The gate is skipped for pure prose documentation; operational release, Git,
 environment, or credential inspection; syntax-only YAML or configuration
@@ -502,13 +530,13 @@ The installer must not overwrite unrelated user instructions. `uninstall`
 reverses only RepoGrammar's own managed write. If a file has a malformed or
 incomplete managed section, the installer must stop and direct the user to a
 manual repair workflow. A complete marker pair alone is not proof of ownership:
-only the exact current content or an exact previously shipped legacy body is
-recognized. A modified or unknown body inside the reserved markers is
+only the exact current content or an exact previously shipped body, including
+v2, is recognized. A modified or unknown body inside the reserved markers is
 `foreign`; it is preserved and refused for automatic refresh or removal. The
-managed block also treats returned family ids as follow-up handles, uses
-`show_family` only with an exact returned id, avoids `include_source_spans` and
-`repogrammar stats` by default, and never silently initializes, resyncs, or
-starts autosync.
+managed block treats returned family ids as follow-up handles rather than proof,
+permits only the one-candidate `UNKNOWN` inspection above, avoids
+`include_source_spans` and `repogrammar stats` by default, and never silently
+initializes, resyncs, or starts autosync.
 
 The managed instruction writer is implemented as a reversible, idempotent
 operation:
@@ -708,8 +736,9 @@ noninteractive live writes, and a dependency-light text wizard:
   user install data directory after native configuration succeeds, recording the
   resolved instruction-file path and instruction action;
 - after writing each receipt, install re-probes the native entry for exact
-  presence and runs the installed product binary's bounded exact-one-tool
-  `tools/list` self-test. Failure removes entries, receipts, instruction
+  presence and runs the installed product binary's bounded initialize/version/
+  instruction plus exact-one-tool-schema self-test. Failure removes entries,
+  receipts, instruction
   sections, and command files newly created by that install run, while restoring
   any pre-existing owned target that was being refreshed from its snapshot;
 - the managed instruction-file writer (create/append/replace/idempotent/remove,

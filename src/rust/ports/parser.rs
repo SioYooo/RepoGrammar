@@ -50,6 +50,25 @@ pub struct ParseReport {
     pub diagnostics: Vec<ParseDiagnostic>,
 }
 
+/// Parser output that carries indexing-only metadata alongside the normalized
+/// report. Most frontends return no Python interface hash; the Python frontend
+/// supplies the exact hash already computed by its `parse_document` request so
+/// indexing can persist it without launching a second worker process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceParseOutput {
+    pub report: ParseReport,
+    pub python_interface_hash: Option<String>,
+}
+
+impl SourceParseOutput {
+    pub fn from_report(report: ParseReport) -> Self {
+        Self {
+            report,
+            python_interface_hash: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseDiagnostic {
     pub path: String,
@@ -100,6 +119,18 @@ pub trait SourceParser {
         _context: &ParserProjectContext,
     ) -> Result<ParseReport, ParseError> {
         self.parse(document)
+    }
+
+    /// Parse with project context and return any indexing-only metadata emitted
+    /// by that same frontend request. The default preserves existing parser
+    /// behavior; only the Python frontend currently attaches metadata.
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        self.parse_with_context(document, context)
+            .map(SourceParseOutput::from_report)
     }
 
     /// Compute the file-local Python interface hash for `text` at `path`. The
