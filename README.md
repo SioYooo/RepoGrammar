@@ -72,7 +72,12 @@ git -C "$JUDGE_ROOT/full-stack-fastapi-template" checkout \
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar setup \
   --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --target auto --yes --no-autosync --progress never
+  --target auto --dry-run --no-autosync --progress never
+
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar init \
+  --project "$JUDGE_ROOT/full-stack-fastapi-template" \
+  --yes --no-autosync --progress never
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar find "FastAPI route" \
@@ -80,14 +85,14 @@ npx --yes --package @sioyooo/repogrammar@0.4.0 \
   --mode compact --verbosity minimal
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar check "backend/app/api/routes/items.py:48" \
+  repogrammar check "backend/app/api/routes/items.py:49" \
   --project "$JUDGE_ROOT/full-stack-fastapi-template" \
   --mode compact --verbosity minimal
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar find "definitely_missing_repo_pattern" \
   --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --mode compact --verbosity minimal
+  --mode compact --json
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar uninit \
@@ -95,7 +100,10 @@ npx --yes --package @sioyooo/repogrammar@0.4.0 \
 rm -rf "$JUDGE_ROOT"
 ```
 
-The successful query should return a supported family plus a bounded
+The judge path first executes a no-write preview of the complete `setup` plan,
+then uses repository-only `init`, so it does not modify global agent
+configuration. `uninit` removes the local index before the disposable clone is
+deleted. The successful query should return a supported family plus a bounded
 `read_plan`. `check` returns a static-alignment token while preserving
 `runtime_equivalence: UNKNOWN`. The deliberately unsupported query returns a
 typed `UNKNOWN` and source-fallback recovery. Exact IDs, hashes, generation

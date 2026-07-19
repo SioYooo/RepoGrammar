@@ -297,15 +297,20 @@ runtime evidence; RepoGrammar's later certificate remains static-only.
 
 ## 6. Controlled stale-evidence rejection and explicit sync
 
-Stop autosync so the stale interval is deterministic, add one disposable source
-probe, then query a previously indexed target before syncing:
+Stop autosync so the stale interval is deterministic, preserve and modify the
+already indexed route file, then query that same target before syncing. A new
+unindexed file would not stale the existing member hash and is therefore not a
+valid probe.
 
 ```bash
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar autosync stop --project "$DEMO_REPO"
 
-echo '# temporary stale-evidence probe; remove before sync' \
-  > "$DEMO_REPO/backend/app/api/routes/_repogrammar_stale_probe.py"
+STALE_TARGET="$DEMO_REPO/backend/app/api/routes/items.py"
+STALE_BACKUP="$DEMO_ROOT/items.py.before-stale-probe"
+cp "$STALE_TARGET" "$STALE_BACKUP"
+printf '\n# temporary stale-evidence probe; restore before sync\n' \
+  >> "$STALE_TARGET"
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar find --project "$DEMO_REPO" \
@@ -317,11 +322,12 @@ The query must reject or qualify stale evidence and provide a recovery action.
 If it returns an unqualified fresh family claim, stop the rehearsal and file a
 product blocker; do not edit the output or continue recording.
 
-Remove only the named probe, explicitly synchronize the real patch, and restart
-autosync:
+Restore the exact pre-probe contents, verify the temporary change is gone,
+explicitly synchronize the real patch, and restart autosync:
 
 ```bash
-rm "$DEMO_REPO/backend/app/api/routes/_repogrammar_stale_probe.py"
+mv "$STALE_BACKUP" "$STALE_TARGET"
+git -C "$DEMO_REPO" diff --check
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar sync --project "$DEMO_REPO" --progress never
@@ -365,19 +371,19 @@ npx --yes --package @sioyooo/repogrammar@0.4.0 \
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar find --project "$DEMO_REPO" \
-  --mode compact --verbosity minimal \
+  --mode compact --json \
   unit:backend/app/api/routes/items.py#definitely_missing_summary_member
 ```
 
 Required checkpoints:
 
 - minimal `find` retains status, bounded read-plan/source-reading obligation,
-  estimated-potential measurement kind/caveat when present, and typed unknowns;
+  and estimated-potential measurement kind/caveat when present;
 - `check` emits one current static-alignment token and always
   `runtime_equivalence: "UNKNOWN"`;
-- the deliberately missing exact member returns typed `UNKNOWN` (normally an
-  `InsufficientSupport` reason) plus recovery, rather than being attached to a
-  plausible nearby FastAPI family;
+- the deliberately missing exact member's JSON returns typed `UNKNOWN`
+  (normally an `InsufficientSupport` reason) plus recovery, rather than being
+  attached to a plausible nearby FastAPI family;
 - no line is described as measured token savings, runtime equivalence, a sound
   proof, or prevention of hallucinations.
 

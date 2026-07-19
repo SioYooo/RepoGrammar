@@ -93,6 +93,8 @@ const DEPRECATED_NODE20_ACTIONS: &[(&str, &str)] = &[
         "use actions/setup-node@v5 or newer",
     ),
 ];
+const PINNED_RUST_TOOLCHAIN_ACTION: &str =
+    "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4";
 const SOURCE_EXTENSIONS: &[&str] = &[
     "rs", "c", "cc", "cpp", "cxx", "h", "hpp", "hh", "hxx", "go", "py", "js", "jsx", "ts", "tsx",
     "java", "cs", "kt", "kts", "sh", "bash", "zsh", "ps1", "sql",
@@ -6084,6 +6086,46 @@ fn check_github_workflow_actions(
                 ));
             }
         }
+        let lines = contents.lines().collect::<Vec<_>>();
+        for (index, line) in lines.iter().enumerate() {
+            let Some((_, action_text)) = line.split_once("uses:") else {
+                continue;
+            };
+            let action = action_text
+                .split('#')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .trim_matches(['\'', '"']);
+            if !action.starts_with("dtolnay/rust-toolchain@") {
+                continue;
+            }
+            if action != PINNED_RUST_TOOLCHAIN_ACTION {
+                violations.push(GuardViolation::new(
+                    relative.clone(),
+                    "UnpinnedThirdPartyGitHubAction",
+                    format!(
+                        "dtolnay/rust-toolchain must use reviewed commit pin {PINNED_RUST_TOOLCHAIN_ACTION}"
+                    ),
+                ));
+            }
+            let action_indent = line.len() - line.trim_start().len();
+            if !lines
+                .iter()
+                .skip(index + 1)
+                .take_while(|candidate| {
+                    candidate.trim().is_empty()
+                        || candidate.len() - candidate.trim_start().len() > action_indent
+                })
+                .any(|candidate| candidate.trim() == "toolchain: stable")
+            {
+                violations.push(GuardViolation::new(
+                    relative.clone(),
+                    "ImplicitRustToolchainSelection",
+                    "the pinned rust-toolchain action must request toolchain: stable explicitly",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -8491,6 +8533,52 @@ verify-stable-release-evidence --evidence-dir evidence
             violation.path == ".github/workflows/release.yml"
                 && violation.rule == "DeprecatedGitHubActionRuntime"
                 && violation.detail.contains("actions/setup-node@v5")
+        }));
+    }
+
+    #[test]
+    fn rust_toolchain_action_requires_reviewed_commit_and_explicit_toolchain() {
+        let root = TempRoot::new("rust-toolchain-action-pin");
+        write_file(
+            root.path().join(".github/workflows/ci.yml"),
+            b"steps:\n  - uses: dtolnay/rust-toolchain@stable\n",
+        );
+        write_file(
+            root.path().join(".github/workflows/release.yml"),
+            format!(
+                "steps:\n  - uses: {PINNED_RUST_TOOLCHAIN_ACTION}\n    with:\n      toolchain: stable\n"
+            )
+            .as_bytes(),
+        );
+        write_file(
+            root.path().join(".github/workflows/stable-release-finalize.yml"),
+            format!(
+                "steps:\n  - uses: {PINNED_RUST_TOOLCHAIN_ACTION}\n  - run: echo sibling\n    env:\n      toolchain: stable\n"
+            )
+            .as_bytes(),
+        );
+
+        let mut violations = Vec::new();
+        check_github_workflow_actions(root.path(), &mut violations).expect("workflow check");
+
+        assert!(violations.iter().any(|violation| {
+            violation.path == ".github/workflows/ci.yml"
+                && violation.rule == "UnpinnedThirdPartyGitHubAction"
+        }));
+        assert!(violations.iter().any(|violation| {
+            violation.path == ".github/workflows/ci.yml"
+                && violation.rule == "ImplicitRustToolchainSelection"
+        }));
+        assert!(!violations.iter().any(|violation| {
+            violation.path == ".github/workflows/release.yml"
+                && matches!(
+                    violation.rule,
+                    "UnpinnedThirdPartyGitHubAction" | "ImplicitRustToolchainSelection"
+                )
+        }));
+        assert!(violations.iter().any(|violation| {
+            violation.path == ".github/workflows/stable-release-finalize.yml"
+                && violation.rule == "ImplicitRustToolchainSelection"
         }));
     }
 

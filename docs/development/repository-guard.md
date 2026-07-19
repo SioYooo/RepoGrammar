@@ -53,6 +53,10 @@ The check command verifies:
 - GitHub workflow files do not use deprecated Node.js 20 action majors for
   first-party checkout or Node setup actions; currently `actions/checkout@v4`
   and `actions/setup-node@v4` are rejected in favor of `@v5` or newer.
+- Every `dtolnay/rust-toolchain` step uses the reviewed commit
+  `4cda84d5c5c54efe2404f9d843567869ab1699d4` and explicitly requests
+  `toolchain: stable`; mutable branches, tags, or a different implementation
+  commit fail the guard.
 - the release workflow classifies preview versus stable through `repo-guard`,
   keeps manual dispatch build-only, and creates one exact npm candidate that
   downstream jobs download rather than repack;

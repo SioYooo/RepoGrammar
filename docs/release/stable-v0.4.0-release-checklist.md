@@ -66,6 +66,9 @@ authority for `0.4.0` bytes.
   unoccupied before tagging.
 - Cargo, Cargo.lock, npm, installer hint, release workflow, finalizer,
   repository guard, tests, and canonical installation docs agree on `0.4.0`.
+- Every `dtolnay/rust-toolchain` workflow step uses reviewed implementation
+  commit `4cda84d5c5c54efe2404f9d843567869ab1699d4` and explicitly requests
+  `toolchain: stable`; mutable third-party action refs fail the repository guard.
 - The public preview remains the immutable `0.2.0-preview.0`; no stable action
   mutates or replaces that version.
 - Release-facing documents distinguish source-ready, tagged candidate, public
@@ -82,14 +85,27 @@ authority for `0.4.0` bytes.
 
 Run on the exact release commit:
 
-```text
+```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo run --quiet --bin repo-guard -- check
-cargo run --quiet --bin repo-guard -- product-eval
-cargo run --quiet --bin repo-guard -- sync-equivalence --all
-cargo run --quiet --bin repo-guard -- payload-measure
+cargo run --quiet --bin repo-guard -- check-diff --base origin/main --head HEAD
+
+RC_PRODUCT_OUT="$(mktemp -d)"
+RC_SYNC_OUT="$(mktemp -d)"
+RC_PAYLOAD_OUT="$(mktemp -d)"
+
+cargo run --quiet --bin repo-guard -- product-eval \
+  --corpus src/fixtures/evaluation/query-corpus-v1.json \
+  --out "$RC_PRODUCT_OUT" --repetitions 1 \
+  --bin target/debug/repogrammar --condition v0_4_0_rc
+cargo run --quiet --bin repo-guard -- sync-equivalence \
+  --fixture src/fixtures/incremental_equivalence/v1 --all \
+  --bin target/debug/repogrammar --out "$RC_SYNC_OUT"
+cargo run --quiet --bin repo-guard -- payload-measure \
+  --fixture src/fixtures/evaluation/payload-measure \
+  --bin target/debug/repogrammar --out "$RC_PAYLOAD_OUT"
 python3 src/workers/python/worker.test.py
 node src/workers/typescript/worker.test.js
 node src/npm/repogrammar.test.js
@@ -99,11 +115,10 @@ git diff --check
 cmp -s AGENTS.md CLAUDE.md
 ```
 
-Where a command requires explicit output paths or corpus arguments, use the
-current CLI contract documented by `repo-guard --help` and retain the resulting
-evidence outside the repository unless the canonical experiment protocol
-requires a checked-in summary. A manual `build-only` workflow dispatch is
-rehearsal only and its artifacts can never become publication candidates.
+Retain the three printed temporary output paths in the RC evidence ledger; do
+not commit their generated artifacts. A manual `build-only` workflow
+dispatch is rehearsal only and its artifacts can never become publication
+candidates.
 
 The local gate also proves:
 
@@ -155,8 +170,10 @@ Before either private candidate becomes public, verify:
 
 - tag SHA equals the merged release commit and candidate run `head_sha`;
 - all platform jobs and package smokes passed in the same tag run;
-- the draft has the exact 11-asset inventory and every checksum passes;
-- GitHub candidate attestation data is available;
+- the draft's exact 11-asset inventory matches the locally retained filenames,
+  sizes, and checksums;
+- public GitHub release/asset attestations are not a pre-publication input and
+  are verified only after immutable publication;
 - `npm-candidate-manifest.json` matches the retained npm tarball filename,
   version, four-file allowlist, SHA-512, and SRI;
 - the authenticated npm stage is the exact retained tarball and no failed or
