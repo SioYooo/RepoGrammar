@@ -992,8 +992,10 @@ require_workflow_match "$WINDOWS_SOURCE_JOB" 'name:[[:space:]]+Windows source-on
   "Windows CI must remain explicitly source-only"
 require_workflow_match "$WINDOWS_SOURCE_JOB" 'runs-on:[[:space:]]+windows-' \
   "Windows source-only installer tests must run on a native Windows runner"
-require_workflow_match "$WINDOWS_SOURCE_JOB" 'dtolnay/rust-toolchain@stable' \
-  "Windows source-only installer tests must provision Rust"
+require_workflow_match "$WINDOWS_SOURCE_JOB" 'dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4' \
+  "Windows source-only installer tests must use the reviewed Rust action pin"
+require_workflow_match "$WINDOWS_SOURCE_JOB" 'toolchain:[[:space:]]+stable' \
+  "Windows source-only installer tests must request stable Rust explicitly"
 require_workflow_match "$WINDOWS_SOURCE_JOB" 'install\.ps1\.test\.ps1' \
   "Windows source-only installer tests must execute the native PowerShell contract"
 require_workflow_absence "$WINDOWS_SOURCE_JOB" 'upload-artifact|release|repogrammar-.*windows|npm publish' \
