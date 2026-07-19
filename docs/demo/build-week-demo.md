@@ -314,11 +314,11 @@ printf '\n# temporary stale-evidence probe; restore before sync\n' \
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar find --project "$DEMO_REPO" \
-  --mode compact --verbosity minimal \
+  --mode compact --json \
   backend/app/api/routes/items.py
 ```
 
-The query must reject or qualify stale evidence and provide a recovery action.
+The JSON query must expose a typed stale-evidence reason and recovery action.
 If it returns an unqualified fresh family claim, stop the rehearsal and file a
 product blocker; do not edit the output or continue recording.
 
