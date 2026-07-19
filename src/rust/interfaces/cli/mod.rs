@@ -613,8 +613,8 @@ fn full_usage() -> String {
         "Project lifecycle:",
         "  setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
         "      Complete agent wiring, repository indexing, autosync, and MCP self-test in one plan.",
-        "  init [--project <path>] [--yes] [--state-only] [--resync] [--autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
-        "      Create safe repo-local state and build the active index; optionally start autosync.",
+        "  init [--project <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
+        "      Create repo-local state, build the active index, and start autosync by default.",
         "  uninit [--project <path>] --yes [--json]",
         "      Remove RepoGrammar repo-local state after explicit confirmation.",
         "  index [--project <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]",
@@ -713,19 +713,20 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --progress auto|always|never      Control indexing progress on stderr.",
         ])),
         "init" => Some(help_text(&[
-            "Usage: repogrammar init [--project <path>|--path <path>] [--yes] [--state-only] [--resync] [--autosync] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
+            "Usage: repogrammar init [--project <path>|--path <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
             "",
-            "Creates repository-local RepoGrammar state under .repogrammar/ and builds or refreshes the active index by default.",
+            "Creates repository-local RepoGrammar state under .repogrammar/, builds or refreshes the active index, and starts autosync by default.",
             "Use --state-only only for low-level lifecycle repair without indexing. Without --write-gitignore it avoids tracked .gitignore edits and writes Git exclude hygiene instead.",
             "--yes is accepted as an agent-safe noninteractive confirmation flag; it does not broaden init writes.",
-            "--resync is accepted as an explicit spelling of the default indexing step; add --autosync to keep facts fresh during an agent editing session.",
+            "--resync and --autosync remain accepted as explicit compatibility spellings of the defaults. Use --no-autosync for CI or one-shot indexing.",
             "",
             "Options:",
             "  --project <path>, --path <path>     Repository root to initialize. Defaults to the current directory.",
             "  --yes                              Accepted no-op confirmation flag for noninteractive agent bootstrap.",
             "  --state-only                       Create or repair lifecycle state without indexing or autosync.",
             "  --resync                           Explicitly request the default active-index build after init succeeds.",
-            "  --autosync                         Build the active index, then start repo-local autosync.",
+            "  --autosync                         Explicitly request the default repo-local autosync start.",
+            "  --no-autosync                      Build the active index without starting a background daemon.",
             "  --write-gitignore                  Add a marker-fenced .gitignore entry in the repository root.",
             "  --json                             Emit machine-readable output.",
             "  --progress auto|always|never       Control progress output.",
@@ -750,7 +751,7 @@ pub fn command_usage(command: &str) -> Option<String> {
             "",
             "Manages optional repository-local automatic sync. With no subcommand, autosync is equivalent to autosync status.",
             "Subcommands are positional: use `repogrammar autosync start`, not `repogrammar autosync --start`.",
-            "Use autosync start after an initial resync when new or modified files should enter RepoGrammar results without manual resync.",
+            "Init starts autosync by default. Use autosync start to recover it after a stop, reboot, or daemon failure.",
             "",
             "Subcommands:",
             "  status     Show auto-sync configuration and daemon state.",
@@ -7148,7 +7149,7 @@ where
             ),
         );
     }
-    if options.state_only && options.autosync {
+    if options.state_only && options.autosync == Some(true) {
         return lifecycle_error(
             "init",
             options.json,
@@ -7216,7 +7217,7 @@ where
             };
 
             let mut autosync_report = None;
-            if options.autosync {
+            if options.autosync.unwrap_or(true) {
                 let autosync_request = build_cli_autosync_request(options, current_dir, env_lookup);
                 match runtime.autosync(AutosyncCommand::Start, autosync_request) {
                     Ok(report) => autosync_report = Some(report),
@@ -7757,7 +7758,7 @@ struct LifecycleOptions {
     yes: bool,
     state_only: bool,
     resync: bool,
-    autosync: bool,
+    autosync: Option<bool>,
     force: bool,
 }
 
@@ -7833,7 +7834,7 @@ impl Default for LifecycleOptions {
             yes: false,
             state_only: false,
             resync: false,
-            autosync: false,
+            autosync: None,
             force: false,
         }
     }
@@ -8041,7 +8042,11 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
                 index += 1;
             }
             "--autosync" if command == "init" => {
-                options.autosync = true;
+                set_init_autosync_preference(&mut options.autosync, true)?;
+                index += 1;
+            }
+            "--no-autosync" if command == "init" => {
+                set_init_autosync_preference(&mut options.autosync, false)?;
                 index += 1;
             }
             "--force" if command == "unlock" => {
@@ -8056,6 +8061,17 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
         }
     }
     Ok(options)
+}
+
+fn set_init_autosync_preference(
+    preference: &mut Option<bool>,
+    enabled: bool,
+) -> Result<(), String> {
+    if preference.is_some_and(|current| current != enabled) {
+        return Err("--autosync and --no-autosync cannot be combined".to_string());
+    }
+    *preference = Some(enabled);
+    Ok(())
 }
 
 fn parse_prune_options(rest: &[String]) -> Result<PruneOptions, String> {
@@ -11258,6 +11274,10 @@ mod tests {
         ) -> Result<AutosyncReport, RepoGrammarError> {
             self.autosync_calls.set(self.autosync_calls.get() + 1);
             assert_eq!(command, AutosyncCommand::Start);
+            assert!(
+                self.indexed.get(),
+                "init must finish resync before starting autosync"
+            );
             if self.fail_autosync {
                 return Err(RepoGrammarError::InvalidInput(
                     "synthetic autosync failure".to_string(),
@@ -12681,13 +12701,17 @@ mod tests {
         assert!(output.stderr.is_empty());
         assert!(output
             .stdout
-            .contains("[--state-only] [--resync] [--autosync]"));
-        assert!(output
-            .stdout
-            .contains("builds or refreshes the active index by default"));
+            .contains("[--state-only] [--resync] [--autosync|--no-autosync]"));
+        assert!(output.stdout.contains("starts autosync by default"));
+        assert!(output.stdout.contains("Use --no-autosync for CI"));
         assert!(output
             .stdout
             .contains("Create or repair lifecycle state without indexing or autosync"));
+
+        let full = run(["help", "--all"]);
+        assert_eq!(full.status, 0);
+        assert!(full.stdout.contains("[--autosync|--no-autosync]"));
+        assert!(full.stdout.contains("start autosync by default"));
     }
 
     #[test]
@@ -15454,7 +15478,7 @@ mod tests {
     }
 
     #[test]
-    fn init_json_invokes_indexing_by_default() {
+    fn init_json_invokes_indexing_and_autosync_by_default() {
         let workspace = TempWorkspace::new("cli-init");
         let env = |_: &str| None;
         let runtime = BootstrapRuntime::default();
@@ -15469,7 +15493,7 @@ mod tests {
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
         assert_eq!(runtime.index_calls.get(), 1);
-        assert_eq!(runtime.autosync_calls.get(), 0);
+        assert_eq!(runtime.autosync_calls.get(), 1);
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
         assert_eq!(value["command"], "init");
         assert_eq!(value["status"], "initialized");
@@ -15477,7 +15501,10 @@ mod tests {
         assert_eq!(value["storage"], "available");
         assert_eq!(value["indexing"], "syntax_only_code_units");
         assert_eq!(value["resync"]["command"], "resync");
+        assert_eq!(value["autosync"]["subcommand"], "start");
+        assert_eq!(value["autosync"]["running"], true);
         assert_eq!(value["bootstrap"]["resync_requested"], true);
+        assert_eq!(value["bootstrap"]["autosync_requested"], true);
         assert!(workspace.path().join(DEFAULT_STATE_DIR).is_dir());
         assert!(workspace.path().join(".gitignore").is_file());
     }
@@ -15515,7 +15542,7 @@ mod tests {
         let runtime = BootstrapRuntime::default();
 
         let output = run_with_context_and_runtime(
-            ["init", "--yes", "--json"],
+            ["init", "--yes", "--no-autosync", "--json"],
             workspace.path(),
             &env,
             &runtime,
@@ -15532,6 +15559,7 @@ mod tests {
         assert_eq!(runtime.index_calls.get(), 1);
         assert_eq!(runtime.autosync_calls.get(), 0);
         assert_eq!(value["resync"]["command"], "resync");
+        assert_eq!(value["autosync"], Value::Null);
     }
 
     #[test]
@@ -15541,7 +15569,15 @@ mod tests {
         let runtime = BootstrapRuntime::default();
 
         let output = run_with_context_and_runtime(
-            ["init", "--yes", "--resync", "--progress", "never", "--json"],
+            [
+                "init",
+                "--yes",
+                "--resync",
+                "--no-autosync",
+                "--progress",
+                "never",
+                "--json",
+            ],
             workspace.path(),
             &env,
             &runtime,
@@ -15563,6 +15599,52 @@ mod tests {
         assert_eq!(value["bootstrap"]["resync_requested"], true);
         assert_eq!(value["bootstrap"]["autosync_requested"], false);
         assert_eq!(value["autosync"], Value::Null);
+    }
+
+    #[test]
+    fn init_no_autosync_builds_index_without_starting_daemon() {
+        let workspace = TempWorkspace::new("cli-init-no-autosync");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--yes", "--no-autosync", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.index_calls.get(), 1);
+        assert_eq!(runtime.autosync_calls.get(), 0);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("init JSON");
+        assert_eq!(value["resync"]["generation_id"], "gen-000001");
+        assert_eq!(value["bootstrap"]["resync_requested"], true);
+        assert_eq!(value["bootstrap"]["autosync_requested"], false);
+        assert_eq!(value["autosync"], Value::Null);
+    }
+
+    #[test]
+    fn init_rejects_conflicting_autosync_preferences_before_writes() {
+        let workspace = TempWorkspace::new("cli-init-conflicting-autosync");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
+
+        for args in [
+            ["init", "--autosync", "--no-autosync", "--json"],
+            ["init", "--no-autosync", "--autosync", "--json"],
+        ] {
+            let output = run_with_context_and_runtime(args, workspace.path(), &env, &runtime);
+            assert_eq!(output.status, 2);
+            assert!(output.stdout.is_empty());
+            assert!(output
+                .stderr
+                .contains("--autosync and --no-autosync cannot be combined"));
+        }
+
+        assert_eq!(runtime.index_calls.get(), 0);
+        assert_eq!(runtime.autosync_calls.get(), 0);
+        assert!(!workspace.path().join(DEFAULT_STATE_DIR).exists());
     }
 
     #[test]
@@ -15664,6 +15746,25 @@ mod tests {
     }
 
     #[test]
+    fn init_state_only_accepts_explicit_no_autosync() {
+        let workspace = TempWorkspace::new("cli-init-state-only-no-autosync");
+        let env = |_: &str| None;
+        let runtime = BootstrapRuntime::default();
+
+        let output = run_with_context_and_runtime(
+            ["init", "--state-only", "--no-autosync", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.index_calls.get(), 0);
+        assert_eq!(runtime.autosync_calls.get(), 0);
+        assert!(workspace.path().join(DEFAULT_STATE_DIR).is_dir());
+    }
+
+    #[test]
     fn init_state_only_resync_fails_without_creating_state() {
         let workspace = TempWorkspace::new("cli-init-state-only-resync");
         let env = |_: &str| None;
@@ -15753,7 +15854,7 @@ mod tests {
         let runtime = BootstrapRuntime::fail_autosync();
 
         let output = run_with_context_and_runtime(
-            ["init", "--yes", "--resync", "--autosync", "--json"],
+            ["init", "--yes", "--resync", "--json"],
             workspace.path(),
             &env,
             &runtime,

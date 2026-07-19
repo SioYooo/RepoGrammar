@@ -217,7 +217,8 @@
   This is preview scope and does not change the ADR-0011 v0.1 focus statement.
   `repogrammar setup` is now the primary zero-decision onboarding entrypoint.
   It creates one application-layer plan over the existing agent-install,
-  repository-init/index, optional auto-sync, and product MCP self-test
+  repository-init/index, default-on auto-sync with an explicit opt-out, and
+  product MCP self-test
   boundaries; interactive execution confirms once, `--yes` is agent-safe,
   `--dry-run` is zero-write, and telemetry remains disabled. Missing live agents
   preserve repository-only setup and do not receive a suggested coding-agent
@@ -246,10 +247,12 @@
   doctor, query preflight, setup, and MCP-facing recommendations do not derive
   conflicting next actions.
   `repogrammar init --yes` remains the agent-safe one-command repository
-  bootstrap: it initializes repo-local state and builds or refreshes the active
-  index by default, while `--autosync` starts auto-sync only after that readable
-  active generation exists. `--state-only` preserves lifecycle-only repair
-  without indexing. `repogrammar status --json` and `repogrammar doctor --json`
+  bootstrap: it initializes repo-local state, builds or refreshes the active
+  index, and starts auto-sync only after that readable generation exists.
+  `--no-autosync` preserves one-shot indexing without a daemon; explicit
+  `--autosync` remains compatible. `--state-only` preserves lifecycle-only
+  repair without indexing or auto-sync. `repogrammar status --json` and
+  `repogrammar doctor --json`
   now expose a source-free repository readiness object that separates
   not-initialized, state-only/no-active-index, ready active index,
   unhealthy/stale active index, autosync, and storage-hygiene states from

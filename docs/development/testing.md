@@ -295,6 +295,11 @@ allowed.
   tests must not start or kill real user background services;
   product-runtime background behavior may be covered through
   temporary-repository smoke tests or ignored/manual tests.
+- Init bootstrap tests must additionally prove that unflagged `init` indexes
+  before starting auto-sync, `--no-autosync` retains the active generation
+  without a daemon, explicit `--autosync` remains compatible, conflicting
+  preferences fail before writes, `--state-only` remains daemon-free, and a
+  default auto-sync startup failure preserves the successful resync sub-result.
 - Family storage tests must cover generation-scoped family records, members,
   variation slots, family-bound evidence, building-only writes, non-`UNKNOWN`
   family validation requiring evidence, active-generation list/show reads,
@@ -999,8 +1004,8 @@ process and NDJSON validation behavior, telemetry consent, transport-neutral MCP
 tool names, CLI command surface, missing-index fallback human/JSON output,
 repo-local lifecycle init/status/doctor/uninit/unlock/logs safety behavior,
 default `init` active-index bootstrap, `--state-only` lifecycle repair,
-auto-sync-after-index sequencing, and bootstrap failure preservation, bounded
-redacted repo-local log tails,
+default auto-sync-after-index sequencing, explicit `--no-autosync`, and
+bootstrap failure preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
 TS/JS, Python, Go, PHP, Ruby, and Swift discovery filtering/hash/path-safety behavior,
 SQLite storage migration and generation-activation safety behavior, validated
@@ -1048,10 +1053,11 @@ cargo run --quiet --bin repo-guard -- product-eval \
 
 For each corpus fixture the harness copies the committed fixture root into an
 isolated temporary workspace with an isolated `HOME`/XDG/`CODEX_HOME` and a
-tool-only `PATH`, runs `init` then `resync`, applies any per-query source
-mutation to that copy, and drives the product binary through the query. It
-never modifies the real repository and never enables auto-sync. Workspaces are
-removed on success and retained (path printed to stderr) on a harness error.
+tool-only `PATH`, runs `init --state-only` then `resync`, applies any per-query
+source mutation to that copy, and drives the product binary through the query.
+It never modifies the real repository and never enables auto-sync. Workspaces
+are removed on success and retained (path printed to stderr) on a harness
+error.
 When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
 next to `repo-guard`; both build into the same target directory.
 
@@ -1226,9 +1232,10 @@ cargo run --quiet --bin repo-guard -- sync-equivalence \
 For each scenario the harness copies the committed fixture root into an
 isolated temporary workspace (isolated `HOME`/XDG/`CODEX_HOME`, tool-only
 `PATH`, telemetry disabled — identical to the product-eval harness). It builds
-state A with `init` then `resync`, applies the scenario's scripted patch, and
-runs `sync` to produce state B (incremental). It then builds a separate clean
-workspace C by applying the same patch first and running `init`+`resync`
+state A with `init --state-only` then `resync`, applies the scenario's scripted
+patch, and runs `sync` to produce state B (incremental). It then builds a
+separate clean workspace C by applying the same patch first and running
+`init --state-only` + `resync`
 (clean full build). It compares canonical dumps of B and C across the product's
 own read surfaces — `files`, `units`, `families`, `family <id> --mode deep`
 (deep mode is required; compact mode returns an empty selected-evidence array so

@@ -551,10 +551,11 @@ For readiness triage, agents may call `inspect_readiness` (or run
 `repogrammar doctor --json`) and read only the source-free readiness object; they
 must treat `.codegraph/` entries as foreign unmanaged provider state and must not
 ask RepoGrammar to create, modify, or delete them.
-When RepoGrammar returns missing-state fallback and the user has allowed
-repo-local analysis state, agents may run
-`repogrammar init --yes`, or `repogrammar init --yes --autosync` when the
-session should keep agent-written files available to later RepoGrammar queries.
+When RepoGrammar returns missing-state fallback and the user has allowed both
+repo-local analysis state and the default repo-local background daemon, agents
+may run `repogrammar init --yes`; it builds the active index and starts
+auto-sync. When authorization or execution policy permits only a one-shot index,
+agents use `repogrammar init --yes --no-autosync` instead.
 When RepoGrammar reports missing or stale analysis for an already initialized
 repository, agents may run `repogrammar resync`. When a session should start
 auto-sync after a successful standalone `resync`, agents may run

@@ -9392,7 +9392,10 @@ mod tests {
         fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
         let runtime = ProductCliRuntime;
 
-        let init = run_with_runtime(cli_args("init", workspace.path(), &["--json"]), &runtime);
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--no-autosync", "--json"]),
+            &runtime,
+        );
         let value = parse_machine_output("init", &init, &workspace);
         assert_eq!(value["resync"]["generation_id"], "gen-000001");
         assert_eq!(value["resync"]["indexed_units"], 1);

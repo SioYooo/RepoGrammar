@@ -32,7 +32,7 @@ sed -n '1,220p' "$DEMO_REPO/tests/conftest.py"
 Initialize the fixture repository, then ask for context about the route file:
 
 ```text
-cargo run --quiet --bin repogrammar -- init --project "$DEMO_REPO" --yes --progress never
+cargo run --quiet --bin repogrammar -- init --project "$DEMO_REPO" --yes --no-autosync --progress never
 cargo run --quiet --bin repogrammar -- find \
   --project "$DEMO_REPO" \
   --token-budget 8000 \

@@ -3484,6 +3484,7 @@ impl EvalWorkspace {
                 "--project",
                 &project,
                 "--yes",
+                "--state-only",
                 "--json",
                 "--progress",
                 "never",
@@ -4492,7 +4493,10 @@ impl SyncEquivalenceWorkspace {
     }
 
     fn init(&self) -> Result<(), String> {
-        self.run_json("init", &["--yes", "--json", "--progress", "never"])?;
+        self.run_json(
+            "init",
+            &["--yes", "--state-only", "--json", "--progress", "never"],
+        )?;
         Ok(())
     }
 

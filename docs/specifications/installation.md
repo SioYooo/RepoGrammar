@@ -9,8 +9,8 @@ The ownership model has three separate layers:
 2. run `repogrammar install` to wire machine-level coding-agent MCP
    integration;
 3. run `repogrammar init` inside each repository that should have a local
-   RepoGrammar index, or `repogrammar init --autosync` when agent-session
-   auto-sync should start after the first index succeeds.
+   RepoGrammar index and daemon, or `repogrammar init --no-autosync` for a
+   deterministic one-shot index without background sync.
 
 `repogrammar setup` is the primary onboarding journey after the CLI has been
 acquired. It composes layers 2 and 3 in one reviewed plan and one confirmation,
@@ -383,11 +383,12 @@ remove project indexes, logs, caches, locks, or repository-local receipts.
 They must not run `init`, `index`, `sync`, or `resync`.
 Agent-safe bootstrap is explicit and per repository: after machine-level
 installation, an agent may run `repogrammar init --yes` only when the user has
-allowed repo-local analysis state. That command does not broaden `init` writes,
-does not start auto-sync, and does not imply telemetry consent, but it builds or
-refreshes the active index by default. Agents may add `--autosync` when the user
-wants coding-agent edits to enter RepoGrammar results without repeated manual
-`resync`. Use `--state-only` only for lifecycle repair that must not index.
+allowed repo-local analysis state and the default repo-local background daemon.
+That command does not broaden tracked-file writes or imply telemetry consent;
+it builds or refreshes the active index and then starts auto-sync by default.
+Agents use `--no-autosync` when authorization covers one-shot indexing but not a
+background process. Use `--state-only` only for lifecycle repair that must not
+index or start auto-sync.
 
 Repository lifecycle state is owned by `repogrammar init`,
 `repogrammar index`, `repogrammar sync`, `repogrammar resync`, and

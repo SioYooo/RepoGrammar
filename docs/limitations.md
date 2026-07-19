@@ -213,6 +213,13 @@ These are intentional current behaviors or tracked deferrals, not defects:
   `repogrammar sync` (or any later size/mtime-visible change) recomputes content
   hashes authoritatively, so freshness is never silently claimed from the
   fingerprint alone.
+- **Autosync is a repo-local detached process, not a global OS service.** Each
+  repository needs its own initialized state and daemon. A reboot, explicit
+  stop, crash, or managed command runner that reclaims detached descendants can
+  leave the repository index readable but auto-sync stopped; use
+  `repogrammar autosync status --project <path>` and restart it from a persistent
+  user terminal when needed. CI and managed runners should normally initialize
+  with `--no-autosync`.
 - **Cross-version autosync step-down is best-effort, not a single-writer
   guarantee.** After a binary upgrade, a still-running older autosync daemon
   observes the newer engine's version stamp in the run state and steps down on
