@@ -54,11 +54,12 @@ JSON result on stdout while rendering the same human progress-bar output on
 stderr.
 
 `setup` exposes the ordered application plan as sanitized stage results for
-agent integration, repository initialization, indexing, optional auto-sync,
-and MCP self-test. Dry-run renders those stages without executing them. Human
-progress remains on stderr and final human or JSON output remains on stdout;
-neither surface may expose receipt paths, repository absolute paths, or raw
-native-agent errors.
+agent integration, repository initialization, indexing, default-on auto-sync,
+and MCP self-test. Standalone `init` follows the same repository order and
+starts auto-sync after indexing unless `--no-autosync` is present. Dry-run
+renders those stages without executing them. Human progress remains on stderr
+and final human or JSON output remains on stdout; neither surface may expose
+receipt paths, repository absolute paths, or raw native-agent errors.
 
 Deferred work: semantic workers do not yet provide fine-grained internal
 progress through the product CLI, and future mining/provider phases will need

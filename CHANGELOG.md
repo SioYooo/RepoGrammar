@@ -18,6 +18,10 @@ independently verified stable acquisition contract remains pinned to `0.3.2`.
 
 ### Changed
 
+- Made standalone `repogrammar init` start its repo-local auto-sync daemon after
+  the default resync succeeds. `--no-autosync` provides an explicit CI,
+  experiment, and one-shot opt-out; `--autosync` remains a compatible explicit
+  spelling, and `--state-only` remains daemon-free.
 - Made managed agent instructions precision-first so covered repository
   contract lookups use RepoGrammar before broad source search.
 - Reused the Python parse-interface hash across compatible indexing work and

@@ -1,6 +1,6 @@
 # ADR-0008: Repo-local state boundary
 
-- Status: Accepted
+- Status: Accepted; auto-sync default partially superseded by ADR-0027
 - Date: 2026-06-24
 
 ## Context
@@ -45,8 +45,10 @@ The default v0.1 MCP surface should expose one primary tool,
 `show_family`, `explain_deviation`, and `check_conformance`. The CLI remains
 multi-command for human discoverability.
 
-Auto-sync is optional in v0.1. Manual `init`, `index`, `sync`, status
-freshness, and query-time freshness checks are the baseline.
+The original v0.1 baseline made auto-sync opt-in. ADR-0027 supersedes only that
+default: explicit `init` now starts a repo-local daemon after a successful
+resync unless `--no-autosync` is present. The repo-local state and explicit
+repository-authorization boundaries in this ADR remain unchanged.
 
 ## Alternatives considered
 
@@ -58,9 +60,9 @@ freshness, and query-time freshness checks are the baseline.
 - Multiple default MCP tools: explicit per-operation schemas, but higher risk of
   agent tool-selection mistakes. A single contextual tool with explicit
   operations keeps the default surface smaller.
-- Default daemon auto-sync in v0.1: attractive for freshness, but family mining
-  is heavier than symbol indexing and should not eagerly recompute whole
-  repositories before incremental invalidation is designed.
+- Default daemon auto-sync in the original v0.1 design: rejected before bounded
+  fingerprinting, incremental invalidation, atomic activation, and startup
+  readiness existed; ADR-0027 revisits and supersedes this alternative.
 
 ## Consequences
 

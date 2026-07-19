@@ -113,6 +113,8 @@ context lives under `.agents/memories/`.
 - Storage boundaries: `specifications/storage.md`.
 - Repo-local state boundary: `decisions/ADR-0008-repo-local-state-boundary.md`
   and `specifications/storage.md`.
+- Default repository auto-sync after init:
+  `decisions/ADR-0027-init-default-repository-autosync.md`.
 - Concurrent filesystem confinement preflight:
   `decisions/ADR-0023-handle-relative-filesystem-confinement-preflight.md`.
   The decision requires

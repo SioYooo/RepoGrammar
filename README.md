@@ -92,6 +92,20 @@ fallback. That is a successful safety decision, not a failed query. Use the
 [fixture-backed walkthrough](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/verified-cli-transcript.md) to reproduce
 the exact `find → check → UNKNOWN` path.
 
+For repository-only bootstrap when agent wiring is already installed, `init`
+builds the active index and starts one repo-local auto-sync daemon by default:
+
+```bash
+repogrammar init --project /path/to/your/repo --yes
+
+# CI, experiments, or one-shot indexing without a background process:
+repogrammar init --project /path/to/your/repo --yes --no-autosync
+```
+
+Each repository owns its own `.repogrammar/` index and daemon; RepoGrammar does
+not run a global repository scanner. `--state-only` remains the repair-only path
+that neither indexes nor starts auto-sync.
+
 ## How it works
 
 RepoGrammar ships a pattern-family-first CLI and one read-only MCP tool,

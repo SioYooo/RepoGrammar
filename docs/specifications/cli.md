@@ -270,12 +270,16 @@ builds or refreshes the active index by default.
 agents that have permission to create repo-local analysis state. It must run the
 normal init path, then run the same static-analysis path as
 `repogrammar resync`. `--resync` remains accepted as an explicit spelling of
-that default. `repogrammar init --autosync` must start auto-sync only after the
-default resync path produces a readable active generation. `--state-only`
-preserves lifecycle-only repair behavior: it creates or repairs repo-local
-state, must not run indexing, and must not start auto-sync. `init --state-only
---resync` and `init --state-only --autosync` must fail cleanly before creating
-state.
+that default. After the resync path produces a readable active generation,
+`init` starts repo-local auto-sync by default. `--no-autosync` explicitly keeps
+the successful active index without starting a background daemon; `--autosync`
+remains accepted as an explicit compatibility spelling of the default. The two
+auto-sync preference flags are mutually exclusive and must fail cleanly before
+creating state when combined. `--state-only` preserves lifecycle-only repair
+behavior: it creates or repairs repo-local state, must not run indexing, and
+must not start auto-sync. `init --state-only --resync` and `init --state-only
+--autosync` must fail cleanly before creating state; `init --state-only
+--no-autosync` is accepted as a redundant safe opt-out.
 
 JSON output for bootstrap must preserve the existing top-level init fields and
 include `resync` and `autosync` sub-results where applicable. If indexing fails
@@ -283,7 +287,9 @@ after state initialization, the error must preserve repo-local state, preserve
 any previously valid active generation, and guide the user to fix the indexing
 issue and run `repogrammar resync`. If auto-sync start fails after a successful
 resync, the JSON error must preserve the valid `resync` sub-result and must not
-roll back the active generation.
+roll back the active generation. Because auto-sync is the default, this partial
+failure contract applies to an unflagged `init` as well as explicit
+`init --autosync`.
 
 `repogrammar init --write-gitignore` may update the root `.gitignore` with a
 small marker-fenced section. Without this flag or explicit interactive
@@ -634,8 +640,11 @@ supports subcommands:
 
 With no subcommand, `autosync` is equivalent to `autosync status`. `start`
 enables auto-sync for the current repository if needed and launches a
-background `repogrammar autosync run` worker. Before enabling or launching a
-new background worker, `start` validates the inherited semantic-worker
+background `repogrammar autosync run` worker. Normal `repogrammar init` already
+invokes this start path after a successful resync; the standalone command is
+the recovery path after a stop, reboot, or daemon failure, and remains
+available for repositories initialized with `--no-autosync`. Before enabling
+or launching a new background worker, `start` validates the inherited semantic-worker
 environment and reports invalid worker argv configuration synchronously rather
 than claiming the daemon started. The child first publishes a `starting`
 daemon-lock phase, then validates repository/config state, validates its own

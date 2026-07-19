@@ -57,13 +57,14 @@ setup, or mirror `AGENTS.md`.
 Run this inside each repository where you want Claude Code to use RepoGrammar:
 
 ```text
-repogrammar init --yes --autosync
+repogrammar init --yes
 repogrammar status
 ```
 
 `repogrammar init --yes` is the agent-safe noninteractive bootstrap and builds
-the first active index by default. Add `--autosync` when Claude Code should keep
-agent-written files available to later RepoGrammar queries.
+the first active index, then starts repo-local auto-sync by default so Claude
+Code edits enter later RepoGrammar queries. Use `--no-autosync` for a one-shot
+index without a background daemon.
 
 After initialization, Claude Code should use the `repogrammar_context` MCP tool
 before CodeGraph or broad source reads when implementation, test, fix,

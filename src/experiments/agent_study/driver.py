@@ -594,8 +594,12 @@ def build_index_tarball(args: argparse.Namespace, repogrammar_bin: str, repo_dir
     # symlinks=True preserves the template's (possibly dangling) symlinks instead
     # of following them; the tree hash skips symlinks the same way (treehash.py).
     shutil.copytree(repo_dir, idx_src, symlinks=True)
-    subprocess.run([repogrammar_bin, "init", "--project", idx_src, "--yes"], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        [repogrammar_bin, "init", "--project", idx_src, "--yes", "--no-autosync"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     rp = os.path.join(idx_src, ".repogrammar")
     if not os.path.isdir(rp):
         raise SystemExit("index build produced no .repogrammar directory")

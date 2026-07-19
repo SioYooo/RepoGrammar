@@ -560,8 +560,9 @@ Machine-level `install` and `uninstall` are separate from repository-level
 `init`, `resync`, `autosync`, and `uninit`. Installer behavior must be
 reversible, scoped, and dry-run friendly. Repository bootstrap is explicit:
 `repogrammar init` creates repo-local analysis state and rebuilds or refreshes
-the active generation by default. Users or agents add `--autosync` only when
-they have permission to start repository-local auto-sync.
+the active generation, then starts repository-local auto-sync by default.
+Users or agents use `--no-autosync` when authorization covers only a one-shot
+index or when CI/experiment determinism forbids a background process.
 
 End-user installation must be binary-first. Public-preview users should be able
 to install and run the RepoGrammar CLI from a prebuilt release artifact without

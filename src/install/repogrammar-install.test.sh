@@ -515,7 +515,7 @@ REPOGRAMMAR_INSTALL_DIR="$PRODUCT_INSTALL_DIR" \
 test -x "${PRODUCT_INSTALL_DIR}/bin/repogrammar"
 test -f "${PRODUCT_INSTALL_DIR}/workers/python/worker.py"
 test -f "${PRODUCT_COMMAND_DIR}/repogrammar-workers/python/worker.py"
-(cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" init >/dev/null)
+(cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" init --state-only >/dev/null)
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" index --progress never >/dev/null)
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" families --json >/dev/null)
 
