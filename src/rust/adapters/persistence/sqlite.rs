@@ -3080,27 +3080,18 @@ fn query_active_repo_shape_stats(
         .iter()
         .map(|scope| query_repo_shape_language_stats(connection, generation_id, scope))
         .collect::<Result<Vec<_>, _>>()?;
-    let eligible_code_units = by_language
+    let (eligible_code_units, family_count, family_member_count, covered_code_units) = by_language
         .iter()
         .find(|stats| stats.language == "python")
-        .map(|stats| stats.eligible_code_units)
-        .unwrap_or(0);
-    let family_member_count = by_language
-        .iter()
-        .find(|stats| stats.language == "python")
-        .map(|stats| stats.family_member_count)
-        .unwrap_or(0);
-    let covered_code_units = by_language
-        .iter()
-        .find(|stats| stats.language == "python")
-        .map(|stats| stats.covered_code_units)
-        .unwrap_or(0);
-    let family_count = scalar_count(
-        connection,
-        "SELECT count(*) FROM families WHERE generation_id = ?1",
-        generation_id,
-        "family",
-    )?;
+        .map(|stats| {
+            (
+                stats.eligible_code_units,
+                stats.family_count,
+                stats.family_member_count,
+                stats.covered_code_units,
+            )
+        })
+        .unwrap_or_default();
     Ok(ActiveRepoShapeStats {
         generation_id: generation_id.to_string(),
         indexed_file_count,
@@ -6149,7 +6140,7 @@ mod tests {
 
     fn family() -> IndexedFamilyRecord {
         IndexedFamilyRecord {
-            family_id: "family:routes:read".to_string(),
+            family_id: "family:typescript:module:routes_read".to_string(),
             classification: "DOMINANT_PATTERN".to_string(),
             prevalence: crate::test_support::sample_family_prevalence(),
         }
@@ -6425,6 +6416,25 @@ mod tests {
         assert_eq!(tsjs.indexed_code_unit_count, 1);
         assert_eq!(tsjs.eligible_code_units, 0);
         assert_eq!(tsjs.family_count, 0);
+    }
+
+    #[test]
+    fn active_repo_shape_stats_keeps_top_level_family_count_in_python_scope() {
+        let (_workspace, store, _generation) =
+            store_with_active_family("sqlite-repo-shape-official-family-scope");
+
+        let stats = store
+            .active_repo_shape_stats()
+            .expect("active repo shape stats");
+
+        assert_eq!(stats.eligible_code_units, 0);
+        assert_eq!(stats.family_count, 0);
+        let tsjs = stats
+            .by_language
+            .iter()
+            .find(|language| language.language == "typescript/javascript")
+            .expect("tsjs language stats");
+        assert_eq!(tsjs.family_count, 1);
     }
 
     #[test]

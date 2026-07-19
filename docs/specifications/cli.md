@@ -1024,11 +1024,11 @@ count is zero, `scope_explanations` must include
 `recommended_next_action: use repogrammar find/check with exact repo-relative paths for PARTIAL_CONTEXT read plans`.
 The required language scopes are
 `python`/`official_v0_1`, `typescript/javascript`/`bounded_v0_2_preview`,
-`rust`/`internal_self_dogfood_preview`, and
-`java`/`bounded_v0_2_preview`. Python top-level repo-shape readiness remains
-separate from multi-language preview readiness. These diagnostics must not be
-described as React/RN family support, React/RN conformance, or measured token
-savings.
+`rust`/`bounded_v0_2_preview`, `java`/`bounded_v0_2_preview`,
+`csharp`/`bounded_v0_2_preview`, and `c/cpp`/`bounded_v0_2_preview`. Python
+top-level repo-shape readiness — including `family_count` — remains separate
+from multi-language preview readiness. These diagnostics must not be described
+as React/RN family support, React/RN conformance, or measured token savings.
 With `--unknowns --json`, stats must embed the same source-free
 persisted semantic `unknown_inventory` object produced by
 `repogrammar unknowns --json`; without `--unknowns`, that object must be
