@@ -1,5 +1,17 @@
 # Project State
 
+## Build Week stable-release line
+
+The current release source identity is `0.4.0`. The earlier annotated
+`v0.3.2` candidate is bound to `26ce59e`; its 11-asset GitHub draft is retained
+as private audit evidence, and its release run was cancelled before the
+protected npm staging job executed. It must not be moved, reused, or published
+as the current product. The forward-only `v0.4.0` checklist is the canonical
+stable gate. Source manifests, tags, drafts, workflows, registry publication,
+and the public finalizer remain distinct evidence states; only the finalizer's
+`STABLE_RELEASE_READY` marker proves the complete public path. The historical
+preview dist-tag remains `0.2.0-preview.0`.
+
 - Status: Bootstrap plus conservative v0.2 TS/JS exact-anchor family substrate
   for Express, Jest/Vitest (with Mocha/`node:test` `runner_kind` aliasing), Zod,
   NestJS, Hono, Next.js, Fastify, Prisma, and Drizzle, internal v0.2

@@ -1,23 +1,23 @@
 # Limitations
 
-RepoGrammar's current source identity is `0.4.0-preview.0`; that manifest value
-does not prove a matching preview tag, GitHub Release, artifact, or npm package
-exists. The independently verified stable acquisition contract remains pinned
-to `0.3.2`. The MCP API and bounded analyzers remain experimental. RepoGrammar
+RepoGrammar's current source identity is `0.4.0`; that manifest value does not
+prove a matching tag, GitHub Release, artifact, or npm package exists. Public
+availability requires the independent registry and finalizer evidence in the
+stable checklist. The MCP API and bounded analyzers remain experimental. RepoGrammar
 is designed to be conservative and local-first, not a sound general static
 analyzer or a production-readiness claim.
 
 ## Release Availability
 
-- Stable artifacts are available only after the exact `v0.3.2` GitHub release
-  is public and immutable and npm `@sioyooo/repogrammar@0.3.2` is independently
+- Stable artifacts are available only after the exact `v0.4.0` GitHub release
+  is public and immutable and npm `@sioyooo/repogrammar@0.4.0` is independently
   verified.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood is the safe contributor path before release and npm
   publication exist.
 - The two-phase immutable rollout and recovery states are tracked in
-  `release/stable-v0.3.2-release-checklist.md`. The earlier preview record
+  `release/stable-v0.4.0-release-checklist.md`. The earlier preview record
   remains in `release/public-preview-release-checklist.md`.
 
 ## Language And Framework Scope
@@ -154,6 +154,16 @@ comparable measurement source and valid treatment correctness. The all-scope
 estimate adds no new path to a measured claim; the paired-experiment recorder
 remains the only source of measured savings.
 
+## Agent-adoption evidence
+
+The mechanics-only N=2 pilot is not an impact study. In its four treatment
+runs, the RepoGrammar MCP server connected successfully but the small headless
+model made `0/4` proactive `repogrammar_context` calls. This is an adoption
+finding, not a product correctness failure or savings result. Current recording
+instructions explicitly tell the agent to use RepoGrammar and must not be
+described as spontaneous adoption. A larger, isolated, correctness-gated study
+remains deferred.
+
 ## Telemetry
 
 Anonymous telemetry is off by default. Telemetry must not include source code,
@@ -288,7 +298,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   parse-document response is a future optimization. Adds/removes that only touch
   an isolated path also remain future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in `0.3.2`; a dedicated `ready`
+  signal reports at most `partial` in `0.4.0`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and

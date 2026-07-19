@@ -1,11 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-07-20 stable channel
 
-Current source identity: `0.4.0-preview.0`. This prerelease identity describes
-the development checkout only. It does not prove that a matching GitHub tag,
-GitHub Release, binary artifact, or npm package has been published. The
-independently verified stable acquisition contract remains pinned to `0.3.2`.
+RepoGrammar `0.4.0` is the forward-only Build Week stable candidate. The
+retained `v0.3.2` tag and 11-asset private draft are bound to the earlier
+`26ce59e` source; its release workflow was cancelled before the protected npm
+staging job ran. The tag, draft, and candidate bytes remain historical audit
+evidence and are not moved, replaced, published, or reused. Current source
+changes therefore advance to the unoccupied `0.4.0` identity.
+
+This source record does not prove that the `v0.4.0` tag, immutable GitHub
+Release, npm package, provenance, dist-tags, or public finalizer exist. Those
+facts must be independently recorded only after the canonical stable checklist
+completes. The release makes no production-readiness, 1.0 API-stability,
+sound-analysis, runtime-equivalence, Windows-support, hallucination-prevention,
+or measured-token-savings claim.
 
 ### Added
 
@@ -15,6 +24,10 @@ independently verified stable acquisition contract remains pinned to `0.3.2`.
   writers without importing legacy unpaired evidence.
 - Added qualified concept-phrase routing for specific family queries while
   retaining conservative `UNKNOWN` and `PARTIAL_CONTEXT` behavior.
+- Added a judge-first no-Rust/Cargo path and a pinned real-repository recording
+  runbook that make bounded read obligations, static-alignment limits, typed
+  abstention, and the mechanics-only `0/4` proactive MCP-adoption result
+  explicit.
 
 ### Changed
 
@@ -27,8 +40,9 @@ independently verified stable acquisition contract remains pinned to `0.3.2`.
 - Reused the Python parse-interface hash across compatible indexing work and
   retained the active generation when an incremental sync proves that source
   and project context are unchanged.
-- Advanced the Cargo and npm development manifests to `0.4.0-preview.0` without
-  changing the immutable `0.3.2` stable-channel policy or publishing anything.
+- Advanced Cargo, npm, release-source, installer, workflow, finalizer, and
+  stable-checklist authority to `0.4.0`. The historical
+  `preview=0.2.0-preview.0` dist-tag remains unchanged.
 - Python remains the official v0.1 family scope. TypeScript/JavaScript, Rust,
   Java, C#, and C/C++ remain bounded preview scopes; their source-free readiness
   and query-savings records are reported separately rather than promoted to an
@@ -42,6 +56,9 @@ independently verified stable acquisition contract remains pinned to `0.3.2`.
   available under `stats --json`.
 - Made source installation verify the running MCP contract and accept the
   current Claude Code absence probe without weakening ownership checks.
+- Removed stale public-release evidence that incorrectly associated the
+  `v0.2.2` finalizer run `29591027524` with the unpublished `v0.3.2`
+  candidate.
 
 ## 0.3.2 — 2026-07-19 stable channel
 

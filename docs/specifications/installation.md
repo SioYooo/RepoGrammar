@@ -152,11 +152,13 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-documentation should pin `v0.3.2` for reproducible acquisition even after the
-normal release becomes GitHub `latest`. When a `latest` or explicit artifact
-lookup fails, installers must report that the release artifact was not found,
-suggest the exact `--version <release-tag>`, and mention
-`REPOGRAMMAR_RELEASE_DIR` for local artifact testing.
+candidate and post-publication documentation should pin `v0.4.0` for
+reproducible acquisition, but public-install claims must remain on the last
+verified public stable (`v0.2.2`) until GitHub, npm, and finalizer evidence all
+pass. When a `latest` or explicit artifact lookup fails, installers must report
+that the release artifact was not found, suggest the exact
+`--version <release-tag>`, and mention `REPOGRAMMAR_RELEASE_DIR` for local
+artifact testing.
 Installers must validate archive entry names before extraction: absolute paths,
 Windows absolute paths, traversal components, URI-like names, backslashes, and
 unexpected files are rejected even when the archive checksum matches. Entry
@@ -178,11 +180,12 @@ chooses the contributor source-build path. It must not
 duplicate native agent configuration logic outside the Rust installer, and it
 must not create or modify `.repogrammar/`.
 
-The current development manifests use `0.4.0-preview.0`. A source build or
-source install must report that identity consistently across Cargo and npm, but
-the manifest value alone does not establish a tag, release artifact, registry
-publication, or public preview channel. Stable acquisition remains pinned to
-the separately verified `0.3.2` release.
+The current release-source manifests use stable identity `0.4.0`. A source
+build or source install must report that identity consistently across Cargo and
+npm, but the manifest value alone does not establish a tag, release artifact,
+registry publication, or public stable channel. Stable acquisition is pinned
+to `0.4.0` only after exact-version GitHub and npm checks confirm publication;
+until then `0.2.2` remains the last verified public stable release.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
@@ -298,7 +301,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.4.0-preview.0.tgz` for the current
+  `npm install -g ./sioyooo-repogrammar-0.4.0.tgz` for the current
   source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
