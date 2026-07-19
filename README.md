@@ -46,6 +46,11 @@ If any check fails, use the contributor/dogfood path, which builds once from
 source. The complete publication gate is in the
 [stable release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/stable-v0.3.2-release-checklist.md).
 
+The current development checkout has source identity `0.4.0-preview.0`.
+Building or installing it from source reports that prerelease version; this is
+not evidence that a matching tag, GitHub Release, or npm package exists. The
+verified public stable path above therefore remains pinned to `0.3.2`.
+
 ```bash
 git clone https://github.com/SioYooo/RepoGrammar.git
 cd RepoGrammar
@@ -119,13 +124,14 @@ The Rust implementation follows a dependency-inverted
 | **Python** — FastAPI, pytest, Pydantic, SQLAlchemy                                    | Bounded framework-family context, not full Python semantics    |
 | **TypeScript / JavaScript** — Express, Jest/Vitest, Next.js, Fastify, Prisma, Drizzle | Conservative exact-anchor preview                              |
 | **Java/Spring, C#, C/C++**                                                             | Structural preview; no runtime/build-system equivalence claim  |
-| **Rust**                                                                               | Internal self-dogfood; no general Rust semantic-analysis claim |
+| **Rust**                                                                               | Bounded structural/framework preview; no general Rust semantics |
 | **Go, PHP, Ruby, Swift**                                                               | File discovery only; not analyzed or supported yet             |
 
-RepoGrammar `0.3.2` is the current stable-channel pre-1.0 release. Its
-MCP API and non-Python analyzers remain experimental; this is not a 1.0
-API-stability or production-readiness claim. RepoGrammar is not a sound static
-analyzer and does not replace source inspection.
+RepoGrammar's current source identity is `0.4.0-preview.0`; the independently
+verified stable acquisition path remains `0.3.2`. Its MCP API and non-Python
+analyzers remain experimental; this is not a 1.0 API-stability or
+production-readiness claim. RepoGrammar is not a sound static analyzer and does
+not replace source inspection.
 `estimated_potential_token_savings` is an **estimated** local read-displacement
 diagnostic—not measured savings or a causal claim. Measured savings require a
 controlled before/after study; the current
