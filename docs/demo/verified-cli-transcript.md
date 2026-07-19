@@ -1,11 +1,18 @@
-# Verified CLI Transcript
+# Historical Verified CLI Transcript (`0.2.0-preview.0`)
 
-This transcript backs the terminal visual in the root README. It was captured
-on 2026-07-16 from commit `73770e6` with the current debug binary. It is a
-historical record: no result line has been rewritten since capture, so the
-`check` output shows the legacy `CONTEXT_ONLY` advisory form that later
-releases replaced with static-alignment certificates (an alignment-status
-token plus `runtime_equivalence: "UNKNOWN"`).
+This transcript was captured on 2026-07-16 from commit `73770e6` with a debug
+build reporting `0.2.0-preview.0`. It is retained only as an immutable historical
+audit record for the old terminal visual. It is **not** the current Build Week
+demo, current release evidence, current judge path, or current protocol.
+
+No result line has been rewritten since capture. The `check` output therefore
+shows the legacy `CONTEXT_ONLY` advisory form. Current releases replace that
+form with static-alignment certificates: an alignment-status token plus
+`runtime_equivalence: "UNKNOWN"`. Do not reuse this transcript or its fixed
+hashes, generation id, line ranges, or token estimate in a current recording.
+
+The canonical current real-repository workflow is the
+[Build Week Demo Runbook](build-week-demo.md).
 
 ```text
 repogrammar 0.2.0-preview.0
@@ -16,9 +23,11 @@ replaced with `$DEMO_REPO`; no result line was rewritten. The demo used an
 isolated HOME and a PATH containing only system Git/Python tools so setup could
 not inspect or modify the developer's real Codex or Claude Code configuration.
 
-## Reproduce the fixture
+## Historical capture method
 
-Run from the RepoGrammar checkout:
+These commands document how the old fixture capture was produced. They are not
+the current public-package rehearsal path and should not be used for the final
+Build Week recording.
 
 ```bash
 cargo build --bin repogrammar
@@ -191,13 +200,14 @@ recovery: use source fallback
 local target in the fixture. RepoGrammar abstains instead of attaching it to the
 nearby FastAPI family.
 
-## Visual provenance
+## Historical visual provenance
 
-`docs/assets/repogrammar-demo.svg` was manually typeset from exact lines in
-this transcript. It abbreviates the successful `find` and `check` output but
-does not alter their status, family, support, read-plan count, estimate label,
-caveat, or uncertainty. The command paths are normalized from the actual
-temporary directory to `$DEMO_REPO`.
+`docs/assets/repogrammar-demo.svg` was manually typeset from exact lines in this
+historical transcript. It abbreviates the old successful `find` and `check`
+output but does not alter their status, family, support, read-plan count,
+estimate label, caveat, or uncertainty. The command paths are normalized from
+the actual temporary directory to `$DEMO_REPO`. The SVG must not be presented
+as output from `0.4.0` or from the pinned real-repository demo.
 
 The capture environment did not contain `vhs`, `asciinema`, `agg`, `ffmpeg`,
 ImageMagick, `termtosvg`, `svg-term-cli`, or Pillow. No dependency was installed
