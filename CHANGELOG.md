@@ -2,7 +2,42 @@
 
 ## Unreleased
 
-No unreleased changes.
+Current source identity: `0.4.0-preview.0`. This prerelease identity describes
+the development checkout only. It does not prove that a matching GitHub tag,
+GitHub Release, binary artifact, or npm package has been published. The
+independently verified stable acquisition contract remains pinned to `0.3.2`.
+
+### Added
+
+- Added source-free, all-language query-outcome accounting and all-scope
+  estimated potential token-savings breakdowns. The atomic v2 cohort keeps each
+  savings event paired with its query denominator and serializes concurrent
+  writers without importing legacy unpaired evidence.
+- Added qualified concept-phrase routing for specific family queries while
+  retaining conservative `UNKNOWN` and `PARTIAL_CONTEXT` behavior.
+
+### Changed
+
+- Made managed agent instructions precision-first so covered repository
+  contract lookups use RepoGrammar before broad source search.
+- Reused the Python parse-interface hash across compatible indexing work and
+  retained the active generation when an incremental sync proves that source
+  and project context are unchanged.
+- Advanced the Cargo and npm development manifests to `0.4.0-preview.0` without
+  changing the immutable `0.3.2` stable-channel policy or publishing anything.
+- Python remains the official v0.1 family scope. TypeScript/JavaScript, Rust,
+  Java, C#, and C/C++ remain bounded preview scopes; their source-free readiness
+  and query-savings records are reported separately rather than promoted to an
+  official support claim.
+
+### Fixed
+
+- Kept top-level `stats` `family_count` inside the Python official-family scope
+  instead of combining an all-language family total with Python-only eligible
+  units and coverage. Per-language preview counts and all-scope savings remain
+  available under `stats --json`.
+- Made source installation verify the running MCP contract and accept the
+  current Claude Code absence probe without weakening ownership checks.
 
 ## 0.3.2 — 2026-07-19 stable channel
 

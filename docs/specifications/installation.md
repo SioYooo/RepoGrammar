@@ -178,6 +178,12 @@ chooses the contributor source-build path. It must not
 duplicate native agent configuration logic outside the Rust installer, and it
 must not create or modify `.repogrammar/`.
 
+The current development manifests use `0.4.0-preview.0`. A source build or
+source install must report that identity consistently across Cargo and npm, but
+the manifest value alone does not establish a tag, release artifact, registry
+publication, or public preview channel. Stable acquisition remains pinned to
+the separately verified `0.3.2` release.
+
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
 
@@ -292,7 +298,8 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.3.2.tgz`;
+  `npm install -g ./sioyooo-repogrammar-0.4.0-preview.0.tgz` for the current
+  source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
 `REPOGRAMMAR_BINARY` is a local dogfood bypass only. It must be an absolute

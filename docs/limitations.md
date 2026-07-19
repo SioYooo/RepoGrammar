@@ -1,9 +1,11 @@
 # Limitations
 
-RepoGrammar `0.3.2` is the stable-channel candidate. Its MCP API
-and bounded analyzers remain experimental. It is designed to be conservative
-and local-first, not a sound general static analyzer or a production-readiness
-claim.
+RepoGrammar's current source identity is `0.4.0-preview.0`; that manifest value
+does not prove a matching preview tag, GitHub Release, artifact, or npm package
+exists. The independently verified stable acquisition contract remains pinned
+to `0.3.2`. The MCP API and bounded analyzers remain experimental. RepoGrammar
+is designed to be conservative and local-first, not a sound general static
+analyzer or a production-readiness claim.
 
 ## Release Availability
 
@@ -29,8 +31,9 @@ claim.
 - React, full JS/TS semantic analysis, dynamic wrappers, broad re-export
   analysis, executable config semantics, and general runtime behavior are not
   supported.
-- Rust support is internal self-dogfood only and does not claim general Rust
-  semantic analysis.
+- Rust support is a bounded v0.2 structural/framework preview covering
+  self-dogfood roles plus serde, thiserror, tokio, clap, and axum families. It
+  does not claim rustc-level or general Rust semantic analysis.
 - Java/Spring support is structural preview only and does not execute classpath,
   build, DI, proxy, or generated repository semantics.
 - Go is discovered-only and unsupported: `.go`, `go.mod`, and `go.work` may

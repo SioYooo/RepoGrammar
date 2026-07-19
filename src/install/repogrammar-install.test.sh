@@ -663,8 +663,8 @@ CARGO_VERSION="$(awk -F' *= *' '
   /^\[/ { section = $0 }
   section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
 ' "${SCRIPT_DIR}/../../Cargo.toml")"
-if [[ "$PACKAGE_VERSION" != "0.3.2" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
-  echo "stable manifests must agree on 0.3.2" >&2
+if [[ "$PACKAGE_VERSION" != "0.4.0-preview.0" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
+  echo "development manifests must agree on 0.4.0-preview.0" >&2
   exit 1
 fi
 PACKAGE_MANIFEST="${SCRIPT_DIR}/../../package.json"
