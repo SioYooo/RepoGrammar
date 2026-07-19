@@ -60,7 +60,7 @@ or measured-token-savings claim.
   `v0.2.2` finalizer run `29591027524` with the unpublished `v0.3.2`
   candidate.
 
-## 0.3.2 — 2026-07-19 stable channel
+## 0.3.2 — 2026-07-19 unpublished stable candidate
 
 RepoGrammar `0.3.2` is the second verifier-fix patch-forward, succeeding the
 retained, unpublished `0.3.0` and `0.3.1` candidates. Its product behavior is
@@ -90,7 +90,7 @@ completed.
   candidate among the failed stable versions that must never appear in the
   registry inventory alongside `0.2.0`, `0.2.1`, and `0.3.0`.
 
-## 0.3.1 — 2026-07-19 stable channel
+## 0.3.1 — 2026-07-19 unpublished stable candidate
 
 RepoGrammar `0.3.1` is the verifier-fix patch-forward that succeeds the retained,
 unpublished `0.3.0` candidate. Its `v0.3.1` tag run failed at the release-gate
@@ -125,7 +125,7 @@ prove that GitHub or npm publication completed.
   inventory. The published `0.2.2` release and the retained `v0.2.0`/`v0.2.1`
   candidate tags are unchanged.
 
-## 0.3.0 — 2026-07-19 stable channel
+## 0.3.0 — 2026-07-19 unpublished stable candidate
 
 RepoGrammar `0.3.0` is the stable-channel candidate that succeeds the published
 `0.2.2`, intended to become the next published stable-channel pre-1.0 release.
@@ -739,7 +739,7 @@ because the workflow used a runner-incompatible `gh api --slurp --jq`
 combination. GitHub `v0.2.0` and npm `@sioyooo/repogrammar@0.2.0` were never
 published. The tag is retained and must not be moved, deleted, or reused.
 `0.2.1` was the next patch-forward candidate but also remained unpublished;
-`0.2.2` is the current publication candidate.
+`0.2.2` subsequently became the first published stable-channel release.
 
 ## 0.2.0-preview.0 — 2026-07-17 public preview
 
