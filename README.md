@@ -1,50 +1,70 @@
-# RepoGrammar
+<h1 align="center">RepoGrammar</h1>
 
-**Local-first, source-backed repository context for coding agents.**
+<p align="center">
+  <strong>Give coding agents your repository's conventions—not another pile of search results.</strong>
+</p>
 
-Coding agents repeatedly reread repository source to rediscover local
-implementation conventions. RepoGrammar builds a local map of implementation
-families, returns a bounded read plan before broad source inspection, and emits
-a typed `UNKNOWN` when repository evidence cannot justify a confident answer.
+<p align="center">
+  Local-first, source-backed pattern context with bounded read plans and honest abstention.
+</p>
 
-The core insight is that context reduction is useful only while evidence
-strength, freshness, unresolved semantics, and remaining source-reading
-obligations stay explicit. Bounded fallback and typed abstention are product
-behavior, not retrieval failures hidden behind a plausible result.
+<p align="center">
+  <img alt="Source version 0.4.0" src="https://img.shields.io/badge/source-0.4.0-7c3aed?style=flat-square">
+  <img alt="Local first" src="https://img.shields.io/badge/context-local--first-0f766e?style=flat-square">
+  <img alt="Read-only MCP" src="https://img.shields.io/badge/MCP-read--only-2563eb?style=flat-square">
+  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md">Quickstart</a>
+  ·
+  <a href="https://github.com/SioYooo/RepoGrammar/tree/main/docs">Documentation</a>
+  ·
+  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md">Limitations</a>
+  ·
+  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md">Changelog</a>
+</p>
+
+---
+
+Coding agents repeatedly read the same files to rediscover how a repository
+implements routes, fixtures, models, and data access. RepoGrammar turns those
+repeated implementations into a compact map of **pattern families** before an
+agent reads source broadly.
+
+When repository evidence is strong, the agent gets representative examples,
+source-backed metadata, and a hash-checked read plan. When it is not,
+RepoGrammar returns a typed `UNKNOWN` with a recovery action instead of filling
+the gap with a plausible guess.
+
+> **The promise:** less source rereading without pretending uncertain static
+> evidence is fact.
 
 ```text
 repository source
-  -> local index and compatible implementation families
-  -> freshness and evidence gates
-  -> metadata-first family context + bounded read plan
-  -> static-alignment certificate or typed UNKNOWN + recovery
+      │
+      ▼
+local evidence index ──► compatible pattern families ──► bounded read plan
+      │                              │
+      └── freshness checks           └──► UNKNOWN / PARTIAL_CONTEXT + recovery
 ```
 
-## Why this is not another search tool
+## Why RepoGrammar
 
-| Tool shape | What it can answer | RepoGrammar's additional contract |
+| Pattern-aware | Evidence-gated | Agent-ready |
 | --- | --- | --- |
-| grep / text search | Where a string occurs | Which repeated implementations have compatible source-backed evidence |
-| semantic search / RAG | Which chunks look relevant | What still must be read, what is stale, and when the result must abstain |
-| CodeGraph | Symbol and relationship graph context | Repository-local implementation families; CodeGraph is only an optional lower-layer provider |
-| generic static analysis | Program facts under its analysis model | Bounded convention evidence and static alignment without claiming sound whole-program or runtime equivalence |
+| Finds how this repository repeatedly implements a role, not merely where a string appears. | Keeps provenance, freshness, unresolved semantics, and exceptions attached to every claim. | Serves compact context through a pattern-first CLI and one read-only MCP tool, `repogrammar_context`. |
 
-RepoGrammar's product identity is:
+RepoGrammar complements text search, semantic search, and symbol graphs. Those
+tools locate code; RepoGrammar adds a repository-local contract for deciding
+which repeated implementations are compatible, what still needs to be read,
+and when the answer must abstain.
 
-```text
-repository-local implementation families
-+ compatible source-backed evidence
-+ bounded read obligations
-+ freshness enforcement
-+ static-alignment certificates
-+ typed abstention and recovery
-```
+## Quick start
 
-## Five-minute judge path — no Rust or Cargo
-
-RepoGrammar `0.4.0` is usable through npm only after both public registries pass
-these checks. The source manifest, a Git tag, a GitHub draft, or a green build
-alone does not prove public availability.
+The current source identity is `0.4.0`. A manifest or Git tag alone does not
+prove that public artifacts are available, so verify the exact npm package,
+dist-tags, and immutable GitHub asset first:
 
 ```bash
 npm view @sioyooo/repogrammar@0.4.0 version
@@ -54,144 +74,136 @@ npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar version
 ```
 
-Continue only when the exact version exists, GitHub returns the immutable
-release asset, and the dist-tags are `latest=0.4.0` and
-`preview=0.2.0-preview.0`.
-
-The evaluator below uses the MIT-licensed
-[`fastapi/full-stack-fastapi-template`](https://github.com/fastapi/full-stack-fastapi-template)
-at an immutable commit. It does not execute target-repository application code.
+Continue when the exact version exists and the dist-tags are
+`latest=0.4.0` and `preview=0.2.0-preview.0`. Then set up a repository:
 
 ```bash
-JUDGE_ROOT="$(mktemp -d)"
-git clone --filter=blob:none https://github.com/fastapi/full-stack-fastapi-template.git \
-  "$JUDGE_ROOT/full-stack-fastapi-template"
-git -C "$JUDGE_ROOT/full-stack-fastapi-template" checkout \
-  4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8
-
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar setup \
-  --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --target auto --dry-run --no-autosync --progress never
-
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar init \
-  --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --yes --no-autosync --progress never
-
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar find "FastAPI route" \
-  --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --mode compact --verbosity minimal
-
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar check "backend/app/api/routes/items.py:49" \
-  --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --mode compact --verbosity minimal
-
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar find "definitely_missing_repo_pattern" \
-  --project "$JUDGE_ROOT/full-stack-fastapi-template" \
-  --mode compact --json
-
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar uninit \
-  --project "$JUDGE_ROOT/full-stack-fastapi-template" --yes
-rm -rf "$JUDGE_ROOT"
+  --project /path/to/your/repo --target auto
 ```
 
-The judge path first executes a no-write preview of the complete `setup` plan,
-then uses repository-only `init`, so it does not modify global agent
-configuration. `uninit` removes the local index before the disposable clone is
-deleted. The successful query should return a supported family plus a bounded
-`read_plan`. `check` returns a static-alignment token while preserving
-`runtime_equivalence: UNKNOWN`. The deliberately unsupported query returns a
-typed `UNKNOWN` and source-fallback recovery. Exact IDs, hashes, generation
-names, and estimated token counts are intentionally not asserted because they
-are repository- and generation-dependent.
+`setup` reviews one plan, safely wires a detected Codex or Claude Code
+integration, initializes the local index, starts that repository's autosync
+daemon, and verifies the read-only MCP surface. Foreign or drifted agent
+configuration is preserved rather than overwritten.
 
-For the recording task and stale-evidence recovery path, use the
-[Build Week demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md). For a permanent managed
-command instead of repeated `npx`, use the verified `install.sh` asset described
-in the [quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md).
+Ask for a repository convention, then check a proposed implementation against
+the returned family:
 
-## How it works
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar find "FastAPI route" \
+  --project /path/to/your/repo --mode compact --verbosity minimal
 
-RepoGrammar ships a pattern-family-first Rust CLI and one read-only MCP tool,
-`repogrammar_context`.
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar check "path/to/file.py:LINE" \
+  --project /path/to/your/repo --mode compact --verbosity minimal
+```
 
-1. Language adapters and bounded semantic workers extract local structural
-   facts without executing target-repository code.
-2. Tree-sitter proposes candidates; compatible exact-anchor evidence, not
-   syntax similarity alone, qualifies a family.
-3. Results return repo-relative evidence metadata, hashes, bounded line/byte
-   ranges, unresolved obligations, and a prioritized read plan. Source spans
-   require explicit opt-in.
-4. Stale, ambiguous, dynamic, unsupported, or insufficient evidence becomes
-   `UNKNOWN` or `PARTIAL_CONTEXT`, with a recovery action.
-5. Query-time hash checks reject stale evidence. Explicit sync authoritatively
-   refreshes the local SQLite index; repo-local autosync is a best-effort
-   convenience, not a freshness proof.
+Consume the returned `read_plan` before broad source inspection. A successful
+`check` is a **static-alignment certificate**; it deliberately preserves
+`runtime_equivalence: UNKNOWN`.
 
-Each repository owns its `.repogrammar/` state and optional daemon. RepoGrammar
-does not run a global repository scanner. `init` starts that repository's
-autosync by default; `init --no-autosync` is the deterministic one-shot path.
+For CI or a deterministic one-shot index, add `--no-autosync`. For a permanent
+managed command, source builds, cleanup, and exact platform requirements, use
+the [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md).
 
-## Pre-existing foundation and Build Week additions
+## What you get
 
-Before the Build Week product-core line, RepoGrammar already had a Rust core,
-local SQLite generations, bounded Python family mining, a pattern-family CLI,
-and a read-only MCP surface.
+- **Pattern families** — repeated, compatible implementations with support,
+  variation, exception, and counterexample context.
+- **Metadata-first evidence** — repo-relative paths, content hashes, bounded
+  ranges, provenance, and unresolved obligations; source spans are opt-in.
+- **Prioritized read plans** — the smallest source-backed set the agent should
+  inspect before making a change.
+- **Static alignment** — a conservative check of whether a target matches an
+  evidenced family without upgrading static similarity into runtime proof.
+- **Typed recovery** — stale, ambiguous, dynamic, unsupported, and
+  insufficient cases become `UNKNOWN` or `PARTIAL_CONTEXT` with an explicit
+  next action.
 
-The auditable Build Week delta added query resolution v2 and term retrieval,
-constraint profiles, static-alignment certificates, minimal verbosity,
-deterministic payload measurement, dependency-aware incremental sync and Python
-interface hashes, full/incremental equivalence gates, decomposed readiness,
-all-outcome estimated read-displacement accounting, cross-version compatibility,
-zero-friction setup, precision-first managed instructions, and default
-repository-local autosync after init. The
-[release checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/stable-v0.4.0-release-checklist.md),
-[RC verdict](https://github.com/SioYooo/RepoGrammar/blob/main/docs/experiments/product-core-rc-verdict.md), and
-[CHANGELOG](https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md) map those claims to code, tests, and commits.
+## Latest in `0.4.0`
 
-The mechanics-only agent-study pilot connected RepoGrammar in four treatment
-runs but observed `0/4` proactive MCP calls from the small headless model. That
-is an adoption finding, not an impact result. The demo therefore instructs the
-agent to use RepoGrammar and does not claim spontaneous adoption or measured
-token savings.
+| Area | Current behavior |
+| --- | --- |
+| Onboarding | One `setup` flow composes safe agent integration, repository initialization, indexing, MCP self-test, and repo-local autosync. |
+| Queries | Exact-first resolution also understands qualified concept phrases such as `FastAPI route`; `mode` controls evidence gathering and `verbosity` controls payload density. |
+| Conformance | `check` returns static-alignment certificates with explicit unresolved obligations and never claims runtime equivalence. |
+| Freshness | Query-time hashes reject stale evidence; explicit `sync` is authoritative, while default repo-local autosync is a best-effort convenience. |
+| Efficiency | Dependency-aware incremental sync and Python interface hashes avoid unnecessary rebuild work while full/incremental equivalence gates protect results. |
+| Metrics | Source-free query-outcome accounting reports estimated potential read displacement across outcomes; it is not measured token savings or a causal result. |
 
-## Support and limitations
+See the [changelog](https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md)
+for the complete version history and the
+[CLI specification](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/cli.md)
+for the exact command contract.
+
+## How it stays trustworthy
+
+1. **Discover locally.** Language adapters and bounded semantic workers extract
+   structural facts without executing target-repository application code.
+2. **Qualify conservatively.** Tree-sitter proposes candidates; syntax
+   similarity alone cannot prove family membership.
+3. **Return metadata first.** Results preserve hashes, bounded locations,
+   provenance, evidence strength, and remaining read obligations.
+4. **Enforce freshness.** Each repository owns its `.repogrammar/` SQLite
+   generations and optional daemon; there is no global repository scanner.
+5. **Abstain by type.** Unsupported confidence becomes an actionable typed
+   result, not a hidden fallback.
+
+The Rust implementation follows a dependency-inverted
+`core → ports → application → adapters → interfaces` architecture. Read the
+[architecture overview](https://github.com/SioYooo/RepoGrammar/blob/main/docs/architecture/overview.md)
+and [MCP contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md)
+for the deeper design.
+
+## Language and framework boundary
 
 | Language | Current evidence boundary |
 | --- | --- |
-| Python — FastAPI, pytest, Pydantic, SQLAlchemy | Bounded framework-family context; official Python-first scope |
-| TypeScript / JavaScript, Rust, Java/Spring, C#, C/C++ | Conservative structural or exact-anchor preview boundaries |
-| Go, PHP, Ruby, Swift | File discovery only; not analyzed or supported |
+| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Official Python-first scope with bounded framework-family context |
+| **TypeScript / JavaScript** — Express, Jest/Vitest, Mocha/`node:test`, Next.js, Fastify, Prisma, Drizzle, Zod, NestJS, Hono | Conservative exact-anchor preview; React and React Native remain unsupported |
+| **Rust** — internal patterns plus bounded serde, thiserror, Tokio, clap, and axum anchors | Structural preview; no macro expansion, trait-resolution, or runtime claim |
+| **Java/Spring, C#, C/C++** | Conservative structural preview; no runtime or build-system equivalence claim |
+| **Go, PHP, Ruby, Swift** | File discovery only; not analyzed or supported |
 
-The source identity is `0.4.0`; that manifest value is not publication proof.
-RepoGrammar is pre-1.0, its MCP API and preview analyzers remain experimental,
+RepoGrammar is pre-1.0. Its MCP API and preview analyzers remain experimental,
 and it is not a sound whole-program static analyzer or a runtime-equivalence
-oracle. `estimated_potential_token_savings` is an **estimated** potential
-read-displacement diagnostic, not measured savings or a causal claim. The
-[limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) state the exact evidence and platform
-boundaries.
+oracle. Stable artifacts target macOS arm64/x86_64 and glibc Linux
+arm64/x86_64 at the documented minimum versions; Windows and musl are not
+public release targets.
 
-Stable artifacts cover macOS arm64/x86_64 and glibc Linux arm64/x86_64 at the
-documented minimum versions. Windows and musl are not public release targets.
+RepoGrammar itself does not call an LLM, embeddings API, vector database, or
+cloud model. Python 3.10 or newer is required for the bounded Python analyzer;
+Rust/Cargo is not required for the verified release path. The exact safety and
+platform boundaries live in [limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
 
-## GPT-5.6 and Codex usage
+## Built with AI, directed by a human
 
-- **ChatGPT on GPT-5.6** helped the maintainer plan, review, refine scope, and
-  audit claims.
-- **Codex on GPT-5.6** implemented and tested Rust, adapters, CLI/MCP behavior,
-  release tooling, and documentation against repository gates.
-- **The human maintainer** owns the core insight, architecture, evidence policy,
-  scope, review, merge authority, and public approvals.
+RepoGrammar was developed through a human-directed GPT-5.6 workflow. ChatGPT
+helped plan and review the work; Codex implemented and tested scoped changes;
+the human maintainer owns the product insight, architecture, evidence policy,
+scope, review, merge authority, and public approvals.
 
-RepoGrammar itself does not call GPT-5.6, the OpenAI API, embeddings, a vector
-database, or any cloud model. It is the local evidence tool used by the coding
-agent.
+OpenAI Build Week is a launch milestone, not the product boundary. Competition
+recording and submission material stays in the
+[demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md)
+and [launch kit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md),
+leaving this README focused on the developer tool.
 
-## License
+## Community
+
+- Start with the [general quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md),
+  [Codex guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md),
+  or [Claude Code guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md).
+- Browse the [documentation map](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md)
+  and [known limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
+- Report bugs or propose improvements with the repository's
+  [issue templates](https://github.com/SioYooo/RepoGrammar/issues/new/choose).
+- Review [CONTRIBUTING](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md),
+  [SECURITY](https://github.com/SioYooo/RepoGrammar/blob/main/SECURITY.md), and the
+  [Code of Conduct](https://github.com/SioYooo/RepoGrammar/blob/main/CODE_OF_CONDUCT.md)
+  before contributing.
 
 RepoGrammar is licensed under the [MIT License](https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE).
