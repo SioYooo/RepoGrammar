@@ -62,52 +62,42 @@ and when the answer must abstain.
 
 ## Quick start
 
-The current source identity is `0.4.0`. A manifest or Git tag alone does not
-prove that public artifacts are available, so verify the exact npm package,
-dist-tags, and immutable GitHub asset first:
+### 1. Download and install
+
+RepoGrammar provides prebuilt binaries for supported macOS and Linux systems;
+Rust and Cargo are not required.
 
 ```bash
-npm view @sioyooo/repogrammar@0.4.0 version
-npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.0/install.sh.sha256
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar version
+curl -fsSL https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh -o install.sh
+bash install.sh --install-cli-only --yes
+repogrammar version
 ```
 
-Continue when the exact version exists and the dist-tags are
-`latest=0.4.0` and `preview=0.2.0-preview.0`. Then set up a repository:
+### 2. Set up your coding agent and first repository
+
+Run this once from a repository. It configures a detected Codex or Claude Code
+integration, initializes that repository, and starts its autosync daemon.
 
 ```bash
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar setup \
-  --project /path/to/your/repo --target auto
+cd /path/to/your/repo
+repogrammar setup --target auto
 ```
 
-`setup` reviews one plan, safely wires a detected Codex or Claude Code
-integration, initializes the local index, starts that repository's autosync
-daemon, and verifies the read-only MCP surface. Foreign or drifted agent
-configuration is preserved rather than overwritten.
+### 3. Initialize every other repository
 
-Ask for a repository convention, then check a proposed implementation against
-the returned family:
+Each repository needs its own local index. Run `init` once inside every other
+repository where you want RepoGrammar available:
 
 ```bash
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar find "FastAPI route" \
-  --project /path/to/your/repo --mode compact --verbosity minimal
-
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar check "path/to/file.py:LINE" \
-  --project /path/to/your/repo --mode compact --verbosity minimal
+cd /path/to/another/repo
+repogrammar init
 ```
 
-Consume the returned `read_plan` before broad source inspection. A successful
-`check` is a **static-alignment certificate**; it deliberately preserves
-`runtime_equivalence: UNKNOWN`.
-
-For CI or a deterministic one-shot index, add `--no-autosync`. For a permanent
-managed command, source builds, cleanup, and exact platform requirements, use
-the [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md).
+After `setup` or `init`, RepoGrammar automatically keeps that repository's
+index synchronized as code changes. There is no global repository scanner, so
+new repositories must be initialized once. See the
+[full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
+for advanced installation, CI, manual sync, and cleanup options.
 
 ## What you get
 
