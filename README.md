@@ -75,8 +75,9 @@ repogrammar version
 
 ### 2. Set up your coding agent and first repository
 
-Run this once from a repository. It configures a detected Codex or Claude Code
-integration, initializes that repository, and starts its autosync daemon.
+Run this once inside your first repository. It configures a detected Codex or
+Claude Code integration, initializes that repository, and starts its autosync
+daemon.
 
 ```bash
 cd /path/to/your/repo

@@ -672,10 +672,20 @@ README_FILE="${SCRIPT_DIR}/../../README.md"
 grep -q '"repository"' "$PACKAGE_MANIFEST"
 grep -q '"homepage"' "$PACKAGE_MANIFEST"
 grep -q '"bugs"' "$PACKAGE_MANIFEST"
-grep -q 'npm view @sioyooo/repogrammar@0.4.0 version' "$README_FILE"
-grep -q 'releases/download/v0.4.0/install.sh.sha256' "$README_FILE"
-grep -q 'npx --yes --package @sioyooo/repogrammar@0.4.0' "$README_FILE"
-grep -Eq '^[[:space:]]*repogrammar setup \\' "$README_FILE"
+README_QUICK_START="$(awk '
+  /^## Quick start$/ { in_quick_start = 1; next }
+  in_quick_start && /^## / { exit }
+  in_quick_start { print }
+' "$README_FILE")"
+grep -q 'releases/latest/download/install.sh' <<<"$README_QUICK_START"
+grep -q '^bash install.sh --install-cli-only --yes$' <<<"$README_QUICK_START"
+grep -q '^repogrammar setup --target auto$' <<<"$README_QUICK_START"
+grep -q '^repogrammar init$' <<<"$README_QUICK_START"
+grep -q 'new repositories must be initialized once' <<<"$README_QUICK_START"
+if grep -Eq '@sioyooo/repogrammar@[0-9]|releases/download/v[0-9]' <<<"$README_QUICK_START"; then
+  echo "README quick start must use the unversioned stable acquisition path" >&2
+  exit 1
+fi
 if grep -Eq '\]\((docs/|CONTRIBUTING\.md|SECURITY\.md|CODE_OF_CONDUCT\.md|LICENSE\))' "$README_FILE"; then
   echo "packed README must not contain relative links to unpackaged repository files" >&2
   exit 1
