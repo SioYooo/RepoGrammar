@@ -15,11 +15,12 @@ type when the repository cannot support a stronger answer.
 
 Do not record the final take until every applicable gate passes:
 
-- [ ] GitHub Release `v0.4.0` is public and immutable, and npm
+- [x] GitHub Release `v0.4.0` is public and immutable, and npm
       `@sioyooo/repogrammar@0.4.0` is public with verified provenance and
-      integrity.
-- [ ] The pinned and unversioned public `npx` smokes pass outside the
-      RepoGrammar checkout; this runbook always uses the pinned package.
+      integrity. Stable finalizer run `29747390860` verified this gate.
+- [x] The pinned and unversioned public `npx` smokes pass outside the
+      RepoGrammar checkout; stable finalizer run `29747390860` verified both
+      lanes, while this runbook always uses the pinned package.
 - [ ] The target checkout resolves exactly to
       `4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8`.
 - [ ] `codex mcp get repogrammar` and Codex `/mcp` show the RepoGrammar server

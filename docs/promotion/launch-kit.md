@@ -126,20 +126,75 @@ evidence to the coding agent.
 
 ## Five-minute judge path
 
-Use the exact public package and commands in the root [README](../../README.md).
-Every command is pinned to `@sioyooo/repogrammar@0.4.0` and runs through `npx`,
-so the path does not require Rust/Cargo or assume a globally installed binary.
-It clones the MIT-licensed `fastapi/full-stack-fastapi-template` at commit
-`4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8`, then demonstrates:
+Use the no-build public installation path in the root [README](../../README.md).
+The following bounded judge path needs Git, Node/npm, and `jq`, but not
+Rust/Cargo, Docker, an API key, or a globally installed RepoGrammar binary. It
+uses an isolated cache and the MIT-licensed
+`fastapi/full-stack-fastapi-template` at commit
+`4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8`:
+
+```bash
+set -euo pipefail
+
+JUDGE_ROOT="$(mktemp -d)"
+JUDGE_REPO="$JUDGE_ROOT/full-stack-fastapi-template"
+export npm_config_cache="$JUDGE_ROOT/npm-cache"
+export REPOGRAMMAR_NPM_CACHE_DIR="$JUDGE_ROOT/repogrammar-cache"
+
+git clone --filter=blob:none \
+  https://github.com/fastapi/full-stack-fastapi-template.git "$JUDGE_REPO"
+git -C "$JUDGE_REPO" checkout --detach \
+  4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8
+test "$(git -C "$JUDGE_REPO" rev-parse HEAD)" = \
+  4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8
+
+npx --yes --package @sioyooo/repogrammar@0.4.0 repogrammar version
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar init --project "$JUDGE_REPO" \
+  --no-autosync --yes --progress never
+
+JUDGE_UNIT="$(
+  npx --yes --package @sioyooo/repogrammar@0.4.0 \
+    repogrammar units --project "$JUDGE_REPO" --json |
+  jq -r '.units[] | select(
+    .path == "backend/app/api/routes/items.py" and
+    .kind == "fastapi_route" and
+    (.id | contains(":read_item:"))
+  ) | .id' |
+  head -n 1
+)"
+test -n "$JUDGE_UNIT"
+
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar find --project "$JUDGE_REPO" \
+  --mode compact --verbosity minimal "$JUDGE_UNIT"
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar check --project "$JUDGE_REPO" \
+  --mode compact --verbosity minimal "$JUDGE_UNIT"
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar find --project "$JUDGE_REPO" --mode compact --json \
+  unit:backend/app/api/routes/items.py#definitely_missing_summary_member
+
+npx --yes --package @sioyooo/repogrammar@0.4.0 \
+  repogrammar uninit --project "$JUDGE_REPO" --yes
+```
+
+This exact path was re-run from a fresh public cache on 2026-07-20. It
+returned `repogrammar 0.4.0`, a 23-member Python FastAPI Route family with a
+bounded required read, `PARTIAL_ALIGNMENT` with
+`runtime_equivalence: UNKNOWN`, an `InsufficientSupport` typed `UNKNOWN` with
+recovery for the deliberately missing member, and successful state cleanup.
+It demonstrates:
 
 1. repository setup and indexing;
 2. a successful family query at `verbosity minimal`;
 3. a bounded read plan;
 4. static alignment with runtime equivalence still UNKNOWN;
-5. a typed unsupported-query UNKNOWN; and
+5. a typed missing-member `InsufficientSupport` UNKNOWN; and
 6. repository-state cleanup.
 
-The recording-specific task and stale-evidence recovery sequence are in the
+The recording-specific patch, target test, Codex MCP, and stale-evidence
+recovery sequence are intentionally separate in the full
 [demo runbook](../demo/build-week-demo.md).
 
 ## Evidence boundaries and limitations
@@ -166,21 +221,24 @@ boundaries.
 
 ## Public release evidence
 
-These fields are publication-phase facts, not source-state claims. Replace
-them only after the exact public finalizer emits `STABLE_RELEASE_READY`.
+These fields are independently verified publication-phase facts.
 
 - Exact version: `0.4.0`
 - Git tag: `v0.4.0`
-- Tag SHA: `<PENDING PUBLICATION EVIDENCE>`
-- Candidate workflow run and attempt: `<PENDING PUBLICATION EVIDENCE>`
-- GitHub Release: `<PENDING PUBLICATION EVIDENCE>`
-- Asset inventory: `<PENDING PUBLICATION EVIDENCE>`
-- npm stage ID: `<PENDING HUMAN-APPROVED STAGE>`
-- npm package and integrity: `<PENDING PUBLICATION EVIDENCE>`
-- npm provenance: `<PENDING PUBLICATION EVIDENCE>`
-- dist-tags: expected `latest=0.4.0`, `preview=0.2.0-preview.0`
-- Public finalizer run: `<PENDING PUBLICATION EVIDENCE>`
-- Finalizer verdict: `<PENDING STABLE_RELEASE_READY>`
+- Release commit: `12e07e7945a2dd5c618069dd640e826e81824297`
+- Annotated tag object: `b4c02d45524637a19f81ca585b920480bc1da2b9`
+- Candidate workflow: [run `29734557948`, attempt 1](https://github.com/SioYooo/RepoGrammar/actions/runs/29734557948)
+- GitHub Release: [immutable `v0.4.0`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.0)
+- Asset inventory: exactly 11 checksum- and attestation-verified assets
+- npm stage ID: `e94e9612-3213-4b36-a20a-e40b0f3c289d`, human-approved
+- npm package: [`@sioyooo/repogrammar@0.4.0`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.0)
+- npm integrity:
+  `sha512-vwMEvpbBQQlIchW02Q2SRc9d97XwkYXLHKPCeHgV7MZs62qYY0mLnIOE/s5emToCLSqD12P6d9FVgLUn5K+vtQ==`
+- npm provenance: SLSA provenance verified against the exact tag workflow,
+  source ref, commit, candidate run, and attempt
+- dist-tags: `latest=0.4.0`, `preview=0.2.0-preview.0`
+- Public finalizer: [run `29747390860`, attempt 1](https://github.com/SioYooo/RepoGrammar/actions/runs/29747390860)
+- Finalizer verdict: `STABLE_RELEASE_READY`
 
 ## Claim guardrails
 
@@ -201,8 +259,8 @@ Do not claim:
 - sound/complete static analysis;
 - production readiness or 1.0 API stability;
 - unsupported platform/language coverage; or
-- public GitHub/npm availability before the registry and finalizer evidence
-  above exists.
+- public GitHub/npm availability without independently verified registry and
+  finalizer evidence.
 
 ## Human-only submission fields
 

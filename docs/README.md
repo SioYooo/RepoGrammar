@@ -23,7 +23,7 @@ development, and governance documentation.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
-- `promotion/`: public-preview launch copy and promotion guardrails.
+- `promotion/`: stable Build Week submission copy and promotion guardrails.
 - `demo/`: recording and live-demo runbooks; the Build Week runbook is the
   canonical under-three-minute submission script and evidence checklist.
 - `../algorithms/paper/`: metadata-only archive of algorithm and supply-chain
@@ -78,7 +78,7 @@ context lives under `.agents/memories/`.
 - v0.2 public-preview readiness: `reports/public-preview-growth-readiness.md`,
   `reports/public-preview-install-proof-matrix.md`, and
   `experiments/v0.2-real-repo-dogfood.md`.
-- Public-preview growth readiness:
+- Stable Build Week submission readiness:
   `reports/public-preview-growth-readiness.md`, `quickstart.md`,
   `quickstart-codex.md`, `quickstart-claude.md`, `limitations.md`,
   `examples/python-fastapi-pytest.md`, and `promotion/launch-kit.md`.

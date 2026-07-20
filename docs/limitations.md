@@ -1,22 +1,21 @@
 # Limitations
 
-RepoGrammar's current source identity is `0.4.0`; that manifest value does not
-prove a matching tag, GitHub Release, artifact, or npm package exists. Public
-availability requires the independent registry and finalizer evidence in the
-stable checklist. The MCP API and bounded analyzers remain experimental. RepoGrammar
-is designed to be conservative and local-first, not a sound general static
-analyzer or a production-readiness claim.
+RepoGrammar's current source and public stable identity is `0.4.0`. Its
+immutable GitHub Release, npm package, provenance, dist-tags, and public install
+paths were independently verified by the stable finalizer; the exact evidence
+is recorded in the stable checklist. The MCP API and bounded analyzers remain
+experimental. RepoGrammar is designed to be conservative and local-first, not
+a sound general static analyzer or a production-readiness claim.
 
 ## Release Availability
 
-- Stable artifacts are available only after the exact `v0.4.0` GitHub release
-  is public and immutable and npm `@sioyooo/repogrammar@0.4.0` is independently
-  verified.
-- The npm wrapper is available only after that exact immutable npm version is
-  approved from staged publication; source manifests do not prove availability.
-- Source-checkout dogfood is the safe contributor path before release and npm
-  publication exist.
-- The two-phase immutable rollout and recovery states are tracked in
+- The exact `v0.4.0` GitHub Release is public and immutable, with 11 verified
+  assets for the documented macOS and glibc Linux targets.
+- npm `@sioyooo/repogrammar@0.4.0` is public after staged publication and human
+  proof-of-presence approval. The verified dist-tags are `latest=0.4.0` and
+  `preview=0.2.0-preview.0`.
+- The two-phase immutable rollout, exact identities, public-smoke evidence, and
+  recovery states are recorded in
   `release/stable-v0.4.0-release-checklist.md`. The earlier preview record
   remains in `release/public-preview-release-checklist.md`.
 
