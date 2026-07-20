@@ -153,9 +153,10 @@ that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
 candidate and post-publication documentation should pin `v0.4.0` for
-reproducible acquisition, but public-install claims must remain on the last
-verified public stable (`v0.2.2`) until GitHub, npm, and finalizer evidence all
-pass. When a `latest` or explicit artifact lookup fails, installers must report
+reproducible acquisition. Public-install claims may name `v0.4.0` because its
+immutable GitHub Release, npm package, provenance, and public paths passed the
+canonical finalizer; the stable checklist records the exact evidence. When a
+`latest` or explicit artifact lookup fails, installers must report
 that the release artifact was not found, suggest the exact
 `--version <release-tag>`, and mention `REPOGRAMMAR_RELEASE_DIR` for local
 artifact testing.
@@ -184,8 +185,8 @@ The current release-source manifests use stable identity `0.4.0`. A source
 build or source install must report that identity consistently across Cargo and
 npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
-to `0.4.0` only after exact-version GitHub and npm checks confirm publication;
-until then `0.2.2` remains the last verified public stable release.
+to `0.4.0`; exact-version GitHub/npm checks and the public finalizer have
+confirmed publication independently of the source manifests.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:

@@ -1,11 +1,11 @@
 # Stable v0.4.0 Release Checklist
 
-This checklist is the canonical two-phase publication gate for RepoGrammar
-`0.4.0`. It advances the stable source identity from the development-only
-`0.4.0-preview.0` manifests and patch-forwards from the retained, abandoned
-`v0.3.2` candidate. The public stable predecessor remains `0.2.2` until both
-GitHub and npm publication complete and the read-only finalizer emits
-`STABLE_RELEASE_READY`.
+This checklist is the canonical two-phase publication record for RepoGrammar
+`0.4.0`. It advanced the stable source identity from the development-only
+`0.4.0-preview.0` manifests and patch-forwarded from the retained, abandoned
+`v0.3.2` candidate. GitHub and npm publication completed on 2026-07-20, and
+read-only finalizer run `29747390860` emitted `STABLE_RELEASE_READY`. The
+public stable predecessor was `0.2.2` until that complete public gate passed.
 
 This release does not claim production readiness, 1.0 API stability, a stable
 MCP API, sound static analysis, measured token savings, runtime equivalence,
@@ -27,9 +27,11 @@ checklist does not expand them.
   candidate run usable by the stable finalizer.
 - GitHub retains a private, non-immutable `v0.3.2` draft. It is historical
   candidate evidence, not a public GitHub Release.
-- The public npm registry contains only `0.2.0-preview.0` and `0.2.2`; it does
-  not contain `0.3.2`. Public dist-tags remain
-  `preview=0.2.0-preview.0` and `latest=0.2.2`.
+- At the `v0.4.0` preflight, the public npm registry contained only
+  `0.2.0-preview.0` and `0.2.2`; it did not contain `0.3.2`, and public
+  dist-tags were `preview=0.2.0-preview.0` and `latest=0.2.2`. After the
+  successful `v0.4.0` publication gate, the verified registry inventory also
+  contains `0.4.0` and `latest=0.4.0`.
 - Before tagging `v0.4.0`, the maintainer must separately inspect authenticated
   npm stage state. A private stage cannot be inferred from public registry
   metadata. Any retained `0.3.2` stage must be rejected through the human 2FA
@@ -235,18 +237,29 @@ public finalizer.
 
 ## Evidence record
 
-Fill these only from verified external state:
+Verified external state:
 
-- release commit: `<pending merge>`
-- tag and tag SHA: `<pending v0.4.0 tag>`
-- candidate run id / attempt: `<pending successful v0.4.0 tag run>`
-- npm stage id and integrity: `<pending protected stage>`
-- GitHub Release URL: `<pending public immutable release>`
-- npm package URL: `<pending public npm package>`
-- finalizer run: `<pending STABLE_RELEASE_READY>`
-- public installer / pinned npm / latest npm / preview smoke:
-  `<pending public finalizer>`
+- release commit: `12e07e7945a2dd5c618069dd640e826e81824297`
+- annotated tag: `v0.4.0`; tag object
+  `b4c02d45524637a19f81ca585b920480bc1da2b9`; dereferenced release commit
+  `12e07e7945a2dd5c618069dd640e826e81824297`
+- candidate run id / attempt: [`29734557948`, attempt 1](https://github.com/SioYooo/RepoGrammar/actions/runs/29734557948)
+- npm stage id: `e94e9612-3213-4b36-a20a-e40b0f3c289d`; approved through
+  the maintainer proof-of-presence boundary after exact staged-tarball review
+- npm candidate and public integrity:
+  `sha512-vwMEvpbBQQlIchW02Q2SRc9d97XwkYXLHKPCeHgV7MZs62qYY0mLnIOE/s5emToCLSqD12P6d9FVgLUn5K+vtQ==`
+- GitHub Release: [immutable `v0.4.0`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.0),
+  normal/non-prerelease, with exactly 11 checksum- and attestation-verified
+  assets
+- npm package: [`@sioyooo/repogrammar@0.4.0`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.0),
+  four-file launcher package with SLSA provenance
+- dist-tags: exactly `latest=0.4.0` and `preview=0.2.0-preview.0`
+- finalizer: [`29747390860`, attempt 1](https://github.com/SioYooo/RepoGrammar/actions/runs/29747390860),
+  which emitted `STABLE_RELEASE_READY`
+- public smoke: verified native x86_64 Linux archive, public installer, exact
+  pinned npm launcher, unversioned `latest` launcher, preserved `preview`
+  launcher, and live repository-only setup all passed in the finalizer
 
-These pending fields are release gates, not claims that publication has
-occurred. After finalization, replace them with exact evidence and keep only the
-human video, `/feedback`, and Devpost actions pending in the submission kit.
+Release publication is complete. The human video, `/feedback`, and Devpost
+actions remain pending in the submission kit, and the separate four-rehearsal
+demo evidence gate remains pending in the demo runbook.

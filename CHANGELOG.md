@@ -2,17 +2,18 @@
 
 ## 0.4.0 — 2026-07-20 stable channel
 
-RepoGrammar `0.4.0` is the forward-only Build Week stable candidate. The
+RepoGrammar `0.4.0` is the published forward-only Build Week stable release. The
 retained `v0.3.2` tag and 11-asset private draft are bound to the earlier
 `26ce59e` source; its release workflow was cancelled before the protected npm
 staging job ran. The tag, draft, and candidate bytes remain historical audit
 evidence and are not moved, replaced, published, or reused. Current source
-changes therefore advance to the unoccupied `0.4.0` identity.
+therefore advanced to the previously unoccupied `0.4.0` identity.
 
-This source record does not prove that the `v0.4.0` tag, immutable GitHub
-Release, npm package, provenance, dist-tags, or public finalizer exist. Those
-facts must be independently recorded only after the canonical stable checklist
-completes. The release makes no production-readiness, 1.0 API-stability,
+The annotated `v0.4.0` tag, immutable 11-asset GitHub Release, staged and
+human-approved npm package, provenance, dist-tags, and public installation
+paths were independently verified by finalizer run `29747390860`, which
+emitted `STABLE_RELEASE_READY`. The exact identities are recorded in the
+canonical stable checklist. The release makes no production-readiness, 1.0 API-stability,
 sound-analysis, runtime-equivalence, Windows-support, hallucination-prevention,
 or measured-token-savings claim.
 
