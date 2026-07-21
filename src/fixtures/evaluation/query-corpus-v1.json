@@ -1356,15 +1356,194 @@
         "outcome": "unknown",
         "unknown_reason": "InsufficientSupport"
       }
+    },
+    {
+      "query_id": "explain-unit-fastapi-member",
+      "fixture_id": "directory-scopes",
+      "kind": "explain_unit_member",
+      "intent": "context",
+      "operation": "explain",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "mode": "compact",
+      "comment": "Explain over a PINNED fastapi_route member unit yields a real two-sided conformance certificate, not a find alias: the target resolves to a code unit, the alignment route runs (route=conformance_static_alignment), and the certificate reports target_relationship=MEMBER with alignment_status=STATICALLY_ALIGNED against the unit's own family. Contrast py-explain-app (path-only, no locator) which abstains INSUFFICIENT_EVIDENCE on the same operation.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATICALLY_ALIGNED",
+        "target_relationship": "MEMBER"
+      }
+    },
+    {
+      "query_id": "explain-unit-pydantic-member",
+      "fixture_id": "directory-scopes",
+      "kind": "explain_unit_member",
+      "intent": "context",
+      "operation": "explain",
+      "target": "unit:app/fastapi-basic/app.py#pydantic_model:userout:109-160:1",
+      "mode": "compact",
+      "comment": "Second explain-unit certificate over a different family: a pinned pydantic_model member resolves MEMBER / STATICALLY_ALIGNED against the versioned pydantic_model family (family_prefix stays at the version-free family:python:pydantic_model so the gold is stable across index generations).",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pydantic_model",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATICALLY_ALIGNED",
+        "target_relationship": "MEMBER"
+      }
+    },
+    {
+      "query_id": "check-against-family-certificate",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_family",
+      "intent": "context",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "family:python:fastapi_route:framework_fastapi_route",
+      "mode": "compact",
+      "comment": "Valid --against pins exactly one comparison family. The check statically compares the fastapi_route member against the named fastapi_route family and commits a STATICALLY_ALIGNED certificate (target_relationship=MEMBER). The selected family matches the against family by construction, so this never counts as a false family.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATICALLY_ALIGNED",
+        "target_relationship": "MEMBER"
+      }
+    },
+    {
+      "query_id": "check-against-cross-family-deviation",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_deviation",
+      "intent": "context",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+      "mode": "compact",
+      "comment": "Two-sided deviation: an explicit --against pins a DIFFERENT family (sqlalchemy_model) than the target's natural fastapi_route membership, so the certificate honestly reports STATIC_DEVIATION with target_relationship=EXCEPTION against the requested family. The user asked to compare against sqlalchemy_model, so surfacing it as the comparison family is correct, not a false selection; family_prefix gold is sqlalchemy_model to match the requested comparison.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_model",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATIC_DEVIATION",
+        "target_relationship": "EXCEPTION"
+      }
+    },
+    {
+      "query_id": "check-against-absent-abstains",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_absent",
+      "intent": "abstention",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "family:python:does_not_exist:framework_none",
+      "mode": "compact",
+      "comment": "A nonexistent --against family matches no comparison family, so the check abstains INSUFFICIENT_EVIDENCE (InsufficientSupport) and selects NO family (selected_family_id: null) rather than falling back to the target's natural family. Asserting outcome=unknown with no family constraint guarantees no false-select and no selection-on-abstention.",
+      "expected": {
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "check-against-ambiguous-abstains",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_ambiguous",
+      "intent": "abstention",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "route",
+      "mode": "compact",
+      "comment": "An ambiguous bare-concept --against ('route') does not pin a single comparison family, so the check abstains INSUFFICIENT_EVIDENCE (InsufficientSupport) with selected_family_id: null instead of guessing. Second no-false-select witness alongside check-against-absent-abstains.",
+      "expected": {
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "scoped-readiness-queryable-heterogeneous",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_queryable",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/fastapi-basic/",
+      "mode": "compact",
+      "comment": "Scoped inspect_readiness (MCP-only; harness drives serve with the target as the within directory scope). A heterogeneous but fully indexed scope is queryable with present coverage and two resolvable families (fastapi_route + pydantic_model).",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "queryable",
+        "scope_coverage": "present",
+        "resolvable_family_count": 2
+      }
+    },
+    {
+      "query_id": "scoped-readiness-queryable-single",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_queryable",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/pytest-basic/",
+      "mode": "compact",
+      "comment": "A single-family indexed scope is queryable with present coverage and exactly one resolvable family (pytest_fixture).",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "queryable",
+        "scope_coverage": "present",
+        "resolvable_family_count": 1
+      }
+    },
+    {
+      "query_id": "scoped-readiness-familyless-indexed",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_familyless",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/dynamic-unknown/tests/sub/",
+      "mode": "compact",
+      "comment": "An indexed-but-familyless scope has present coverage yet zero resolvable families, so scoped queryability is partial_context: the scope is indexed and readable for local context but carries no supported family to retrieve.",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "partial_context",
+        "scope_coverage": "present",
+        "resolvable_family_count": 0
+      }
+    },
+    {
+      "query_id": "scoped-readiness-absent-ghost",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_absent",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/ghost/",
+      "mode": "compact",
+      "comment": "A nonexistent scope has empty coverage and zero indexed files, so scoped queryability is not_indexed with no resolvable families; the readiness call still answers successfully (status ok) rather than erroring.",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "not_indexed",
+        "scope_coverage": "empty",
+        "resolvable_family_count": 0
+      }
+    },
+    {
+      "query_id": "scoped-readiness-empty-plain",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_absent",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/plain/util/",
+      "mode": "compact",
+      "comment": "A present-but-familyless plain package directory whose files were not stored under this scope prefix reports not_indexed with empty coverage and zero resolvable families, distinct from the indexed-but-familyless partial_context case.",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "not_indexed",
+        "scope_coverage": "empty",
+        "resolvable_family_count": 0
+      }
     }
   ],
   "_deferred_wave2_kinds": {
-    "note": "Wave-2 top-up, added by the coordinator once Phases 4/5 land. These depend on behaviors not yet resolving at commit 7e09caa or need larger fixtures; gold is deliberately NOT authored here to avoid fabricated expectations.",
+    "note": "Remaining wave-2 deferrals after the wave-2 top-up landed the explain-unit certificate, check --against, and scoped-readiness cases with real gold from the 2ea0b6f binary. The kinds below still need behaviors or fixtures not deterministically expressible here.",
     "deferred": [
-      "explain_two_sided (explain operation two-sided deviation projection - Phase 4/5)",
-      "check_against (check operation with an explicit --against comparison target - Phase 4/5)",
-      "scoped_readiness (scoped-readiness / inspect_readiness projection cases - Phase 4/5)",
-      "directory_truncated (resolution.cardinality=truncated needs a directory exceeding DIRECTORY_SCOPE_FILE_LIMIT=64 indexed files; requires a large deterministic fixture)",
+      "directory_truncated (resolution.cardinality=truncated needs a directory exceeding DIRECTORY_SCOPE_FILE_LIMIT=64 indexed files; the directory-scopes fixture indexes only 36 files, so a purpose-built large fixture is still required)",
       "same_basename_multi_directory / multi_family_member / term_tie (best-effort ambiguity cases; existing fixtures resolve them deterministically without a distinct tie, so deferred until a purpose-built fixture exists)"
     ]
   }

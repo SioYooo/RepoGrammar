@@ -1185,13 +1185,40 @@ stays `product-eval-corpus.v1`. The covered kinds:
   family/unit identity) return a typed `UNKNOWN`, never a union or a
   silently-dropped constraint.
 
-**Deferred to a wave-2 top-up** (documented in the corpus under
-`_deferred_wave2_kinds`; gold deliberately not authored to avoid fabricated
-expectations): `explain`-two-sided deviation projection, `check --against`
-comparison targets, scoped-readiness projection (all depend on Phases 4/5 landing
-in parallel), `resolution.cardinality = "truncated"` (needs a directory exceeding
-the 64-file scope bound), and best-effort same-basename / multi-family-member /
-term-tie ambiguity cases (need a purpose-built tie fixture).
+The wave-2 top-up adds the two-sided conformance and scoped-readiness kinds, each
+gold the real deterministic output of the pinned binary:
+
+- `explain_unit_member` — `explain` over a **pinned** member `unit:` id resolves
+  the target to a code unit and runs the alignment route
+  (`route = "conformance_static_alignment"`), so it is no longer a `find` alias: the
+  certificate reports `target_relationship = "MEMBER"` and
+  `alignment_status = "STATICALLY_ALIGNED"` against the unit's own family (contrast
+  the path-only `explain_deviation` case, which abstains `INSUFFICIENT_EVIDENCE`).
+- `check_against_family` / `check_against_deviation` — `check` with an explicit
+  `against` comparison-family scope. A valid `against` that pins the unit's own
+  family commits a `MEMBER` / `STATICALLY_ALIGNED` certificate; an `against` that
+  pins a **different** family honestly reports `EXCEPTION` / `STATIC_DEVIATION`
+  against the requested family (the requested family is surfaced as the comparison,
+  not a false selection).
+- `check_against_absent` / `check_against_ambiguous` — a nonexistent or ambiguous
+  `against` scope pins no comparison family, so the check abstains
+  `INSUFFICIENT_EVIDENCE` with `selected_family_id: null` rather than guessing: the
+  no-false-select witnesses for the two-sided lane.
+- `scoped_readiness_queryable` / `scoped_readiness_familyless` /
+  `scoped_readiness_absent` — the MCP-only `inspect_readiness` operation over a
+  `within` directory scope (the case `target` is the scope). Gold asserts
+  `queryability` (`queryable` / `partial_context` / `not_indexed`), `scope_coverage`
+  (`present` / `empty`), and `resolvable_family_count`: a fully indexed scope is
+  `queryable` with resolvable families, an indexed-but-familyless scope is
+  `partial_context` with zero families, and a nonexistent or unstored scope is
+  `not_indexed` with empty coverage.
+
+**Still deferred** (documented in the corpus under `_deferred_wave2_kinds`; gold
+deliberately not authored to avoid fabricated expectations):
+`resolution.cardinality = "truncated"` (needs a directory exceeding the 64-file
+scope bound; the `directory-scopes` fixture indexes only 36 files), and best-effort
+same-basename / multi-family-member / term-tie ambiguity cases (need a
+purpose-built tie fixture).
 
 ### Scope-resolution and safety metrics (v3)
 
