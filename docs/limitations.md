@@ -101,6 +101,15 @@ changed after indexing, instead of fabricating a deviation from stale facts. A
 target with no comparison family, an ambiguous family key, or an unsupported role
 also abstains with `INSUFFICIENT_EVIDENCE` and never surfaces a selected family.
 
+- **Directory scope reads are bounded.** A directory-scope target resolves through
+  a bounded, generation-consistent prefix read (a fixed cap on child files). A
+  directory holding more files than the bound reports truncation explicitly, and
+  because unseen files might belong to other families the resolver never claims a
+  single family under truncation — it surfaces the seen families as candidate
+  handles instead. Narrow to a smaller directory or a specific pattern family id.
+  See `docs/specifications/query-resolution.md` for the full scope-resolution
+  semantics.
+
 ## Source Text
 
 RepoGrammar returns metadata by default. Source text is opt-in through:
@@ -131,6 +140,18 @@ The `static_alignment` dimension reports only that a fresh, ready family exists
 to align against, never that an alignment holds at runtime. The
 `top_blocking_unknowns` are triage buckets, not resolved analysis. A `degraded`
 summary with a stale count is an honest freshness caveat, not an error.
+
+- **Scoped readiness is bounded and path-like.** `repogrammar doctor
+  --target/--within` and the MCP `inspect_readiness` scoped operation report a
+  bounded, source-free queryability report for one directory/module scope. Its
+  counts come from the same bounded directory-scope reads as the query path, so a
+  scope holding more files than the bound reports `coverage: truncated` and the
+  file/family counts are lower bounds. The scope must be path-like: a bare
+  single-segment token (e.g. `pkg`) that carries no `/` or `.` is rejected by the
+  shared path-safety authority and reads to an empty scope (`not_indexed`), the
+  same way the directory-scope query resolver treats it. Scoped readiness never
+  hydrates a family, reads no source content, and is capability-only in exactly the
+  same sense as the whole-checkout readiness above.
 
 ## Token Savings
 

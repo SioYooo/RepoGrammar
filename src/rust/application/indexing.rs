@@ -5284,8 +5284,8 @@ mod tests {
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
         ActiveSemanticFacts, GenerationHandle, IndexStorageLayout, IndexStore, IndexStoreError,
-        IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, StorageInspection,
-        STORAGE_SCHEMA_VERSION,
+        IndexedCodeUnitRecord, IndexedFileRecord, IndexedSemanticFactRecord, ScopedIndexedFiles,
+        StorageInspection, STORAGE_SCHEMA_VERSION,
     };
     use crate::ports::parser::{ParseDiagnostic, ParseDiagnosticSeverity, ParserProjectContext};
     use crate::ports::semantic_worker::{
@@ -15469,6 +15469,14 @@ extraPaths = ["src/lib", "C:/secret"]
                 panic!("active indexed file reads must not run during indexing")
             }
 
+            fn list_active_files_in_directory(
+                &self,
+                _prefix: &str,
+                _limit: usize,
+            ) -> Result<ScopedIndexedFiles, IndexStoreError> {
+                panic!("scoped indexed file reads must not run during indexing")
+            }
+
             fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {
                 panic!("active code-unit reads must not run during indexing")
             }
@@ -15618,6 +15626,14 @@ extraPaths = ["src/lib", "C:/secret"]
 
             fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError> {
                 panic!("active indexed file reads must not run during indexing")
+            }
+
+            fn list_active_files_in_directory(
+                &self,
+                _prefix: &str,
+                _limit: usize,
+            ) -> Result<ScopedIndexedFiles, IndexStoreError> {
+                panic!("scoped indexed file reads must not run during indexing")
             }
 
             fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError> {

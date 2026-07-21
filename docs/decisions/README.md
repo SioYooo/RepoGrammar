@@ -38,3 +38,4 @@ Current accepted ADRs:
 - ADR-0026: Zero-friction onboarding orchestration.
 - ADR-0027: Init starts repository auto-sync by default.
 - ADR-0028: Ownership-aware product uninstall and agent disconnect.
+- ADR-0029: Additive candidate-set resolution cardinality.

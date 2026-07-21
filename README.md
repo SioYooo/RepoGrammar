@@ -73,6 +73,19 @@ bash install.sh --install-cli-only --yes
 repogrammar version
 ```
 
+Already have Node? The same release is published to npm, so you can download and
+run it in one step — no separate install:
+
+```bash
+npx --yes --package @sioyooo/repogrammar repogrammar version
+```
+
+The npm package is a thin launcher: it downloads and verifies the matching
+prebuilt macOS/Linux binary (the same release artifact `install.sh` installs),
+so Rust and Cargo are still not required. See the
+[full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
+for version-pinned `npx` commands and CI usage.
+
 ### 2. Set up your coding agent and first repository
 
 Run this once inside your first repository. It configures a detected Codex or

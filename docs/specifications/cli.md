@@ -89,12 +89,24 @@ It is exact-family-id only and is intended for family ids returned by earlier
 `find`, `explain`, `check`, or `member` queries.
 
 `repogrammar explain` is the CLI equivalent of the `explain_deviation`
-operation.
+operation. It is no longer a `find` alias: it runs the same two-sided
+static-alignment resolution as `check` and projects a real deviation certificate.
+It resolves the target to exactly one indexed code unit, pins one comparison
+family, and projects a `target_relationship` — `MEMBER`, `LEGAL_VARIATION`,
+`NEAR_MISS`, `EXCEPTION`, `BLOCKED_UNKNOWN`, `OUT_OF_SCOPE`, or `INCOMPATIBILITY`
+(the reserved `COMPETING_PATTERN` token is emitted by no path) — whenever a unit
+and family both resolve, abstaining with a typed `INSUFFICIENT_EVIDENCE`/`UNKNOWN`
+and a `null` `selected_family_id` otherwise. It claims no runtime behavior
+(`runtime_equivalence: "UNKNOWN"`). `--include-variations` / `--include-exceptions`
+request the legal-variation and exception coverage labels. Pin one unit with a
+path, path:line, path:byte-range, or `unit:` locator; a bare path mapping to
+several family-eligible units abstains rather than guessing.
 
 `repogrammar check` is the CLI equivalent of the `check_conformance` operation.
 It is a source-backed *static-alignment* check, not a runtime-conformance
-verdict. It resolves the target to a specific indexed code unit, selects a
-comparison pattern family (the unit's own family when it is a member, otherwise
+verdict. It resolves the target to a specific indexed code unit, pins a
+comparison pattern family (the caller-named `--against` family when provided,
+otherwise the unit's own family when it is a member, otherwise
 the single fresh ready family of the unit's `(language, kind, role)` key), and
 compares the target's indexed feature profile against that family's constraint
 profile. The top-level `status` is one of the static-alignment tokens
@@ -115,6 +127,12 @@ All query commands must support:
 - `--include-variations`
 - `--include-exceptions`
 - `--include-source-spans`
+
+`explain` and `check` additionally accept `--against <scope>`, which pins the
+comparison family to exactly one family (an exact `family:` id, framework role, or
+pattern that resolves to the unique fresh ready family; an ambiguous or unmatched
+`--against` abstains with candidate handles and never false-selects). `--against`
+is rejected on any other query command rather than silently ignored.
 
 Successful `find`, `family`, `member`, `explain`, and `check` outputs include
 metadata-only `estimated_potential_token_savings` diagnostics with
@@ -463,7 +481,25 @@ authoritative when a mutable database is present.
 Doctor JSON must include the same `readiness` and `product_readiness` objects as
 status JSON. Doctor may recommend commands such as `repogrammar init`,
 `repogrammar resync`, `repogrammar doctor`, or `repogrammar autosync start`, but
-it must not perform those actions implicitly. Doctor and status human output must
+it must not perform those actions implicitly.
+
+`repogrammar doctor` also accepts an optional `--target <scope>` and/or
+`--within <scope>` (a directory/module scope). With either flag, doctor returns a
+bounded, source-free SCOPED readiness report over just that scope instead of the
+whole-checkout doctor view; with neither flag the whole-checkout output is
+byte-identical to before, and the two forms are mutually exclusive. The scoped
+report is the same shape the MCP `inspect_readiness` scoped operation returns
+(see `docs/specifications/mcp-api.md`): a `summary` token, a `queryability`
+verdict, a `scope` object (`prefix_count`, `indexed_file_count`, `coverage`,
+`truncated`, `languages`, `resolvable_family_count`, `freshness`), `providers`,
+and one `recovery` action. JSON output wraps it under the same `command`/
+`schema_version` doctor envelope; human output renders a compact scoped block. It
+is SOURCE-FREE (it hydrates no family and reads no source content) and records no
+family-query telemetry, exactly like the whole-checkout readiness. Every field is
+a low-cardinality enum, count, or language token — no raw target, path, or symbol
+appears in the output. The scope must be path-like: a bare single-segment token
+(e.g. `pkg`) that carries no `/` or `.` is rejected by the shared path-safety
+authority and reads to an empty scope. Doctor and status human output must
 lead with the actionable capability summary and the one canonical next action from
 the recovery classifier (a `capability:` line and a `next_action:` line). Family
 evidence counts (`stale_family_evidence`, `unverifiable_family_evidence`) are
@@ -1336,11 +1372,14 @@ stale listing is never turned into `status: UNKNOWN`. The freshness-free
 freshness) omits the `freshness` field and the counts.
 `family`, `member`, `find`, `explain`, and `check` accept the first positional
 operand as their target. `family <target>` is an exact family-id lookup.
-`member <target>` is an exact code-unit/member-id lookup. `find`, `explain`,
-and `check` use an internal `discover -> hydrate -> compose` loop over the
+`member <target>` is an exact code-unit/member-id lookup. `find` uses an
+internal `discover -> hydrate -> compose` loop over the
 target the caller already has: repo-relative paths or suffixes, exact
 member/code-unit ids, exact member roles, exact family ids, and supported
-query-safe pattern text. These commands may accept family ids, but family ids are
+query-safe pattern text. `explain` and `check` instead run the two-sided
+static-alignment path: they resolve the SUBJECT to exactly one code unit by
+locator and pin one COMPARISON family (via `--against` or inference), reusing that
+same family-discovery loop only for the comparison side. These commands may accept family ids, but family ids are
 not required initial inputs; returned family ids are follow-up handles for exact
 inspection. They must not treat short substrings such as a framework name,
 classification label, or directory fragment as a successful family match. When a
@@ -1384,7 +1423,29 @@ taken from the indexed file inventory's stored size; when that size is
 unavailable the block reports null counts with an `unavailable_reason` rather
 than a guessed number. Alignment (`check`) certificates carry the same block
 with `outcome_shape: alignment`; an abstaining certificate reports the null
-block. Exact `family` and `member` lookups continue to return
+block.
+
+When a `find`/`explain` target names a **directory / composite scope**, the
+command reports the resolved candidate-set cardinality through an additive
+top-level `resolution` object (byte-parallel with the MCP shape; see
+`docs/specifications/mcp-api.md` and ADR-0029). No new top-level status token is
+added — the response stays on `product-schemas.v1`:
+
+```json
+"resolution": { "cardinality": "none|one|many|truncated", "candidates": [ { "family_id": "family:...", "summary": "python fastapi.route · DOMINANT_PATTERN" } ] }
+```
+
+A single proven in-scope family is `status: ok` + `resolution.cardinality: one`;
+several in-scope families are `PARTIAL_CONTEXT` + `many` (bounded candidate
+summaries, **never** a `selected_family_id`); a resolved-but-familyless scope is
+`PARTIAL_CONTEXT` + `none` (empty candidates); a bounded read that may hide
+families is `PARTIAL_CONTEXT` + `truncated`. Each candidate `summary` is projected
+from the family search-summary projection (never a hydrated deep family, never raw
+source). `resolution` is an additive `standard`/`full` field, dropped at
+`--verbosity minimal`; for `many`/`truncated` the candidate `family_id`s are also
+carried on `resolved_target.candidate_family_ids` and
+`query_route.follow_up_family_ids`, which are retained at `minimal`, so no
+narrowing handle is lost. Exact `family` and `member` lookups continue to return
 typed `UNKNOWN` when their exact ids are missing. `family`, `member`, `find`,
 `explain`, and `check` JSON outputs must include `query_route` with `route`,
 `input_kind`, `pipeline`, `family_id_policy`, `candidate_limit`,

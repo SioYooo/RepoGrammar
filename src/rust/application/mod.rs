@@ -12,6 +12,7 @@ pub mod progress;
 pub(crate) mod proof_lattice;
 pub mod providers;
 pub mod query;
+pub mod query_resolution;
 pub mod query_terms;
 pub mod recovery;
 pub mod repository;

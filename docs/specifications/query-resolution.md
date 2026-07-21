@@ -45,6 +45,73 @@ exact identifier.
 3. **Local-context read plan (unchanged).** Where term retrieval abstains and its
    preconditions still hold (a path-shaped target resolving to one indexed file or
    unit), the existing `PARTIAL_CONTEXT` local-context fallback still applies.
+4. **Directory / composite scope resolution.** When every earlier stage still
+   abstained with an empty-candidate `query target` block and the parsed target
+   named a directory scope (a `/`-containing token that is not a file locator,
+   e.g. `src/rust/interfaces/cli`) — alone or combined with concept, framework, or
+   language ranking signals — the scope is resolved deterministically (see below).
+   A non-directory target with no hard-constraint conflict flows through this stage
+   unchanged, so every prior outcome is byte-identical.
+
+### Directory and composite scope resolution
+
+The target parser (`application::query_resolution::parse_target`) classifies a
+raw target into orthogonal HARD (exact `family:`/`unit:`/path locks), SCOPE
+(directory prefixes, language), and RANKING (concept, framework role, symbol,
+residue) tiers, and records any typed hard-constraint conflict without resolving
+it. Stage 4 acts on the SCOPE tier:
+
+- **Scope establishment.** Each directory prefix is normalized (strip `./`,
+  trailing slash) and safety-checked by the shared `is_safe_query_path_text`
+  authority; an absolute path, a `..` traversal, a backslash, a scheme, a control
+  character, or an empty segment is rejected and never used to read. Each safe
+  prefix is resolved through the bounded `IndexStore::list_active_files_in_directory`
+  read-model port — a prefix range scan over the `(generation_id, path)` primary
+  key that returns at most a fixed limit of child files in `path` order and a
+  `truncated` flag. The scoped read and every family lookup are checked against the
+  same active `generation_id`; a resync mismatch abstains unchanged.
+- **Family mapping.** The bounded scoped files are mapped to the pattern families
+  whose evidence lives within the scope (via the existing
+  `find_active_families_by_evidence_path` projection). Multiple directory scopes
+  default to **intersection**. A composite target additionally intersects the
+  in-scope families with the positively-scored families from the single
+  term-retrieval scoring authority, so `app/api route` narrows to the family that
+  is both in the directory and matches the concept.
+- **Outcomes and the additive `resolution` projection.** Every scope outcome that
+  resolves a locus carries an additive top-level `resolution` object — a
+  `cardinality` token (`one`/`many`/`none`/`truncated`) plus a bounded, source-free
+  `candidates` array (each `{family_id, summary}`, the summary projected from the
+  committed family search-summary projection — never a hydrated deep family). It is
+  expressed **without a new top-level status token**: the existing `FOUND` /
+  `PARTIAL_CONTEXT` statuses carry it (see the additive-field rationale in
+  ADR-0029). A `many`/`none`/`truncated` resolution **never** carries a
+  `selected_family_id`.
+  - **One family (untruncated) → `FOUND` + `resolution.cardinality = "one"`.** The
+    single proven family is hydrated through the same freshness + profile gates and
+    is the sole candidate in the resolution.
+  - **Heterogeneous scope (more than one distinct family) → `PARTIAL_CONTEXT` +
+    `resolution.cardinality = "many"`.** The bounded competing families are surfaced
+    as candidate summaries with **no** `selected_family_id` — zero false selection.
+    Their `family_id`s are also carried on the `directory_scope` resolved target's
+    `candidate_family_ids` (and thus on `query_route.follow_up_family_ids`), so the
+    narrowing handles survive at `minimal` even though the rich `resolution` object
+    is a `standard`/`full` field.
+  - **Resolved locus with no matching family → `PARTIAL_CONTEXT` +
+    `resolution.cardinality = "none"`** (an empty candidate set) with a
+    `directory_scope` resolved target (the bounded child paths as candidate handles,
+    an empty read plan — the locus is a directory, not a single file) and no invented
+    family.
+  - A scope that resolves to **no indexed files** returns a typed `UNKNOWN` naming
+    the accurate reason (an unresolved locus carries no `resolution`). Jointly
+    unsatisfiable directory scopes, and any parsed hard-constraint conflict
+    (multiple `family:` ids, multiple `unit:` ids, or a mixed family/unit identity),
+    return a typed conflict `UNKNOWN` — never a union or a silently-dropped
+    constraint.
+- **Truncation is never silent.** When the scoped read exceeds its bound, unseen
+  files might belong to other families, so the resolver never claims a single
+  family under truncation: the outcome is `PARTIAL_CONTEXT` +
+  `resolution.cardinality = "truncated"`, surfacing the families seen so far as
+  bounded candidates with the truncation stated in the source-free recovery text.
 
 A resolved family detail carries a hydrated, metadata-only `constraint_profile`
 (the source-backed specification, or `null` when none was persisted) and a
@@ -67,6 +134,24 @@ Evidence-mode selection covers the canonical and support constraints plus one
 witness per observed variation dimension (and the anchor-target dimension) when
 the profile is hydrated. See the Representative selection rule and the
 `FamilyConstraintProfile` in `docs/specifications/domain-model.md`.
+
+### Scoped readiness reuse
+
+The bounded directory-scope machinery is also reused, read-only, by SCOPED
+readiness (`repogrammar doctor --target/--within` and the MCP `inspect_readiness`
+scoped operation; see `docs/specifications/mcp-api.md` and
+`docs/specifications/product.md`). Scoped readiness parses the `target`/`within`
+with the same `parse_target`, normalizes and safety-checks the scope prefixes with
+the same `normalize_directory_prefix`, and maps the bounded scoped files to their
+families with the same `list_active_files_in_directory` +
+`find_active_families_by_evidence_path` ports and the same generation-consistency
+discipline. Unlike the query path, it only COUNTS: it never hydrates, selects, or
+projects a family, never reads source content, and records no telemetry. It
+therefore surfaces the scope's indexed-file coverage, languages present, and the
+count of families whose evidence occupies the scope as a bounded queryability
+report, without ever selecting a family. As in the query path, a bare
+single-segment token that carries no `/` or `.` is not a path-like scope and reads
+to an empty scope.
 
 ### Abstention gates and reasons
 
@@ -152,15 +237,20 @@ only removes ids already carried by `follow_up_family_ids`.
 
 ### Calibration summary
 
-Calibrated against the 79-query product-eval corpus (`query-corpus-v1.json`;
-42 retrieval + 25 abstention + 12 context after the gold adjudications). With
-vocabulary v2 at `MIN_RETRIEVAL_SCORE = 10` and `MIN_RETRIEVAL_MARGIN = 1`,
-hit@1 is **25/42** and MRR is **0.595**, up from vocabulary v1's 21/42 and
-0.500. The four additional matches are the two fixture phrasings and the
-`unit test` / `test case` synonym queries covered by the qualified table. Every
-hard constraint remains unchanged: zero false-family selections, 25/25 correct
-abstentions, zero selections on abstention gold, 4/4 unsupported rejections,
-6/6 ambiguity precision, 13/14 candidate recall, and 12/12 context matches.
+Calibrated against the product-eval corpus (`query-corpus-v1.json`), now 107
+queries (47 retrieval + 34 abstention + 26 context) after the universal
+target-resolution expansion added directory, composite, candidate-set,
+two-sided explain/check (`against`), and scoped-readiness cases. On the
+term-retrieval subset, vocabulary v2 at `MIN_RETRIEVAL_SCORE = 10` and
+`MIN_RETRIEVAL_MARGIN = 1` scores hit@1 **25/42** and MRR **0.595** (up from
+vocabulary v1's 21/42 and 0.500; the four additional matches are the two
+fixture phrasings and the `unit test` / `test case` synonym queries covered by
+the qualified table). Across the full corpus, hit@1 is **30/47** and MRR is
+**0.638**. Every hard constraint holds: zero false-family selections, committed
+family precision **38/38**, 34/34 correct abstentions, zero selections on
+abstention gold, 4/4 unsupported rejections, 6/6 ambiguity precision, 16/17
+candidate recall, 26/26 context matches, and 10/10 directory / 3/3 composite /
+4/4 conflict scope resolution.
 
 The earlier v1 threshold sweep put hit@1 on a plateau across
 `MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regressed to 18/42 (the
@@ -345,12 +435,17 @@ constants.
 
 ## Static-alignment check resolution
 
-The `check` operation (CLI `check`, MCP `check_conformance`,
-`FamilyLookupMode::Conformance`) reuses this resolution pipeline and layers a
-source-backed static-alignment certificate on top. It is implemented in
-`application::query::check_static_alignment` and decides the alignment with the
-single authority `application::conformance::compute_alignment`. It never proves
-runtime equivalence: every certificate carries `runtime_equivalence: UNKNOWN`.
+The two-sided static-alignment operations (`FamilyLookupMode::Conformance`) —
+`check` (CLI `check`, MCP `check_conformance`) and `explain` (CLI `explain`, MCP
+`explain_deviation`) — reuse this resolution pipeline and layer a source-backed
+static-alignment certificate on top. Both are implemented in
+`application::query::check_static_alignment` and decide the alignment with the
+single authority `application::conformance::compute_alignment`; they differ only in
+the `command`/`operation` label and emphasis, not in the resolution or projection.
+`explain` is no longer a `find` alias: it produces the same certificate, so it
+always carries a real `target_relationship` when a unit and family both resolve.
+Neither ever proves runtime equivalence: every certificate carries
+`runtime_equivalence: UNKNOWN`.
 
 Resolution proceeds in three deterministic stages:
 
@@ -371,13 +466,21 @@ Resolution proceeds in three deterministic stages:
    - a target that matches no indexed file/unit, or whose locator contains no unit,
      abstains without a certificate.
 
-2. **Comparison-family selection.** When the resolved unit is a member
-   (`find_active_families_by_member`), its own family is the comparison family
-   (`MEMBER`). When it is a non-member, the single fresh ready family of its
-   `(language, kind, role)` key is selected from the source-free
-   `list_active_family_search_summaries` projection. Multiple plausible families
-   abstain with `INSUFFICIENT_EVIDENCE` and candidate ids; no family for the key,
-   or a target with no supported role or non-eligible kind, abstains
+2. **Comparison-family selection.** Exactly one comparison family is pinned before
+   any `compute_alignment` call. When the caller supplies the optional `against`
+   scope, it pins the comparison side directly: `against` is resolved through the
+   shared family-resolution authority (`resolve_against_family`, reusing the exact
+   `family:` id / framework-role / pattern discovery plus the freshness gate) to
+   **exactly one** fresh ready family; an ambiguous or unmatched `against` abstains
+   with `INSUFFICIENT_EVIDENCE` and bounded candidate handles, never a false
+   selection. With `against` present, `MEMBER` is decided by whether the resolved
+   subject unit is a member of the caller-named family. When `against` is omitted
+   and the resolved unit is a member (`find_active_families_by_member`), its own
+   family is the comparison family (`MEMBER`); when it is a non-member, the single
+   fresh ready family of its `(language, kind, role)` key is selected from the
+   source-free `list_active_family_search_summaries` projection. Multiple plausible
+   families abstain with `INSUFFICIENT_EVIDENCE` and candidate ids; no family for
+   the key, or a target with no supported role or non-eligible kind, abstains
    `OUT_OF_SCOPE`; a stale comparison family abstains with `StaleEvidence`. A
    selected family is **never** surfaced for an abstaining outcome (the field is
    structurally `None`), so an abstention is never telemetered as a resolved
@@ -435,12 +538,14 @@ observed among an untruncated enumeration.
 
 The non-member relationship is classified deterministically as `BLOCKED_UNKNOWN`
 (a blocking unknown prevented membership), `EXCEPTION` (a required-feature
-violation against the only ready family of its key — source-backed negative
-evidence), or `NEAR_MISS` (satisfies every required constraint but was not
-admitted); `OUT_OF_SCOPE` names an unsupported kind/role. `COMPETING_PATTERN` is
-**reserved and not yet emitted**: a member always compares against its own family,
-so no current path constructs it. Deviation summaries are RepoGrammar feature
-TOKENS, never repository source text.
+violation against the comparison family — source-backed negative evidence), or
+`NEAR_MISS` (satisfies every required constraint but was not admitted);
+`OUT_OF_SCOPE` names an unsupported kind/role. This non-member classification also
+covers a caller-named `against` family the subject is not a member of (e.g. a
+member of one family compared against a different named family). `COMPETING_PATTERN`
+is **reserved and not yet emitted**: no current path — including `against` — ever
+constructs it. Deviation summaries are RepoGrammar feature TOKENS, never repository
+source text.
 
 ### Certificate serialization: scale guard and duplicate handles
 

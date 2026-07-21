@@ -8,18 +8,20 @@ use crate::application::query::{
     estimate_partial_context_potential_token_savings, family_query_route_report,
     family_query_unknown_metric, found_outcome_token_savings, product_readiness_value,
     query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
-    select_family_evidence, validate_query_target, validate_query_token_budget,
-    AlignmentCertificateReport, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
-    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
-    FamilyQueryUnknown, OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation,
-    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, ResolvedQueryTarget,
-    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, Verbosity, VerbosityTier,
-    MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
+    scoped_readiness_value, select_family_evidence, validate_query_target,
+    validate_query_token_budget, AlignmentCertificateReport, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, OutcomeTokenSavings,
+    ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, ResolvedQueryTarget, ScopedReadinessReport, SourceSpanRenderReport,
+    TermRetrievalAbstention, TermRetrievalRoute, Verbosity, VerbosityTier, MAX_QUERY_TARGET_BYTES,
+    MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
     ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
 };
+use crate::application::query_resolution::Resolution;
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
 use crate::application::telemetry::{
     record_family_query_metric, FamilyQueryCommandCategory, FamilyQueryEntrypoint,
@@ -105,6 +107,7 @@ pub trait McpReadOnlyRuntime {
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        against: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError>;
 
@@ -115,6 +118,19 @@ pub trait McpReadOnlyRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<ProductReadinessReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("readiness"))
+    }
+
+    /// Assemble the bounded, source-free SCOPED readiness report for a
+    /// directory/module scope named by `target` and/or `within`. Read-only,
+    /// source-free, and telemetry-free, like `product_readiness`; it never
+    /// hydrates a family or reads source content.
+    fn scoped_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+        _target: &str,
+        _within: Option<&str>,
+    ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("scoped readiness"))
     }
 
     fn render_source_spans(
@@ -196,6 +212,14 @@ pub struct McpJsonRpcOutcome {
 struct ContextArguments {
     operation: McpOperation,
     target: Option<String>,
+    /// Optional caller-named comparison family scope. Additive to the closed input
+    /// schema; only meaningful for `explain_deviation` / `check_conformance`, where
+    /// it pins the comparison side to exactly one family.
+    against: Option<String>,
+    /// Optional directory/module scope. Consumed only by `inspect_readiness` to
+    /// request a bounded, source-free SCOPED queryability report; ignored by the
+    /// family-query operations, which already scope through `target`.
+    within: Option<String>,
     output_options: FamilyOutputOptions,
     include_source_spans: bool,
 }
@@ -203,7 +227,7 @@ struct ContextArguments {
 pub fn tool_schema() -> Value {
     json!({
         "name": McpToolName::Context.as_str(),
-        "description": "Read-only RepoGrammar pattern-family context. For find_analogues, explain_deviation, and check_conformance, pass the path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use show_family only with an exact family id. Use inspect_readiness (no target) for a bounded, source-free capability report: a summary token, per-dimension states (repository, active index, family evidence freshness, prevalence, retrieval, static alignment, providers, autosync, measurement), the top blocking-unknown mechanisms, and one executable recovery action. Start with compact mode and do not request include_source_spans by default. Use read_plan before editing, and fall back on UNKNOWN/FALLBACK/stale/omitted/insufficient results. Do not run repogrammar stats in normal agent loops. No silent setup; run setup/resync/autosync only when user or project policy permits machine integration and repo-local analysis state.",
+        "description": "Read-only RepoGrammar pattern-family context. For find_analogues, explain_deviation, and check_conformance, pass the path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use show_family only with an exact family id. Use inspect_readiness (no target) for a bounded, source-free capability report: a summary token, per-dimension states (repository, active index, family evidence freshness, prevalence, retrieval, static alignment, providers, autosync, measurement), the top blocking-unknown mechanisms, and one executable recovery action. Add an optional target and/or within (a directory/module scope) to inspect_readiness for a bounded, source-free SCOPED queryability report over just that scope: a summary token, a resolvability verdict, scoped indexing coverage and file count, languages/providers present, resolvable family count, freshness, and one recovery action — with no source-span hydration and no family-query telemetry. Start with compact mode and do not request include_source_spans by default. Use read_plan before editing, and fall back on UNKNOWN/FALLBACK/stale/omitted/insufficient results. Do not run repogrammar stats in normal agent loops. No silent setup; run setup/resync/autosync only when user or project policy permits machine integration and repo-local analysis state.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -223,6 +247,18 @@ pub fn tool_schema() -> Value {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": MAX_MCP_TARGET_BYTES,
+                },
+                "against": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_MCP_TARGET_BYTES,
+                    "description": "Optional comparison-family scope for explain_deviation and check_conformance: an exact family: id, framework role, or pattern that pins the single comparison family. Omitted, the comparison family is inferred from the target unit's membership or its (language, kind, role) key. Ambiguous or unmatched against abstains with candidate handles; it never false-selects.",
+                },
+                "within": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_MCP_TARGET_BYTES,
+                    "description": "Optional directory/module scope. Consumed only by inspect_readiness to request a bounded, source-free scoped queryability report over that scope.",
                 },
                 "token_budget": {
                     "type": "integer",
@@ -269,9 +305,27 @@ pub fn handle_context_call(
     };
 
     // `inspect_readiness` is a read-only, source-free capability inspection. It
-    // does not run the query preflight or family lookup; it returns the decomposed
-    // readiness report, or a clean fallback when readiness cannot be assembled.
+    // does not run the query preflight or family lookup, and it records NO
+    // family-query telemetry (it returns before any telemetry sink). It returns
+    // the decomposed readiness report, or a clean fallback when readiness cannot
+    // be assembled.
     if arguments.operation == McpOperation::InspectReadiness {
+        // A `target` and/or `within` requests the bounded, source-free SCOPED
+        // queryability report; the no-target path is byte-identical to before.
+        if arguments.target.is_some() || arguments.within.is_some() {
+            let target = arguments.target.as_deref().unwrap_or("");
+            return Ok(
+                match runtime.scoped_readiness(request, target, arguments.within.as_deref()) {
+                    Ok(scoped) => scoped_inspect_readiness_value(&scoped),
+                    Err(_) => fallback_value(
+                        arguments.operation,
+                        repository_status_unavailable_fallback(
+                            QueryPreflightOperation::PatternFamilyQuery,
+                        ),
+                    ),
+                },
+            );
+        }
         return Ok(match runtime.product_readiness(request) {
             Ok(readiness) => inspect_readiness_value(&readiness),
             Err(_) => fallback_value(
@@ -308,6 +362,7 @@ pub fn handle_context_call(
         QueryPreflightReport::Ready => match runtime.family_lookup(
             request.clone(),
             arguments.target.as_deref(),
+            arguments.against.as_deref(),
             lookup_mode_for_operation(arguments.operation),
         ) {
             Ok(FamilyLookupReport::Found(family)) => {
@@ -620,11 +675,14 @@ fn alignment_outcome_status(
 fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
     match operation {
         McpOperation::ShowFamily => FamilyLookupMode::ExactFamilyId,
-        McpOperation::FindAnalogues | McpOperation::ExplainDeviation => {
-            FamilyLookupMode::FuzzyQuery
+        McpOperation::FindAnalogues => FamilyLookupMode::FuzzyQuery,
+        // `explain_deviation` is no longer a `find` alias: it resolves the target
+        // to a code unit and a single comparison family and projects a real
+        // deviation certificate (`target_relationship`) through the shared
+        // two-sided static-alignment path, exactly as `check_conformance` does.
+        McpOperation::ExplainDeviation | McpOperation::CheckConformance => {
+            FamilyLookupMode::Conformance
         }
-        // check_conformance runs the static-alignment flow.
-        McpOperation::CheckConformance => FamilyLookupMode::Conformance,
         // inspect_readiness never enters the family-lookup path.
         McpOperation::InspectReadiness => {
             unreachable!("inspect_readiness is not a family-query operation")
@@ -883,6 +941,8 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             key.as_str(),
             "operation"
                 | "target"
+                | "against"
+                | "within"
                 | "token_budget"
                 | "mode"
                 | "verbosity"
@@ -915,6 +975,46 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
         Some(_) => {
             return Err(McpProtocolError::invalid_params(
                 "repogrammar_context target must be a string when provided",
+            ));
+        }
+    };
+    let against = match object.get("against") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_query_target(value).map_err(|error| {
+                McpProtocolError::invalid_params(format!("repogrammar_context against {error}"))
+            })?;
+            Some(value.clone())
+        }
+        Some(_) => {
+            return Err(McpProtocolError::invalid_params(
+                "repogrammar_context against must be a string when provided",
+            ));
+        }
+    };
+    // `against` names the comparison family for the two-sided operations only.
+    // Reject it elsewhere rather than silently ignoring it.
+    if against.is_some()
+        && !matches!(
+            operation,
+            McpOperation::ExplainDeviation | McpOperation::CheckConformance
+        )
+    {
+        return Err(McpProtocolError::invalid_params(
+            "repogrammar_context against is only valid with explain_deviation or check_conformance",
+        ));
+    }
+    let within = match object.get("within") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_query_target(value).map_err(|error| {
+                McpProtocolError::invalid_params(format!("repogrammar_context within {error}"))
+            })?;
+            Some(value.clone())
+        }
+        Some(_) => {
+            return Err(McpProtocolError::invalid_params(
+                "repogrammar_context within must be a string when provided",
             ));
         }
     };
@@ -996,6 +1096,8 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
     Ok(ContextArguments {
         operation,
         target,
+        against,
+        within,
         output_options: FamilyOutputOptions {
             evidence_mode,
             token_budget,
@@ -1034,6 +1136,22 @@ fn inspect_readiness_value(readiness: &ProductReadinessReport) -> Value {
         "status": "ok",
         "implemented": true,
         "readiness": product_readiness_value(readiness),
+    })
+}
+
+/// Bounded, source-free MCP result for a SCOPED `inspect_readiness` (a `target`
+/// and/or `within` was supplied). It carries only typed tokens, counts, language
+/// tokens, and the single recovery action — no source text, raw target, path, or
+/// symbol — under a distinct `scoped_readiness` key so consumers can tell it apart
+/// from the whole-checkout `readiness` report.
+fn scoped_inspect_readiness_value(scoped: &ScopedReadinessReport) -> Value {
+    json!({
+        "operation": McpOperation::InspectReadiness.as_str(),
+        "command": McpOperation::InspectReadiness.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
+        "status": "ok",
+        "implemented": true,
+        "scoped_readiness": scoped_readiness_value(scoped),
     })
 }
 
@@ -1184,6 +1302,7 @@ fn family_detail_value(
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&family.unknowns),
     });
+    insert_resolution(&mut payload, family.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
     payload
 }
@@ -1221,6 +1340,7 @@ fn family_partial_context_value(
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
     });
+    insert_resolution(&mut payload, report.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
     payload
 }
@@ -1497,6 +1617,39 @@ fn term_retrieval_value(term: &TermRetrievalRoute) -> Value {
         })),
         "abstention_reason": term.abstention_reason.map(|reason| reason.as_str()),
     })
+}
+
+/// The additive top-level `resolution` object (MCP shape). Renders the
+/// candidate-set cardinality (`none`/`one`/`many`/`truncated`) and bounded,
+/// source-free candidate summaries. It never carries a `selected_family_id`: a
+/// `many`/`none`/`truncated` resolution is a candidate set, not a selection.
+/// Rendered at `standard`/`full` only (`Standard` tier); at `minimal` the
+/// narrowing family handles are preserved by `query_route` instead.
+fn resolution_value(resolution: &Resolution) -> Value {
+    json!({
+        "cardinality": resolution.cardinality.as_str(),
+        "candidates": resolution
+            .candidates
+            .iter()
+            .map(|candidate| json!({
+                "family_id": candidate.family_id,
+                "summary": candidate.summary,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Insert the additive `resolution` object into a family response payload when the
+/// report carries one and the requested verbosity renders `Standard`-tier fields.
+/// A `None` resolution (every non-scope outcome) leaves the payload byte-stable.
+fn insert_resolution(payload: &mut Value, resolution: Option<&Resolution>, verbosity: Verbosity) {
+    if let Some(resolution) = resolution {
+        if verbosity.renders(VerbosityTier::Standard) {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("resolution".to_string(), resolution_value(resolution));
+            }
+        }
+    }
 }
 
 fn resolved_target_value(target: &ResolvedQueryTarget, verbosity: Verbosity) -> Value {
@@ -2262,6 +2415,49 @@ mod tests {
     }
 
     #[test]
+    fn context_arguments_accept_against_only_for_two_sided_operations() {
+        // `against` is additive to the closed input schema and appears as a bounded
+        // string property.
+        let schema = tool_schema();
+        assert_eq!(
+            schema["inputSchema"]["properties"]["against"]["maxLength"],
+            MAX_MCP_TARGET_BYTES
+        );
+
+        // Accepted and captured for the two-sided operations.
+        for operation in ["explain_deviation", "check_conformance"] {
+            let parsed = parse_context_arguments(&json!({
+                "operation": operation,
+                "target": "unit:app/api/routes.py#fastapi_route:read:0-1:1",
+                "against": "family:python:fastapi_route:framework_fastapi_route",
+            }))
+            .expect("against accepted for two-sided operation");
+            assert_eq!(
+                parsed.against.as_deref(),
+                Some("family:python:fastapi_route:framework_fastapi_route")
+            );
+        }
+
+        // Rejected (never silently ignored) for other operations.
+        let rejected = parse_context_arguments(&json!({
+            "operation": "find_analogues",
+            "target": "src/routes/a.ts",
+            "against": "family:python:fastapi_route:framework_fastapi_route",
+        }))
+        .expect_err("against must be rejected for find_analogues");
+        assert_eq!(rejected.code(), -32602);
+
+        // Control characters / oversized against are rejected like target.
+        let oversized = "y".repeat(MAX_MCP_TARGET_BYTES + 1);
+        let bad = parse_context_arguments(&json!({
+            "operation": "check_conformance",
+            "against": oversized,
+        }))
+        .expect_err("oversized against must be rejected");
+        assert_eq!(bad.code(), -32602);
+    }
+
+    #[test]
     fn context_arguments_parse_verbosity_default_valid_and_invalid() {
         // Absent verbosity defaults to the byte-stable `standard` shape.
         let default = parse_context_arguments(&json!({"operation": "find_analogues"}))
@@ -2590,6 +2786,112 @@ mod tests {
     }
 
     #[test]
+    fn scoped_inspect_readiness_routes_to_scoped_report_without_family_lookup() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness", "target": "app/api"}),
+        )
+        .expect("scoped readiness response");
+
+        assert_eq!(response["operation"], "inspect_readiness");
+        assert_eq!(response["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(response["status"], "ok");
+        // The scoped report lands under its own key, distinct from the whole-repo
+        // `readiness` key, so consumers can tell them apart.
+        let scoped = &response["scoped_readiness"];
+        assert_eq!(scoped["summary"], "ready");
+        assert_eq!(scoped["queryability"], "queryable");
+        assert_eq!(scoped["scope"]["indexed_file_count"], 3);
+        assert_eq!(scoped["scope"]["resolvable_family_count"], 2);
+        assert_eq!(scoped["scope"]["languages"][0], "python");
+        assert!(scoped["recovery"]["action"].is_string());
+        assert!(response.get("readiness").is_none());
+        // Read-only, source-free capability inspection: no family lookup runs, and
+        // no source-span detail leaks.
+        assert_eq!(runtime.lookup_calls(), 0);
+        assert!(response.get("read_plan").is_none());
+        let serialized = response.to_string();
+        assert!(!serialized.contains("content_hash"));
+        assert!(!serialized.contains("start_byte"));
+    }
+
+    #[test]
+    fn scoped_inspect_readiness_accepts_within_only() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness", "within": "app/api"}),
+        )
+        .expect("scoped readiness response");
+
+        assert_eq!(response["scoped_readiness"]["queryability"], "queryable");
+        assert_eq!(runtime.lookup_calls(), 0);
+    }
+
+    #[test]
+    fn inspect_readiness_no_target_output_is_unchanged() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness"}),
+        )
+        .expect("readiness response");
+
+        // The no-target path keeps the whole-checkout `readiness` shape and never
+        // emits the scoped key.
+        assert!(response.get("readiness").is_some());
+        assert!(response.get("scoped_readiness").is_none());
+        assert_eq!(response["readiness"]["summary"], "degraded");
+    }
+
+    #[test]
+    fn scoped_inspect_readiness_records_no_family_query_telemetry() {
+        let workspace = TempWorkspace::new("mcp-scoped-readiness-no-telemetry");
+        let context = context_for_workspace(&workspace);
+        let rollup_path = workspace
+            .path()
+            .join(".repogrammar")
+            .join("telemetry")
+            .join("local-metrics")
+            .join("family_query_metrics.json");
+
+        // The scoped inspect_readiness path emits NO family-query telemetry.
+        let scoped = handle_context_call(
+            &FakeMcpRuntime::ready_unknown(),
+            &context,
+            &json!({"operation": "inspect_readiness", "target": "app/api"}),
+        )
+        .expect("scoped readiness response");
+        assert_eq!(scoped["scoped_readiness"]["queryability"], "queryable");
+        assert!(
+            !rollup_path.exists(),
+            "scoped inspect_readiness must not write family-query telemetry"
+        );
+
+        // Positive control: a family-query fallback on the SAME context DOES write
+        // the rollup, proving the harness would observe telemetry if any were
+        // emitted on the scoped path.
+        let fallback = handle_context_call(
+            &FakeMcpRuntime::initialized_without_generation(),
+            &context,
+            &json!({"operation": "find_analogues", "target": "app/api"}),
+        )
+        .expect("fallback response");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert!(
+            rollup_path.exists(),
+            "family-query fallback must write the telemetry rollup"
+        );
+    }
+
+    #[test]
     fn no_active_generation_returns_index_guidance() {
         let runtime = FakeMcpRuntime::initialized_without_generation();
 
@@ -2619,7 +2921,13 @@ mod tests {
 
         assert_eq!(response["status"], "UNKNOWN");
         assert_eq!(response["implemented"], true);
-        assert_eq!(response["query_route"]["route"], "discovery_unknown");
+        // `explain_deviation` now resolves through the shared two-sided
+        // static-alignment path (no longer a fuzzy `find` alias), so a
+        // Conformance-mode abstention names the conformance route.
+        assert_eq!(
+            response["query_route"]["route"],
+            "conformance_static_alignment"
+        );
         assert_eq!(
             response["query_route"]["family_id_policy"],
             "family_ids_are_returned_follow_up_handles_not_required_initial_inputs"
@@ -2812,7 +3120,7 @@ mod tests {
             options,
         );
         let route = family_query_route_report(
-            &FamilyLookupReport::Found(family.clone()),
+            &FamilyLookupReport::Found(Box::new(family.clone())),
             FamilyLookupMode::FuzzyQuery,
         );
         let estimate = EstimatedPotentialTokenSavings::new(1, 1);
@@ -2849,6 +3157,146 @@ mod tests {
         assert_eq!(deep["member_count"], total);
         assert_eq!(deep["members_truncated"], false);
         assert_eq!(deep["members"].as_array().expect("members").len(), total);
+    }
+
+    #[test]
+    fn found_resolution_one_renders_additively_and_drops_at_minimal() {
+        use crate::application::query_resolution::{
+            Resolution, ResolutionCandidate, ResolutionCardinality,
+        };
+        let mut family = family_detail();
+        family.resolution = Some(Resolution {
+            cardinality: ResolutionCardinality::One,
+            candidates: vec![ResolutionCandidate {
+                family_id: family.family_id.clone(),
+                summary: "typescript express.route · DOMINANT_PATTERN".to_string(),
+            }],
+        });
+        let options = FamilyOutputOptions::default();
+        let read_plan = build_read_plan(
+            &family,
+            Some("src/routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+            options,
+        );
+        let route = family_query_route_report(
+            &FamilyLookupReport::Found(Box::new(family.clone())),
+            FamilyLookupMode::FuzzyQuery,
+        );
+        let estimate = EstimatedPotentialTokenSavings::new(1, 1);
+
+        // Standard: the additive `resolution` object is rendered with cardinality
+        // `one`, its single candidate, and NO `selected_family_id` inside it.
+        let value = family_detail_value(
+            McpOperation::FindAnalogues,
+            &family,
+            &route,
+            &read_plan,
+            options,
+            None,
+            &estimate,
+        );
+        assert_eq!(value["resolution"]["cardinality"], "one");
+        assert_eq!(
+            value["resolution"]["candidates"][0]["family_id"],
+            family.family_id
+        );
+        assert!(value["resolution"]["candidates"][0]["summary"].is_string());
+        assert!(value["resolution"].get("selected_family_id").is_none());
+
+        // Minimal: the object is dropped (Standard tier); the family itself is
+        // still in the `family` block, so no narrowing handle is lost.
+        let minimal = FamilyOutputOptions {
+            verbosity: Verbosity::Minimal,
+            ..options
+        };
+        let value_min = family_detail_value(
+            McpOperation::FindAnalogues,
+            &family,
+            &route,
+            &read_plan,
+            minimal,
+            None,
+            &estimate,
+        );
+        assert!(value_min.get("resolution").is_none());
+    }
+
+    #[test]
+    fn partial_context_resolution_many_never_selects_and_keeps_minimal_handles() {
+        use crate::application::query_resolution::{
+            Resolution, ResolutionCandidate, ResolutionCardinality,
+        };
+        let fastapi = "family:python:fastapi_route:framework_fastapi_route";
+        let sqlalchemy = "family:python:sqlalchemy_model:framework_sqlalchemy_model";
+        let FamilyLookupReport::PartialContext(mut report) = partial_context_report() else {
+            panic!("expected partial context");
+        };
+        report.resolution = Some(Resolution {
+            cardinality: ResolutionCardinality::Many,
+            candidates: vec![
+                ResolutionCandidate {
+                    family_id: fastapi.to_string(),
+                    summary: "python fastapi.route · DOMINANT_PATTERN".to_string(),
+                },
+                ResolutionCandidate {
+                    family_id: sqlalchemy.to_string(),
+                    summary: "python sqlalchemy.model · DOMINANT_PATTERN".to_string(),
+                },
+            ],
+        });
+        report.resolved_target.candidate_family_ids =
+            vec![fastapi.to_string(), sqlalchemy.to_string()];
+        let route = family_query_route_report(
+            &FamilyLookupReport::PartialContext(report.clone()),
+            FamilyLookupMode::FuzzyQuery,
+        );
+        let options = FamilyOutputOptions::default();
+
+        // Standard: cardinality `many`, both candidate summaries, and NEVER a
+        // `selected_family_id` — neither inside `resolution` nor on the route.
+        let value = family_partial_context_value(
+            McpOperation::FindAnalogues,
+            &report,
+            &route,
+            &report.read_plan,
+            options,
+            None,
+            None,
+        );
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["resolution"]["cardinality"], "many");
+        assert_eq!(
+            value["resolution"]["candidates"]
+                .as_array()
+                .expect("candidates")
+                .len(),
+            2
+        );
+        assert!(value["resolution"].get("selected_family_id").is_none());
+        assert!(value["query_route"]["selected_family_id"].is_null());
+
+        // Minimal: the rich object is dropped, but the narrowing family handles
+        // survive on `query_route.follow_up_family_ids`.
+        let minimal = FamilyOutputOptions {
+            verbosity: Verbosity::Minimal,
+            ..options
+        };
+        let value_min = family_partial_context_value(
+            McpOperation::FindAnalogues,
+            &report,
+            &route,
+            &report.read_plan,
+            minimal,
+            None,
+            None,
+        );
+        assert!(value_min.get("resolution").is_none());
+        let handles = value_min["query_route"]["follow_up_family_ids"]
+            .as_array()
+            .expect("follow-up handles");
+        assert!(handles.iter().any(|handle| handle == fastapi));
+        assert!(handles.iter().any(|handle| handle == sqlalchemy));
     }
 
     #[test]
@@ -3382,7 +3830,7 @@ mod tests {
                 RepositoryStatus::Initialized {
                     active_generation: "gen-000001".to_string(),
                 },
-                FamilyLookupReport::Found(family_detail()),
+                FamilyLookupReport::Found(Box::new(family_detail())),
             )
         }
 
@@ -3471,6 +3919,7 @@ mod tests {
             &self,
             _request: RepositoryStatusRequest,
             target: Option<&str>,
+            _against: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             self.lookup_calls.set(self.lookup_calls.get() + 1);
@@ -3501,6 +3950,32 @@ mod tests {
                 false,
                 Some(Vec::new()),
             ))
+        }
+
+        fn scoped_readiness(
+            &self,
+            _request: RepositoryStatusRequest,
+            _target: &str,
+            _within: Option<&str>,
+        ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+            // A queryable scope fixture; the scoped path must never enter the family
+            // lookup, so this records nothing on `lookup_calls`.
+            Ok(ScopedReadinessReport {
+                summary: crate::application::query::ReadinessSummary::Ready,
+                queryability: crate::application::query::ScopeQueryability::Queryable,
+                scope_prefix_count: 1,
+                indexed_file_count: 3,
+                index_coverage: crate::application::query::ScopeIndexCoverage::Present,
+                languages_in_scope: vec!["python".to_string()],
+                resolvable_family_count: 2,
+                scope_truncated: false,
+                freshness: crate::application::query::ScopeFreshness::Fresh,
+                providers: Vec::new(),
+                recovery: crate::application::recovery::RecoveryRecommendation {
+                    action: crate::application::recovery::RecoveryAction::None,
+                    reason: crate::application::recovery::RecoveryReason::Ready,
+                },
+            })
         }
 
         fn render_source_spans(
@@ -3615,6 +4090,7 @@ mod tests {
                         .to_string(),
                 ),
             }],
+            resolution: None,
         }))
     }
 
@@ -3658,6 +4134,7 @@ mod tests {
             }],
             constraint_profile: None,
             term_retrieval: None,
+            resolution: None,
         }
     }
 

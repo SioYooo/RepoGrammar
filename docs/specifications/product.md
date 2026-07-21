@@ -416,12 +416,28 @@ abstention (a typed `UNKNOWN`, never an emitted family) rather than certainty.
 See `domain-model.md` for the `FamilyPrevalence` record and classification
 rule.
 
+A family is **selected** (`FOUND`) only when exactly one high-confidence family
+resolves. When a fuzzy target resolves a **directory or composite scope** to more
+than one in-scope family, RepoGrammar must never collapse the set into a single
+guess or a generic `UNKNOWN`: it reports `PARTIAL_CONTEXT` and projects the
+candidate-set cardinality through an additive `resolution` object
+(`cardinality: one|many|none|truncated` plus bounded, source-free
+`{family_id, summary}` candidates). A `many`/`none`/`truncated` resolution carries
+**no** `selected_family_id` — the candidates are narrowing handles, not a claim.
+The cardinality is expressed additively on `product-schemas.v1`, without a new
+top-level status token (see ADR-0029 and `docs/specifications/query-resolution.md`).
+
 Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Language-native semantic facts take precedence over
 framework heuristics and syntax-only fingerprints. Syntax-origin framework-role
 facts can record that a code unit has a recognizable framework role shape, but
 `FRAMEWORK_HEURISTIC` certainty is not enough to prove family membership,
 resolved handler identity, runtime lifecycle equivalence, or conformance.
+The two-sided static-alignment operations `check_conformance` and
+`explain_deviation` (the latter is a real deviation projection, not a `find`
+alias) resolve a subject unit against one comparison family — pinned by the
+optional `against` scope or inferred — and report a `target_relationship`; both
+carry `runtime_equivalence: "UNKNOWN"` and never claim runtime conformance.
 Freshness is a required gate before semantic facts can become inputs to future
 family claim builders. A fresh supported fact kind is still only eligible input;
 it is not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result
@@ -541,6 +557,20 @@ one payload can never carry `readiness.query_ready: false` beside
 it is not a claim that any particular family, alignment, or token-saving result is
 supported or measured. Assembling it performs bounded stats-scale reads, so like
 `status`/`doctor` it is for readiness triage, not routine per-query agent loops.
+
+The same authority also produces a bounded, source-free SCOPED readiness report
+for one directory/module scope, exposed by `repogrammar doctor --target/--within`
+and the MCP `inspect_readiness` scoped operation. It reuses the shared
+target-resolution vocabulary and the bounded directory-scope read/family-mapping
+ports to report, for that scope only, a resolvability verdict, indexed-file
+coverage and count, languages present, the count of families whose evidence
+occupies the scope (counted WITHOUT hydrating any family), a scope freshness token
+projected from the same repository recovery authority, and one recovery action.
+Its `summary` is projected from the same shared recovery as the whole-checkout
+readiness, so a scope is never more optimistic than the repository. It is
+source-free (it hydrates no family and reads no source content) and records no
+family-query telemetry; every field is a low-cardinality enum, count, or language
+token, with no raw target, path, or symbol in the output.
 
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,

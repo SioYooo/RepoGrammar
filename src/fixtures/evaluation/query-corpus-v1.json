@@ -15,6 +15,11 @@
       "fixture_id": "zero-family",
       "root": "src/fixtures/evaluation/zero-family-repo",
       "description": "Two plain Python files with ordinary functions and no framework imports, so no family evidence can exist."
+    },
+    {
+      "fixture_id": "directory-scopes",
+      "root": "src/fixtures/evaluation/directory-scopes",
+      "description": "Nested Python repo reusing the recognized v0.1 patterns under app/ (plus a plain plain/util/ package and the dynamic-unknown/tests/sub/ indexed-but-familyless directory), so directory and composite scope resolution (single/heterogeneous/familyless/nonexistent cardinalities) and hard-constraint conflicts can be evaluated deterministically against the real 7e09caa binary."
     }
   ],
   "queries": [
@@ -232,7 +237,9 @@
         "outcome": "unknown",
         "unknown_reason": "StaleEvidence",
         "route": "exact_lookup_unknown",
-        "candidates_include": ["family:python:fastapi_route"]
+        "candidates_include": [
+          "family:python:fastapi_route"
+        ]
       }
     },
     {
@@ -271,17 +278,15 @@
       "query_id": "py-explain-app",
       "fixture_id": "python-v0_1",
       "kind": "explain_deviation",
-      "intent": "context",
+      "intent": "abstention",
       "operation": "explain",
       "target": "fastapi-basic/app.py",
       "mode": "compact",
       "expected": {
-        "outcome": "partial_context",
-        "route": "partial_context_read_plan",
-        "candidates_include": [
-          "family:python:fastapi_route",
-          "family:python:pydantic_model"
-        ]
+        "outcome": "unknown",
+        "route": "conformance_static_alignment",
+        "alignment_status": "INSUFFICIENT_EVIDENCE",
+        "unknown_reason": "InsufficientSupport"
       }
     },
     {
@@ -646,7 +651,9 @@
       "mode": "compact",
       "expected": {
         "outcome": "unknown",
-        "candidates_include": ["family:python:fastapi_route"]
+        "candidates_include": [
+          "family:python:fastapi_route"
+        ]
       }
     },
     {
@@ -659,7 +666,9 @@
       "mode": "compact",
       "expected": {
         "outcome": "unknown",
-        "candidates_include": ["family:python:sqlalchemy_model"]
+        "candidates_include": [
+          "family:python:sqlalchemy_model"
+        ]
       }
     },
     {
@@ -1105,6 +1114,437 @@
         "outcome": "unknown",
         "alignment_status": "INSUFFICIENT_EVIDENCE"
       }
+    },
+    {
+      "query_id": "dir-single-pytest-basic",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_single",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "app/pytest-basic/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "resolution_cardinality": "one",
+        "family_prefix": "family:python:pytest_fixture"
+      }
+    },
+    {
+      "query_id": "dir-single-pydantic-basic",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_single",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "app/pydantic-basic/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "resolution_cardinality": "one",
+        "family_prefix": "family:python:pydantic_model"
+      }
+    },
+    {
+      "query_id": "dir-module-scope-nested-tests",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_module_scope",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "app/dynamic-unknown/tests/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "resolution_cardinality": "one",
+        "family_prefix": "family:python:pytest_fixture"
+      }
+    },
+    {
+      "query_id": "dir-heterogeneous-fastapi-basic",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_heterogeneous",
+      "intent": "context",
+      "operation": "find",
+      "target": "app/fastapi-basic/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "many",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "dir-heterogeneous-sqlalchemy-basic",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_heterogeneous",
+      "intent": "context",
+      "operation": "find",
+      "target": "app/sqlalchemy-basic/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "many",
+        "candidates_include": [
+          "family:python:sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method"
+        ]
+      }
+    },
+    {
+      "query_id": "dir-heterogeneous-mixed-python",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_heterogeneous",
+      "intent": "context",
+      "operation": "find",
+      "target": "app/mixed-python/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "many",
+        "candidates_include": [
+          "family:python:fastapi_route",
+          "family:python:pydantic_model"
+        ]
+      }
+    },
+    {
+      "query_id": "dir-familyless-indexed-sub",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_familyless",
+      "intent": "context",
+      "operation": "find",
+      "target": "app/dynamic-unknown/tests/sub/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "none"
+      }
+    },
+    {
+      "query_id": "dir-nonexistent-scope",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_nonexistent",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "app/ghost/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "dir-empty-plain-scope",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_nonexistent",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "app/plain/util/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "dir-multi-intersection-one",
+      "fixture_id": "directory-scopes",
+      "kind": "directory_intersection",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "app/fastapi-basic/ app/fastapi-alias-strong-evidence/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "resolution_cardinality": "one",
+        "family_prefix": "family:python:fastapi_route"
+      }
+    },
+    {
+      "query_id": "composite-path-concept-one",
+      "fixture_id": "directory-scopes",
+      "kind": "composite_path_concept",
+      "intent": "retrieval",
+      "operation": "find",
+      "target": "app/fastapi-basic route",
+      "mode": "compact",
+      "expected": {
+        "outcome": "ok",
+        "resolution_cardinality": "one",
+        "family_prefix": "family:python:fastapi_route"
+      }
+    },
+    {
+      "query_id": "composite-path-concept-none",
+      "fixture_id": "directory-scopes",
+      "kind": "composite_path_concept_none",
+      "intent": "context",
+      "operation": "find",
+      "target": "app/sqlalchemy-basic route",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "none"
+      }
+    },
+    {
+      "query_id": "composite-path-symbol-many",
+      "fixture_id": "directory-scopes",
+      "kind": "composite_path_symbol",
+      "intent": "context",
+      "operation": "find",
+      "target": "app/sqlalchemy-basic get",
+      "mode": "compact",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "many",
+        "candidates_include": [
+          "family:python:sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method"
+        ]
+      }
+    },
+    {
+      "query_id": "conflict-two-family-ids",
+      "fixture_id": "directory-scopes",
+      "kind": "conflict_family_ids",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "family:python:fastapi_route:framework_fastapi_route family:python:sqlalchemy_model:framework_sqlalchemy_model",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "conflict-two-unit-ids",
+      "fixture_id": "directory-scopes",
+      "kind": "conflict_unit_ids",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3 unit:app/sqlalchemy-basic/models.py#sqlalchemy_model:user:122-351:2",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "conflict-disjoint-dir-scopes",
+      "fixture_id": "directory-scopes",
+      "kind": "conflict_dir_scopes",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "app/pytest-basic/ app/pytest-strong-evidence/",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "conflict-mixed-family-unit-identity",
+      "fixture_id": "directory-scopes",
+      "kind": "conflict_mixed_identity",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "family:python:fastapi_route:framework_fastapi_route unit:app/sqlalchemy-basic/models.py#sqlalchemy_model:user:122-351:2",
+      "mode": "compact",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "explain-unit-fastapi-member",
+      "fixture_id": "directory-scopes",
+      "kind": "explain_unit_member",
+      "intent": "context",
+      "operation": "explain",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "mode": "compact",
+      "comment": "Explain over a PINNED fastapi_route member unit yields a real two-sided conformance certificate, not a find alias: the target resolves to a code unit, the alignment route runs (route=conformance_static_alignment), and the certificate reports target_relationship=MEMBER with alignment_status=STATICALLY_ALIGNED against the unit's own family. Contrast py-explain-app (path-only, no locator) which abstains INSUFFICIENT_EVIDENCE on the same operation.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATICALLY_ALIGNED",
+        "target_relationship": "MEMBER"
+      }
+    },
+    {
+      "query_id": "explain-unit-pydantic-member",
+      "fixture_id": "directory-scopes",
+      "kind": "explain_unit_member",
+      "intent": "context",
+      "operation": "explain",
+      "target": "unit:app/fastapi-basic/app.py#pydantic_model:userout:109-160:1",
+      "mode": "compact",
+      "comment": "Second explain-unit certificate over a different family: a pinned pydantic_model member resolves MEMBER / STATICALLY_ALIGNED against the versioned pydantic_model family (family_prefix stays at the version-free family:python:pydantic_model so the gold is stable across index generations).",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:pydantic_model",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATICALLY_ALIGNED",
+        "target_relationship": "MEMBER"
+      }
+    },
+    {
+      "query_id": "check-against-family-certificate",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_family",
+      "intent": "context",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "family:python:fastapi_route:framework_fastapi_route",
+      "mode": "compact",
+      "comment": "Valid --against pins exactly one comparison family. The check statically compares the fastapi_route member against the named fastapi_route family and commits a STATICALLY_ALIGNED certificate (target_relationship=MEMBER). The selected family matches the against family by construction, so this never counts as a false family.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:fastapi_route",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATICALLY_ALIGNED",
+        "target_relationship": "MEMBER"
+      }
+    },
+    {
+      "query_id": "check-against-cross-family-deviation",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_deviation",
+      "intent": "context",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+      "mode": "compact",
+      "comment": "Two-sided deviation: an explicit --against pins a DIFFERENT family (sqlalchemy_model) than the target's natural fastapi_route membership, so the certificate honestly reports STATIC_DEVIATION with target_relationship=EXCEPTION against the requested family. The user asked to compare against sqlalchemy_model, so surfacing it as the comparison family is correct, not a false selection; family_prefix gold is sqlalchemy_model to match the requested comparison.",
+      "expected": {
+        "outcome": "ok",
+        "family_prefix": "family:python:sqlalchemy_model",
+        "route": "conformance_static_alignment",
+        "alignment_status": "STATIC_DEVIATION",
+        "target_relationship": "EXCEPTION"
+      }
+    },
+    {
+      "query_id": "check-against-absent-abstains",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_absent",
+      "intent": "abstention",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "family:python:does_not_exist:framework_none",
+      "mode": "compact",
+      "comment": "A nonexistent --against family matches no comparison family, so the check abstains INSUFFICIENT_EVIDENCE (InsufficientSupport) and selects NO family (selected_family_id: null) rather than falling back to the target's natural family. Asserting outcome=unknown with no family constraint guarantees no false-select and no selection-on-abstention.",
+      "expected": {
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "check-against-ambiguous-abstains",
+      "fixture_id": "directory-scopes",
+      "kind": "check_against_ambiguous",
+      "intent": "abstention",
+      "operation": "check",
+      "target": "unit:app/fastapi-basic/app.py#fastapi_route:list_users:216-433:3",
+      "against": "route",
+      "mode": "compact",
+      "comment": "An ambiguous bare-concept --against ('route') does not pin a single comparison family, so the check abstains INSUFFICIENT_EVIDENCE (InsufficientSupport) with selected_family_id: null instead of guessing. Second no-false-select witness alongside check-against-absent-abstains.",
+      "expected": {
+        "outcome": "unknown",
+        "alignment_status": "INSUFFICIENT_EVIDENCE",
+        "unknown_reason": "InsufficientSupport"
+      }
+    },
+    {
+      "query_id": "scoped-readiness-queryable-heterogeneous",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_queryable",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/fastapi-basic/",
+      "mode": "compact",
+      "comment": "Scoped inspect_readiness (MCP-only; harness drives serve with the target as the within directory scope). A heterogeneous but fully indexed scope is queryable with present coverage and two resolvable families (fastapi_route + pydantic_model).",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "queryable",
+        "scope_coverage": "present",
+        "resolvable_family_count": 2
+      }
+    },
+    {
+      "query_id": "scoped-readiness-queryable-single",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_queryable",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/pytest-basic/",
+      "mode": "compact",
+      "comment": "A single-family indexed scope is queryable with present coverage and exactly one resolvable family (pytest_fixture).",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "queryable",
+        "scope_coverage": "present",
+        "resolvable_family_count": 1
+      }
+    },
+    {
+      "query_id": "scoped-readiness-familyless-indexed",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_familyless",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/dynamic-unknown/tests/sub/",
+      "mode": "compact",
+      "comment": "An indexed-but-familyless scope has present coverage yet zero resolvable families, so scoped queryability is partial_context: the scope is indexed and readable for local context but carries no supported family to retrieve.",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "partial_context",
+        "scope_coverage": "present",
+        "resolvable_family_count": 0
+      }
+    },
+    {
+      "query_id": "scoped-readiness-absent-ghost",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_absent",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/ghost/",
+      "mode": "compact",
+      "comment": "A nonexistent scope has empty coverage and zero indexed files, so scoped queryability is not_indexed with no resolvable families; the readiness call still answers successfully (status ok) rather than erroring.",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "not_indexed",
+        "scope_coverage": "empty",
+        "resolvable_family_count": 0
+      }
+    },
+    {
+      "query_id": "scoped-readiness-empty-plain",
+      "fixture_id": "directory-scopes",
+      "kind": "scoped_readiness_absent",
+      "intent": "context",
+      "operation": "inspect_readiness",
+      "target": "app/plain/util/",
+      "mode": "compact",
+      "comment": "A present-but-familyless plain package directory whose files were not stored under this scope prefix reports not_indexed with empty coverage and zero resolvable families, distinct from the indexed-but-familyless partial_context case.",
+      "expected": {
+        "outcome": "ok",
+        "queryability": "not_indexed",
+        "scope_coverage": "empty",
+        "resolvable_family_count": 0
+      }
     }
-  ]
+  ],
+  "_deferred_wave2_kinds": {
+    "note": "Remaining wave-2 deferrals after the wave-2 top-up landed the explain-unit certificate, check --against, and scoped-readiness cases with real gold from the 2ea0b6f binary. The kinds below still need behaviors or fixtures not deterministically expressible here.",
+    "deferred": [
+      "directory_truncated (resolution.cardinality=truncated needs a directory exceeding DIRECTORY_SCOPE_FILE_LIMIT=64 indexed files; the directory-scopes fixture indexes only 36 files, so a purpose-built large fixture is still required)",
+      "same_basename_multi_directory / multi_family_member / term_tie (best-effort ambiguity cases; existing fixtures resolve them deterministically without a distinct tie, so deferred until a purpose-built fixture exists)"
+    ]
+  }
 }

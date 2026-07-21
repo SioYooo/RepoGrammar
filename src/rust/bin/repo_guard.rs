@@ -2808,7 +2808,7 @@ fn executable_on_path(name: &str) -> Option<PathBuf> {
 }
 
 const PRODUCT_EVAL_CORPUS_SCHEMA: &str = "product-eval-corpus.v1";
-const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v2";
+const PRODUCT_EVAL_RESULTS_SCHEMA: &str = "product-eval-results.v3";
 
 /// Default recorded `condition` for a plain product run. `--condition <token>`
 /// overrides it verbatim so ablation runs (product built with ablation
@@ -2964,6 +2964,11 @@ enum EvalOperation {
     Member,
     Explain,
     Check,
+    /// The MCP-only bounded, source-free scoped queryability report. Unlike the
+    /// other operations it has no CLI verb, so the harness drives it over the
+    /// product's `serve` stdio surface (see [`EvalWorkspace::run_readiness_query`])
+    /// with the corpus `target` interpreted as the `within` directory scope.
+    InspectReadiness,
 }
 
 impl EvalOperation {
@@ -2974,6 +2979,7 @@ impl EvalOperation {
             EvalOperation::Member => "member",
             EvalOperation::Explain => "explain",
             EvalOperation::Check => "check",
+            EvalOperation::InspectReadiness => "inspect_readiness",
         }
     }
 
@@ -2984,8 +2990,15 @@ impl EvalOperation {
             "member" => Ok(EvalOperation::Member),
             "explain" => Ok(EvalOperation::Explain),
             "check" => Ok(EvalOperation::Check),
+            "inspect_readiness" => Ok(EvalOperation::InspectReadiness),
             other => Err(format!("unsupported query operation '{other}'")),
         }
+    }
+
+    /// True when the CLI (and its `--against` comparison scope) accepts the
+    /// operation as a two-sided conformance verb.
+    fn accepts_against(self) -> bool {
+        matches!(self, EvalOperation::Explain | EvalOperation::Check)
     }
 }
 
@@ -3031,6 +3044,12 @@ struct EvalExpected {
     /// for Recall@K/MRR; independent of which single family (if any) is
     /// selected. An empty/absent list leaves the query out of candidate recall.
     candidates_include: Option<Vec<String>>,
+    /// Expected additive scope-resolution `resolution.cardinality` token
+    /// (`one`/`many`/`none`/`truncated`) for a directory/composite scope query.
+    /// Absent for non-scope queries; when present it is matched against the
+    /// product's top-level `resolution.cardinality`, so directory-scope golds are
+    /// enforced (a `many`/`none`/`truncated` scope must never carry a selection).
+    resolution_cardinality: Option<String>,
     unknown_reason: Option<String>,
     route: Option<String>,
     /// First-class matcher for the static-alignment certificate's
@@ -3038,6 +3057,24 @@ struct EvalExpected {
     /// `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`). A mismatch is a query
     /// mismatch, so alignment golds are enforced rather than decorative.
     alignment_status: Option<String>,
+    /// First-class matcher for the two-sided conformance certificate's
+    /// `target_relationship` token (`MEMBER`, `NEAR_MISS`, `COMPETING_PATTERN`,
+    /// `BLOCKED_UNKNOWN`, `OUT_OF_SCOPE`, `EXCEPTION`). Present only for
+    /// `explain`/`check` cases; it proves the two-sided semantics (a `MEMBER`
+    /// certificate rather than a find alias, or an `EXCEPTION` against an
+    /// explicit `against` family).
+    target_relationship: Option<String>,
+    /// Expected scoped-readiness `queryability` verdict token
+    /// (`queryable`/`partial_context`/`not_indexed`) for an `inspect_readiness`
+    /// case, matched against `scoped_readiness.queryability`.
+    queryability: Option<String>,
+    /// Expected scoped-readiness `scope.coverage` token (`present`/`empty`) for
+    /// an `inspect_readiness` case.
+    scope_coverage: Option<String>,
+    /// Expected scoped-readiness `scope.resolvable_family_count` for an
+    /// `inspect_readiness` case. A numeric gold, so a familyless (`0`) scope is
+    /// distinguished from a queryable one.
+    resolvable_family_count: Option<u64>,
 }
 
 impl EvalExpected {
@@ -3061,9 +3098,14 @@ impl EvalExpected {
             family_prefix: optional_object_string(object, "family_prefix")?,
             family_any_of,
             candidates_include,
+            resolution_cardinality: optional_object_string(object, "resolution_cardinality")?,
             unknown_reason: optional_object_string(object, "unknown_reason")?,
             route: optional_object_string(object, "route")?,
             alignment_status: optional_object_string(object, "alignment_status")?,
+            target_relationship: optional_object_string(object, "target_relationship")?,
+            queryability: optional_object_string(object, "queryability")?,
+            scope_coverage: optional_object_string(object, "scope_coverage")?,
+            resolvable_family_count: optional_object_u64(object, "resolvable_family_count")?,
         })
     }
 
@@ -3090,11 +3132,32 @@ impl EvalExpected {
         if let Some(list) = &self.candidates_include {
             map.insert("candidates_include".to_string(), list.clone().into());
         }
+        if let Some(cardinality) = &self.resolution_cardinality {
+            map.insert(
+                "resolution_cardinality".to_string(),
+                cardinality.clone().into(),
+            );
+        }
         if let Some(reason) = &self.unknown_reason {
             map.insert("unknown_reason".to_string(), reason.clone().into());
         }
         if let Some(route) = &self.route {
             map.insert("route".to_string(), route.clone().into());
+        }
+        if let Some(relationship) = &self.target_relationship {
+            map.insert(
+                "target_relationship".to_string(),
+                relationship.clone().into(),
+            );
+        }
+        if let Some(queryability) = &self.queryability {
+            map.insert("queryability".to_string(), queryability.clone().into());
+        }
+        if let Some(coverage) = &self.scope_coverage {
+            map.insert("scope_coverage".to_string(), coverage.clone().into());
+        }
+        if let Some(count) = self.resolvable_family_count {
+            map.insert("resolvable_family_count".to_string(), count.into());
         }
         serde_json::Value::Object(map)
     }
@@ -3118,6 +3181,22 @@ struct EvalActual {
     /// The static-alignment certificate's `alignment_status` token, when the
     /// query drove the `check` operation. `None` for other operations.
     alignment_status: Option<String>,
+    /// The additive top-level `resolution.cardinality` token
+    /// (`one`/`many`/`none`/`truncated`) a directory/composite scope query
+    /// surfaces. `None` when the response carries no `resolution` object (every
+    /// non-scope outcome, and a scope that abstained to a typed UNKNOWN).
+    resolution_cardinality: Option<String>,
+    /// The two-sided conformance certificate's top-level `target_relationship`
+    /// token, when the query drove `explain`/`check`. `None` for other
+    /// operations and for abstaining certificates that select no comparison.
+    target_relationship: Option<String>,
+    /// The scoped-readiness `queryability` verdict, when the query drove
+    /// `inspect_readiness`. `None` for every other operation.
+    queryability: Option<String>,
+    /// The scoped-readiness `scope.coverage` token, when present.
+    scope_coverage: Option<String>,
+    /// The scoped-readiness `scope.resolvable_family_count`, when present.
+    resolvable_family_count: Option<u64>,
 }
 
 impl EvalActual {
@@ -3166,6 +3245,28 @@ impl EvalActual {
             .get("alignment_status")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let resolution_cardinality = value
+            .get("resolution")
+            .and_then(|resolution| resolution.get("cardinality"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let target_relationship = value
+            .get("target_relationship")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let scoped = value.get("scoped_readiness");
+        let queryability = scoped
+            .and_then(|scoped| scoped.get("queryability"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let scope = scoped.and_then(|scoped| scoped.get("scope"));
+        let scope_coverage = scope
+            .and_then(|scope| scope.get("coverage"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let resolvable_family_count = scope
+            .and_then(|scope| scope.get("resolvable_family_count"))
+            .and_then(serde_json::Value::as_u64);
         Ok(Self {
             outcome: EvalOutcome::classify_status(status),
             route,
@@ -3177,6 +3278,11 @@ impl EvalActual {
             unknown_reason,
             active_generation,
             alignment_status,
+            resolution_cardinality,
+            target_relationship,
+            queryability,
+            scope_coverage,
+            resolvable_family_count,
         })
     }
 
@@ -3192,6 +3298,11 @@ impl EvalActual {
             "unknown_reason": self.unknown_reason,
             "active_generation": self.active_generation,
             "alignment_status": self.alignment_status,
+            "resolution_cardinality": self.resolution_cardinality,
+            "target_relationship": self.target_relationship,
+            "queryability": self.queryability,
+            "scope_coverage": self.scope_coverage,
+            "resolvable_family_count": self.resolvable_family_count,
         })
     }
 }
@@ -3216,6 +3327,10 @@ struct EvalQuery {
     operation: EvalOperation,
     target: String,
     mode: String,
+    /// Optional two-sided comparison-family scope forwarded to the product as
+    /// `--against`. Valid only for `explain`/`check`; the corpus loader rejects
+    /// it on any other operation so a case cannot silently drop it.
+    against: Option<String>,
     mutation: Option<EvalMutation>,
     expected: EvalExpected,
 }
@@ -3247,14 +3362,23 @@ impl EvalQuery {
             None => None,
             Some(token) => Some(EvalIntent::from_token(&token)?),
         };
+        let operation = EvalOperation::from_token(&required_object_string(object, "operation")?)?;
+        let against = optional_object_string(object, "against")?;
+        if against.is_some() && !operation.accepts_against() {
+            return Err(format!(
+                "query 'against' is only valid for explain/check, not '{}'",
+                operation.as_str()
+            ));
+        }
         Ok(Self {
             query_id: required_object_string(object, "query_id")?,
             fixture_id: required_object_string(object, "fixture_id")?,
             kind: required_object_string(object, "kind")?,
             intent,
-            operation: EvalOperation::from_token(&required_object_string(object, "operation")?)?,
+            operation,
             target: required_object_string(object, "target")?,
             mode: optional_object_string(object, "mode")?.unwrap_or_else(|| "compact".to_string()),
+            against,
             mutation,
             expected,
         })
@@ -3354,6 +3478,20 @@ fn optional_object_string(
     }
 }
 
+fn optional_object_u64(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<u64>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => {
+            Ok(Some(value.as_u64().ok_or_else(|| {
+                format!("field '{key}' must be a non-negative integer")
+            })?))
+        }
+    }
+}
+
 fn optional_string_array(
     object: &serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -3421,6 +3559,31 @@ fn evaluate_match(expected: &EvalExpected, actual: &EvalActual) -> (bool, Vec<St
     if let Some(alignment_status) = &expected.alignment_status {
         if actual.alignment_status.as_deref() != Some(alignment_status.as_str()) {
             mismatches.push("alignment_status".to_string());
+        }
+    }
+    if let Some(cardinality) = &expected.resolution_cardinality {
+        if actual.resolution_cardinality.as_deref() != Some(cardinality.as_str()) {
+            mismatches.push("resolution_cardinality".to_string());
+        }
+    }
+    if let Some(relationship) = &expected.target_relationship {
+        if actual.target_relationship.as_deref() != Some(relationship.as_str()) {
+            mismatches.push("target_relationship".to_string());
+        }
+    }
+    if let Some(queryability) = &expected.queryability {
+        if actual.queryability.as_deref() != Some(queryability.as_str()) {
+            mismatches.push("queryability".to_string());
+        }
+    }
+    if let Some(coverage) = &expected.scope_coverage {
+        if actual.scope_coverage.as_deref() != Some(coverage.as_str()) {
+            mismatches.push("scope_coverage".to_string());
+        }
+    }
+    if let Some(count) = expected.resolvable_family_count {
+        if actual.resolvable_family_count != Some(count) {
+            mismatches.push("resolvable_family_count".to_string());
         }
     }
     (mismatches.is_empty(), mismatches)
@@ -3640,6 +3803,11 @@ fn baseline_actual(selection: BaselineSelection, active_generation: Option<Strin
         unknown_reason: None,
         active_generation,
         alignment_status: None,
+        resolution_cardinality: None,
+        target_relationship: None,
+        queryability: None,
+        scope_coverage: None,
+        resolvable_family_count: None,
     }
 }
 
@@ -3701,6 +3869,31 @@ struct ProductEvalMetrics {
     unsupported_rejection_den: usize,
     ambiguity_precision_num: usize,
     ambiguity_precision_den: usize,
+    /// Committed-answer precision: over every query that committed a family
+    /// selection (`den`), how many committed a gold-correct family (`num`). A
+    /// selection on abstention gold or a family-unconstrained query is in the
+    /// denominator but never the numerator, so a wrong commit lowers precision.
+    committed_precision_num: usize,
+    committed_precision_den: usize,
+    /// Answerable rate: queries that committed some answer or context
+    /// (`ok`/`partial_context`) over every evaluated query. `total_records` is the
+    /// shared denominator for the answerable and partial-context rates.
+    answerable_num: usize,
+    partial_context_num: usize,
+    total_records: usize,
+    /// Directory/composite scope query recall (per kind-family prefix): a scope
+    /// query matches its full gold. Conflict accuracy: a conflict-kind query
+    /// returns a typed `UNKNOWN`.
+    directory_recall_num: usize,
+    directory_recall_den: usize,
+    composite_recall_num: usize,
+    composite_recall_den: usize,
+    conflict_accuracy_num: usize,
+    conflict_accuracy_den: usize,
+    /// UNKNOWN outcomes bucketed by their typed `unknown_reason` (enum-only,
+    /// low-cardinality). A query that abstains without a reason token is keyed
+    /// under `unspecified`.
+    unknown_by_reason: std::collections::BTreeMap<String, usize>,
     by_intent: std::collections::BTreeMap<&'static str, (usize, usize)>,
 }
 
@@ -3731,6 +3924,53 @@ fn format_mean(sum: f64, den: usize) -> String {
 fn compute_product_eval_metrics(records: &[EvalMetricRecord]) -> ProductEvalMetrics {
     let mut metrics = ProductEvalMetrics::default();
     for record in records {
+        metrics.total_records += 1;
+        match record.actual.outcome {
+            EvalOutcome::Ok | EvalOutcome::PartialContext => {
+                metrics.answerable_num += 1;
+                if record.actual.outcome == EvalOutcome::PartialContext {
+                    metrics.partial_context_num += 1;
+                }
+            }
+            EvalOutcome::Unknown | EvalOutcome::Fallback => {}
+        }
+        if record.actual.outcome == EvalOutcome::Unknown {
+            let reason = record
+                .actual
+                .unknown_reason
+                .clone()
+                .unwrap_or_else(|| "unspecified".to_string());
+            *metrics.unknown_by_reason.entry(reason).or_insert(0) += 1;
+        }
+        // Committed-answer precision: every family commit is scored against gold.
+        if record.actual.selected_family.is_some() {
+            metrics.committed_precision_den += 1;
+            if has_family_constraint(record.expected)
+                && selected_satisfies_family_gold(record.expected, record.actual)
+            {
+                metrics.committed_precision_num += 1;
+            }
+        }
+        // Scope-query recall and conflict accuracy key off the corpus kind prefix,
+        // so wave-2 kinds under the same families extend these without new code.
+        if record.kind.starts_with("directory") {
+            metrics.directory_recall_den += 1;
+            if record.is_match {
+                metrics.directory_recall_num += 1;
+            }
+        }
+        if record.kind.starts_with("composite") {
+            metrics.composite_recall_den += 1;
+            if record.is_match {
+                metrics.composite_recall_num += 1;
+            }
+        }
+        if record.kind.starts_with("conflict") {
+            metrics.conflict_accuracy_den += 1;
+            if record.actual.outcome == EvalOutcome::Unknown {
+                metrics.conflict_accuracy_num += 1;
+            }
+        }
         if let Some(intent) = record.intent {
             let counters = metrics.by_intent.entry(intent.as_str()).or_insert((0, 0));
             counters.0 += 1;
@@ -3833,6 +4073,55 @@ impl ProductEvalMetrics {
                 "num": self.ambiguity_precision_num,
                 "den": self.ambiguity_precision_den,
             },
+            "committed_precision": ratio_value(
+                self.committed_precision_num,
+                self.committed_precision_den,
+            ),
+            "committed_precision_counts": {
+                "num": self.committed_precision_num,
+                "den": self.committed_precision_den,
+            },
+            "answerable_rate": ratio_value(self.answerable_num, self.total_records),
+            "answerable_counts": { "num": self.answerable_num, "den": self.total_records },
+            "partial_context_rate": ratio_value(self.partial_context_num, self.total_records),
+            "partial_context_counts": {
+                "num": self.partial_context_num,
+                "den": self.total_records,
+            },
+            "candidate_recall_at_k": ratio_value(
+                self.candidate_recall_num,
+                self.candidate_recall_den,
+            ),
+            "candidate_recall_k": RETRIEVAL_CANDIDATE_K,
+            "directory_query_recall": ratio_value(
+                self.directory_recall_num,
+                self.directory_recall_den,
+            ),
+            "directory_query_recall_counts": {
+                "num": self.directory_recall_num,
+                "den": self.directory_recall_den,
+            },
+            "composite_query_recall": ratio_value(
+                self.composite_recall_num,
+                self.composite_recall_den,
+            ),
+            "composite_query_recall_counts": {
+                "num": self.composite_recall_num,
+                "den": self.composite_recall_den,
+            },
+            "conflict_accuracy": ratio_value(
+                self.conflict_accuracy_num,
+                self.conflict_accuracy_den,
+            ),
+            "conflict_accuracy_counts": {
+                "num": self.conflict_accuracy_num,
+                "den": self.conflict_accuracy_den,
+            },
+            "unknown_by_reason": self
+                .unknown_by_reason
+                .iter()
+                .map(|(reason, count)| (reason.clone(), serde_json::json!(count)))
+                .collect::<serde_json::Map<String, serde_json::Value>>(),
         })
     }
 }
@@ -4169,22 +4458,32 @@ impl EvalWorkspace {
         query: &EvalQuery,
         repetitions: usize,
     ) -> Result<(EvalActual, Vec<u128>), String> {
+        // `inspect_readiness` has no CLI verb; it is driven over the product's
+        // read-only MCP `serve` surface with the corpus target as the scope.
+        if query.operation == EvalOperation::InspectReadiness {
+            return self.run_readiness_query(query, repetitions);
+        }
         let project = self.project_arg()?;
         let mut latencies = Vec::with_capacity(repetitions);
         let mut last_stdout = None;
         for _ in 0..repetitions {
+            let mut command = self.command();
+            command.args([
+                query.operation.as_str(),
+                query.target.as_str(),
+                "--project",
+                &project,
+                "--mode",
+                query.mode.as_str(),
+                "--json",
+            ]);
+            // `--against` names the two-sided comparison family; the corpus
+            // loader already gated it to explain/check operations.
+            if let Some(against) = &query.against {
+                command.args(["--against", against.as_str()]);
+            }
             let started = std::time::Instant::now();
-            let output = self
-                .command()
-                .args([
-                    query.operation.as_str(),
-                    query.target.as_str(),
-                    "--project",
-                    &project,
-                    "--mode",
-                    query.mode.as_str(),
-                    "--json",
-                ])
+            let output = command
                 .output()
                 .map_err(|_| format!("query '{}' could not execute", query.query_id))?;
             latencies.push(started.elapsed().as_millis());
@@ -4197,6 +4496,37 @@ impl EvalWorkspace {
             .ok_or_else(|| format!("query '{}' produced no repetitions", query.query_id))?;
         let value: serde_json::Value = serde_json::from_str(stdout.trim())
             .map_err(|_| format!("query '{}' output was not JSON", query.query_id))?;
+        let actual = EvalActual::from_query_json(&value)?;
+        Ok((actual, latencies))
+    }
+
+    /// Drives one scoped `inspect_readiness` corpus case over the product's MCP
+    /// `serve` stdio surface, interpreting the corpus `target` as the `within`
+    /// directory scope. The bounded, source-free `scoped_readiness` content JSON
+    /// is parsed through the shared [`EvalActual::from_query_json`], so the
+    /// readiness golds (`queryability`/`scope_coverage`/`resolvable_family_count`)
+    /// reuse the same matcher as every other operation. Latency is sampled per
+    /// repetition like [`EvalWorkspace::run_query`]; the resolution is unchanged.
+    fn run_readiness_query(
+        &self,
+        query: &EvalQuery,
+        repetitions: usize,
+    ) -> Result<(EvalActual, Vec<u128>), String> {
+        let within = query.against.as_deref().unwrap_or(query.target.as_str());
+        let mut latencies = Vec::with_capacity(repetitions);
+        let mut last_value = None;
+        for _ in 0..repetitions {
+            let started = std::time::Instant::now();
+            let (value, _bytes) = self.mcp_inspect_readiness(Some(within), None)?;
+            latencies.push(started.elapsed().as_millis());
+            last_value = Some(value);
+        }
+        let value = last_value.ok_or_else(|| {
+            format!(
+                "readiness query '{}' produced no repetitions",
+                query.query_id
+            )
+        })?;
         let actual = EvalActual::from_query_json(&value)?;
         Ok((actual, latencies))
     }
@@ -4247,14 +4577,50 @@ impl EvalWorkspace {
         Ok((value, trimmed.len()))
     }
 
-    /// Drives the product's MCP `serve` stdio surface for a single
+    /// Drives the product's MCP `serve` stdio surface for a single whole-checkout
     /// `inspect_readiness` call and returns the bounded, source-free readiness
     /// payload plus its serialized byte length. This measures the actual MCP
     /// readiness surface (lean by construction) rather than the CLI `status`
     /// lifecycle command, whose storage internals (`wal_bytes`/`shm_bytes`/...)
     /// are volatile and out of scope for the response-precision policy.
     fn capture_inspect_readiness(&self) -> Result<(serde_json::Value, usize), String> {
+        self.mcp_inspect_readiness(None, None)
+    }
+
+    /// Drives the product's read-only MCP `serve` stdio surface for a single
+    /// `inspect_readiness` call, optionally scoped by a `within` directory scope
+    /// and/or a `target`, and returns the bounded, source-free content JSON plus
+    /// its serialized byte length. Shared by the payload-measure whole-checkout
+    /// capture and the product-eval scoped-readiness cases so both exercise one
+    /// MCP driver; the arguments object is assembled through `serde_json` rather
+    /// than string interpolation so scopes are escaped correctly.
+    fn mcp_inspect_readiness(
+        &self,
+        within: Option<&str>,
+        target: Option<&str>,
+    ) -> Result<(serde_json::Value, usize), String> {
         let project = self.project_arg()?;
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("operation".to_string(), "inspect_readiness".into());
+        if let Some(within) = within {
+            arguments.insert("within".to_string(), within.into());
+        }
+        if let Some(target) = target {
+            arguments.insert("target".to_string(), target.into());
+        }
+        let call = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "repogrammar_context", "arguments": arguments },
+        });
+        let requests = format!(
+            "{}\n{}\n{}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}",
+            serde_json::to_string(&call)
+                .map_err(|_| "could not serialize the MCP inspect_readiness request".to_string())?,
+        );
         let mut child = self
             .command()
             .args(["serve", "--project", &project])
@@ -4262,24 +4628,18 @@ impl EvalWorkspace {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|_| "payload-measure could not start MCP serve".to_string())?;
-        let requests = concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\
-{\"name\":\"repogrammar_context\",\"arguments\":{\"operation\":\"inspect_readiness\"}}}\n"
-        );
+            .map_err(|_| "could not start MCP serve".to_string())?;
         child
             .stdin
             .take()
-            .ok_or_else(|| "payload-measure MCP serve stdin was unavailable".to_string())?
+            .ok_or_else(|| "MCP serve stdin was unavailable".to_string())?
             .write_all(requests.as_bytes())
-            .map_err(|_| "payload-measure could not write the MCP serve request".to_string())?;
+            .map_err(|_| "could not write the MCP serve request".to_string())?;
         let output = child
             .wait_with_output()
-            .map_err(|_| "payload-measure MCP serve did not complete".to_string())?;
+            .map_err(|_| "MCP serve did not complete".to_string())?;
         let stdout = String::from_utf8(output.stdout)
-            .map_err(|_| "payload-measure MCP serve output was not UTF-8".to_string())?;
+            .map_err(|_| "MCP serve output was not UTF-8".to_string())?;
         for line in stdout.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -5910,6 +6270,33 @@ fn run_product_eval(
         metrics.unsupported_rejection_den,
         metrics.ambiguity_precision_num,
         metrics.ambiguity_precision_den,
+    ));
+    report.push_str(&format!(
+        "scope_metrics: committed_precision {}/{} | answerable {}/{} | partial_context {}/{} | candidate_recall@{} {}/{} | directory_recall {}/{} | composite_recall {}/{} | conflict_accuracy {}/{}\n",
+        metrics.committed_precision_num,
+        metrics.committed_precision_den,
+        metrics.answerable_num,
+        metrics.total_records,
+        metrics.partial_context_num,
+        metrics.total_records,
+        RETRIEVAL_CANDIDATE_K,
+        metrics.candidate_recall_num,
+        metrics.candidate_recall_den,
+        metrics.directory_recall_num,
+        metrics.directory_recall_den,
+        metrics.composite_recall_num,
+        metrics.composite_recall_den,
+        metrics.conflict_accuracy_num,
+        metrics.conflict_accuracy_den,
+    ));
+    let unknown_reason_summary: Vec<String> = metrics
+        .unknown_by_reason
+        .iter()
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    report.push_str(&format!(
+        "unknown_by_reason: {}\n",
+        unknown_reason_summary.join(" | ")
     ));
     let intent_summary: Vec<String> = metrics
         .by_intent
@@ -9733,6 +10120,128 @@ verify-stable-release-evidence --evidence-dir evidence
         assert!(matched);
     }
 
+    #[test]
+    fn product_eval_target_relationship_is_a_first_class_matcher() {
+        // A two-sided explain/check certificate exposes target_relationship at
+        // the top level; the actual reads it and a declared gold is enforced.
+        let value = serde_json::json!({
+            "status": "STATICALLY_ALIGNED",
+            "alignment_status": "STATICALLY_ALIGNED",
+            "target_relationship": "MEMBER",
+            "query_route": {"selected_family_id": "family:python:fastapi_route"},
+        });
+        let actual = EvalActual::from_query_json(&value).expect("parses");
+        assert_eq!(actual.target_relationship.as_deref(), Some("MEMBER"));
+
+        let member_gold = EvalExpected {
+            target_relationship: Some("MEMBER".to_string()),
+            ..EvalExpected::default()
+        };
+        let (matched, _) = evaluate_match(&member_gold, &actual);
+        assert!(matched);
+
+        let exception_gold = EvalExpected {
+            target_relationship: Some("EXCEPTION".to_string()),
+            ..EvalExpected::default()
+        };
+        let (matched, mismatches) = evaluate_match(&exception_gold, &actual);
+        assert!(!matched);
+        assert!(mismatches.contains(&"target_relationship".to_string()));
+    }
+
+    #[test]
+    fn product_eval_scoped_readiness_fields_parse_and_match() {
+        // A scoped inspect_readiness content payload surfaces queryability plus a
+        // scope object; the actual projects them into first-class golds.
+        let value = serde_json::json!({
+            "status": "ok",
+            "scoped_readiness": {
+                "queryability": "partial_context",
+                "scope": {
+                    "coverage": "present",
+                    "resolvable_family_count": 0
+                }
+            }
+        });
+        let actual = EvalActual::from_query_json(&value).expect("parses");
+        assert_eq!(actual.outcome, EvalOutcome::Ok);
+        assert_eq!(actual.queryability.as_deref(), Some("partial_context"));
+        assert_eq!(actual.scope_coverage.as_deref(), Some("present"));
+        assert_eq!(actual.resolvable_family_count, Some(0));
+
+        let gold = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            queryability: Some("partial_context".to_string()),
+            scope_coverage: Some("present".to_string()),
+            resolvable_family_count: Some(0),
+            ..EvalExpected::default()
+        };
+        let (matched, _) = evaluate_match(&gold, &actual);
+        assert!(matched);
+
+        let wrong = EvalExpected {
+            queryability: Some("queryable".to_string()),
+            resolvable_family_count: Some(2),
+            ..EvalExpected::default()
+        };
+        let (matched, mismatches) = evaluate_match(&wrong, &actual);
+        assert!(!matched);
+        assert!(mismatches.contains(&"queryability".to_string()));
+        assert!(mismatches.contains(&"resolvable_family_count".to_string()));
+    }
+
+    #[test]
+    fn product_eval_corpus_parses_against_and_readiness_operations() {
+        // A check case may carry `against`; a readiness case parses the
+        // inspect_readiness operation with the target as its scope.
+        let check = serde_json::json!({
+            "query_id": "check-against",
+            "fixture_id": "directory-scopes",
+            "kind": "check_against_family",
+            "intent": "context",
+            "operation": "check",
+            "target": "unit:app/x.py#fastapi_route:list:1-2:1",
+            "against": "family:python:fastapi_route:framework_fastapi_route",
+            "expected": { "outcome": "ok" }
+        });
+        let parsed = EvalQuery::from_value(&check).expect("check with against parses");
+        assert_eq!(
+            parsed.against.as_deref(),
+            Some("family:python:fastapi_route:framework_fastapi_route")
+        );
+        assert_eq!(parsed.operation, EvalOperation::Check);
+
+        let readiness = serde_json::json!({
+            "query_id": "scoped-readiness",
+            "fixture_id": "directory-scopes",
+            "kind": "scoped_readiness_queryable",
+            "intent": "context",
+            "operation": "inspect_readiness",
+            "target": "app/fastapi-basic/",
+            "expected": { "outcome": "ok", "queryability": "queryable" }
+        });
+        let parsed = EvalQuery::from_value(&readiness).expect("readiness parses");
+        assert_eq!(parsed.operation, EvalOperation::InspectReadiness);
+        assert!(parsed.against.is_none());
+    }
+
+    #[test]
+    fn product_eval_corpus_rejects_against_on_non_two_sided_operation() {
+        // `against` is only meaningful for explain/check; a find case that
+        // declares it is a corpus error, not a silently dropped field.
+        let find = serde_json::json!({
+            "query_id": "find-against",
+            "fixture_id": "directory-scopes",
+            "kind": "ambiguous",
+            "intent": "abstention",
+            "operation": "find",
+            "target": "handler",
+            "against": "family:python:fastapi_route:framework_fastapi_route",
+            "expected": { "outcome": "unknown" }
+        });
+        assert!(EvalQuery::from_value(&find).is_err());
+    }
+
     fn sample_found_actual() -> EvalActual {
         EvalActual {
             outcome: EvalOutcome::Ok,
@@ -9749,6 +10258,11 @@ verify-stable-release-evidence --evidence-dir evidence
             unknown_reason: None,
             active_generation: Some("gen-000002".to_string()),
             alignment_status: None,
+            resolution_cardinality: None,
+            target_relationship: None,
+            queryability: None,
+            scope_coverage: None,
+            resolvable_family_count: None,
         }
     }
 
@@ -9764,6 +10278,11 @@ verify-stable-release-evidence --evidence-dir evidence
             unknown_reason: Some("InsufficientSupport".to_string()),
             active_generation: Some("gen-000002".to_string()),
             alignment_status: None,
+            resolution_cardinality: None,
+            target_relationship: None,
+            queryability: None,
+            scope_coverage: None,
+            resolvable_family_count: None,
         }
     }
 
@@ -9845,6 +10364,11 @@ verify-stable-release-evidence --evidence-dir evidence
             unknown_reason: Some("StaleEvidence".to_string()),
             active_generation: Some("gen-000002".to_string()),
             alignment_status: None,
+            resolution_cardinality: None,
+            target_relationship: None,
+            queryability: None,
+            scope_coverage: None,
+            resolvable_family_count: None,
         };
         let (is_match, _) = evaluate_match(&expected, &stale);
         assert!(is_match);
@@ -9906,6 +10430,11 @@ verify-stable-release-evidence --evidence-dir evidence
             unknown_reason: Some("InsufficientSupport".to_string()),
             active_generation: Some("gen-000002".to_string()),
             alignment_status: None,
+            resolution_cardinality: None,
+            target_relationship: None,
+            queryability: None,
+            scope_coverage: None,
+            resolvable_family_count: None,
         };
         let (is_match, mismatch_fields) = evaluate_match(&expected, &actual);
         let entry = serde_json::json!({
@@ -10270,6 +10799,222 @@ verify-stable-release-evidence --evidence-dir evidence
         assert!(value["false_family_rate"].is_null());
         assert!(value["unsupported_rejection_rate"].is_null());
         assert!(value["ambiguity_precision"].is_null());
+        // New v3 scope metrics also collapse to null over an empty corpus.
+        assert!(value["committed_precision"].is_null());
+        assert!(value["answerable_rate"].is_null());
+        assert!(value["directory_query_recall"].is_null());
+        assert!(value["composite_query_recall"].is_null());
+        assert!(value["conflict_accuracy"].is_null());
+    }
+
+    #[test]
+    fn product_eval_reads_and_matches_resolution_cardinality() {
+        // A directory heterogeneous scope surfaces the additive top-level
+        // `resolution.cardinality` and competing candidates with no selection.
+        let scope = serde_json::json!({
+            "status": "PARTIAL_CONTEXT",
+            "active_generation": "gen-000003",
+            "resolution": {
+                "cardinality": "many",
+                "candidates": [
+                    {"family_id": "family:python:fastapi_route:framework_fastapi_route"},
+                    {"family_id": "family:python:pydantic_model:framework_pydantic_model"}
+                ]
+            },
+            "query_route": {
+                "route": "discovery_unknown",
+                "candidate_family_ids": [
+                    "family:python:fastapi_route:framework_fastapi_route",
+                    "family:python:pydantic_model:framework_pydantic_model"
+                ]
+            }
+        });
+        let actual = EvalActual::from_query_json(&scope).expect("parses");
+        assert_eq!(actual.resolution_cardinality.as_deref(), Some("many"));
+        assert_eq!(actual.outcome, EvalOutcome::PartialContext);
+        assert!(actual.selected_family.is_none());
+        assert_eq!(actual.to_value()["resolution_cardinality"], "many");
+
+        let many_gold = EvalExpected {
+            outcome: Some(EvalOutcome::PartialContext),
+            resolution_cardinality: Some("many".to_string()),
+            ..EvalExpected::default()
+        };
+        let (is_match, _) = evaluate_match(&many_gold, &actual);
+        assert!(is_match);
+
+        // A cardinality mismatch is a first-class query mismatch.
+        let one_gold = EvalExpected {
+            resolution_cardinality: Some("one".to_string()),
+            ..EvalExpected::default()
+        };
+        let (is_match, fields) = evaluate_match(&one_gold, &actual);
+        assert!(!is_match);
+        assert!(fields.contains(&"resolution_cardinality".to_string()));
+
+        // A response with no `resolution` object leaves the field None.
+        let plain = serde_json::json!({
+            "status": "ok",
+            "query_route": {"selected_family_id": "family:python:fastapi_route"}
+        });
+        let plain_actual = EvalActual::from_query_json(&plain).expect("parses");
+        assert!(plain_actual.resolution_cardinality.is_none());
+        assert!(plain_actual.to_value()["resolution_cardinality"].is_null());
+    }
+
+    #[test]
+    fn product_eval_scope_metrics_partition_by_kind() {
+        fn scope_actual(
+            outcome: EvalOutcome,
+            selected: Option<&str>,
+            cardinality: Option<&str>,
+            reason: Option<&str>,
+        ) -> EvalActual {
+            EvalActual {
+                outcome,
+                route: None,
+                selected_family: selected.map(str::to_string),
+                candidate_family_count: 0,
+                candidate_families: Vec::new(),
+                hydrated_family_count: None,
+                retrieval_stage_count: None,
+                unknown_reason: reason.map(str::to_string),
+                active_generation: Some("gen-000004".to_string()),
+                alignment_status: None,
+                resolution_cardinality: cardinality.map(str::to_string),
+                target_relationship: None,
+                queryability: None,
+                scope_coverage: None,
+                resolvable_family_count: None,
+            }
+        }
+        let single_gold = EvalExpected {
+            outcome: Some(EvalOutcome::Ok),
+            resolution_cardinality: Some("one".to_string()),
+            family_prefix: Some("family:python:fastapi_route".to_string()),
+            ..EvalExpected::default()
+        };
+        let hetero_gold = EvalExpected {
+            outcome: Some(EvalOutcome::PartialContext),
+            resolution_cardinality: Some("many".to_string()),
+            ..EvalExpected::default()
+        };
+        let abstain_gold = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            ..EvalExpected::default()
+        };
+        let composite_gold = single_gold.clone();
+        let conflict_gold = abstain_gold.clone();
+
+        let single_actual = scope_actual(
+            EvalOutcome::Ok,
+            Some("family:python:fastapi_route:framework_fastapi_route"),
+            Some("one"),
+            None,
+        );
+        let hetero_actual = scope_actual(EvalOutcome::PartialContext, None, Some("many"), None);
+        let nonexistent_actual = scope_actual(
+            EvalOutcome::Unknown,
+            None,
+            None,
+            Some("InsufficientSupport"),
+        );
+        let composite_actual = single_actual.clone();
+        let conflict_actual = scope_actual(
+            EvalOutcome::Unknown,
+            None,
+            None,
+            Some("InsufficientSupport"),
+        );
+
+        let records = vec![
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Retrieval),
+                kind: "directory_single",
+                expected: &single_gold,
+                actual: &single_actual,
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Context),
+                kind: "directory_heterogeneous",
+                expected: &hetero_gold,
+                actual: &hetero_actual,
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "directory_nonexistent",
+                expected: &abstain_gold,
+                actual: &nonexistent_actual,
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Retrieval),
+                kind: "composite_path_concept",
+                expected: &composite_gold,
+                actual: &composite_actual,
+                is_match: true,
+            },
+            EvalMetricRecord {
+                intent: Some(EvalIntent::Abstention),
+                kind: "conflict_family_ids",
+                expected: &conflict_gold,
+                actual: &conflict_actual,
+                is_match: true,
+            },
+        ];
+        let metrics = compute_product_eval_metrics(&records);
+
+        // Directory queries: single + heterogeneous + nonexistent all matched.
+        assert_eq!(
+            (metrics.directory_recall_num, metrics.directory_recall_den),
+            (3, 3)
+        );
+        assert_eq!(
+            (metrics.composite_recall_num, metrics.composite_recall_den),
+            (1, 1)
+        );
+        // Conflict query correctly returned UNKNOWN.
+        assert_eq!(
+            (metrics.conflict_accuracy_num, metrics.conflict_accuracy_den),
+            (1, 1)
+        );
+        // Two committed selections (single + composite), both gold-correct.
+        assert_eq!(
+            (
+                metrics.committed_precision_num,
+                metrics.committed_precision_den
+            ),
+            (2, 2)
+        );
+        // Answerable = ok/partial_context (single + heterogeneous + composite).
+        assert_eq!((metrics.answerable_num, metrics.total_records), (3, 5));
+        assert_eq!(metrics.partial_context_num, 1);
+        // Two abstentions carried the same typed reason.
+        assert_eq!(
+            metrics.unknown_by_reason.get("InsufficientSupport"),
+            Some(&2)
+        );
+        // No family was committed against abstention gold.
+        assert_eq!(metrics.selected_on_abstention_gold, 0);
+        assert_eq!(metrics.false_family_selections, 0);
+
+        let value = metrics.to_value();
+        assert_eq!(value["committed_precision"], serde_json::json!(1.0));
+        assert_eq!(value["directory_query_recall"], serde_json::json!(1.0));
+        assert_eq!(value["composite_query_recall"], serde_json::json!(1.0));
+        assert_eq!(value["conflict_accuracy"], serde_json::json!(1.0));
+        assert_eq!(value["answerable_rate"], serde_json::json!(0.6));
+        assert_eq!(
+            value["candidate_recall_k"],
+            serde_json::json!(RETRIEVAL_CANDIDATE_K)
+        );
+        assert_eq!(
+            value["unknown_by_reason"]["InsufficientSupport"],
+            serde_json::json!(2)
+        );
     }
 
     #[test]

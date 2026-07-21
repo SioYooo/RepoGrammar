@@ -26,9 +26,26 @@ operation semantics. The CLI remains multi-command for human discoverability.
 The current input schema is intentionally small:
 
 - required `operation`: one of the five operation strings above.
-  `inspect_readiness` takes no `target` and ignores the evidence-shaping fields.
+  `inspect_readiness` accepts an optional `target` and/or `within` to request a
+  bounded, source-free SCOPED readiness report (see below); with neither it
+  returns the whole-checkout readiness report and ignores the evidence-shaping
+  fields.
 - optional `target`: non-empty string, at most 8192 bytes, with no control
   characters.
+- optional `against`: non-empty string, same length/character bounds as `target`.
+  It names the COMPARISON family for the two-sided operations `explain_deviation`
+  and `check_conformance`, and is rejected (never silently ignored) on any other
+  operation. It pins the comparison side to exactly one family: an exact `family:`
+  id resolves that family directly; a framework role or pattern resolves the
+  unique fresh ready family of that role, otherwise the request abstains with
+  bounded candidate family handles and no selection. When omitted, the comparison
+  family is inferred from the target unit's own membership, else the single fresh
+  ready family of its `(language, kind, role)` key. `against` is additive to the
+  closed input schema and never false-selects a comparison family.
+- optional `within`: non-empty string, at most 8192 bytes, with no control
+  characters. A directory/module scope. Consumed only by `inspect_readiness` to
+  request a scoped queryability report; the family-query operations ignore it
+  (they already scope through `target`).
 - optional `token_budget`: positive integer up to 200000 used to cap selected
   evidence metadata. Supplying it implies `mode: evidence` unless an explicit
   mode is provided.
@@ -89,31 +106,53 @@ CLI equivalent: `repogrammar family`.
 ### explain_deviation
 
 Explain whether a target differs from a family as a legal variation, exception,
-incompatibility, or `UNKNOWN`.
-Like `find_analogues`, the initial target may be a path, symbol/member id,
-framework role, or pattern question; exact family ids are optional follow-up
-handles, not prerequisites.
+incompatibility, near miss, static deviation, or `UNKNOWN`. `explain_deviation` is
+**not** a `find_analogues` alias: it performs the same two-sided static-alignment
+resolution as `check_conformance` and projects a real deviation certificate. It
+resolves the target to exactly one indexed code unit, pins exactly one comparison
+family (the caller-named `against` family when provided, else inferred from
+membership or the unit's `(language, kind, role)` key), and projects the target's
+indexed feature profile against that family's constraint profile via the shared
+`compute_alignment` authority.
 
-CLI equivalent: `repogrammar explain`.
+Whenever a unit and a comparison family both resolve, the response carries a real
+`target_relationship` — one of `MEMBER`, `LEGAL_VARIATION`, `NEAR_MISS`,
+`EXCEPTION`, `BLOCKED_UNKNOWN`, `OUT_OF_SCOPE`, or `INCOMPATIBILITY` (the
+`COMPETING_PATTERN` token remains reserved and is emitted by no path) — never
+`null`. When the target cannot be pinned to one unit + one family (ambiguous,
+stale, unindexed, out of scope, family-less, or an ambiguous/unmatched `against`),
+it abstains with a typed `UNKNOWN`/`INSUFFICIENT_EVIDENCE` status, a `null`
+`selected_family_id`, and bounded candidate handles. Like `check_conformance`, it
+claims no runtime behavior: every response carries `runtime_equivalence:
+"UNKNOWN"`. The target should pin one unit — a path, path:line locator,
+path:byte-range, or `unit:` member id; a bare path that maps to several
+family-eligible units abstains rather than guessing. `include_variations` /
+`include_exceptions` request the legal-variation and exception coverage labels.
+
+CLI equivalent: `repogrammar explain` (with optional `--against`).
 
 ### check_conformance
 
 Return a source-backed *static-alignment* certificate for a target, or abstain
 with a typed reason. This is not a runtime-conformance verdict: matched family
 context is never proof of runtime equivalence. `check_conformance` resolves the
-target to a specific indexed code unit, selects a comparison family (the unit's
-own family when it is a member, otherwise the single fresh ready family of its
-`(language, kind, role)` key), and statically compares the target's indexed
-feature profile against that family's constraint profile. The top-level `status`
+target to a specific indexed code unit, pins a comparison family, and statically
+compares the target's indexed feature profile against that family's constraint
+profile. The comparison family is the caller-named `against` family when provided,
+otherwise the unit's own family when it is a member, otherwise the single fresh
+ready family of its `(language, kind, role)` key. `against` lets the caller fix the
+comparison side (an exact `family:` id, framework role, or pattern that resolves to
+exactly one fresh ready family; an ambiguous or unmatched `against` abstains with
+candidate handles and never false-selects). The top-level `status`
 is a static-alignment token (`STATICALLY_ALIGNED`, `STATIC_DEVIATION`,
 `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`, or `UNKNOWN`) — never
 `PASS`/`FAIL`/`CONFORMS` and never the legacy `CONTEXT_ONLY` advisory — and every
 certificate carries `runtime_equivalence: "UNKNOWN"`. A stale, ambiguous,
-unindexed, or family-less target abstains with `INSUFFICIENT_EVIDENCE` and never
-surfaces a selected family. The initial target may be a path, path:line locator,
-or `unit:` member id.
+unindexed, or family-less target (or an unresolvable `against`) abstains with
+`INSUFFICIENT_EVIDENCE`/`UNKNOWN` and never surfaces a selected family. The initial
+target may be a path, path:line locator, or `unit:` member id.
 
-CLI equivalent: `repogrammar check`.
+CLI equivalent: `repogrammar check` (with optional `--against`).
 
 ### inspect_readiness
 
@@ -152,8 +191,50 @@ commands, so like them it is for readiness triage, not routine per-query loops.
 When readiness cannot be assembled at all, the response is the standard
 `FALLBACK_TO_CODE_SEARCH` object.
 
+#### Scoped readiness (optional `target`/`within`)
+
+When `inspect_readiness` is called with a `target` and/or `within`, the response
+replaces the whole-checkout `readiness` object with a bounded, source-free
+`scoped_readiness` object describing how queryable RepoGrammar is over just that
+directory/module scope. The no-target response is byte-identical to before; the
+two are mutually exclusive and carried under distinct keys (`readiness` vs
+`scoped_readiness`) so consumers can tell them apart. The scoped report carries:
+
+- `summary`: the same `ready`/`degraded`/`not_ready` token as the whole-checkout
+  readiness, projected from the same shared recovery authority, so a scope is
+  never more optimistic than the repository.
+- `queryability`: the scope resolvability verdict —
+  `queryable` (indexed scope with at least one resolvable family on a ready
+  repository), `partial_context` (indexed scope, no resolvable family),
+  `degraded` (indexed scope on a degraded repository), `not_indexed` (the scope
+  resolved to no indexed files; with `scope.prefix_count == 0` the target named
+  no safe directory scope), `not_ready` (the repository cannot serve queries), or
+  `cannot_verify` (a store read failed or the generation changed mid-read).
+- `scope`: `prefix_count` (how many safe directory prefixes were read — a count
+  only, never the paths), `indexed_file_count`, `coverage`
+  (`empty`/`present`/`truncated`), `truncated` (a bounded read hit its cap, so the
+  counts are lower bounds), `languages` (low-cardinality language tokens present
+  in scope), `resolvable_family_count` (distinct families whose evidence occupies
+  the scope, counted WITHOUT hydrating any family), and `freshness`
+  (`fresh`/`stale`/`cannot_verify`/`not_applicable`, projected source-free from the
+  shared repository recovery — not a per-file re-hash).
+- `providers`: the same per-slot integration/availability list as the
+  whole-checkout readiness.
+- `recovery`: the single recovery object from the shared recovery classifier.
+
+Scoped readiness is SOURCE-FREE: it hydrates no family and reads no source
+content (no `SourceStore` access). It records NO family-query telemetry, exactly
+like the no-target inspection. Every field is a low-cardinality enum, count, or
+language token; no raw target, path, or symbol appears in the output. The scope
+must be path-like: a bare single-segment token (e.g. `pkg`) that carries no `/`
+or `.` is rejected by the shared path-safety authority and reads to an empty
+scope (`not_indexed` with `prefix_count 0`), exactly as the directory-scope query
+resolver treats it. When scoped readiness cannot be assembled, the response is the
+standard `FALLBACK_TO_CODE_SEARCH` object.
+
 CLI equivalent: the source-free readiness fields of `repogrammar status --json`
-and `repogrammar doctor --json` (`product_readiness`).
+and `repogrammar doctor --json` (`product_readiness`), and the scoped report via
+`repogrammar doctor --target <scope>` / `--within <scope>`.
 
 ## Missing and stale indexes
 
@@ -202,12 +283,16 @@ contract.
 Exact MCP lookups are bounded: exact family-id targets hydrate only that family,
 exact member/code-unit targets first use the member index and hydrate one family
 only when the member id is unique, and ambiguity remains typed `UNKNOWN`.
-Fuzzy lookup must not hydrate every family. For `find_analogues`,
-`explain_deviation`, and `check_conformance`, the public query mode is
+Fuzzy lookup must not hydrate every family. For `find_analogues` (and the
+comparison-family `against` side of `explain_deviation` / `check_conformance`,
+which reuses the same family resolution), the public query mode is
 `discover -> hydrate -> compose`: RepoGrammar accepts the path, symbol/member id,
 framework role, or pattern question the caller has, discovers candidate family
 ids internally from exact ids, exact member ids, repo-relative evidence paths,
-and exact member roles, then hydrates only the capped candidate set. If role/path
+and exact member roles, then hydrates only the capped candidate set. The
+`explain_deviation` / `check_conformance` SUBJECT side, in contrast, resolves to
+exactly one indexed code unit by locator and never fuzzy-discovers a subject
+family. If role/path
 discovery is truncated or exceeds the cap, the family probe blocks with typed
 `UNKNOWN` (reason `InsufficientSupport`, affected claim `query target candidate
 set`) and candidate ids instead of scanning all family detail. `show_family`
@@ -254,9 +339,56 @@ the shared `resolved_target` serializer suppresses the pure input echo
 echoes an already-resolved locus (the `check_conformance` target echo); when
 resolution stayed genuinely ambiguous — no single path, family, or unit pinned —
 the corresponding candidate list is retained as the caller's narrowing handle.
-`standard` and `full` keep the complete field set byte-for-byte. Exact `show_family`
+`standard` and `full` keep the complete field set byte-for-byte.
+
+#### The additive `resolution` object (candidate-set cardinality)
+
+`find_analogues` (the `FuzzyQuery` operation) can resolve
+a **directory / composite scope** to a set of pattern families. RepoGrammar
+reports the cardinality of that set through an additive top-level `resolution`
+object rather than a new top-level status token — the response stays on
+`product-schemas.v1` (see ADR-0029 for the compatibility rationale, and
+`docs/specifications/query-resolution.md` for the resolver). Shape:
+
+```json
+"resolution": {
+  "cardinality": "none" | "one" | "many" | "truncated",
+  "candidates": [ { "family_id": "family:...", "summary": "python fastapi.route · DOMINANT_PATTERN" } ]
+}
+```
+
+- `one` → the existing `FOUND` (`status: "ok"`) outcome: a single proven in-scope
+  family, hydrated normally; it is the sole `resolution.candidate`.
+- `many` → `PARTIAL_CONTEXT`: several distinct in-scope families with **no**
+  selection. `resolution.candidates` lists the bounded, source-free candidate
+  summaries; `resolution` **never** carries a `selected_family_id`.
+- `none` → `PARTIAL_CONTEXT`: the directory locus resolved to indexed files but no
+  matching family; `resolution.candidates` is empty.
+- `truncated` → `PARTIAL_CONTEXT`: the bounded scope read may hide further
+  families, so the families seen so far are candidates and no single family is
+  claimed.
+
+Each candidate `summary` is a short line projected from the committed family
+search-summary projection (language, framework role or code-unit kind,
+classification) — never a hydrated deep family and never raw source. The
+`cardinality` token is a low-cardinality enum safe to record in telemetry; the
+candidate `family_id`s are already-public handles. `resolution.candidates` is
+bounded by the same fuzzy candidate cap.
+
+The `resolution` object is an additive **`standard`/`full`** field: non-scope
+outcomes never carry it, so their bytes are unchanged, and it is dropped at
+`verbosity: minimal`. Dropping it at `minimal` loses no narrowing handle — for a
+`many`/`truncated` PARTIAL_CONTEXT the candidate `family_id`s are also on the
+resolved target's `candidate_family_ids` and therefore on
+`query_route.follow_up_family_ids`, both of which are retained at `minimal`.
+
+Exact `show_family`
 lookups still require an exact family id and return typed `UNKNOWN` when that
-family id is missing. `check_conformance` responses carry the static-alignment
+family id is missing. `show_family` never enters the fuzzy scope path, so it never
+carries a candidate-set `resolution` and never hydrates more than the one exact
+family. `check_conformance` AND `explain_deviation` responses (both drive the
+shared two-sided static-alignment path and differ only in the `command`/`operation`
+label and emphasis) carry the static-alignment
 certificate fields: `alignment_status`, `runtime_equivalence` (always
 `"UNKNOWN"`), `target_relationship`, `selected_family_id`, `target` (the
 resolved code-unit locator), and `alignment` (the computation — `outcome_reason`,
@@ -286,10 +418,16 @@ required-feature violations (`required_mismatch`, `must_be_empty_violation`,
 (`unobserved_variation`, `truncated_observation`, `blocking_suppressed_requirement`)
 that forces `PARTIAL_ALIGNMENT`, never `STATIC_DEVIATION`. `selected_family_id` is
 `null` for every abstaining outcome, and `COMPETING_PATTERN` is a reserved
-`target_relationship` token no current path emits. `check_conformance` resolves
+`target_relationship` token no current path emits. The non-abstaining
+`target_relationship` values are `MEMBER`, `LEGAL_VARIATION`, `NEAR_MISS`,
+`EXCEPTION`, `BLOCKED_UNKNOWN`, `OUT_OF_SCOPE`, and `INCOMPATIBILITY`.
+`check_conformance` and `explain_deviation` both resolve
 the target to exactly one code unit honoring a `path:line`, `path:byte-range`, or
 `unit:` locator; a path-only target that names a file with more than one
 family-eligible unit abstains with `INSUFFICIENT_EVIDENCE` and candidate unit ids.
+The optional `against` input pins the comparison family for both operations (an
+ambiguous or unmatched `against` abstains with `INSUFFICIENT_EVIDENCE`, a `null`
+`selected_family_id`, and candidate handles — never a false selection).
 All family lookup responses include `query_route`, a source-free route metadata
 object with `route`, `input_kind`, `pipeline`, `family_id_policy`,
 `candidate_limit`, `selected_family_id`, `candidate_family_ids`,

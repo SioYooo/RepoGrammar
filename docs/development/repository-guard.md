@@ -120,6 +120,36 @@ failure, or non-JSON query output. The corpus, result schema, and current
 baseline reading are documented in
 `docs/experiments/product-core-baseline.md`.
 
+The committed corpus (`src/fixtures/evaluation/query-corpus-v1.json`,
+`product-eval-corpus.v1`) covers the exact/path/role/natural-language retrieval
+and abstention surface plus, over the nested `directory-scopes` fixture, the
+directory and composite scope resolution and hard-constraint conflict behavior,
+the two-sided `explain`/`check` conformance certificate, and the MCP scoped
+readiness projection. A scope query gold may carry an optional
+`expected.resolution_cardinality` (`one`/`many`/`none`/`truncated`) matched
+against the product's additive top-level `resolution.cardinality`. Additive gold
+fields, all enforced field-by-field: `expected.target_relationship`
+(`MEMBER`/`NEAR_MISS`/`COMPETING_PATTERN`/`BLOCKED_UNKNOWN`/`OUT_OF_SCOPE`/`EXCEPTION`)
+against a two-sided certificate's top-level `target_relationship`; and
+`expected.queryability`, `expected.scope_coverage`, and
+`expected.resolvable_family_count` against the scoped-readiness
+`scoped_readiness.queryability`/`scope.coverage`/`scope.resolvable_family_count`.
+A case may also carry an optional `against` string (the `--against`
+comparison-family scope); the corpus loader rejects it on any operation other
+than `explain`/`check`. The `inspect_readiness` operation has no CLI verb, so the
+harness drives it over the product's read-only MCP `serve` stdio surface,
+interpreting the case `target` as the `within` directory scope. The results
+schema is `product-eval-results.v3` (strictly additive over v2), whose
+`summary.metrics` adds `committed_precision`, `answerable_rate`,
+`partial_context_rate`, `candidate_recall_at_k`, `directory_query_recall`,
+`composite_query_recall`, `conflict_accuracy`, and the `unknown_by_reason`
+histogram alongside the existing retrieval and safety counters. The remaining
+deferred kinds (`directory_truncated`, needing a >64-file scope; and the
+best-effort ambiguity ties) are enumerated in the corpus
+`_deferred_wave2_kinds` marker. See
+[Testing](testing.md#directory--composite-scope-and-conflict-cases) for the full
+kind taxonomy and metric definitions.
+
 ## payload-measure
 
 `payload-measure` is the deterministic response-payload byte-measurement harness

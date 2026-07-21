@@ -672,7 +672,8 @@ mod tests {
     };
     use crate::ports::index_store::{
         ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-        ActiveRepoShapeStats, ActiveSemanticFacts, IndexStorageLayout, STORAGE_SCHEMA_VERSION,
+        ActiveRepoShapeStats, ActiveSemanticFacts, IndexStorageLayout, ScopedIndexedFiles,
+        STORAGE_SCHEMA_VERSION,
     };
     use crate::test_support::FakeWriteSession;
 
@@ -737,6 +738,18 @@ mod tests {
             Ok(ActiveIndexedFiles {
                 generation_id: "gen-000001".to_string(),
                 files: Vec::new(),
+            })
+        }
+
+        fn list_active_files_in_directory(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<ScopedIndexedFiles, IndexStoreError> {
+            Ok(ScopedIndexedFiles {
+                generation_id: "gen-000001".to_string(),
+                files: Vec::new(),
+                truncated: false,
             })
         }
 

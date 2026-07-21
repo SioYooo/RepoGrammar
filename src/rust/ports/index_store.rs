@@ -72,6 +72,19 @@ pub struct ActiveIndexedFiles {
     pub files: Vec<IndexedFileRecord>,
 }
 
+/// A bounded, deterministically ordered projection of the active generation's
+/// indexed files whose path falls under one directory prefix. The read is
+/// bounded by `limit`: at most `limit` records are returned (ordered by `path`),
+/// and `truncated` is `true` when the directory scope held more files than the
+/// bound. Backs deterministic directory-scope target resolution without ever
+/// loading the whole inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedIndexedFiles {
+    pub generation_id: String,
+    pub files: Vec<IndexedFileRecord>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveCodeUnits {
     pub generation_id: String,
@@ -265,6 +278,20 @@ pub trait IndexStore {
     ) -> Result<(), IndexStoreError>;
 
     fn list_active_indexed_files(&self) -> Result<ActiveIndexedFiles, IndexStoreError>;
+
+    /// Returns a bounded, deterministically ordered projection of the active
+    /// generation's indexed files whose path is contained by the directory
+    /// `prefix` (a repo-relative directory with no trailing slash, e.g.
+    /// `app/api`). Only strict children are returned — a file at exactly `prefix`
+    /// is not a directory and is excluded. Implemented as a prefix range scan over
+    /// the `(generation_id, path)` primary key: at most `limit` records are
+    /// returned in `path` order, and `truncated` is set when the scope held more
+    /// files than the bound. Never loads the whole inventory.
+    fn list_active_files_in_directory(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<ScopedIndexedFiles, IndexStoreError>;
 
     fn list_active_code_units(&self) -> Result<ActiveCodeUnits, IndexStoreError>;
 

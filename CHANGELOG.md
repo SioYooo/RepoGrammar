@@ -20,6 +20,44 @@ CLI behavior until this work is published under a new patch-forward version.
   and deletion-time identity checks before removing any product file.
 - Added structured finalizer reports with complete/partial status, removed,
   preserved, failed, residual-copy, and manual-recovery fields.
+- Added an optional `against` input to the two-sided static-alignment operations
+  `explain_deviation` / `check_conformance` (CLI `explain` / `check`, `--against`).
+  It names the COMPARISON family and pins it to exactly one fresh ready family (an
+  exact `family:` id, framework role, or pattern); an ambiguous or unmatched
+  `against` abstains with `INSUFFICIENT_EVIDENCE`, `selected_family_id: null`, and
+  bounded candidate handles, never a false selection. `against` is additive to the
+  closed input schema (every existing `target`-only call is byte-compatible) and is
+  rejected — never silently ignored — on any other operation/command. See ADR-0029
+  (Phase 4 note).
+- Added an optional `target`/`within` (a directory/module scope) to the MCP
+  `inspect_readiness` operation and a matching `--target`/`--within` to
+  `repogrammar doctor`, returning a bounded, source-free SCOPED queryability
+  report over just that scope: a `summary` token, a `queryability` verdict
+  (`queryable`/`partial_context`/`degraded`/`not_indexed`/`not_ready`/
+  `cannot_verify`), a `scope` object (safe-prefix count, indexed-file count and
+  coverage bucket, truncation flag, languages present, count of families whose
+  evidence occupies the scope, and freshness), `providers`, and one `recovery`
+  action. It reuses the shared target-resolution vocabulary and the bounded
+  directory-scope read/family-mapping ports, but only COUNTS: it hydrates no
+  family, reads no source content, and records no family-query telemetry. Every
+  field is a low-cardinality enum/count/language token — no raw target, path, or
+  symbol appears. The no-target `inspect_readiness`/`doctor` output is unchanged
+  (the whole-checkout `readiness` object and the scoped `scoped_readiness` object
+  are mutually exclusive and carried under distinct keys), and the response stays
+  on `product-schemas.v1` (see ADR-0029). A bare single-segment token that carries
+  no `/` or `.` is not a path-like scope and reads to an empty scope.
+- Added an additive top-level `resolution` object to `find_analogues` /
+  `explain_deviation` (CLI `find`/`explain`) responses that resolve a directory or
+  composite scope. It projects the candidate-set cardinality
+  (`one`/`many`/`none`/`truncated`) plus bounded, source-free `{family_id, summary}`
+  candidate handles, so a multi-family scope surfaces every real in-scope family
+  instead of collapsing into a generic `UNKNOWN`. The cardinality token is
+  telemetry-safe and the candidate summaries are projected from the committed
+  family search-summary projection (never a hydrated deep family, never raw
+  source). No new top-level status token was introduced — the response stays on
+  `product-schemas.v1` (see ADR-0029). `resolution` renders at `standard`/`full`
+  and is dropped at `minimal`, where the candidate `family_id`s remain available as
+  narrowing handles on `query_route.follow_up_family_ids`.
 
 ### Changed
 
@@ -34,6 +72,26 @@ CLI behavior until this work is published under a new patch-forward version.
 - Product uninstall preserves repository-local `.repogrammar/`, telemetry,
   research and experiment records, unknown global files, and npm/Cargo or
   unmanaged PATH copies. Residual copies are reported rather than removed.
+- Changed `explain_deviation` (CLI `explain`) from a `find_analogues` alias into a
+  real deviation projection: it now runs the same two-sided static-alignment
+  resolution as `check_conformance`, resolving the subject to exactly one code unit
+  and one comparison family, and always reports a real `target_relationship`
+  (`MEMBER` / `LEGAL_VARIATION` / `NEAR_MISS` / `EXCEPTION` / `BLOCKED_UNKNOWN` /
+  `OUT_OF_SCOPE` / `INCOMPATIBILITY`; `COMPETING_PATTERN` stays reserved) with
+  `runtime_equivalence: "UNKNOWN"`. A target that cannot be pinned to one unit + one
+  family (ambiguous, stale, unindexed, out of scope, or family-less) now abstains
+  with a typed `INSUFFICIENT_EVIDENCE`/`UNKNOWN` and `selected_family_id: null`
+  instead of returning fuzzy family context. `find_analogues` is unchanged. This is
+  a user-visible contract change; affected fixtures were regenerated deliberately.
+- Changed a directory/composite scope that resolves to more than one in-scope
+  pattern family (or to a truncated bounded read) from a typed `UNKNOWN` to a
+  `PARTIAL_CONTEXT` outcome carrying `resolution.cardinality: "many"` /
+  `"truncated"`. A single proven in-scope family remains `FOUND`
+  (`resolution.cardinality: "one"`) and a resolved-but-familyless scope remains
+  `PARTIAL_CONTEXT` (`resolution.cardinality: "none"`). A `many`/`none`/`truncated`
+  resolution never carries a `selected_family_id` — committed family precision is
+  unchanged (a family is selected only when exactly one high-confidence family
+  resolves). Non-scope outcomes are byte-unchanged.
 
 ### Fixed
 

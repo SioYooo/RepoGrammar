@@ -24,22 +24,24 @@ use crate::application::query::{
     estimate_partial_context_potential_token_savings, family_query_abstention_reason,
     family_query_route_report, family_query_unknown_metric, found_outcome_token_savings,
     product_readiness_value, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport,
-    FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode,
-    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
-    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
-    OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport,
-    ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
-    RepoShapeLanguageDiagnostics, ResolvedQueryTarget, SelectedFamilyEvidence,
-    SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket,
-    UnknownInventoryReport, Verbosity, VerbosityTier, PRODUCT_SCHEMA_VERSION,
+    repository_status_unavailable_fallback, scoped_readiness_value, select_family_evidence,
+    validate_query_target, validate_query_token_budget, AlignmentCertificateReport,
+    DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode, FamilyFreshnessCounts,
+    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, OutcomeTokenSavings, ProductReadinessReport,
+    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
+    ResolvedQueryTarget, ScopedReadinessReport, SelectedFamilyEvidence, SourceSpanRenderReport,
+    TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
+    Verbosity, VerbosityTier, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
-    ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
-    UnknownInventoryLanguageSummary,
+    scoped_readiness_from_stores, ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission,
+    SourceSpanPolicy, UnknownInventoryLanguageSummary,
 };
+use crate::application::query_resolution::Resolution;
 use crate::application::recovery::{
     recovery_command, recovery_guidance, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth,
     RecoveryLockState,
@@ -233,6 +235,7 @@ pub trait CliRuntime {
         &self,
         _request: RepositoryStatusRequest,
         _target: Option<&str>,
+        _against: Option<&str>,
         _mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("family"))
@@ -275,6 +278,15 @@ pub trait CliRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<ProductReadinessReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("readiness"))
+    }
+
+    fn scoped_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+        _target: &str,
+        _within: Option<&str>,
+    ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("scoped readiness"))
     }
 
     fn install_agent_integration(
@@ -842,8 +854,11 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
         ])),
-        "status" => Some(status_or_doctor_usage("status", "Report repository initialization, manifest, active generation, schema, and storage health.")),
-        "doctor" => Some(status_or_doctor_usage("doctor", "Inspect lifecycle hygiene, storage health, lock state, and recovery guidance.")),
+        "status" => Some(status_or_doctor_usage("status", "Report repository initialization, manifest, active generation, schema, and storage health.", &[])),
+        "doctor" => Some(status_or_doctor_usage("doctor", "Inspect lifecycle hygiene, storage health, lock state, and recovery guidance.", &[
+            "  --target <scope>                   Directory/module scope for a bounded, source-free scoped readiness report.",
+            "  --within <scope>                   Directory/module scope narrowing (alone or with --target).",
+        ])),
         "unlock" => Some(help_text(&[
             "Usage: repogrammar unlock [--project <path>|--path <path>] [--force --yes] [--json] [--quiet|--verbose]",
             "",
@@ -1044,9 +1059,9 @@ fn index_or_sync_usage(command: &str, summary: &str) -> String {
     ])
 }
 
-fn status_or_doctor_usage(command: &str, summary: &str) -> String {
-    help_text(&[
-        &format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--quiet|--verbose]"),
+fn status_or_doctor_usage(command: &str, summary: &str, extra_options: &[&str]) -> String {
+    let mut lines: Vec<&str> = vec![
+        // Usage line is command-specific; filled below.
         "",
         summary,
         "",
@@ -1054,7 +1069,12 @@ fn status_or_doctor_usage(command: &str, summary: &str) -> String {
         "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
         "  --json                             Emit machine-readable output.",
         "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
-    ])
+    ];
+    lines.extend_from_slice(extra_options);
+    let usage_line =
+        format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--quiet|--verbose]");
+    lines[0] = usage_line.as_str();
+    help_text(&lines)
 }
 
 fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
@@ -1267,6 +1287,12 @@ where
             format!("{command} does not accept --all; use an explicit --mode for query detail\n"),
         );
     }
+    if options.against.is_some() && !matches!(command, "explain" | "check") {
+        return CliOutput::failure(
+            2,
+            format!("{command} does not accept --against; --against names the comparison family for explain and check only\n"),
+        );
+    }
     let request = RepositoryStatusRequest {
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
@@ -1362,6 +1388,7 @@ where
             match runtime.family_lookup(
                 request.clone(),
                 options.target.as_deref(),
+                options.against.as_deref(),
                 lookup_mode_for_command(command),
             ) {
                 Ok(report) if options.json => {
@@ -1501,10 +1528,11 @@ fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
     match command {
         "family" => FamilyLookupMode::ExactFamilyId,
         "member" => FamilyLookupMode::ExactMemberId,
-        // `check` runs the static-alignment flow; `find`/`explain` stay on the
-        // shared fuzzy family-resolution pipeline.
-        "check" => FamilyLookupMode::Conformance,
-        "find" | "explain" => FamilyLookupMode::FuzzyQuery,
+        // `check` and `explain` both run the two-sided static-alignment flow:
+        // `explain` is no longer a `find` alias but a real deviation projection
+        // (`target_relationship`). `find` stays on the fuzzy discovery pipeline.
+        "check" | "explain" => FamilyLookupMode::Conformance,
+        "find" => FamilyLookupMode::FuzzyQuery,
         _ => FamilyLookupMode::FuzzyQuery,
     }
 }
@@ -2928,6 +2956,7 @@ fn family_partial_context_json(
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
     });
+    insert_resolution(&mut value, report.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut value, source_spans, options.verbosity);
     json_line(value)
 }
@@ -3042,8 +3071,44 @@ fn family_detail_json(
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&family.unknowns),
     });
+    insert_resolution(&mut payload, family.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
     json_line(payload)
+}
+
+/// The additive top-level `resolution` object (CLI shape, byte-parallel with the
+/// MCP [`resolution_value`] renderer). Renders the candidate-set cardinality
+/// (`none`/`one`/`many`/`truncated`) plus bounded, source-free candidate
+/// summaries, and never a `selected_family_id`.
+fn resolution_json(resolution: &Resolution) -> serde_json::Value {
+    json!({
+        "cardinality": resolution.cardinality.as_str(),
+        "candidates": resolution
+            .candidates
+            .iter()
+            .map(|candidate| json!({
+                "family_id": candidate.family_id,
+                "summary": candidate.summary,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Insert the additive `resolution` object into a family response value when the
+/// report carries one and the requested verbosity renders `Standard`-tier fields.
+/// A `None` resolution (every non-scope outcome) leaves the value byte-stable.
+fn insert_resolution(
+    value: &mut serde_json::Value,
+    resolution: Option<&Resolution>,
+    verbosity: Verbosity,
+) {
+    if let Some(resolution) = resolution {
+        if verbosity.renders(VerbosityTier::Standard) {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("resolution".to_string(), resolution_json(resolution));
+            }
+        }
+    }
 }
 
 /// Source-free JSON for the `query_route` envelope (CLI shape, byte-parallel with
@@ -7753,12 +7818,26 @@ where
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
     };
-    let readiness = runtime
-        .product_readiness(RepositoryStatusRequest {
-            path: request.path.clone(),
-            state_dir_override: request.state_dir_override.clone(),
-        })
-        .ok();
+    let status_request = RepositoryStatusRequest {
+        path: request.path.clone(),
+        state_dir_override: request.state_dir_override.clone(),
+    };
+
+    // A `--target`/`--within` scope requests the bounded, source-free SCOPED
+    // readiness report instead of the whole-checkout doctor view. Additive: with
+    // neither flag the whole-checkout path below is byte-identical to before.
+    if options.target.is_some() || options.within.is_some() {
+        let target = options.target.as_deref().unwrap_or("");
+        return match runtime.scoped_readiness(status_request, target, options.within.as_deref()) {
+            Ok(scoped) if options.json => {
+                CliOutput::success(json_line(scoped_doctor_json(&scoped)))
+            }
+            Ok(scoped) => CliOutput::success(scoped_readiness_human(&scoped)),
+            Err(error) => lifecycle_error("doctor", options.json, error),
+        };
+    }
+
+    let readiness = runtime.product_readiness(status_request).ok();
 
     match runtime.repository_doctor(request) {
         Ok(report) if options.json => {
@@ -7767,6 +7846,52 @@ where
         Ok(report) => CliOutput::success(doctor_human(&report, readiness.as_ref())),
         Err(error) => lifecycle_error("doctor", options.json, error),
     }
+}
+
+/// The machine-readable scoped readiness payload for `doctor --target/--within`:
+/// the shared source-free scoped report under a `command`/`schema_version`
+/// envelope, matching the status/doctor JSON contract.
+fn scoped_doctor_json(scoped: &ScopedReadinessReport) -> Value {
+    let mut value = scoped_readiness_value(scoped);
+    if let Value::Object(map) = &mut value {
+        map.insert("command".to_string(), json!("doctor"));
+        map.insert("schema_version".to_string(), json!(PRODUCT_SCHEMA_VERSION));
+    }
+    value
+}
+
+/// Render the bounded, source-free scoped readiness report as a compact human
+/// block. Carries only tokens and counts — no raw target, path, or symbol.
+fn scoped_readiness_human(scoped: &ScopedReadinessReport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "scoped readiness: {}\tqueryability: {}\n",
+        scoped.summary.as_str(),
+        scoped.queryability.as_str(),
+    ));
+    output.push_str(&format!(
+        "scope: {} prefixes\t{} indexed files\tcoverage: {}\ttruncated: {}\n",
+        scoped.scope_prefix_count,
+        scoped.indexed_file_count,
+        scoped.index_coverage.as_str(),
+        scoped.scope_truncated,
+    ));
+    output.push_str(&format!(
+        "families_in_scope: {}\tfreshness: {}\n",
+        scoped.resolvable_family_count,
+        scoped.freshness.as_str(),
+    ));
+    if !scoped.languages_in_scope.is_empty() {
+        output.push_str(&format!(
+            "languages: {}\n",
+            scoped.languages_in_scope.join(", ")
+        ));
+    }
+    output.push_str(&format!(
+        "recovery: {}\n",
+        recovery_guidance(scoped.recovery.action)
+    ));
+    output
 }
 
 fn handle_prune<F>(
@@ -8088,6 +8213,9 @@ fn handle_deferred_long_running(command: &str, options: &LifecycleOptions) -> Cl
 struct QueryOptions {
     project_path: Option<String>,
     target: Option<String>,
+    /// Optional caller-named comparison family scope (`--against`), meaningful only
+    /// for `explain` / `check`, where it pins the comparison side to one family.
+    against: Option<String>,
     json: bool,
     evidence_mode: FamilyEvidenceMode,
     mode_explicit: bool,
@@ -8175,6 +8303,10 @@ struct LifecycleOptions {
     resync: bool,
     autosync: Option<bool>,
     force: bool,
+    /// Optional directory/module scope for `doctor` scoped readiness. Additive:
+    /// absent keeps the whole-checkout readiness path byte-identical.
+    target: Option<String>,
+    within: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8251,6 +8383,8 @@ impl Default for LifecycleOptions {
             resync: false,
             autosync: None,
             force: false,
+            target: None,
+            within: None,
         }
     }
 }
@@ -8467,6 +8601,16 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
             "--force" if command == "unlock" => {
                 options.force = true;
                 index += 1;
+            }
+            "--target" if command == "doctor" => {
+                let value = option_value(rest, index, "--target", "a directory/module scope")?;
+                set_scope_option(&mut options.target, "--target", value)?;
+                index += 2;
+            }
+            "--within" if command == "doctor" => {
+                let value = option_value(rest, index, "--within", "a directory/module scope")?;
+                set_scope_option(&mut options.within, "--within", value)?;
+                index += 2;
             }
             value if !value.starts_with('-') => {
                 set_project_path(&mut options.project_path, value)?;
@@ -8782,6 +8926,12 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
                 set_project_path(&mut options.project_path, value)?;
                 index += 2;
             }
+            "--against" => {
+                let value = option_value(rest, index, "--against", "a comparison family scope")?;
+                validate_query_target(value).map_err(|error| format!("--against {error}"))?;
+                options.against = Some(value.to_string());
+                index += 2;
+            }
             "--token-budget" => {
                 let value = option_value(rest, index, "--token-budget", "a token budget")?;
                 let parsed = parse_positive_usize(value, "--token-budget")?;
@@ -9064,6 +9214,17 @@ fn set_project_path(target: &mut Option<String>, value: &str) -> Result<(), Stri
         return Err(format!("unexpected positional argument: {value}"));
     }
     *target = Some(value.to_string());
+    Ok(())
+}
+
+/// Set a scoped-readiness scope flag (`--target`/`--within`), rejecting a repeated
+/// flag and validating the value with the shared query-target authority.
+fn set_scope_option(slot: &mut Option<String>, flag: &str, value: &str) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} may be provided at most once"));
+    }
+    validate_query_target(value).map_err(|error| format!("{flag} {error}"))?;
+    *slot = Some(value.to_string());
     Ok(())
 }
 
@@ -11294,6 +11455,7 @@ mod tests {
                 }],
                 constraint_profile: None,
                 term_retrieval: None,
+                resolution: None,
             }
         }
 
@@ -11480,6 +11642,7 @@ mod tests {
             &self,
             _request: RepositoryStatusRequest,
             target: Option<&str>,
+            _against: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let matched = match mode {
@@ -11494,7 +11657,7 @@ mod tests {
                 }
             };
             if matched {
-                Ok(FamilyLookupReport::Found(Self::detail()))
+                Ok(FamilyLookupReport::Found(Box::new(Self::detail())))
             } else {
                 Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
                     active_generation: "gen-000001".to_string(),
@@ -11990,6 +12153,24 @@ mod tests {
             list_families(&store)
         }
 
+        fn scoped_readiness(
+            &self,
+            request: RepositoryStatusRequest,
+            target: &str,
+            within: Option<&str>,
+        ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+            let store = self.store_for_status_request(&request)?;
+            let report = repository_status_with_storage(request, &store)?;
+            Ok(scoped_readiness_from_stores(
+                &report,
+                target,
+                within,
+                &store,
+                &store,
+                Vec::new(),
+            ))
+        }
+
         fn inspect_agent_integration(
             &self,
             target: AgentTarget,
@@ -12007,11 +12188,13 @@ mod tests {
             &self,
             request: RepositoryStatusRequest,
             target: Option<&str>,
+            against: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
-            // The conformance check needs the freshness gate and a source store,
-            // exactly like production; other modes keep the source-store-free path.
+            // The conformance/deviation flow needs the freshness gate and a source
+            // store, exactly like production; other modes keep the source-store-free
+            // path.
             if mode == FamilyLookupMode::Conformance {
                 return lookup_family_with_freshness_and_local_context(
                     crate::application::query::FamilyEvidenceFreshnessRequest {
@@ -12022,6 +12205,7 @@ mod tests {
                     &store,
                     &FilesystemSourceStore,
                     target,
+                    against,
                     mode,
                 );
             }
@@ -14225,6 +14409,49 @@ mod tests {
     }
 
     #[test]
+    fn query_options_parse_and_gate_against_scope() {
+        // `--against` parses into the query options as the comparison-family scope.
+        let parsed = parse_query_options(&[
+            "--against".to_string(),
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "unit:app/api/routes.py#fastapi_route:read:0-1:1".to_string(),
+        ])
+        .expect("--against parses");
+        assert_eq!(
+            parsed.against.as_deref(),
+            Some("family:python:fastapi_route:framework_fastapi_route")
+        );
+
+        // `--against` validates its value like a target (rejects control text).
+        assert!(parse_query_options(&["--against".to_string(), "bad\nvalue".to_string()]).is_err());
+        // `--against` requires a value.
+        assert!(parse_query_options(&["--against".to_string()]).is_err());
+
+        // `explain`/`check` accept `--against`; other query commands reject it
+        // (never silently ignore) with a nonzero exit.
+        let workspace = TempWorkspace::new("cli-query-against-gate");
+        let env = |_: &str| None;
+        for command in ["find", "family", "member"] {
+            let output = run_with_context(
+                [
+                    command,
+                    "--against",
+                    "family:python:fastapi_route:framework_fastapi_route",
+                    "target",
+                ],
+                workspace.path(),
+                &env,
+            );
+            assert_eq!(output.status, 2, "{command} must reject --against");
+            assert!(
+                output.stderr.contains("does not accept --against"),
+                "{command} rejection message: {}",
+                output.stderr
+            );
+        }
+    }
+
+    #[test]
     fn query_options_parse_verbosity_default_valid_and_invalid() {
         // Absent `--verbosity` defaults to the byte-stable `standard` shape.
         assert_eq!(
@@ -14956,6 +15183,118 @@ mod tests {
             savings_rollup["by_language"]["typescript/javascript"]["event_count"],
             1
         );
+    }
+
+    /// A directory-scope PARTIAL_CONTEXT report with a `many` resolution, built
+    /// directly so the serializer contract can be asserted without a fixture repo.
+    fn directory_scope_many_report() -> FamilyPartialContextReport {
+        use crate::application::query_resolution::{
+            Resolution, ResolutionCandidate, ResolutionCardinality,
+        };
+        let fastapi = "family:python:fastapi_route:framework_fastapi_route";
+        let sqlalchemy = "family:python:sqlalchemy_model:framework_sqlalchemy_model";
+        FamilyPartialContextReport {
+            active_generation: "gen-000001".to_string(),
+            resolved_target: ResolvedQueryTarget {
+                original_target: "app/api".to_string(),
+                kind: "directory_scope",
+                path: "app/api".to_string(),
+                line: None,
+                byte_range: None,
+                family_id: None,
+                code_unit_id: None,
+                symbol_hints: Vec::new(),
+                residue_terms: Vec::new(),
+                candidate_paths: vec![
+                    "app/api/models.py".to_string(),
+                    "app/api/routes.py".to_string(),
+                ],
+                candidate_family_ids: vec![fastapi.to_string(), sqlalchemy.to_string()],
+                candidate_code_unit_ids: Vec::new(),
+                confidence: "scope",
+                match_kind: "directory_scope",
+            },
+            read_plan: ReadPlan {
+                items: Vec::new(),
+                estimated_tokens: 0,
+                source_snippets_included: false,
+                requires_source_before_edit: false,
+                selection_strategy: "directory_scope_no_read_plan",
+                budget_satisfied: true,
+                truncated: false,
+                line_range_omissions: Vec::new(),
+            },
+            resolved_file_size_bytes: None,
+            resolved_file_language: String::new(),
+            unknowns: vec![FamilyQueryUnknown {
+                class: crate::core::model::UnknownClass::Blocking,
+                reason: crate::core::model::UnknownReasonCode::InsufficientSupport,
+                affected_claim: "pattern family evidence for resolved directory scope".to_string(),
+                recovery: Some("pick one from resolution.candidates".to_string()),
+            }],
+            resolution: Some(Resolution {
+                cardinality: ResolutionCardinality::Many,
+                candidates: vec![
+                    ResolutionCandidate {
+                        family_id: fastapi.to_string(),
+                        summary: "python fastapi.route · DOMINANT_PATTERN".to_string(),
+                    },
+                    ResolutionCandidate {
+                        family_id: sqlalchemy.to_string(),
+                        summary: "python sqlalchemy.model · DOMINANT_PATTERN".to_string(),
+                    },
+                ],
+            }),
+        }
+    }
+
+    #[test]
+    fn cli_partial_context_resolution_many_never_selects_and_keeps_minimal_handles() {
+        let fastapi = "family:python:fastapi_route:framework_fastapi_route";
+        let sqlalchemy = "family:python:sqlalchemy_model:framework_sqlalchemy_model";
+        let report = directory_scope_many_report();
+        let route = family_query_route_report(
+            &FamilyLookupReport::PartialContext(Box::new(report.clone())),
+            FamilyLookupMode::FuzzyQuery,
+        );
+        let options = FamilyOutputOptions::default();
+
+        // Standard: the additive `resolution` object carries `many`, both candidate
+        // summaries, and never a `selected_family_id`.
+        let value: Value = serde_json::from_str(&family_partial_context_json(
+            "find", &report, &route, options, None, None,
+        ))
+        .expect("partial context json");
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["resolution"]["cardinality"], "many");
+        assert_eq!(
+            value["resolution"]["candidates"]
+                .as_array()
+                .expect("candidates")
+                .len(),
+            2
+        );
+        assert_eq!(value["resolution"]["candidates"][0]["family_id"], fastapi);
+        assert!(value["resolution"]["candidates"][0]["summary"].is_string());
+        assert!(value["resolution"].get("selected_family_id").is_none());
+        assert!(value["query_route"]["selected_family_id"].is_null());
+
+        // Minimal: the rich object is dropped, but the narrowing handles survive on
+        // `query_route.follow_up_family_ids`.
+        let minimal = FamilyOutputOptions {
+            verbosity: Verbosity::Minimal,
+            ..options
+        };
+        let value_min: Value = serde_json::from_str(&family_partial_context_json(
+            "find", &report, &route, minimal, None, None,
+        ))
+        .expect("minimal partial context json");
+        assert!(value_min.get("resolution").is_none());
+        let handles = value_min["query_route"]["follow_up_family_ids"]
+            .as_array()
+            .expect("follow-up handles");
+        assert!(handles.iter().any(|handle| handle == fastapi));
+        assert!(handles.iter().any(|handle| handle == sqlalchemy));
     }
 
     #[test]
@@ -17440,6 +17779,61 @@ mod tests {
         assert!(!doctor
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn doctor_scoped_target_reports_bounded_source_free_scoped_readiness() {
+        let workspace = TempWorkspace::new("cli-doctor-scoped-readiness");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::create_dir_all(workspace.path().join("pkg/sub")).expect("scope dir");
+        fs::write(
+            workspace.path().join("pkg/sub/a.ts"),
+            "export const a = 1;\n",
+        )
+        .expect("write scoped source");
+        let init =
+            run_with_context_and_runtime(["init", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(init.status, 0);
+
+        // JSON scoped readiness: a bounded report under the doctor envelope, with
+        // no whole-checkout doctor `checks`/`readiness` fields.
+        let doctor = run_with_context_and_runtime(
+            ["doctor", "--target", "pkg/sub", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("scoped doctor JSON");
+        assert_eq!(value["command"], "doctor");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(value["summary"], "ready");
+        // The scope resolves the indexed file; without a family it is partial
+        // context, never not_indexed and never not_ready.
+        assert_ne!(value["queryability"], "not_indexed");
+        assert_ne!(value["queryability"], "not_ready");
+        assert_eq!(value["scope"]["prefix_count"], 1);
+        assert_eq!(value["scope"]["indexed_file_count"], 1);
+        assert_eq!(value["scope"]["freshness"], "fresh");
+        assert!(value.get("checks").is_none());
+        // Source-free and path-free: no raw target, path, or workspace path leaks.
+        assert!(!doctor.stdout.contains("pkg/sub/a.ts"));
+        assert!(!doctor
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        // Human scoped readiness renders the same tokens compactly.
+        let human = run_with_context_and_runtime(
+            ["doctor", "--target", "pkg/sub"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(human.status, 0);
+        assert!(human.stdout.contains("scoped readiness: ready"));
+        assert!(human.stdout.contains("queryability:"));
+        assert!(!human.stdout.contains("pkg/sub/a.ts"));
     }
 
     #[test]

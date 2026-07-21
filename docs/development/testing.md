@@ -1065,7 +1065,8 @@ When `--bin` is omitted the harness resolves the sibling `repogrammar` binary
 next to `repo-guard`; both build into the same target directory.
 
 The run writes `<output-dir>/product-eval-results.json`
-(`schema_version: product-eval-results.v2`) with top-level `condition` and
+(`schema_version: product-eval-results.v3`, strictly additive over v2 — a v2
+reader ignores the new fields) with top-level `condition` and
 `baseline` provenance tags
 (see [Run conditions and the token-overlap baseline](#run-conditions-and-the-token-overlap-baseline)),
 per-fixture `resync` latency
@@ -1152,6 +1153,104 @@ existing `summary.by_kind`. `summary.false_family_selections` and
 `summary.selected_on_abstention_gold` are surfaced at the summary top level as
 the two confident-wrong-selection safety counters.
 
+### Directory / composite scope and conflict cases
+
+The corpus additionally covers the Phase 1–3 directory/composite scope resolution
+and hard-constraint conflict behavior over the committed `directory-scopes`
+fixture — a nested Python repository that reuses the recognized v0.1 patterns
+under `app/`, plus a plain `plain/util/` package and the indexed-but-familyless
+`dynamic-unknown/tests/sub/` directory. Every scope gold is the real deterministic
+output of the pinned product binary, not aspiration.
+
+A scope query's gold carries an optional `expected.resolution_cardinality` token
+matched against the product's additive top-level `resolution.cardinality`
+(`one`/`many`/`none`/`truncated`). The field is optional, so the corpus schema
+stays `product-eval-corpus.v1`. The covered kinds:
+
+- `directory_single` / `directory_module_scope` / `directory_intersection` — a
+  directory (or multi-directory intersection) that resolves to exactly one proven
+  family: `ok` + `resolution.cardinality = "one"` with the family selected.
+- `directory_heterogeneous` — a directory spanning more than one family:
+  `partial_context` + `cardinality = "many"`, the competing families surfaced as
+  candidates (`candidates_include` gold) with **no** selection.
+- `directory_familyless` — an indexed directory whose files carry no matching
+  family: `partial_context` + `cardinality = "none"`, an empty candidate set.
+- `directory_nonexistent` — a scope that resolves to no indexed files (a
+  nonexistent path or a directory of unindexed plain sources): typed `UNKNOWN`
+  with no `resolution` object.
+- `composite_path_concept` / `composite_path_symbol` — a directory scope combined
+  with a concept/symbol ranking signal, intersected with the term-retrieval
+  scoring authority. A concept that narrows to one in-scope family resolves `one`;
+  a concept that excludes every in-scope family yields `cardinality = "none"`.
+- `conflict_family_ids` / `conflict_unit_ids` / `conflict_dir_scopes` /
+  `conflict_mixed_identity` — parsed hard-constraint conflicts (two distinct
+  `family:`/`unit:` ids, jointly-unsatisfiable directory scopes, or a mixed
+  family/unit identity) return a typed `UNKNOWN`, never a union or a
+  silently-dropped constraint.
+
+The wave-2 top-up adds the two-sided conformance and scoped-readiness kinds, each
+gold the real deterministic output of the pinned binary:
+
+- `explain_unit_member` — `explain` over a **pinned** member `unit:` id resolves
+  the target to a code unit and runs the alignment route
+  (`route = "conformance_static_alignment"`), so it is no longer a `find` alias: the
+  certificate reports `target_relationship = "MEMBER"` and
+  `alignment_status = "STATICALLY_ALIGNED"` against the unit's own family (contrast
+  the path-only `explain_deviation` case, which abstains `INSUFFICIENT_EVIDENCE`).
+- `check_against_family` / `check_against_deviation` — `check` with an explicit
+  `against` comparison-family scope. A valid `against` that pins the unit's own
+  family commits a `MEMBER` / `STATICALLY_ALIGNED` certificate; an `against` that
+  pins a **different** family honestly reports `EXCEPTION` / `STATIC_DEVIATION`
+  against the requested family (the requested family is surfaced as the comparison,
+  not a false selection).
+- `check_against_absent` / `check_against_ambiguous` — a nonexistent or ambiguous
+  `against` scope pins no comparison family, so the check abstains
+  `INSUFFICIENT_EVIDENCE` with `selected_family_id: null` rather than guessing: the
+  no-false-select witnesses for the two-sided lane.
+- `scoped_readiness_queryable` / `scoped_readiness_familyless` /
+  `scoped_readiness_absent` — the MCP-only `inspect_readiness` operation over a
+  `within` directory scope (the case `target` is the scope). Gold asserts
+  `queryability` (`queryable` / `partial_context` / `not_indexed`), `scope_coverage`
+  (`present` / `empty`), and `resolvable_family_count`: a fully indexed scope is
+  `queryable` with resolvable families, an indexed-but-familyless scope is
+  `partial_context` with zero families, and a nonexistent or unstored scope is
+  `not_indexed` with empty coverage.
+
+**Still deferred** (documented in the corpus under `_deferred_wave2_kinds`; gold
+deliberately not authored to avoid fabricated expectations):
+`resolution.cardinality = "truncated"` (needs a directory exceeding the 64-file
+scope bound; the `directory-scopes` fixture indexes only 36 files), and best-effort
+same-basename / multi-family-member / term-tie ambiguity cases (need a
+purpose-built tie fixture).
+
+### Scope-resolution and safety metrics (v3)
+
+`summary.metrics` additionally reports, each as a rate plus its integer
+numerator/denominator:
+
+- `committed_precision` — over every query that committed a family selection, the
+  fraction that committed a gold-correct family. A selection on abstention gold or
+  a family-unconstrained query is in the denominator but never the numerator, so a
+  confident wrong commit lowers precision. Under the hard safety gates it reads
+  `1.0`.
+- `answerable_rate` — the fraction of all queries that committed an answer or
+  context (`ok`/`partial_context`) rather than abstaining.
+- `partial_context_rate` — the fraction of all queries that resolved to
+  `partial_context` (the scope/local-context lane).
+- `candidate_recall_at_k` — the `candidate_recall` value with the depth `K`
+  echoed as `candidate_recall_k` (currently 5).
+- `directory_query_recall` / `composite_query_recall` — over `directory*` /
+  `composite*` kind queries, the fraction matching their full gold.
+- `conflict_accuracy` — over `conflict*` kind queries, the fraction returning a
+  typed `UNKNOWN`.
+- `unknown_by_reason` — a low-cardinality histogram of `UNKNOWN` outcomes keyed by
+  their typed `unknown_reason` (a reason-less abstention is keyed `unspecified`).
+
+The hard gate semantics are unchanged and remain non-negotiable: zero false
+committed families (`false_family_selections = 0`, `selected_on_abstention_gold =
+0`), no regression on the existing exact cases, and every ambiguity / truncation /
+staleness / conflict outcome made explicit.
+
 ### Run conditions and the token-overlap baseline
 
 Every results document carries two top-level provenance fields — a `condition`
@@ -1175,7 +1274,7 @@ schema:
   rejected with a typed error, because a baseline is not the product.
 
 The token-overlap baseline is an honest naive lower bound evaluated on the same
-corpus gold and emitted in the same `product-eval-results.v2` schema. It indexes
+corpus gold and emitted in the same `product-eval-results.v3` schema. It indexes
 each fixture through the same isolated `init`+`resync` flow, then fetches the
 product's `families --json` listing once per fixture. For each query it does not
 drive the product; instead it:

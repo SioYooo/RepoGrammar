@@ -8,6 +8,10 @@ use crate::application::family::{
     FAMILY_UNKNOWN_SLOT_DESCRIPTION_PREFIX,
 };
 use crate::application::providers::{provider_recovery_code, ProviderSlotStatus};
+use crate::application::query_resolution::{
+    normalize_directory_prefix, parse_target, Resolution, ResolutionCandidate,
+    ResolutionCardinality, TargetConflict, TargetConstraints,
+};
 use crate::application::query_terms::{normalize_query, score_family_candidates, MatchedSignals};
 use crate::application::recovery::{
     classify_recovery, recovery_command, recovery_guidance, RecoveryAction, RecoveryAgentState,
@@ -35,11 +39,12 @@ use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
     ActiveFamily, ActiveFamilyCandidates, FamilyConstraintProfileStore, FamilyStore,
     IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedVariationSlotRecord, StoreError,
+    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilySearchSummaryRecord,
+    IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     ActiveRepoShapeStats, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedSemanticFactRecord, RepoShapeLanguageStats,
+    IndexedSemanticFactRecord, RepoShapeLanguageStats, ScopedIndexedFiles,
 };
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use serde_json::{json, Value};
@@ -96,6 +101,15 @@ const TERM_STAGE_SCORE: usize = 3;
 const TERM_STAGE_GATE: usize = 4;
 /// Stage count when hydration ran (adds bounded hydration + freshness).
 const TERM_STAGE_HYDRATE: usize = 5;
+
+/// Maximum indexed files read per directory scope. The scoped read fetches at
+/// most this many (deterministically ordered) child files; a scope with more
+/// files reports `truncated` and, because unseen files might belong to other
+/// families, the resolver never claims a single family under truncation.
+const DIRECTORY_SCOPE_FILE_LIMIT: usize = 64;
+/// Per-file bound on the family-by-evidence-path lookup used to map a scoped file
+/// to its pattern families. Mirrors the fuzzy candidate bound.
+const DIRECTORY_SCOPE_FAMILY_LIMIT: usize = FUZZY_FAMILY_CANDIDATE_LIMIT;
 
 pub fn validate_query_target(value: &str) -> Result<(), &'static str> {
     if value.trim().is_empty() {
@@ -360,6 +374,11 @@ pub struct FamilyDetailReport {
     /// Present only when the deterministic term-retrieval fallback selected this
     /// family; carries its source-free route metadata for the query response.
     pub term_retrieval: Option<TermRetrievalRoute>,
+    /// The additive candidate-set / scope-resolution cardinality projection, set
+    /// only when a universal-target-resolution scope path produced this FOUND
+    /// (`ResolutionCardinality::One`). `None` for every non-scope FOUND, which
+    /// keeps those responses byte-stable under `product-schemas.v1`.
+    pub resolution: Option<Resolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,6 +425,13 @@ pub struct FamilyPartialContextReport {
     /// `typescript`), normalized to a low-cardinality scope token when the
     /// savings event is attributed. Empty when unknown.
     pub resolved_file_language: String,
+    /// The additive candidate-set / scope-resolution cardinality projection, set
+    /// only when a universal-target-resolution scope path produced this
+    /// PARTIAL_CONTEXT: `None` (resolved locus, no family), `Many` (several
+    /// in-scope families, no selection), or `Truncated` (bounded read may hide
+    /// further families). `None` for every non-scope PARTIAL_CONTEXT, which keeps
+    /// those responses byte-stable under `product-schemas.v1`.
+    pub resolution: Option<Resolution>,
 }
 
 /// A source-backed static-alignment certificate for the `check` operation.
@@ -456,7 +482,10 @@ pub struct AlignmentCertificateReport {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FamilyLookupReport {
-    Found(FamilyDetailReport),
+    /// Boxed so the (large) detail — which now carries the additive `resolution`
+    /// projection — does not inflate every `FamilyLookupReport` variant, matching
+    /// the already-boxed `PartialContext`/`Alignment` variants.
+    Found(Box<FamilyDetailReport>),
     PartialContext(Box<FamilyPartialContextReport>),
     Unknown(FamilyUnknownReport),
     /// A static-alignment certificate produced by `FamilyLookupMode::Conformance`.
@@ -994,9 +1023,14 @@ pub enum FamilyLookupMode {
     ExactFamilyId,
     ExactMemberId,
     FuzzyQuery,
-    /// Static-alignment check. Resolves the target to a specific code unit,
-    /// selects a comparison family, and returns a `FamilyLookupReport::Alignment`
-    /// certificate. Never emits a runtime-conformance verdict.
+    /// Two-sided static-alignment resolution shared by `check_conformance` and
+    /// `explain_deviation`. Resolves the target to a specific code unit, pins a
+    /// single comparison family (the caller-named `against` family when provided,
+    /// else inferred from membership or the unit's key), and returns a
+    /// `FamilyLookupReport::Alignment` certificate carrying `target_relationship`.
+    /// Never emits a runtime-conformance verdict: `runtime_equivalence` stays
+    /// `UNKNOWN`. The two operations differ only in output labeling/emphasis, not
+    /// in the resolution or the `compute_alignment` projection.
     Conformance,
 }
 
@@ -1085,11 +1119,16 @@ fn query_route_name(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'st
         (FamilyLookupReport::Found(_), FamilyLookupMode::ExactMemberId) => "exact_member_hydrate",
         (FamilyLookupReport::PartialContext(_), _) => "partial_context_read_plan",
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => "discovery_unknown",
-        (FamilyLookupReport::Unknown(_), _) => "exact_lookup_unknown",
         // The alignment route is built directly by `alignment_query_route_report`;
-        // these arms only satisfy exhaustiveness for the conformance mode.
-        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        // these arms only satisfy exhaustiveness for the conformance mode. A
+        // Conformance-mode abstention names the conformance route even if it
+        // arrives in the Unknown shape (production abstentions are Alignment).
+        (
+            FamilyLookupReport::Found(_) | FamilyLookupReport::Unknown(_),
+            FamilyLookupMode::Conformance,
+        )
         | (FamilyLookupReport::Alignment(_), _) => "conformance_static_alignment",
+        (FamilyLookupReport::Unknown(_), _) => "exact_lookup_unknown",
     }
 }
 
@@ -1169,7 +1208,7 @@ fn query_route_why(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'sta
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => {
             "candidate discovery or local target resolution could not produce a single supported family without overclaiming"
         }
-        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        (FamilyLookupReport::Found(_) | FamilyLookupReport::Unknown(_), FamilyLookupMode::Conformance)
         | (FamilyLookupReport::Alignment(_), _) => {
             "check resolved the target to a code unit and statically compared it against the selected family's constraint profile; runtime equivalence remains UNKNOWN"
         }
@@ -2621,12 +2660,13 @@ pub fn lookup_family(
             term_retrieval: None,
         }));
     };
+    let constraints = parse_target(target, None, None);
     let FamilyMatchSet {
         active_generation,
         matches,
         unknown,
         candidate_family_ids,
-    } = bounded_family_matches(store, target, mode)?;
+    } = bounded_family_matches(store, target, mode, &constraints)?;
     if let Some(unknown) = unknown {
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
             active_generation,
@@ -2645,10 +2685,10 @@ pub fn lookup_family(
     }
     if let Some(matched) = matches.into_iter().next() {
         let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
-        return Ok(FamilyLookupReport::Found(family_detail(
+        return Ok(FamilyLookupReport::Found(Box::new(family_detail(
             matched.family,
             profile,
-        )));
+        ))));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
@@ -2680,6 +2720,7 @@ fn bounded_family_matches(
     store: &impl FamilyStore,
     target: &str,
     mode: FamilyLookupMode,
+    constraints: &TargetConstraints,
 ) -> Result<FamilyMatchSet, RepoGrammarError> {
     match mode {
         FamilyLookupMode::ExactFamilyId => exact_family_match_set(store, target),
@@ -2687,7 +2728,7 @@ fn bounded_family_matches(
         // Conformance resolves through the shared fuzzy pipeline before the
         // alignment layer runs, so it shares the fuzzy match set here.
         FamilyLookupMode::FuzzyQuery | FamilyLookupMode::Conformance => {
-            fuzzy_family_match_set(store, target)
+            fuzzy_family_match_set(store, target, constraints)
         }
     }
 }
@@ -2752,6 +2793,7 @@ fn exact_member_match_set(
 fn fuzzy_family_match_set(
     store: &impl FamilyStore,
     target: &str,
+    constraints: &TargetConstraints,
 ) -> Result<FamilyMatchSet, RepoGrammarError> {
     if let Some(active_family) = store.show_family(target).map_err(family_store_error)? {
         let active_generation = active_family.generation_id.clone();
@@ -2765,7 +2807,7 @@ fn fuzzy_family_match_set(
         });
     }
 
-    if target.starts_with("unit:") {
+    if constraints.is_unit_prefixed() {
         let candidates = store
             .find_active_families_by_member(target)
             .map_err(family_store_error)?;
@@ -2971,7 +3013,11 @@ pub fn lookup_family_with_local_context(
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
     let report = lookup_family(family_store, target, mode)?;
-    add_local_context_fallback(index_store, report, target, mode)
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return Ok(report);
+    };
+    let constraints = parse_target(target, None, None);
+    add_local_context_fallback(index_store, report, target, &constraints, mode)
 }
 
 pub fn lookup_family_with_freshness(
@@ -2992,12 +3038,28 @@ pub fn lookup_family_with_freshness(
             term_retrieval: None,
         }));
     };
+    // Parse the raw target once; the dispatcher below threads a single parse
+    // through every stage instead of re-deriving these facts per call site.
+    let constraints = parse_target(target, None, None);
+    lookup_family_with_freshness_using(request, store, source_store, target, &constraints, mode)
+}
+
+/// The freshness-gated match logic over an already-parsed target. Split out so the
+/// dispatcher can thread one [`TargetConstraints`] through every stage.
+fn lookup_family_with_freshness_using(
+    request: FamilyEvidenceFreshnessRequest,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    target: &str,
+    constraints: &TargetConstraints,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
     let FamilyMatchSet {
         active_generation,
         matches,
         unknown,
         candidate_family_ids,
-    } = bounded_family_matches(store, target, mode)?;
+    } = bounded_family_matches(store, target, mode, constraints)?;
     if let Some(unknown) = unknown {
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
             active_generation,
@@ -3017,10 +3079,10 @@ pub fn lookup_family_with_freshness(
     if let Some(matched) = matches.into_iter().next() {
         if family_evidence_is_fresh(&request, source_store, &matched.family)? {
             let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
-            return Ok(FamilyLookupReport::Found(family_detail(
+            return Ok(FamilyLookupReport::Found(Box::new(family_detail(
                 matched.family,
                 profile,
-            )));
+            ))));
         }
         let family_id = matched.family.family.family_id;
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
@@ -3047,23 +3109,67 @@ pub fn lookup_family_with_freshness_and_local_context(
     family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
+    against: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
-    // The conformance check resolves the target and comparison family through the
-    // same shared pipeline, then layers the static-alignment certificate on top.
+    // The conformance/deviation operations both resolve the target and comparison
+    // family through the same shared two-sided pipeline, then layer the
+    // static-alignment certificate (or deviation projection) on top. `against`,
+    // when present, pins the comparison side to exactly one family.
     if mode == FamilyLookupMode::Conformance {
-        return check_static_alignment(request, index_store, family_store, source_store, target);
+        return check_static_alignment(
+            request,
+            index_store,
+            family_store,
+            source_store,
+            target,
+            against,
+        );
     }
+    // An empty target abstains through the exact layer; every fallback below is a
+    // no-op on it, so the base report is the final answer.
+    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
+        return lookup_family_with_freshness(request, family_store, source_store, None, mode);
+    };
+    // Parse the raw target exactly once and thread the single result through every
+    // stage: the exact/fuzzy match set, term retrieval, local context, and
+    // directory-scope resolution all consume the same parsed constraints.
+    let constraints = parse_target(target, None, None);
     // Exact authority + role/evidence fuzzy layers run first and unchanged.
-    let report =
-        lookup_family_with_freshness(request.clone(), family_store, source_store, target, mode)?;
+    let report = lookup_family_with_freshness_using(
+        request.clone(),
+        family_store,
+        source_store,
+        target,
+        &constraints,
+        mode,
+    )?;
     // Only when those layers produced no candidate for a non-path-locator target
     // does deterministic term retrieval run, through the same freshness gate.
-    let report =
-        term_retrieval_fallback(&request, family_store, source_store, report, target, mode)?;
+    let report = term_retrieval_fallback(
+        &request,
+        family_store,
+        source_store,
+        report,
+        target,
+        &constraints,
+        mode,
+    )?;
     // The existing local-context read-plan fallback still applies where its
     // preconditions hold (path-shaped targets, or term retrieval that abstained).
-    add_local_context_fallback(index_store, report, target, mode)
+    let report = add_local_context_fallback(index_store, report, target, &constraints, mode)?;
+    // Finally, resolve a directory / composite scope (or surface a typed conflict)
+    // for a target that still abstained — the headline directory-scope fix. A
+    // non-directory target with no conflict flows through unchanged.
+    directory_scope_fallback(
+        &request,
+        index_store,
+        family_store,
+        source_store,
+        report,
+        &constraints,
+        mode,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -3092,7 +3198,9 @@ fn check_static_alignment(
     family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
+    against: Option<&str>,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let against = against.map(str::trim).filter(|against| !against.is_empty());
     let snapshot = index_store
         .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
@@ -3194,7 +3302,11 @@ fn check_static_alignment(
         ));
     }
 
-    // (3) Membership: the unit's own family, else the single ready family of key.
+    // (3) Comparison family. `against`, when present, pins exactly ONE comparison
+    // family (the caller-named side); otherwise the family is inferred from the
+    // subject's own membership, else the single ready family of its key. The
+    // subject's membership set is computed first so `is_member` is decided against
+    // whichever family is finally pinned (including a caller-named `against`).
     let member_candidates = family_store
         .find_active_families_by_member(&unit.id)
         .map_err(family_store_error)?;
@@ -3206,9 +3318,33 @@ fn check_static_alignment(
     member_family_ids.sort();
     member_family_ids.dedup();
 
-    let (family_id, is_member) = if member_family_ids.len() == 1 {
+    let (family_id, is_member) = if let Some(against) = against {
+        // Caller-pinned comparison side: resolve `against` to exactly ONE fresh
+        // ready family through the shared family-resolution pipeline. Ambiguity or
+        // no match abstains with bounded candidate handles; it never false-selects.
+        match resolve_against_family(&request, family_store, source_store, against)? {
+            AgainstFamilySelection::One(family_id) => {
+                let is_member = member_family_ids.iter().any(|id| id == &family_id);
+                (family_id, is_member)
+            }
+            AgainstFamilySelection::Abstain(candidates) => {
+                let mut resolved = resolved_target_for_unit(target, unit, None);
+                resolved.candidate_family_ids = candidates.clone();
+                return Ok(alignment_abstain(
+                    active_generation,
+                    AlignmentStatus::InsufficientEvidence,
+                    empty_alignment_read_plan(),
+                    vec![candidate_ambiguity_unknown(
+                        "check comparison family (against) ambiguity",
+                        &candidates,
+                    )],
+                    resolved,
+                ));
+            }
+        }
+    } else if member_family_ids.len() == 1 {
         (
-            member_family_ids.into_iter().next().expect("one family"),
+            member_family_ids.first().cloned().expect("one family"),
             true,
         )
     } else if member_family_ids.is_empty() {
@@ -3567,6 +3703,59 @@ fn select_comparison_family_by_key(
     })
 }
 
+/// The comparison family a caller-named `against` scope resolved to.
+enum AgainstFamilySelection {
+    /// Exactly one fresh ready comparison family was pinned.
+    One(String),
+    /// The `against` scope did not pin exactly one fresh ready family. Carries the
+    /// bounded candidate handles (empty when nothing matched); NEVER a selection.
+    Abstain(Vec<String>),
+}
+
+/// Resolve a caller-named `against` comparison scope to exactly ONE fresh ready
+/// pattern family, or abstain with bounded candidate handles.
+///
+/// This reuses the shared family-resolution authority
+/// ([`lookup_family_with_freshness_using`], the exact-family / role / pattern
+/// discovery + freshness gate) rather than re-deriving selection here:
+///
+/// * an exact `family:` id resolves that family directly (fresh) → [`AgainstFamilySelection::One`];
+/// * a framework role or pattern resolves the unique fresh ready family of that
+///   role, else the bounded candidate set → [`AgainstFamilySelection::Abstain`];
+/// * a stale, missing, or ambiguous `against` never selects — it abstains with
+///   whatever narrowing candidate handles the resolver surfaced.
+///
+/// `against` names the COMPARISON family only; it is never resolved as a code
+/// locus, so the local-context / directory-scope fallbacks are intentionally not
+/// consulted here.
+fn resolve_against_family(
+    request: &FamilyEvidenceFreshnessRequest,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    against: &str,
+) -> Result<AgainstFamilySelection, RepoGrammarError> {
+    let constraints = parse_target(against, None, None);
+    let report = lookup_family_with_freshness_using(
+        request.clone(),
+        family_store,
+        source_store,
+        against,
+        &constraints,
+        FamilyLookupMode::FuzzyQuery,
+    )?;
+    Ok(match report {
+        FamilyLookupReport::Found(family) => AgainstFamilySelection::One(family.family_id.clone()),
+        FamilyLookupReport::Unknown(unknown) => {
+            AgainstFamilySelection::Abstain(normalized_family_ids(unknown.candidate_family_ids))
+        }
+        // `lookup_family_with_freshness_using` only ever returns Found/Unknown;
+        // any other shape is treated as a no-selection abstention defensively.
+        FamilyLookupReport::PartialContext(_) | FamilyLookupReport::Alignment(_) => {
+            AgainstFamilySelection::Abstain(Vec::new())
+        }
+    })
+}
+
 /// 1-based line number to the byte offset of that line's start, or `None` when
 /// the line is out of range.
 fn line_start_byte(text: &str, line: usize) -> Option<usize> {
@@ -3896,7 +4085,8 @@ fn term_retrieval_fallback(
     store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     report: FamilyLookupReport,
-    target: Option<&str>,
+    target: &str,
+    constraints: &TargetConstraints,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
     if mode != FamilyLookupMode::FuzzyQuery {
@@ -3910,14 +4100,11 @@ fn term_retrieval_fallback(
         // claim, candidate ids, and recovery guidance verbatim.
         return Ok(report);
     }
-    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
-        return Ok(report);
-    };
     // Path-locator-shaped targets are handled by the exact/suffix/local-context
     // path; term retrieval only claims non-path natural-language style targets.
     // A single interior-dotted word (e.g. `fastapi.Depends`, `0.100`, `e.g.`) is
     // NOT path-shaped, so such prose still reaches retrieval.
-    if target_has_path_locator_shape(target) {
+    if constraints.path_locator_shaped {
         return Ok(report);
     }
     run_term_retrieval(
@@ -3952,7 +4139,7 @@ fn term_retrieval_eligible(report: &FamilyUnknownReport) -> bool {
 /// as a genuine file locator for the retrieval guard. Kept deliberately small
 /// and aligned with the indexed languages; a dotted word whose final segment is
 /// not one of these (e.g. `fastapi.Depends`, `0.100`, `e.g`) is not path-shaped.
-const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
+pub(crate) const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
     "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "java", "cs", "go", "rb", "php",
     "swift", "kt", "kts", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx",
 ];
@@ -3961,7 +4148,7 @@ const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
 /// guard: some whitespace token contains `/`, or (after stripping a trailing
 /// `:line`/`:start-end` locator) ends in a known source-file extension. Prose
 /// containing a single interior-dotted word is not path-shaped.
-fn target_has_path_locator_shape(target: &str) -> bool {
+pub(crate) fn target_has_path_locator_shape(target: &str) -> bool {
     target.split_whitespace().any(|token| {
         if token.contains('/') {
             return true;
@@ -4136,7 +4323,7 @@ fn run_term_retrieval(
             let profile = hydrated_constraint_profile(store, &winner.family.family_id)?;
             let mut detail = family_detail(winner, profile);
             detail.term_retrieval = Some(route);
-            Ok(FamilyLookupReport::Found(detail))
+            Ok(FamilyLookupReport::Found(Box::new(detail)))
         }
         _ => Ok(term_unknown_report(
             active_generation,
@@ -4236,7 +4423,8 @@ pub fn build_read_plan(
 fn add_local_context_fallback(
     index_store: &impl IndexStore,
     report: FamilyLookupReport,
-    target: Option<&str>,
+    target: &str,
+    constraints: &TargetConstraints,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
     if mode != FamilyLookupMode::FuzzyQuery {
@@ -4248,9 +4436,6 @@ fn add_local_context_fallback(
     if !family_evidence_insufficient_for_local_context(&unknown_report) {
         return Ok(FamilyLookupReport::Unknown(unknown_report));
     }
-    let Some(target) = target.map(str::trim).filter(|target| !target.is_empty()) else {
-        return Ok(FamilyLookupReport::Unknown(unknown_report));
-    };
     let files = index_store
         .list_active_indexed_files()
         .map_err(index_store_error)?;
@@ -4276,7 +4461,7 @@ fn add_local_context_fallback(
             term_retrieval: None,
         }));
     }
-    match resolve_local_context(target, &files.files, &units.units)? {
+    match resolve_local_context(target, constraints, &files.files, &units.units)? {
         LocalContextResolution::Resolved(report) => {
             let recovery = classify_query_evidence_recovery(
                 RecoveryFreshness::Fresh,
@@ -4302,6 +4487,9 @@ fn add_local_context_fallback(
                             recovery_guidance(recovery.action)
                         )),
                     }],
+                    // Non-scope single-file local resolution: no directory-scope
+                    // candidate-set projection, byte-stable under v1.
+                    resolution: None,
                 },
             )))
         }
@@ -4314,6 +4502,578 @@ fn add_local_context_fallback(
             }))
         }
         LocalContextResolution::Unresolved => Ok(FamilyLookupReport::Unknown(unknown_report)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Directory / composite scope resolution.
+//
+// The headline fix: a target that names an indexed directory (e.g.
+// `src/rust/interfaces/cli`) — alone or combined with concept/framework/language
+// ranking — previously fell through to a generic `discovery_unknown`. This stage
+// resolves the directory scope from the bounded `list_active_files_in_directory`
+// port, maps the scoped files to their pattern families, intersects with any
+// ranking signals, and decides deterministically WITHOUT ever selecting a family
+// it cannot prove: single family in scope -> FOUND; heterogeneous -> candidates
+// with no selection; scope with files but no matching family -> PARTIAL_CONTEXT;
+// nonexistent scope -> UNKNOWN; a hard-constraint conflict -> a typed conflict.
+// Truncation is never hidden and never permits a selection.
+// ---------------------------------------------------------------------------
+
+/// The deterministic outcome of resolving a directory / composite scope.
+enum DirectoryScopeResolution {
+    /// A resync landed between the exact layers and the scope reads; abstain
+    /// unchanged rather than attribute a different generation.
+    GenerationMismatch,
+    /// The scope resolved to no indexed files at all (nonexistent / empty).
+    Empty,
+    /// The scope resolved to indexed files but no pattern family matched the
+    /// composite; the locus is resolved but there is no family
+    /// ([`ResolutionCardinality::None`]).
+    Familyless { files: Vec<String> },
+    /// Multiple directory scopes were jointly unsatisfiable (empty intersection).
+    Conflict,
+    /// Exactly one pattern family occupies the (untruncated) scope
+    /// ([`ResolutionCardinality::One`]). Carries the single candidate's
+    /// source-free summary so the FOUND response can project a `one` resolution
+    /// without re-reading the search summaries.
+    Family {
+        family_id: String,
+        candidate: ResolutionCandidate,
+    },
+    /// More than one distinct family occupies the scope
+    /// ([`ResolutionCardinality::Many`]), or the scope was truncated so a single
+    /// family cannot be proven ([`ResolutionCardinality::Truncated`]). Never a
+    /// selection: the bounded candidate summaries are narrowing handles only.
+    Candidates {
+        candidates: Vec<ResolutionCandidate>,
+        files: Vec<String>,
+        truncated: bool,
+    },
+}
+
+/// Resolve a directory / composite scope (or surface a typed hard-constraint
+/// conflict) for a target that still abstained after the exact, term-retrieval,
+/// and local-context stages. A non-directory target with no conflict flows
+/// through unchanged, so every existing outcome is byte-identical.
+fn directory_scope_fallback(
+    request: &FamilyEvidenceFreshnessRequest,
+    index_store: &impl IndexStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    report: FamilyLookupReport,
+    constraints: &TargetConstraints,
+    mode: FamilyLookupMode,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    if mode != FamilyLookupMode::FuzzyQuery {
+        return Ok(report);
+    }
+    // Only act on a still-empty abstention. A candidate-set, ambiguity, or
+    // stale-evidence block keeps its own claim, candidates, and recovery verbatim.
+    let FamilyLookupReport::Unknown(ref unknown) = report else {
+        return Ok(report);
+    };
+    if !term_retrieval_eligible(unknown) {
+        return Ok(report);
+    }
+    let active_generation = unknown.active_generation.clone();
+
+    // A hard-constraint conflict (multiple family/unit ids, or mixed) is surfaced
+    // as a typed conflict — never a union, never a silently-dropped constraint.
+    if let Some(conflict) = constraints.conflicts.first() {
+        return Ok(target_conflict_report(active_generation, conflict));
+    }
+
+    // Nothing to resolve unless the target named a directory scope.
+    if constraints.scope.directory_prefixes.is_empty() {
+        return Ok(report);
+    }
+    // Normalize + safety-check every prefix; an unsafe prefix is never read.
+    let prefixes: Vec<String> = constraints
+        .scope
+        .directory_prefixes
+        .iter()
+        .filter_map(|prefix| normalize_directory_prefix(prefix))
+        .collect();
+    if prefixes.is_empty() {
+        return Ok(report);
+    }
+
+    match resolve_directory_scope(
+        index_store,
+        family_store,
+        constraints,
+        &prefixes,
+        &active_generation,
+    )? {
+        DirectoryScopeResolution::GenerationMismatch => Ok(report),
+        DirectoryScopeResolution::Empty => Ok(directory_scope_empty_report(active_generation)),
+        DirectoryScopeResolution::Conflict => {
+            Ok(directory_scope_conflict_report(active_generation))
+        }
+        // Resolved locus, no family: PARTIAL_CONTEXT + resolution `none`.
+        DirectoryScopeResolution::Familyless { files } => Ok(directory_scope_partial_context(
+            active_generation,
+            &prefixes,
+            files,
+            Vec::new(),
+            Resolution {
+                cardinality: ResolutionCardinality::None,
+                candidates: Vec::new(),
+            },
+        )),
+        // Several in-scope families (or a truncated read): PARTIAL_CONTEXT +
+        // resolution `many`/`truncated` with bounded candidate summaries and NO
+        // selected family.
+        DirectoryScopeResolution::Candidates {
+            candidates,
+            files,
+            truncated,
+        } => {
+            let cardinality = if truncated {
+                ResolutionCardinality::Truncated
+            } else {
+                ResolutionCardinality::Many
+            };
+            let candidate_family_ids = candidates
+                .iter()
+                .map(|candidate| candidate.family_id.clone())
+                .collect();
+            Ok(directory_scope_partial_context(
+                active_generation,
+                &prefixes,
+                files,
+                candidate_family_ids,
+                Resolution {
+                    cardinality,
+                    candidates,
+                },
+            ))
+        }
+        // Exactly one in-scope family: FOUND + resolution `one`.
+        DirectoryScopeResolution::Family {
+            family_id,
+            candidate,
+        } => resolve_single_scope_family(
+            request,
+            family_store,
+            source_store,
+            active_generation,
+            family_id,
+            Resolution {
+                cardinality: ResolutionCardinality::One,
+                candidates: vec![candidate],
+            },
+        ),
+    }
+}
+
+/// True when the target carries a semantic ranking signal that should narrow a
+/// directory scope: a pattern concept, a framework role, or a language filter. A
+/// bare path's own residue/identifier tokens are intentionally excluded — they
+/// would otherwise make every directory target "composite" against itself.
+fn has_scope_ranking_signals(constraints: &TargetConstraints) -> bool {
+    !constraints.ranking.concepts.is_empty()
+        || !constraints.ranking.qualified_concepts.is_empty()
+        || !constraints.ranking.framework_roles.is_empty()
+        || !constraints.scope.languages.is_empty()
+}
+
+/// Map the safe directory prefixes to the pattern families that occupy them and
+/// classify the result. All reads are generation-checked against `base_generation`
+/// and bounded; nothing loads the whole inventory.
+fn resolve_directory_scope(
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    constraints: &TargetConstraints,
+    prefixes: &[String],
+    base_generation: &str,
+) -> Result<DirectoryScopeResolution, RepoGrammarError> {
+    let mut per_prefix_families: Vec<BTreeSet<String>> = Vec::new();
+    let mut scoped_files: BTreeSet<String> = BTreeSet::new();
+    let mut truncated = false;
+    let mut any_files = false;
+
+    for prefix in prefixes {
+        let ScopedIndexedFiles {
+            generation_id,
+            files,
+            truncated: scope_truncated,
+        } = index_store
+            .list_active_files_in_directory(prefix, DIRECTORY_SCOPE_FILE_LIMIT)
+            .map_err(index_store_error)?;
+        if generation_id != base_generation {
+            return Ok(DirectoryScopeResolution::GenerationMismatch);
+        }
+        truncated |= scope_truncated;
+        let mut families: BTreeSet<String> = BTreeSet::new();
+        for file in &files {
+            any_files = true;
+            scoped_files.insert(file.path.clone());
+            let candidates = family_store
+                .find_active_families_by_evidence_path(&file.path, DIRECTORY_SCOPE_FAMILY_LIMIT)
+                .map_err(family_store_error)?;
+            if candidates.generation_id != base_generation {
+                return Ok(DirectoryScopeResolution::GenerationMismatch);
+            }
+            truncated |= candidates.truncated;
+            for candidate in candidates.candidates {
+                families.insert(candidate.family_id);
+            }
+        }
+        per_prefix_families.push(families);
+    }
+
+    if !any_files {
+        return Ok(DirectoryScopeResolution::Empty);
+    }
+
+    // Multiple directory scopes default to INTERSECTION.
+    let mut in_scope = per_prefix_families.first().cloned().unwrap_or_default();
+    for families in per_prefix_families.iter().skip(1) {
+        in_scope = in_scope.intersection(families).cloned().collect();
+    }
+
+    // Composite: intersect with the ranking signal's positively-scored families,
+    // reusing the single term-retrieval scoring authority.
+    if has_scope_ranking_signals(constraints) {
+        match ranked_family_ids(family_store, constraints, base_generation)? {
+            None => return Ok(DirectoryScopeResolution::GenerationMismatch),
+            Some(ranked) => {
+                in_scope = in_scope.intersection(&ranked).cloned().collect();
+            }
+        }
+    }
+
+    // `in_scope` is a `BTreeSet`, so the candidate order is deterministic (sorted
+    // by family id); the scoped file list is likewise sorted.
+    let ids: Vec<String> = in_scope.into_iter().collect();
+    let scoped_files: Vec<String> = scoped_files.into_iter().collect();
+
+    // A truncated scope may hide further families, so a single-family or
+    // familyless conclusion cannot be proven; surface what was seen as candidates
+    // (never a selection) with the truncation flag set.
+    if truncated {
+        let Some(candidates) = scope_resolution_candidates(family_store, &ids, base_generation)?
+        else {
+            return Ok(DirectoryScopeResolution::GenerationMismatch);
+        };
+        return Ok(DirectoryScopeResolution::Candidates {
+            candidates,
+            files: scoped_files,
+            truncated: true,
+        });
+    }
+
+    match ids.len() {
+        0 => {
+            if prefixes.len() > 1 {
+                // Jointly unsatisfiable directory scopes are a typed conflict.
+                Ok(DirectoryScopeResolution::Conflict)
+            } else {
+                // The locus resolved (files exist) but no family matched.
+                Ok(DirectoryScopeResolution::Familyless {
+                    files: scoped_files,
+                })
+            }
+        }
+        1 => {
+            let Some(mut candidates) =
+                scope_resolution_candidates(family_store, &ids, base_generation)?
+            else {
+                return Ok(DirectoryScopeResolution::GenerationMismatch);
+            };
+            let candidate = candidates.pop().expect("one candidate for one family");
+            Ok(DirectoryScopeResolution::Family {
+                family_id: ids.into_iter().next().expect("one family"),
+                candidate,
+            })
+        }
+        _ => {
+            let Some(candidates) =
+                scope_resolution_candidates(family_store, &ids, base_generation)?
+            else {
+                return Ok(DirectoryScopeResolution::GenerationMismatch);
+            };
+            Ok(DirectoryScopeResolution::Candidates {
+                candidates,
+                files: scoped_files,
+                truncated: false,
+            })
+        }
+    }
+}
+
+/// Project each in-scope family id into a bounded, source-free
+/// [`ResolutionCandidate`] using the committed family search-summary projection.
+///
+/// Reuses the same `list_active_family_search_summaries` port the ranking path
+/// reads; it never hydrates a deep family. Returns `None` when the summary
+/// projection describes a different generation (a resync landed mid-read), so the
+/// caller abstains rather than attribute a stale summary. `ids` order is
+/// preserved, so the candidate set is deterministic.
+fn scope_resolution_candidates(
+    store: &impl FamilyStore,
+    ids: &[String],
+    base_generation: &str,
+) -> Result<Option<Vec<ResolutionCandidate>>, RepoGrammarError> {
+    let summaries = store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    if summaries.generation_id != base_generation {
+        return Ok(None);
+    }
+    let by_id: BTreeMap<&str, &IndexedFamilySearchSummaryRecord> = summaries
+        .families
+        .iter()
+        .map(|record| (record.family_id.as_str(), record))
+        .collect();
+    Ok(Some(
+        ids.iter()
+            .map(|family_id| ResolutionCandidate {
+                family_id: family_id.clone(),
+                summary: by_id
+                    .get(family_id.as_str())
+                    .map(|record| family_search_summary_line(record))
+                    .unwrap_or_default(),
+            })
+            .collect(),
+    ))
+}
+
+/// A short, source-free one-line summary of a family, projected from its
+/// committed search-summary row. It composes already-public, low-cardinality
+/// projection fields (language, framework role or code-unit kind, classification)
+/// and never touches source text. Empty segments are dropped so a family without
+/// a framework role still yields a coherent line.
+fn family_search_summary_line(record: &IndexedFamilySearchSummaryRecord) -> String {
+    let descriptor = if !record.framework_role.is_empty() {
+        record.framework_role.as_str()
+    } else {
+        record.code_unit_kind.as_str()
+    };
+    let head: Vec<&str> = [record.language.as_str(), descriptor]
+        .into_iter()
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    match (head.is_empty(), record.classification.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => record.classification.clone(),
+        (false, true) => head.join(" "),
+        (false, false) => format!("{} · {}", head.join(" "), record.classification),
+    }
+}
+
+/// The set of family ids that score a positive retrieval signal for this target,
+/// or `None` when the search-summary projection describes a different generation.
+/// Reuses the committed normalization + scoring authority verbatim.
+fn ranked_family_ids(
+    store: &impl FamilyStore,
+    constraints: &TargetConstraints,
+    base_generation: &str,
+) -> Result<Option<BTreeSet<String>>, RepoGrammarError> {
+    let summaries = store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    if summaries.generation_id != base_generation {
+        return Ok(None);
+    }
+    let normalized = normalize_query(&constraints.original);
+    let ranking = score_family_candidates(&normalized, &summaries.families);
+    Ok(Some(
+        ranking
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.family_id)
+            .collect(),
+    ))
+}
+
+/// Hydrate the single in-scope family through the same freshness + profile gates
+/// the fuzzy path uses, returning a FOUND detail when fresh or a typed stale
+/// abstention otherwise. Never selects a family whose evidence is stale.
+fn resolve_single_scope_family(
+    request: &FamilyEvidenceFreshnessRequest,
+    store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    active_generation: String,
+    family_id: String,
+    resolution: Resolution,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let Some(active_family) = store.show_family(&family_id).map_err(family_store_error)? else {
+        // The family vanished between the scope map and hydration (a resync race);
+        // abstain rather than invent one.
+        return Ok(directory_scope_empty_report(active_generation));
+    };
+    if active_family.generation_id != active_generation {
+        return Ok(directory_scope_empty_report(active_generation));
+    }
+    if family_evidence_is_fresh(request, source_store, &active_family)? {
+        let profile = hydrated_constraint_profile(store, &active_family.family.family_id)?;
+        let mut detail = family_detail(active_family, profile);
+        // The single in-scope family is a proven selection: project a `one`
+        // resolution so the FOUND response carries the additive candidate set.
+        detail.resolution = Some(resolution);
+        return Ok(FamilyLookupReport::Found(Box::new(detail)));
+    }
+    Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation,
+        candidate_family_ids: vec![family_id.clone()],
+        unknowns: vec![stale_evidence_unknown(format!(
+            "{}:evidence_freshness",
+            family_id
+        ))],
+        term_retrieval: None,
+    }))
+}
+
+/// A directory scope that resolved to no indexed files: a typed UNKNOWN naming
+/// the accurate reason, never a fabricated family.
+fn directory_scope_empty_report(active_generation: String) -> FamilyLookupReport {
+    FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation,
+        candidate_family_ids: Vec::new(),
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "query target directory scope".to_string(),
+            recovery: Some(
+                "the requested directory scope resolved to no indexed files; check the path or resync the index".to_string(),
+            ),
+        }],
+        term_retrieval: None,
+    })
+}
+
+/// Multiple directory scopes that share no pattern family: a typed conflict, not
+/// a union of the individual scopes.
+fn directory_scope_conflict_report(active_generation: String) -> FamilyLookupReport {
+    FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation,
+        candidate_family_ids: Vec::new(),
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "query target scope conflict".to_string(),
+            recovery: Some(
+                "the requested directory scopes share no pattern family; narrow to a single directory scope".to_string(),
+            ),
+        }],
+        term_retrieval: None,
+    })
+}
+
+/// A typed hard-constraint conflict surfaced as a blocking UNKNOWN. The competing
+/// exact ids are carried as candidate handles so the caller can narrow to one.
+fn target_conflict_report(
+    active_generation: String,
+    conflict: &TargetConflict,
+) -> FamilyLookupReport {
+    let (candidate_family_ids, recovery): (Vec<String>, &str) = match conflict {
+        TargetConflict::MultipleFamilyIds(ids) => (
+            ids.clone(),
+            "the target named more than one exact family id; narrow to a single family id",
+        ),
+        TargetConflict::MultipleUnitIds(_) => (
+            Vec::new(),
+            "the target named more than one exact member id; narrow to a single member id",
+        ),
+        TargetConflict::MixedFamilyAndUnitId => (
+            Vec::new(),
+            "the target mixed an exact family id and an exact member id; use exactly one exact identity",
+        ),
+    };
+    // Only family ids are valid family-handle candidates; unit ids are surfaced in
+    // the recovery text, never mislabeled as family candidates.
+    FamilyLookupReport::Unknown(FamilyUnknownReport {
+        active_generation,
+        candidate_family_ids: normalized_family_ids(candidate_family_ids),
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "query target conflict".to_string(),
+            recovery: Some(recovery.to_string()),
+        }],
+        term_retrieval: None,
+    })
+}
+
+/// A directory scope whose locus resolved as a PARTIAL_CONTEXT: the scope is read-
+/// plan context only, never a family selection. The read plan is intentionally
+/// empty — the locus is a directory, not a single file — and the resolved target
+/// carries the bounded child paths plus the in-scope family ids as candidate
+/// handles (so they survive at `minimal`). The additive `resolution` carries the
+/// cardinality (`none`/`many`/`truncated`) and bounded candidate summaries.
+///
+/// The `One` cardinality never reaches this builder: a single proven in-scope
+/// family resolves to a FOUND through [`resolve_single_scope_family`].
+fn directory_scope_partial_context(
+    active_generation: String,
+    prefixes: &[String],
+    files: Vec<String>,
+    candidate_family_ids: Vec<String>,
+    resolution: Resolution,
+) -> FamilyLookupReport {
+    let recovery = match resolution.cardinality {
+        ResolutionCardinality::None => {
+            "the directory scope resolved to indexed files but carries no matching pattern family; treat the scope as read-plan context only"
+        }
+        ResolutionCardinality::Many => {
+            "the directory scope resolved to multiple in-scope pattern families with no single selection; pick one from resolution.candidates or narrow with a pattern family id or a more specific path"
+        }
+        ResolutionCardinality::Truncated => {
+            "the directory scope exceeded the bounded read limit (results truncated); the families in resolution.candidates are partial — narrow to a smaller directory or one pattern family id"
+        }
+        // Unreachable: a single in-scope family resolves to FOUND, not here.
+        ResolutionCardinality::One => {
+            "the directory scope resolved to a single pattern family"
+        }
+    };
+    let resolved_target = ResolvedQueryTarget {
+        original_target: prefixes.join(" "),
+        kind: "directory_scope",
+        path: prefixes.first().cloned().unwrap_or_default(),
+        line: None,
+        byte_range: None,
+        family_id: None,
+        code_unit_id: None,
+        symbol_hints: Vec::new(),
+        residue_terms: Vec::new(),
+        candidate_paths: files,
+        candidate_family_ids: normalized_family_ids(candidate_family_ids),
+        candidate_code_unit_ids: Vec::new(),
+        confidence: "scope",
+        match_kind: "directory_scope",
+    };
+    FamilyLookupReport::PartialContext(Box::new(FamilyPartialContextReport {
+        active_generation,
+        resolved_target,
+        read_plan: empty_directory_scope_read_plan(),
+        resolved_file_size_bytes: None,
+        resolved_file_language: String::new(),
+        unknowns: vec![FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "pattern family evidence for resolved directory scope".to_string(),
+            recovery: Some(recovery.to_string()),
+        }],
+        resolution: Some(resolution),
+    }))
+}
+
+/// An empty read plan for a resolved-but-familyless directory scope. The scope is
+/// a directory rather than a single file, so there is no single body to read; the
+/// candidate child paths on the resolved target are the narrowing handles.
+fn empty_directory_scope_read_plan() -> ReadPlan {
+    ReadPlan {
+        items: Vec::new(),
+        estimated_tokens: 0,
+        source_snippets_included: false,
+        requires_source_before_edit: false,
+        selection_strategy: "directory_scope_no_read_plan",
+        budget_satisfied: true,
+        truncated: false,
+        line_range_omissions: Vec::new(),
     }
 }
 
@@ -4352,9 +5112,9 @@ struct LocalContextReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TargetLocator {
-    line: Option<usize>,
-    byte_range: Option<(usize, usize)>,
+pub(crate) struct TargetLocator {
+    pub(crate) line: Option<usize>,
+    pub(crate) byte_range: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4379,6 +5139,7 @@ enum LocalContextResolution {
 
 fn resolve_local_context(
     target: &str,
+    constraints: &TargetConstraints,
     files: &[IndexedFileRecord],
     units: &[IndexedCodeUnitRecord],
 ) -> Result<LocalContextResolution, RepoGrammarError> {
@@ -4463,10 +5224,7 @@ fn resolve_local_context(
             ))
     });
 
-    let target_terms = target_identifier_tokens(target)
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let target_terms = constraints.ranking.identifier_tokens.clone();
     let unit_hint_terms = target_terms
         .iter()
         .filter(|term| !file.path.contains(term.as_str()))
@@ -4699,7 +5457,7 @@ fn target_path_tokens(target: &str) -> Vec<&str> {
         .collect()
 }
 
-fn split_query_path_locator(token: &str) -> (&str, Option<TargetLocator>) {
+pub(crate) fn split_query_path_locator(token: &str) -> (&str, Option<TargetLocator>) {
     let Some((path, suffix)) = token.rsplit_once(':') else {
         return (token, None);
     };
@@ -4759,7 +5517,7 @@ fn target_boundary_after_locator(target: &str, end: usize) -> bool {
         .is_none_or(|character| !is_path_character(character) && character != ':')
 }
 
-fn is_safe_query_path_text(path: &str) -> bool {
+pub(crate) fn is_safe_query_path_text(path: &str) -> bool {
     !path.is_empty()
         && (path.contains('/') || path.contains('.'))
         && !path.starts_with('/')
@@ -4771,7 +5529,7 @@ fn is_safe_query_path_text(path: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-fn target_identifier_tokens(target: &str) -> Vec<&str> {
+pub(crate) fn target_identifier_tokens(target: &str) -> Vec<&str> {
     target
         .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .filter(|token| !token.is_empty())
@@ -6079,6 +6837,9 @@ fn family_detail(
         unknowns,
         constraint_profile: constraint_profile.map(Box::new),
         term_retrieval: None,
+        // Non-scope FOUND: no candidate-set projection, byte-stable under v1. The
+        // directory-scope single-family path sets a `One` resolution explicitly.
+        resolution: None,
     }
 }
 
@@ -6708,14 +7469,7 @@ pub fn assemble_product_readiness(
     // combined recovery to be `None` (repository clean and fresh, autosync not
     // recommended, and family evidence fresh); a recommended-but-stopped autosync
     // (`AutosyncRecommended`) is a live maintenance caveat and is `Degraded`.
-    let summary = match recovery.reason {
-        RecoveryReason::RepositoryNotInitialized
-        | RecoveryReason::StorageUnhealthy
-        | RecoveryReason::BlockingLock
-        | RecoveryReason::ActiveIndexMissing => ReadinessSummary::NotReady,
-        RecoveryReason::Ready => ReadinessSummary::Ready,
-        _ => ReadinessSummary::Degraded,
-    };
+    let summary = readiness_summary_from_recovery_reason(recovery.reason);
 
     ProductReadinessReport {
         summary,
@@ -7037,6 +7791,400 @@ fn readiness_recovery_reason_token(reason: RecoveryReason) -> &'static str {
         RecoveryReason::AgentSelfTestFailed => "agent_self_test_failed",
         RecoveryReason::Ready => "ready",
     }
+}
+
+/// The one authoritative projection of a combined recovery reason onto the
+/// low-cardinality product-readiness summary token. Shared by the whole-checkout
+/// [`assemble_product_readiness`] and the SCOPED [`scoped_readiness_from_stores`]
+/// so both surfaces derive the same summary from the same recovery authority; a
+/// scope can never report a more optimistic summary than the repository.
+fn readiness_summary_from_recovery_reason(reason: RecoveryReason) -> ReadinessSummary {
+    match reason {
+        RecoveryReason::RepositoryNotInitialized
+        | RecoveryReason::StorageUnhealthy
+        | RecoveryReason::BlockingLock
+        | RecoveryReason::ActiveIndexMissing => ReadinessSummary::NotReady,
+        RecoveryReason::Ready => ReadinessSummary::Ready,
+        _ => ReadinessSummary::Degraded,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scoped readiness (Phase 5).
+//
+// `inspect_readiness` with an optional `target`/`within` returns a bounded,
+// SOURCE-FREE queryability report for one directory / module scope. It reuses the
+// Phase 1/2 target-resolution vocabulary (`parse_target` +
+// `normalize_directory_prefix`) and the bounded scope-read ports
+// (`list_active_files_in_directory` + `find_active_families_by_evidence_path`)
+// exactly as the directory-scope family resolver does — but it only COUNTS: it
+// never hydrates, selects, or projects a family, never reads source content, and
+// records NO family-query telemetry. Every field is a low-cardinality
+// enum/count/bucket; no raw target, path, or symbol is ever emitted. The single
+// recovery action, the summary, and the freshness projection are all derived from
+// the SAME authoritative repository recovery the whole-checkout readiness uses.
+// ---------------------------------------------------------------------------
+
+/// Scoped resolvability verdict: how queryable RepoGrammar is over one scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeQueryability {
+    /// The scope holds indexed files and at least one resolvable family, on a
+    /// repository whose readiness summary is `ready`.
+    Queryable,
+    /// The scope holds indexed files but no resolvable family (locus resolves,
+    /// no family evidence occupies it).
+    PartialContext,
+    /// The scope holds indexed files but the repository carries a live caveat
+    /// (stale index or recommended-but-stopped autosync); queries may fall back.
+    Degraded,
+    /// The scope resolved to no indexed files. With `scope_prefix_count == 0` the
+    /// target named no safe directory scope; with `>= 1` the directory is not
+    /// indexed.
+    NotIndexed,
+    /// The repository cannot serve family queries at all (not initialized,
+    /// storage unhealthy, blocking lock, or no active index).
+    NotReady,
+    /// The scope could not be read: a store error or a mid-read generation change.
+    CannotVerify,
+}
+
+impl ScopeQueryability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queryable => "queryable",
+            Self::PartialContext => "partial_context",
+            Self::Degraded => "degraded",
+            Self::NotIndexed => "not_indexed",
+            Self::NotReady => "not_ready",
+            Self::CannotVerify => "cannot_verify",
+        }
+    }
+}
+
+/// Bounded scoped-indexing coverage bucket. `Present` and `Truncated` both mean
+/// the scope holds indexed files; `Truncated` additionally means the bounded read
+/// hit its cap, so the file/family counts are lower bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeIndexCoverage {
+    Empty,
+    Present,
+    Truncated,
+}
+
+impl ScopeIndexCoverage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Present => "present",
+            Self::Truncated => "truncated",
+        }
+    }
+}
+
+/// Scoped freshness projection, derived source-free from the shared repository
+/// recovery reason (the same authority the whole-checkout readiness uses). It is
+/// NOT a per-file re-hash: scoped readiness never reads source content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeFreshness {
+    Fresh,
+    Stale,
+    CannotVerify,
+    NotApplicable,
+}
+
+impl ScopeFreshness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::CannotVerify => "cannot_verify",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
+/// The bounded, source-free scoped readiness report. Every field is a
+/// low-cardinality enum, count, or language token; it carries no raw target,
+/// path, or symbol, and no source text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedReadinessReport {
+    /// Repository readiness summary, projected from the same recovery authority as
+    /// the whole-checkout readiness. A scope is never more optimistic than this.
+    pub summary: ReadinessSummary,
+    /// The scoped resolvability verdict.
+    pub queryability: ScopeQueryability,
+    /// How many safe directory prefixes were read (a count only — never the paths).
+    pub scope_prefix_count: usize,
+    /// Distinct indexed files in scope (bounded; a lower bound when truncated).
+    pub indexed_file_count: usize,
+    /// Scoped indexing coverage bucket.
+    pub index_coverage: ScopeIndexCoverage,
+    /// Distinct languages present in scope (low-cardinality vocabulary tokens).
+    pub languages_in_scope: Vec<String>,
+    /// Distinct families whose evidence occupies the scope (bounded; a lower bound
+    /// when truncated). Counted WITHOUT hydrating any family.
+    pub resolvable_family_count: usize,
+    /// True when a bounded scope read hit its cap, so counts are lower bounds.
+    pub scope_truncated: bool,
+    /// Scoped freshness projection.
+    pub freshness: ScopeFreshness,
+    /// Provider slots (reused verbatim from the whole-checkout readiness inputs).
+    pub providers: Vec<ProviderSlotStatus>,
+    /// The one executable recovery action from the shared recovery classifier.
+    pub recovery: RecoveryRecommendation,
+}
+
+/// Scoped freshness derived source-free from the combined repository recovery
+/// reason. `repository_recovery_for_report` only produces repository-level
+/// reasons, so this projection is total over the reasons that can actually occur.
+fn scope_freshness_from_recovery(reason: RecoveryReason) -> ScopeFreshness {
+    match reason {
+        RecoveryReason::Ready => ScopeFreshness::Fresh,
+        RecoveryReason::EvidenceStale | RecoveryReason::AutosyncRecommended => {
+            ScopeFreshness::Stale
+        }
+        RecoveryReason::EvidenceCannotBeVerified | RecoveryReason::FamilyEvidenceUnavailable => {
+            ScopeFreshness::CannotVerify
+        }
+        _ => ScopeFreshness::NotApplicable,
+    }
+}
+
+/// The safe directory-scope prefixes named by a target and/or `within`, in
+/// first-seen order and deduplicated. Prefixes come from the target's directory
+/// tokens, the parent directory of any file-path locator, and the optional
+/// `within` scope, each normalized + safety-checked by the shared
+/// [`normalize_directory_prefix`] authority. An unsafe prefix is dropped and never
+/// read.
+fn scoped_readiness_prefixes(constraints: &TargetConstraints, within: Option<&str>) -> Vec<String> {
+    let mut raw: Vec<String> = Vec::new();
+    raw.extend(constraints.scope.directory_prefixes.iter().cloned());
+    for locator in &constraints.hard.path_locators {
+        if let Some((parent, _)) = locator.path.rsplit_once('/') {
+            raw.push(parent.to_string());
+        }
+    }
+    if let Some(within) = within {
+        raw.push(within.to_string());
+    }
+    // The scope must be path-like: `normalize_directory_prefix` (through the shared
+    // `is_safe_query_path_text` authority) rejects a bare single-segment token that
+    // carries no `/` or `.`, because it is indistinguishable from an identifier.
+    // A bare top-level directory name is therefore out of scope and reads to an
+    // empty scope, exactly as the Phase 2 directory resolver treats it.
+    let mut normalized: Vec<String> = Vec::new();
+    for prefix in raw {
+        if let Some(safe) = normalize_directory_prefix(&prefix) {
+            if !normalized.contains(&safe) {
+                normalized.push(safe);
+            }
+        }
+    }
+    normalized
+}
+
+/// The counted, source-free coverage of one scope, or `CannotVerify` when a store
+/// read failed or the generation changed mid-read.
+enum ScopedCoverage {
+    CannotVerify,
+    Resolved {
+        indexed_file_count: usize,
+        languages: Vec<String>,
+        resolvable_family_count: usize,
+        truncated: bool,
+    },
+}
+
+/// Map the safe scope prefixes to bounded indexed-file, language, and distinct
+/// in-scope family COUNTS. Mirrors the file→family mapping loop of
+/// [`resolve_directory_scope`] and reuses the same bounded ports and generation
+/// discipline, but it only counts: it never hydrates, selects, or projects a
+/// family, never reads source content, and records no telemetry.
+fn gather_scoped_coverage(
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    prefixes: &[String],
+    base_generation: &str,
+) -> ScopedCoverage {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    let mut languages: BTreeSet<String> = BTreeSet::new();
+    let mut families: BTreeSet<String> = BTreeSet::new();
+    let mut truncated = false;
+
+    for prefix in prefixes {
+        let scoped =
+            match index_store.list_active_files_in_directory(prefix, DIRECTORY_SCOPE_FILE_LIMIT) {
+                Ok(scoped) => scoped,
+                Err(_) => return ScopedCoverage::CannotVerify,
+            };
+        if scoped.generation_id != base_generation {
+            return ScopedCoverage::CannotVerify;
+        }
+        truncated |= scoped.truncated;
+        for file in &scoped.files {
+            files.insert(file.path.clone());
+            if !file.language.is_empty() {
+                languages.insert(file.language.clone());
+            }
+            let candidates = match family_store
+                .find_active_families_by_evidence_path(&file.path, DIRECTORY_SCOPE_FAMILY_LIMIT)
+            {
+                Ok(candidates) => candidates,
+                Err(_) => return ScopedCoverage::CannotVerify,
+            };
+            if candidates.generation_id != base_generation {
+                return ScopedCoverage::CannotVerify;
+            }
+            truncated |= candidates.truncated;
+            for candidate in candidates.candidates {
+                families.insert(candidate.family_id);
+            }
+        }
+    }
+
+    ScopedCoverage::Resolved {
+        indexed_file_count: files.len(),
+        languages: languages.into_iter().collect(),
+        resolvable_family_count: families.len(),
+        truncated,
+    }
+}
+
+/// Assemble the bounded, source-free scoped readiness report for one directory /
+/// module scope named by `target` and/or `within`.
+///
+/// SOURCE-FREE: the signature takes no [`SourceStore`]; it never hydrates a
+/// family and never reads source content. TELEMETRY-FREE: it records no
+/// family-query outcome. The summary, freshness, and single recovery action are
+/// derived from the SAME [`repository_recovery_for_report`] authority the
+/// whole-checkout readiness uses, so a scope is never more optimistic than the
+/// repository. Total: a store error or a mid-read generation change is reported as
+/// `CannotVerify`, never a panic or an invented count.
+pub fn scoped_readiness_from_stores(
+    report: &RepositoryStatusReport,
+    target: &str,
+    within: Option<&str>,
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    providers: Vec<ProviderSlotStatus>,
+) -> ScopedReadinessReport {
+    let recovery = repository_recovery_for_report(report);
+    let summary = readiness_summary_from_recovery_reason(recovery.reason);
+    let freshness = scope_freshness_from_recovery(recovery.reason);
+
+    let base = |queryability: ScopeQueryability| ScopedReadinessReport {
+        summary,
+        queryability,
+        scope_prefix_count: 0,
+        indexed_file_count: 0,
+        index_coverage: ScopeIndexCoverage::Empty,
+        languages_in_scope: Vec::new(),
+        resolvable_family_count: 0,
+        scope_truncated: false,
+        freshness,
+        providers: providers.clone(),
+        recovery,
+    };
+
+    // A not-ready repository gates every scope: never read a scope that cannot be
+    // served, and never report a scope more optimistic than the repository.
+    if summary == ReadinessSummary::NotReady {
+        return base(ScopeQueryability::NotReady);
+    }
+
+    // A servable summary without a concrete active generation is unexpected; treat
+    // it as unverifiable rather than invent a scope read against no generation.
+    let active_generation = match &report.status {
+        RepositoryStatus::Initialized { active_generation }
+            if active_generation != "none" && active_generation != "not implemented" =>
+        {
+            active_generation.clone()
+        }
+        _ => return base(ScopeQueryability::CannotVerify),
+    };
+
+    let constraints = parse_target(target, within, None);
+    let prefixes = scoped_readiness_prefixes(&constraints, within);
+
+    match gather_scoped_coverage(index_store, family_store, &prefixes, &active_generation) {
+        ScopedCoverage::CannotVerify => ScopedReadinessReport {
+            scope_prefix_count: prefixes.len(),
+            ..base(ScopeQueryability::CannotVerify)
+        },
+        ScopedCoverage::Resolved {
+            indexed_file_count,
+            languages,
+            resolvable_family_count,
+            truncated,
+        } => {
+            let index_coverage = if indexed_file_count == 0 {
+                ScopeIndexCoverage::Empty
+            } else if truncated {
+                ScopeIndexCoverage::Truncated
+            } else {
+                ScopeIndexCoverage::Present
+            };
+            // The verdict layers the scope coverage on top of the shared summary:
+            // a not-indexed scope is never `queryable`; a degraded repository caps
+            // an indexed scope at `degraded`; only a ready repository with an
+            // indexed scope that carries at least one family is `queryable`.
+            let queryability = if indexed_file_count == 0 {
+                ScopeQueryability::NotIndexed
+            } else if summary == ReadinessSummary::Degraded {
+                ScopeQueryability::Degraded
+            } else if resolvable_family_count > 0 {
+                ScopeQueryability::Queryable
+            } else {
+                ScopeQueryability::PartialContext
+            };
+            ScopedReadinessReport {
+                summary,
+                queryability,
+                scope_prefix_count: prefixes.len(),
+                indexed_file_count,
+                index_coverage,
+                languages_in_scope: languages,
+                resolvable_family_count,
+                scope_truncated: truncated,
+                freshness,
+                providers,
+                recovery,
+            }
+        }
+    }
+}
+
+/// Source-free JSON view of the scoped readiness report. Shared by CLI `doctor`
+/// and the MCP `inspect_readiness` scoped operation so the scoped shape has a
+/// single serializer authority. Carries only typed tokens, counts, language
+/// tokens, and the single recovery action — no raw target, path, or symbol.
+pub fn scoped_readiness_value(report: &ScopedReadinessReport) -> Value {
+    json!({
+        "summary": report.summary.as_str(),
+        "queryability": report.queryability.as_str(),
+        "scope": {
+            "prefix_count": report.scope_prefix_count,
+            "indexed_file_count": report.indexed_file_count,
+            "coverage": report.index_coverage.as_str(),
+            "truncated": report.scope_truncated,
+            "languages": report.languages_in_scope,
+            "resolvable_family_count": report.resolvable_family_count,
+            "freshness": report.freshness.as_str(),
+        },
+        "providers": report
+            .providers
+            .iter()
+            .map(|status| {
+                json!({
+                    "id": status.slot.id(),
+                    "language": status.slot.language(),
+                    "integrated": status.slot.is_integrated(),
+                    "availability": status.availability.as_protocol_str(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "recovery": product_readiness_recovery_value(report.recovery),
+    })
 }
 
 #[cfg(test)]
@@ -7365,6 +8513,7 @@ mod tests {
         repo_shape_stats: ActiveRepoShapeStats,
         snapshot_reads: std::cell::Cell<usize>,
         indexed_file_reads: std::cell::Cell<usize>,
+        scoped_file_reads: std::cell::Cell<usize>,
         code_unit_reads: std::cell::Cell<usize>,
     }
 
@@ -7377,6 +8526,7 @@ mod tests {
                 repo_shape_stats: empty_repo_shape_stats(),
                 snapshot_reads: std::cell::Cell::new(0),
                 indexed_file_reads: std::cell::Cell::new(0),
+                scoped_file_reads: std::cell::Cell::new(0),
                 code_unit_reads: std::cell::Cell::new(0),
             }
         }
@@ -7402,6 +8552,10 @@ mod tests {
 
         fn indexed_file_reads(&self) -> usize {
             self.indexed_file_reads.get()
+        }
+
+        fn scoped_file_reads(&self) -> usize {
+            self.scoped_file_reads.get()
         }
 
         fn code_unit_reads(&self) -> usize {
@@ -7518,6 +8672,32 @@ mod tests {
             Ok(ActiveIndexedFiles {
                 generation_id: "gen-000001".to_string(),
                 files: self.files.clone(),
+            })
+        }
+
+        fn list_active_files_in_directory(
+            &self,
+            prefix: &str,
+            limit: usize,
+        ) -> Result<ScopedIndexedFiles, IndexStoreError> {
+            self.scoped_file_reads.set(self.scoped_file_reads.get() + 1);
+            let limit = limit.max(1);
+            let boundary = format!("{}/", prefix.trim_end_matches('/'));
+            let mut files = self
+                .files
+                .iter()
+                .filter(|file| file.path.starts_with(&boundary))
+                .cloned()
+                .collect::<Vec<_>>();
+            files.sort_by(|left, right| left.path.cmp(&right.path));
+            let truncated = files.len() > limit;
+            if truncated {
+                files.truncate(limit);
+            }
+            Ok(ScopedIndexedFiles {
+                generation_id: "gen-000001".to_string(),
+                files,
+                truncated,
             })
         }
 
@@ -8121,6 +9301,7 @@ mod tests {
             unknowns: Vec::new(),
             constraint_profile: None,
             term_retrieval: None,
+            resolution: None,
         }
     }
 
@@ -10667,6 +11848,7 @@ mod tests {
             resolved_file_size_bytes: size_bytes,
             resolved_file_language: language.to_string(),
             unknowns: Vec::new(),
+            resolution: None,
         }
     }
 
@@ -12385,6 +13567,70 @@ mod tests {
     }
 
     #[test]
+    fn resolve_against_family_pins_exact_family_and_never_false_selects() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let fresh = TermRetrievalSourceStore { fresh: true };
+
+        // An exact `family:` id pins exactly ONE fresh ready comparison family.
+        match resolve_against_family(
+            &family_freshness_request(),
+            &store,
+            &fresh,
+            "family:python:fastapi_route:framework_fastapi_route",
+        )
+        .expect("against resolution")
+        {
+            AgainstFamilySelection::One(family_id) => assert_eq!(
+                family_id,
+                "family:python:fastapi_route:framework_fastapi_route"
+            ),
+            AgainstFamilySelection::Abstain(_) => {
+                panic!("a fresh exact family id must pin exactly one comparison family")
+            }
+        }
+
+        // An unmatched `against` scope abstains with no candidate and no selection.
+        match resolve_against_family(
+            &family_freshness_request(),
+            &store,
+            &fresh,
+            "family:python:nonexistent:none",
+        )
+        .expect("against resolution")
+        {
+            AgainstFamilySelection::Abstain(candidates) => assert!(candidates.is_empty()),
+            AgainstFamilySelection::One(family_id) => {
+                panic!("an unmatched against must never false-select {family_id}")
+            }
+        }
+
+        // A stale exact family never selects: it abstains with the family only as a
+        // bounded candidate handle, honoring the no-false-selection invariant.
+        let stale = TermRetrievalSourceStore { fresh: false };
+        match resolve_against_family(
+            &family_freshness_request(),
+            &store,
+            &stale,
+            "family:python:fastapi_route:framework_fastapi_route",
+        )
+        .expect("against resolution")
+        {
+            AgainstFamilySelection::Abstain(candidates) => assert_eq!(
+                candidates,
+                vec!["family:python:fastapi_route:framework_fastapi_route".to_string()]
+            ),
+            AgainstFamilySelection::One(family_id) => {
+                panic!("a stale against must never select {family_id}")
+            }
+        }
+    }
+
+    #[test]
     fn term_retrieval_abstains_on_margin_tie() {
         let store = FakeFamilyStore::with_families(vec![
             term_family(
@@ -12625,6 +13871,7 @@ mod tests {
             &store,
             &source,
             Some("family:python:fastapi_route:framework_fastapi_route"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("exact lookup");
@@ -12643,6 +13890,7 @@ mod tests {
             &store,
             &source,
             Some("How are FastAPI routes implemented?"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("first");
@@ -12652,6 +13900,7 @@ mod tests {
             &store,
             &source,
             Some("How are FastAPI routes implemented?"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("second");
@@ -12712,6 +13961,7 @@ mod tests {
             &store,
             &source,
             Some(shared_member),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -12758,6 +14008,7 @@ mod tests {
             &store,
             &source,
             Some("framework:fastapi.route"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -12794,6 +14045,7 @@ mod tests {
             &store,
             &source,
             Some("How does fastapi.Depends injection work in fastapi routes?"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -12874,5 +14126,500 @@ mod tests {
             tie_route.abstention_reason,
             Some(TermRetrievalAbstention::MarginTooClose)
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Directory / composite scope resolution (Phase 2 headline fix).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn directory_scope_with_single_family_resolves_found() {
+        // The headline reproduction: an indexed directory that maps to exactly one
+        // pattern family now resolves to that family instead of `discovery_unknown`.
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("app/api"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        // A directory-scope resolution uses the bounded scoped read exactly once.
+        assert_eq!(index.scoped_file_reads(), 1);
+        // The FOUND carries an additive `one` resolution whose single candidate is
+        // the resolved family (recall@K includes the one-family scope case).
+        let resolution = family.resolution.as_ref().expect("one resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::One);
+        assert_eq!(resolution.candidates.len(), 1);
+        assert_eq!(
+            resolution.candidates[0].family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+    }
+
+    #[test]
+    fn directory_scope_with_heterogeneous_families_never_false_selects() {
+        // Two distinct families share the directory; the scope resolves to a
+        // PARTIAL_CONTEXT that surfaces both as bounded candidate handles with NO
+        // selected family (resolution `many`).
+        let index = FakeStore::new(Vec::new()).with_files(vec![
+            indexed_file("app/api/routes.py"),
+            indexed_file("app/api/models.py"),
+        ]);
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api/routes.py",
+            ),
+            term_family(
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+                "framework:sqlalchemy.model",
+                "DOMINANT_PATTERN",
+                "app/api/models.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("app/api"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::PartialContext(partial) = &report else {
+            panic!("expected PartialContext candidates, got {report:?}");
+        };
+        // The additive resolution carries `many` with bounded candidate summaries
+        // and NO selected family; every real in-scope family appears (recall@K).
+        let resolution = partial.resolution.as_ref().expect("many resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::Many);
+        let candidate_ids: Vec<&str> = resolution
+            .candidates
+            .iter()
+            .map(|candidate| candidate.family_id.as_str())
+            .collect();
+        assert_eq!(
+            candidate_ids,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route",
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+            ]
+        );
+        // Each candidate carries a short, source-free summary line.
+        assert!(resolution
+            .candidates
+            .iter()
+            .all(|candidate| !candidate.summary.is_empty()));
+        // The narrowing handles survive on the resolved target (kept at `minimal`).
+        assert_eq!(
+            partial.resolved_target.candidate_family_ids,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model".to_string(),
+            ]
+        );
+        // The route carries no selected family — zero false selection.
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+        assert_eq!(
+            route.candidate_family_ids,
+            partial.resolved_target.candidate_family_ids
+        );
+    }
+
+    #[test]
+    fn composite_directory_and_concept_intersects_to_one_family() {
+        // A composite `directory + concept` narrows a heterogeneous directory to
+        // the single family that also matches the concept ranking signal.
+        let index = FakeStore::new(Vec::new()).with_files(vec![
+            indexed_file("app/api/routes.py"),
+            indexed_file("app/api/models.py"),
+        ]);
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api/routes.py",
+            ),
+            term_family(
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+                "framework:sqlalchemy.model",
+                "DOMINANT_PATTERN",
+                "app/api/models.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            // `route` is a pattern concept that only the fastapi route family
+            // matches; the sqlalchemy model family is excluded by the intersection.
+            Some("app/api route"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+    }
+
+    #[test]
+    fn nonexistent_directory_scope_is_typed_unknown_without_inventing_a_family() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("does/not/exist"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected Unknown, got {report:?}");
+        };
+        assert!(unknown.candidate_family_ids.is_empty());
+        assert_eq!(
+            unknown.unknowns[0].affected_claim,
+            "query target directory scope"
+        );
+    }
+
+    #[test]
+    fn familyless_directory_scope_is_partial_context() {
+        // The directory resolves to indexed files but no family lives there: a
+        // PARTIAL_CONTEXT that resolves the scope as read-plan context only.
+        let index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("legacy/scripts/migrate.py")]);
+        let store = FakeFamilyStore::empty();
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("legacy/scripts"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::PartialContext(partial) = &report else {
+            panic!("expected PartialContext, got {report:?}");
+        };
+        assert_eq!(partial.resolved_target.kind, "directory_scope");
+        assert!(partial.resolved_target.family_id.is_none());
+        assert_eq!(
+            partial.resolved_target.candidate_paths,
+            vec!["legacy/scripts/migrate.py".to_string()]
+        );
+        assert!(partial.read_plan.items.is_empty());
+        // The additive resolution carries `none`: a resolved locus with no family
+        // and an empty candidate set.
+        let resolution = partial.resolution.as_ref().expect("none resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::None);
+        assert!(resolution.candidates.is_empty());
+        // The route surfaces no selected family for a familyless scope.
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+    }
+
+    #[test]
+    fn conflicting_hard_constraints_return_a_typed_conflict() {
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::empty();
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("family:python:one family:python:two"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected Unknown conflict, got {report:?}");
+        };
+        assert_eq!(unknown.unknowns[0].affected_claim, "query target conflict");
+        assert_eq!(
+            unknown.candidate_family_ids,
+            vec![
+                "family:python:one".to_string(),
+                "family:python:two".to_string()
+            ]
+        );
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+    }
+
+    #[test]
+    fn truncated_directory_scope_never_selects_and_flags_truncation() {
+        // 65 files exceed the bounded scope read (limit 64). Only the first mapped
+        // file resolves to a family, but truncation means unseen files might belong
+        // to other families, so the resolver must NOT select — it surfaces the seen
+        // family as a candidate and flags truncation.
+        let files: Vec<IndexedFileRecord> = (0..65)
+            .map(|index| indexed_file(&format!("pkg/sub/f{index:02}.py")))
+            .collect();
+        let index = FakeStore::new(Vec::new()).with_files(files);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "pkg/sub/f00.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("pkg/sub"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::PartialContext(partial) = &report else {
+            panic!("expected PartialContext under truncation, got {report:?}");
+        };
+        // The additive resolution is `truncated`: the seen family is a bounded
+        // candidate handle, never a selection.
+        let resolution = partial.resolution.as_ref().expect("truncated resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::Truncated);
+        let candidate_ids: Vec<&str> = resolution
+            .candidates
+            .iter()
+            .map(|candidate| candidate.family_id.as_str())
+            .collect();
+        assert_eq!(
+            candidate_ids,
+            vec!["family:python:fastapi_route:framework_fastapi_route"]
+        );
+        // Truncation is explicit in the recovery text, never silent.
+        let recovery = partial.unknowns[0].recovery.as_deref().unwrap_or_default();
+        assert!(recovery.contains("truncated"), "recovery: {recovery}");
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Scoped readiness (Phase 5): bounded, source-free, telemetry-free.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scoped_readiness_is_queryable_for_indexed_single_family_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let report = healthy_status_report();
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        assert_eq!(scoped.summary, ReadinessSummary::Ready);
+        assert_eq!(scoped.queryability, ScopeQueryability::Queryable);
+        assert_eq!(scoped.scope_prefix_count, 1);
+        assert_eq!(scoped.indexed_file_count, 1);
+        assert_eq!(scoped.index_coverage, ScopeIndexCoverage::Present);
+        assert_eq!(scoped.resolvable_family_count, 1);
+        assert_eq!(scoped.languages_in_scope, vec!["typescript".to_string()]);
+        assert_eq!(scoped.freshness, ScopeFreshness::Fresh);
+        assert!(!scoped.scope_truncated);
+        // Source-free: the scope maps files to families WITHOUT hydrating any of
+        // them, so `show_family` is never called on the scoped path.
+        assert_eq!(store.show_family_reads(), 0);
+        // The bounded scope read is used exactly once for the single prefix.
+        assert_eq!(index.scoped_file_reads(), 1);
+    }
+
+    #[test]
+    fn scoped_readiness_is_partial_context_when_scope_has_no_family() {
+        let index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("legacy/scripts/migrate.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = healthy_status_report();
+        let scoped = scoped_readiness_from_stores(
+            &report,
+            "legacy/scripts",
+            None,
+            &index,
+            &store,
+            Vec::new(),
+        );
+        assert_eq!(scoped.queryability, ScopeQueryability::PartialContext);
+        assert_eq!(scoped.indexed_file_count, 1);
+        assert_eq!(scoped.resolvable_family_count, 0);
+        assert_eq!(scoped.index_coverage, ScopeIndexCoverage::Present);
+    }
+
+    #[test]
+    fn scoped_readiness_is_not_indexed_for_unknown_directory() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = healthy_status_report();
+        let scoped = scoped_readiness_from_stores(
+            &report,
+            "does/not/exist",
+            None,
+            &index,
+            &store,
+            Vec::new(),
+        );
+        assert_eq!(scoped.queryability, ScopeQueryability::NotIndexed);
+        // The directory scope was named (prefix_count 1) but holds no indexed files.
+        assert_eq!(scoped.scope_prefix_count, 1);
+        assert_eq!(scoped.indexed_file_count, 0);
+        assert_eq!(scoped.index_coverage, ScopeIndexCoverage::Empty);
+    }
+
+    #[test]
+    fn scoped_readiness_is_not_indexed_when_target_names_no_directory_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = healthy_status_report();
+        // Neither a bare single-segment token (`pkg`) nor multi-word prose names a
+        // path-like directory scope, so the shared safety authority rejects them and
+        // no scope is read.
+        for target in ["pkg", "fastapi route handler"] {
+            let scoped =
+                scoped_readiness_from_stores(&report, target, None, &index, &store, Vec::new());
+            assert_eq!(scoped.queryability, ScopeQueryability::NotIndexed);
+            assert_eq!(scoped.scope_prefix_count, 0);
+        }
+        assert_eq!(index.scoped_file_reads(), 0);
+    }
+
+    #[test]
+    fn scoped_readiness_within_narrows_the_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let report = healthy_status_report();
+        // An empty target with a `within` directory still resolves the scope.
+        let scoped =
+            scoped_readiness_from_stores(&report, "", Some("app/api"), &index, &store, Vec::new());
+        assert_eq!(scoped.queryability, ScopeQueryability::Queryable);
+        assert_eq!(scoped.scope_prefix_count, 1);
+        assert_eq!(scoped.resolvable_family_count, 1);
+    }
+
+    #[test]
+    fn scoped_readiness_not_ready_repository_skips_scope_reads() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = status_report(
+            RepositoryStatus::NotInitialized,
+            RepositoryImplementationStatus::NotImplemented,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        assert_eq!(scoped.summary, ReadinessSummary::NotReady);
+        assert_eq!(scoped.queryability, ScopeQueryability::NotReady);
+        assert_eq!(scoped.recovery.action, RecoveryAction::Setup);
+        // A not-ready repository gates every scope: no scope read is attempted.
+        assert_eq!(index.scoped_file_reads(), 0);
+    }
+
+    #[test]
+    fn scoped_readiness_degraded_repository_caps_an_indexed_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        // A dirty repository index is degraded; an indexed scope with a family is
+        // capped at `degraded`, never `queryable`.
+        let report = dirty_index_report();
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        assert_eq!(scoped.summary, ReadinessSummary::Degraded);
+        assert_eq!(scoped.queryability, ScopeQueryability::Degraded);
+        assert_eq!(scoped.freshness, ScopeFreshness::Stale);
+        assert_eq!(scoped.recovery.action, RecoveryAction::Resync);
+    }
+
+    #[test]
+    fn scoped_readiness_value_is_source_free_and_low_cardinality() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let report = healthy_status_report();
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        let value = scoped_readiness_value(&scoped);
+        assert_eq!(value["summary"], "ready");
+        assert_eq!(value["queryability"], "queryable");
+        assert_eq!(value["scope"]["prefix_count"], 1);
+        assert_eq!(value["scope"]["indexed_file_count"], 1);
+        assert_eq!(value["scope"]["coverage"], "present");
+        assert_eq!(value["scope"]["resolvable_family_count"], 1);
+        assert_eq!(value["scope"]["freshness"], "fresh");
+        assert_eq!(value["scope"]["languages"][0], "typescript");
+        assert!(value["recovery"]["action"].is_string());
+        // No raw target, path, or symbol may appear in the serialized output.
+        let serialized = value.to_string();
+        for forbidden in [
+            "app/api",
+            "routes.py",
+            "family:python:fastapi_route:framework_fastapi_route",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "scoped readiness leaked forbidden token {forbidden}"
+            );
+        }
     }
 }
