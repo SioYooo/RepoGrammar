@@ -2765,7 +2765,7 @@ fn fuzzy_family_match_set(
         });
     }
 
-    if target.starts_with("unit:") {
+    if crate::application::query_resolution::parse_target(target, None, None).is_unit_prefixed() {
         let candidates = store
             .find_active_families_by_member(target)
             .map_err(family_store_error)?;
@@ -3917,7 +3917,7 @@ fn term_retrieval_fallback(
     // path; term retrieval only claims non-path natural-language style targets.
     // A single interior-dotted word (e.g. `fastapi.Depends`, `0.100`, `e.g.`) is
     // NOT path-shaped, so such prose still reaches retrieval.
-    if target_has_path_locator_shape(target) {
+    if crate::application::query_resolution::parse_target(target, None, None).path_locator_shaped {
         return Ok(report);
     }
     run_term_retrieval(
@@ -3952,7 +3952,7 @@ fn term_retrieval_eligible(report: &FamilyUnknownReport) -> bool {
 /// as a genuine file locator for the retrieval guard. Kept deliberately small
 /// and aligned with the indexed languages; a dotted word whose final segment is
 /// not one of these (e.g. `fastapi.Depends`, `0.100`, `e.g`) is not path-shaped.
-const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
+pub(crate) const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
     "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "java", "cs", "go", "rb", "php",
     "swift", "kt", "kts", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx",
 ];
@@ -3961,7 +3961,7 @@ const PATH_LOCATOR_EXTENSIONS: &[&str] = &[
 /// guard: some whitespace token contains `/`, or (after stripping a trailing
 /// `:line`/`:start-end` locator) ends in a known source-file extension. Prose
 /// containing a single interior-dotted word is not path-shaped.
-fn target_has_path_locator_shape(target: &str) -> bool {
+pub(crate) fn target_has_path_locator_shape(target: &str) -> bool {
     target.split_whitespace().any(|token| {
         if token.contains('/') {
             return true;
@@ -4352,9 +4352,9 @@ struct LocalContextReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TargetLocator {
-    line: Option<usize>,
-    byte_range: Option<(usize, usize)>,
+pub(crate) struct TargetLocator {
+    pub(crate) line: Option<usize>,
+    pub(crate) byte_range: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4463,10 +4463,9 @@ fn resolve_local_context(
             ))
     });
 
-    let target_terms = target_identifier_tokens(target)
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let target_terms = crate::application::query_resolution::parse_target(target, None, None)
+        .ranking
+        .identifier_tokens;
     let unit_hint_terms = target_terms
         .iter()
         .filter(|term| !file.path.contains(term.as_str()))
@@ -4699,7 +4698,7 @@ fn target_path_tokens(target: &str) -> Vec<&str> {
         .collect()
 }
 
-fn split_query_path_locator(token: &str) -> (&str, Option<TargetLocator>) {
+pub(crate) fn split_query_path_locator(token: &str) -> (&str, Option<TargetLocator>) {
     let Some((path, suffix)) = token.rsplit_once(':') else {
         return (token, None);
     };
@@ -4771,7 +4770,7 @@ fn is_safe_query_path_text(path: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-fn target_identifier_tokens(target: &str) -> Vec<&str> {
+pub(crate) fn target_identifier_tokens(target: &str) -> Vec<&str> {
     target
         .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .filter(|token| !token.is_empty())
