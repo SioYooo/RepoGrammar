@@ -58,6 +58,7 @@
 - RepoGrammar v0.1 official language scope is Python-first, focused on FastAPI, pytest, SQLAlchemy, and Pydantic. Existing TypeScript/JavaScript substrate is transitional and must not be described as the official v0.1 target unless a later ADR changes scope.
 - Keep the CLI pattern-family-first. Do not add `callers`, `callees`, `impact`, `affected`, `node`, or `explore` as top-level v0.1 commands.
 - Do not impose RepoGrammar's mirrored `AGENTS.md`/`CLAUDE.md` policy on repositories that consume RepoGrammar.
+- Public installation, product uninstall, and release gates support Linux and macOS only. Treat Windows installer and product-uninstall paths as deferred source-only contributor code: do not implement, repair, expand, or make them release-blocking unless the maintainer explicitly reauthorizes Windows support.
 - Do not add a production dependency without demonstrated need and an accompanying architecture or decision update.
 
 ## Completion

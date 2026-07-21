@@ -98,6 +98,7 @@ jobs:
   windows-source-installer-contract:
     name: Windows source-only installer contract
     runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch, pinned 2026-07-20

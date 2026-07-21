@@ -24,11 +24,13 @@ allowed.
   directory, inspect its files/metadata, install it into an isolated prefix
   offline, execute its wrapper against local fake release assets, and remove
   the tarball with the temporary directory.
-- Native CI must run the PowerShell source-only installer contract on Windows.
-  That job is platform evidence for the contributor path only and must not
-  upload or imply a Windows release artifact. The wrapper must explicitly
-  return success after asserting an intentionally failing child invocation so
-  the expected child status cannot become the native test process status.
+- Native CI may run the PowerShell source-only installer contract on Windows as
+  a non-blocking diagnostic. Linux and macOS are the only supported install,
+  product-uninstall, and release-gate platforms; Windows results must not block
+  those gates, upload an artifact, or imply Windows product support. The
+  wrapper must explicitly return success after asserting an intentionally
+  failing child invocation so the expected child status cannot become the
+  native test process status.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
 - Process-boundary tests that rely on inherited child pipes must make child
