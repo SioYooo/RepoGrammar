@@ -462,7 +462,25 @@ authoritative when a mutable database is present.
 Doctor JSON must include the same `readiness` and `product_readiness` objects as
 status JSON. Doctor may recommend commands such as `repogrammar init`,
 `repogrammar resync`, `repogrammar doctor`, or `repogrammar autosync start`, but
-it must not perform those actions implicitly. Doctor and status human output must
+it must not perform those actions implicitly.
+
+`repogrammar doctor` also accepts an optional `--target <scope>` and/or
+`--within <scope>` (a directory/module scope). With either flag, doctor returns a
+bounded, source-free SCOPED readiness report over just that scope instead of the
+whole-checkout doctor view; with neither flag the whole-checkout output is
+byte-identical to before, and the two forms are mutually exclusive. The scoped
+report is the same shape the MCP `inspect_readiness` scoped operation returns
+(see `docs/specifications/mcp-api.md`): a `summary` token, a `queryability`
+verdict, a `scope` object (`prefix_count`, `indexed_file_count`, `coverage`,
+`truncated`, `languages`, `resolvable_family_count`, `freshness`), `providers`,
+and one `recovery` action. JSON output wraps it under the same `command`/
+`schema_version` doctor envelope; human output renders a compact scoped block. It
+is SOURCE-FREE (it hydrates no family and reads no source content) and records no
+family-query telemetry, exactly like the whole-checkout readiness. Every field is
+a low-cardinality enum, count, or language token — no raw target, path, or symbol
+appears in the output. The scope must be path-like: a bare single-segment token
+(e.g. `pkg`) that carries no `/` or `.` is rejected by the shared path-safety
+authority and reads to an empty scope. Doctor and status human output must
 lead with the actionable capability summary and the one canonical next action from
 the recovery classifier (a `capability:` line and a `next_action:` line). Family
 evidence counts (`stale_family_evidence`, `unverifiable_family_evidence`) are

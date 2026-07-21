@@ -7366,14 +7366,7 @@ pub fn assemble_product_readiness(
     // combined recovery to be `None` (repository clean and fresh, autosync not
     // recommended, and family evidence fresh); a recommended-but-stopped autosync
     // (`AutosyncRecommended`) is a live maintenance caveat and is `Degraded`.
-    let summary = match recovery.reason {
-        RecoveryReason::RepositoryNotInitialized
-        | RecoveryReason::StorageUnhealthy
-        | RecoveryReason::BlockingLock
-        | RecoveryReason::ActiveIndexMissing => ReadinessSummary::NotReady,
-        RecoveryReason::Ready => ReadinessSummary::Ready,
-        _ => ReadinessSummary::Degraded,
-    };
+    let summary = readiness_summary_from_recovery_reason(recovery.reason);
 
     ProductReadinessReport {
         summary,
@@ -7695,6 +7688,400 @@ fn readiness_recovery_reason_token(reason: RecoveryReason) -> &'static str {
         RecoveryReason::AgentSelfTestFailed => "agent_self_test_failed",
         RecoveryReason::Ready => "ready",
     }
+}
+
+/// The one authoritative projection of a combined recovery reason onto the
+/// low-cardinality product-readiness summary token. Shared by the whole-checkout
+/// [`assemble_product_readiness`] and the SCOPED [`scoped_readiness_from_stores`]
+/// so both surfaces derive the same summary from the same recovery authority; a
+/// scope can never report a more optimistic summary than the repository.
+fn readiness_summary_from_recovery_reason(reason: RecoveryReason) -> ReadinessSummary {
+    match reason {
+        RecoveryReason::RepositoryNotInitialized
+        | RecoveryReason::StorageUnhealthy
+        | RecoveryReason::BlockingLock
+        | RecoveryReason::ActiveIndexMissing => ReadinessSummary::NotReady,
+        RecoveryReason::Ready => ReadinessSummary::Ready,
+        _ => ReadinessSummary::Degraded,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scoped readiness (Phase 5).
+//
+// `inspect_readiness` with an optional `target`/`within` returns a bounded,
+// SOURCE-FREE queryability report for one directory / module scope. It reuses the
+// Phase 1/2 target-resolution vocabulary (`parse_target` +
+// `normalize_directory_prefix`) and the bounded scope-read ports
+// (`list_active_files_in_directory` + `find_active_families_by_evidence_path`)
+// exactly as the directory-scope family resolver does — but it only COUNTS: it
+// never hydrates, selects, or projects a family, never reads source content, and
+// records NO family-query telemetry. Every field is a low-cardinality
+// enum/count/bucket; no raw target, path, or symbol is ever emitted. The single
+// recovery action, the summary, and the freshness projection are all derived from
+// the SAME authoritative repository recovery the whole-checkout readiness uses.
+// ---------------------------------------------------------------------------
+
+/// Scoped resolvability verdict: how queryable RepoGrammar is over one scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeQueryability {
+    /// The scope holds indexed files and at least one resolvable family, on a
+    /// repository whose readiness summary is `ready`.
+    Queryable,
+    /// The scope holds indexed files but no resolvable family (locus resolves,
+    /// no family evidence occupies it).
+    PartialContext,
+    /// The scope holds indexed files but the repository carries a live caveat
+    /// (stale index or recommended-but-stopped autosync); queries may fall back.
+    Degraded,
+    /// The scope resolved to no indexed files. With `scope_prefix_count == 0` the
+    /// target named no safe directory scope; with `>= 1` the directory is not
+    /// indexed.
+    NotIndexed,
+    /// The repository cannot serve family queries at all (not initialized,
+    /// storage unhealthy, blocking lock, or no active index).
+    NotReady,
+    /// The scope could not be read: a store error or a mid-read generation change.
+    CannotVerify,
+}
+
+impl ScopeQueryability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queryable => "queryable",
+            Self::PartialContext => "partial_context",
+            Self::Degraded => "degraded",
+            Self::NotIndexed => "not_indexed",
+            Self::NotReady => "not_ready",
+            Self::CannotVerify => "cannot_verify",
+        }
+    }
+}
+
+/// Bounded scoped-indexing coverage bucket. `Present` and `Truncated` both mean
+/// the scope holds indexed files; `Truncated` additionally means the bounded read
+/// hit its cap, so the file/family counts are lower bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeIndexCoverage {
+    Empty,
+    Present,
+    Truncated,
+}
+
+impl ScopeIndexCoverage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Present => "present",
+            Self::Truncated => "truncated",
+        }
+    }
+}
+
+/// Scoped freshness projection, derived source-free from the shared repository
+/// recovery reason (the same authority the whole-checkout readiness uses). It is
+/// NOT a per-file re-hash: scoped readiness never reads source content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeFreshness {
+    Fresh,
+    Stale,
+    CannotVerify,
+    NotApplicable,
+}
+
+impl ScopeFreshness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::CannotVerify => "cannot_verify",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
+/// The bounded, source-free scoped readiness report. Every field is a
+/// low-cardinality enum, count, or language token; it carries no raw target,
+/// path, or symbol, and no source text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedReadinessReport {
+    /// Repository readiness summary, projected from the same recovery authority as
+    /// the whole-checkout readiness. A scope is never more optimistic than this.
+    pub summary: ReadinessSummary,
+    /// The scoped resolvability verdict.
+    pub queryability: ScopeQueryability,
+    /// How many safe directory prefixes were read (a count only — never the paths).
+    pub scope_prefix_count: usize,
+    /// Distinct indexed files in scope (bounded; a lower bound when truncated).
+    pub indexed_file_count: usize,
+    /// Scoped indexing coverage bucket.
+    pub index_coverage: ScopeIndexCoverage,
+    /// Distinct languages present in scope (low-cardinality vocabulary tokens).
+    pub languages_in_scope: Vec<String>,
+    /// Distinct families whose evidence occupies the scope (bounded; a lower bound
+    /// when truncated). Counted WITHOUT hydrating any family.
+    pub resolvable_family_count: usize,
+    /// True when a bounded scope read hit its cap, so counts are lower bounds.
+    pub scope_truncated: bool,
+    /// Scoped freshness projection.
+    pub freshness: ScopeFreshness,
+    /// Provider slots (reused verbatim from the whole-checkout readiness inputs).
+    pub providers: Vec<ProviderSlotStatus>,
+    /// The one executable recovery action from the shared recovery classifier.
+    pub recovery: RecoveryRecommendation,
+}
+
+/// Scoped freshness derived source-free from the combined repository recovery
+/// reason. `repository_recovery_for_report` only produces repository-level
+/// reasons, so this projection is total over the reasons that can actually occur.
+fn scope_freshness_from_recovery(reason: RecoveryReason) -> ScopeFreshness {
+    match reason {
+        RecoveryReason::Ready => ScopeFreshness::Fresh,
+        RecoveryReason::EvidenceStale | RecoveryReason::AutosyncRecommended => {
+            ScopeFreshness::Stale
+        }
+        RecoveryReason::EvidenceCannotBeVerified | RecoveryReason::FamilyEvidenceUnavailable => {
+            ScopeFreshness::CannotVerify
+        }
+        _ => ScopeFreshness::NotApplicable,
+    }
+}
+
+/// The safe directory-scope prefixes named by a target and/or `within`, in
+/// first-seen order and deduplicated. Prefixes come from the target's directory
+/// tokens, the parent directory of any file-path locator, and the optional
+/// `within` scope, each normalized + safety-checked by the shared
+/// [`normalize_directory_prefix`] authority. An unsafe prefix is dropped and never
+/// read.
+fn scoped_readiness_prefixes(constraints: &TargetConstraints, within: Option<&str>) -> Vec<String> {
+    let mut raw: Vec<String> = Vec::new();
+    raw.extend(constraints.scope.directory_prefixes.iter().cloned());
+    for locator in &constraints.hard.path_locators {
+        if let Some((parent, _)) = locator.path.rsplit_once('/') {
+            raw.push(parent.to_string());
+        }
+    }
+    if let Some(within) = within {
+        raw.push(within.to_string());
+    }
+    // The scope must be path-like: `normalize_directory_prefix` (through the shared
+    // `is_safe_query_path_text` authority) rejects a bare single-segment token that
+    // carries no `/` or `.`, because it is indistinguishable from an identifier.
+    // A bare top-level directory name is therefore out of scope and reads to an
+    // empty scope, exactly as the Phase 2 directory resolver treats it.
+    let mut normalized: Vec<String> = Vec::new();
+    for prefix in raw {
+        if let Some(safe) = normalize_directory_prefix(&prefix) {
+            if !normalized.contains(&safe) {
+                normalized.push(safe);
+            }
+        }
+    }
+    normalized
+}
+
+/// The counted, source-free coverage of one scope, or `CannotVerify` when a store
+/// read failed or the generation changed mid-read.
+enum ScopedCoverage {
+    CannotVerify,
+    Resolved {
+        indexed_file_count: usize,
+        languages: Vec<String>,
+        resolvable_family_count: usize,
+        truncated: bool,
+    },
+}
+
+/// Map the safe scope prefixes to bounded indexed-file, language, and distinct
+/// in-scope family COUNTS. Mirrors the file→family mapping loop of
+/// [`resolve_directory_scope`] and reuses the same bounded ports and generation
+/// discipline, but it only counts: it never hydrates, selects, or projects a
+/// family, never reads source content, and records no telemetry.
+fn gather_scoped_coverage(
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    prefixes: &[String],
+    base_generation: &str,
+) -> ScopedCoverage {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    let mut languages: BTreeSet<String> = BTreeSet::new();
+    let mut families: BTreeSet<String> = BTreeSet::new();
+    let mut truncated = false;
+
+    for prefix in prefixes {
+        let scoped =
+            match index_store.list_active_files_in_directory(prefix, DIRECTORY_SCOPE_FILE_LIMIT) {
+                Ok(scoped) => scoped,
+                Err(_) => return ScopedCoverage::CannotVerify,
+            };
+        if scoped.generation_id != base_generation {
+            return ScopedCoverage::CannotVerify;
+        }
+        truncated |= scoped.truncated;
+        for file in &scoped.files {
+            files.insert(file.path.clone());
+            if !file.language.is_empty() {
+                languages.insert(file.language.clone());
+            }
+            let candidates = match family_store
+                .find_active_families_by_evidence_path(&file.path, DIRECTORY_SCOPE_FAMILY_LIMIT)
+            {
+                Ok(candidates) => candidates,
+                Err(_) => return ScopedCoverage::CannotVerify,
+            };
+            if candidates.generation_id != base_generation {
+                return ScopedCoverage::CannotVerify;
+            }
+            truncated |= candidates.truncated;
+            for candidate in candidates.candidates {
+                families.insert(candidate.family_id);
+            }
+        }
+    }
+
+    ScopedCoverage::Resolved {
+        indexed_file_count: files.len(),
+        languages: languages.into_iter().collect(),
+        resolvable_family_count: families.len(),
+        truncated,
+    }
+}
+
+/// Assemble the bounded, source-free scoped readiness report for one directory /
+/// module scope named by `target` and/or `within`.
+///
+/// SOURCE-FREE: the signature takes no [`SourceStore`]; it never hydrates a
+/// family and never reads source content. TELEMETRY-FREE: it records no
+/// family-query outcome. The summary, freshness, and single recovery action are
+/// derived from the SAME [`repository_recovery_for_report`] authority the
+/// whole-checkout readiness uses, so a scope is never more optimistic than the
+/// repository. Total: a store error or a mid-read generation change is reported as
+/// `CannotVerify`, never a panic or an invented count.
+pub fn scoped_readiness_from_stores(
+    report: &RepositoryStatusReport,
+    target: &str,
+    within: Option<&str>,
+    index_store: &impl IndexStore,
+    family_store: &impl FamilyStore,
+    providers: Vec<ProviderSlotStatus>,
+) -> ScopedReadinessReport {
+    let recovery = repository_recovery_for_report(report);
+    let summary = readiness_summary_from_recovery_reason(recovery.reason);
+    let freshness = scope_freshness_from_recovery(recovery.reason);
+
+    let base = |queryability: ScopeQueryability| ScopedReadinessReport {
+        summary,
+        queryability,
+        scope_prefix_count: 0,
+        indexed_file_count: 0,
+        index_coverage: ScopeIndexCoverage::Empty,
+        languages_in_scope: Vec::new(),
+        resolvable_family_count: 0,
+        scope_truncated: false,
+        freshness,
+        providers: providers.clone(),
+        recovery,
+    };
+
+    // A not-ready repository gates every scope: never read a scope that cannot be
+    // served, and never report a scope more optimistic than the repository.
+    if summary == ReadinessSummary::NotReady {
+        return base(ScopeQueryability::NotReady);
+    }
+
+    // A servable summary without a concrete active generation is unexpected; treat
+    // it as unverifiable rather than invent a scope read against no generation.
+    let active_generation = match &report.status {
+        RepositoryStatus::Initialized { active_generation }
+            if active_generation != "none" && active_generation != "not implemented" =>
+        {
+            active_generation.clone()
+        }
+        _ => return base(ScopeQueryability::CannotVerify),
+    };
+
+    let constraints = parse_target(target, within, None);
+    let prefixes = scoped_readiness_prefixes(&constraints, within);
+
+    match gather_scoped_coverage(index_store, family_store, &prefixes, &active_generation) {
+        ScopedCoverage::CannotVerify => ScopedReadinessReport {
+            scope_prefix_count: prefixes.len(),
+            ..base(ScopeQueryability::CannotVerify)
+        },
+        ScopedCoverage::Resolved {
+            indexed_file_count,
+            languages,
+            resolvable_family_count,
+            truncated,
+        } => {
+            let index_coverage = if indexed_file_count == 0 {
+                ScopeIndexCoverage::Empty
+            } else if truncated {
+                ScopeIndexCoverage::Truncated
+            } else {
+                ScopeIndexCoverage::Present
+            };
+            // The verdict layers the scope coverage on top of the shared summary:
+            // a not-indexed scope is never `queryable`; a degraded repository caps
+            // an indexed scope at `degraded`; only a ready repository with an
+            // indexed scope that carries at least one family is `queryable`.
+            let queryability = if indexed_file_count == 0 {
+                ScopeQueryability::NotIndexed
+            } else if summary == ReadinessSummary::Degraded {
+                ScopeQueryability::Degraded
+            } else if resolvable_family_count > 0 {
+                ScopeQueryability::Queryable
+            } else {
+                ScopeQueryability::PartialContext
+            };
+            ScopedReadinessReport {
+                summary,
+                queryability,
+                scope_prefix_count: prefixes.len(),
+                indexed_file_count,
+                index_coverage,
+                languages_in_scope: languages,
+                resolvable_family_count,
+                scope_truncated: truncated,
+                freshness,
+                providers,
+                recovery,
+            }
+        }
+    }
+}
+
+/// Source-free JSON view of the scoped readiness report. Shared by CLI `doctor`
+/// and the MCP `inspect_readiness` scoped operation so the scoped shape has a
+/// single serializer authority. Carries only typed tokens, counts, language
+/// tokens, and the single recovery action — no raw target, path, or symbol.
+pub fn scoped_readiness_value(report: &ScopedReadinessReport) -> Value {
+    json!({
+        "summary": report.summary.as_str(),
+        "queryability": report.queryability.as_str(),
+        "scope": {
+            "prefix_count": report.scope_prefix_count,
+            "indexed_file_count": report.indexed_file_count,
+            "coverage": report.index_coverage.as_str(),
+            "truncated": report.scope_truncated,
+            "languages": report.languages_in_scope,
+            "resolvable_family_count": report.resolvable_family_count,
+            "freshness": report.freshness.as_str(),
+        },
+        "providers": report
+            .providers
+            .iter()
+            .map(|status| {
+                json!({
+                    "id": status.slot.id(),
+                    "language": status.slot.language(),
+                    "integrated": status.slot.is_integrated(),
+                    "availability": status.availability.as_protocol_str(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "recovery": product_readiness_recovery_value(report.recovery),
+    })
 }
 
 #[cfg(test)]
@@ -13872,5 +14259,187 @@ mod tests {
         assert!(recovery.contains("truncated"), "recovery: {recovery}");
         let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
         assert!(route.selected_family_id.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Scoped readiness (Phase 5): bounded, source-free, telemetry-free.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scoped_readiness_is_queryable_for_indexed_single_family_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let report = healthy_status_report();
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        assert_eq!(scoped.summary, ReadinessSummary::Ready);
+        assert_eq!(scoped.queryability, ScopeQueryability::Queryable);
+        assert_eq!(scoped.scope_prefix_count, 1);
+        assert_eq!(scoped.indexed_file_count, 1);
+        assert_eq!(scoped.index_coverage, ScopeIndexCoverage::Present);
+        assert_eq!(scoped.resolvable_family_count, 1);
+        assert_eq!(scoped.languages_in_scope, vec!["typescript".to_string()]);
+        assert_eq!(scoped.freshness, ScopeFreshness::Fresh);
+        assert!(!scoped.scope_truncated);
+        // Source-free: the scope maps files to families WITHOUT hydrating any of
+        // them, so `show_family` is never called on the scoped path.
+        assert_eq!(store.show_family_reads(), 0);
+        // The bounded scope read is used exactly once for the single prefix.
+        assert_eq!(index.scoped_file_reads(), 1);
+    }
+
+    #[test]
+    fn scoped_readiness_is_partial_context_when_scope_has_no_family() {
+        let index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("legacy/scripts/migrate.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = healthy_status_report();
+        let scoped = scoped_readiness_from_stores(
+            &report,
+            "legacy/scripts",
+            None,
+            &index,
+            &store,
+            Vec::new(),
+        );
+        assert_eq!(scoped.queryability, ScopeQueryability::PartialContext);
+        assert_eq!(scoped.indexed_file_count, 1);
+        assert_eq!(scoped.resolvable_family_count, 0);
+        assert_eq!(scoped.index_coverage, ScopeIndexCoverage::Present);
+    }
+
+    #[test]
+    fn scoped_readiness_is_not_indexed_for_unknown_directory() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = healthy_status_report();
+        let scoped = scoped_readiness_from_stores(
+            &report,
+            "does/not/exist",
+            None,
+            &index,
+            &store,
+            Vec::new(),
+        );
+        assert_eq!(scoped.queryability, ScopeQueryability::NotIndexed);
+        // The directory scope was named (prefix_count 1) but holds no indexed files.
+        assert_eq!(scoped.scope_prefix_count, 1);
+        assert_eq!(scoped.indexed_file_count, 0);
+        assert_eq!(scoped.index_coverage, ScopeIndexCoverage::Empty);
+    }
+
+    #[test]
+    fn scoped_readiness_is_not_indexed_when_target_names_no_directory_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = healthy_status_report();
+        // Neither a bare single-segment token (`pkg`) nor multi-word prose names a
+        // path-like directory scope, so the shared safety authority rejects them and
+        // no scope is read.
+        for target in ["pkg", "fastapi route handler"] {
+            let scoped =
+                scoped_readiness_from_stores(&report, target, None, &index, &store, Vec::new());
+            assert_eq!(scoped.queryability, ScopeQueryability::NotIndexed);
+            assert_eq!(scoped.scope_prefix_count, 0);
+        }
+        assert_eq!(index.scoped_file_reads(), 0);
+    }
+
+    #[test]
+    fn scoped_readiness_within_narrows_the_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let report = healthy_status_report();
+        // An empty target with a `within` directory still resolves the scope.
+        let scoped =
+            scoped_readiness_from_stores(&report, "", Some("app/api"), &index, &store, Vec::new());
+        assert_eq!(scoped.queryability, ScopeQueryability::Queryable);
+        assert_eq!(scoped.scope_prefix_count, 1);
+        assert_eq!(scoped.resolvable_family_count, 1);
+    }
+
+    #[test]
+    fn scoped_readiness_not_ready_repository_skips_scope_reads() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::empty();
+        let report = status_report(
+            RepositoryStatus::NotInitialized,
+            RepositoryImplementationStatus::NotImplemented,
+            RepositoryImplementationStatus::NotImplemented,
+            Vec::new(),
+        );
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        assert_eq!(scoped.summary, ReadinessSummary::NotReady);
+        assert_eq!(scoped.queryability, ScopeQueryability::NotReady);
+        assert_eq!(scoped.recovery.action, RecoveryAction::Setup);
+        // A not-ready repository gates every scope: no scope read is attempted.
+        assert_eq!(index.scoped_file_reads(), 0);
+    }
+
+    #[test]
+    fn scoped_readiness_degraded_repository_caps_an_indexed_scope() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        // A dirty repository index is degraded; an indexed scope with a family is
+        // capped at `degraded`, never `queryable`.
+        let report = dirty_index_report();
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        assert_eq!(scoped.summary, ReadinessSummary::Degraded);
+        assert_eq!(scoped.queryability, ScopeQueryability::Degraded);
+        assert_eq!(scoped.freshness, ScopeFreshness::Stale);
+        assert_eq!(scoped.recovery.action, RecoveryAction::Resync);
+    }
+
+    #[test]
+    fn scoped_readiness_value_is_source_free_and_low_cardinality() {
+        let index = FakeStore::new(Vec::new()).with_files(vec![indexed_file("app/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let report = healthy_status_report();
+        let scoped =
+            scoped_readiness_from_stores(&report, "app/api", None, &index, &store, Vec::new());
+        let value = scoped_readiness_value(&scoped);
+        assert_eq!(value["summary"], "ready");
+        assert_eq!(value["queryability"], "queryable");
+        assert_eq!(value["scope"]["prefix_count"], 1);
+        assert_eq!(value["scope"]["indexed_file_count"], 1);
+        assert_eq!(value["scope"]["coverage"], "present");
+        assert_eq!(value["scope"]["resolvable_family_count"], 1);
+        assert_eq!(value["scope"]["freshness"], "fresh");
+        assert_eq!(value["scope"]["languages"][0], "typescript");
+        assert!(value["recovery"]["action"].is_string());
+        // No raw target, path, or symbol may appear in the serialized output.
+        let serialized = value.to_string();
+        for forbidden in [
+            "app/api",
+            "routes.py",
+            "family:python:fastapi_route:framework_fastapi_route",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "scoped readiness leaked forbidden token {forbidden}"
+            );
+        }
     }
 }

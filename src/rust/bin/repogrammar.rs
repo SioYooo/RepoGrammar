@@ -36,11 +36,11 @@ use repogrammar::application::providers::optional_provider_report;
 use repogrammar::application::query::{
     enrich_read_plan_line_ranges, list_code_units, list_families_with_freshness,
     list_indexed_files, lookup_family_with_freshness_and_local_context,
-    product_readiness_from_stores, render_source_spans, repo_shape_diagnostics, unknown_inventory,
-    FamilyEvidenceFreshnessRequest, FamilyListReport, FamilyLookupMode, FamilyLookupReport,
-    IndexedCodeUnitsReport, IndexedFilesReport, ProductReadinessReport, ReadPlan,
-    RepoShapeDiagnosticsReport, SourceSpanRenderReport, SourceSpanRenderRequest,
-    UnknownInventoryReport,
+    product_readiness_from_stores, render_source_spans, repo_shape_diagnostics,
+    scoped_readiness_from_stores, unknown_inventory, FamilyEvidenceFreshnessRequest,
+    FamilyListReport, FamilyLookupMode, FamilyLookupReport, IndexedCodeUnitsReport,
+    IndexedFilesReport, ProductReadinessReport, ReadPlan, RepoShapeDiagnosticsReport,
+    ScopedReadinessReport, SourceSpanRenderReport, SourceSpanRenderRequest, UnknownInventoryReport,
 };
 use repogrammar::application::repository::{
     repository_doctor_with_storage, repository_state_location, repository_status_with_storage,
@@ -1697,6 +1697,28 @@ impl CliRuntime for ProductCliRuntime {
         ))
     }
 
+    fn scoped_readiness(
+        &self,
+        request: RepositoryStatusRequest,
+        target: &str,
+        within: Option<&str>,
+    ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+        let store = self.store_for_status_request(&request)?;
+        let report = repository_status_with_storage(request.clone(), &store)?;
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        let providers = optional_provider_report(
+            |key| env_lookup(key),
+            |binary| {
+                repogrammar::application::providers::binary_available_on_path(binary, &env_lookup)
+            },
+        );
+        // Source-free and telemetry-free: no `SourceStore` is passed, and the
+        // scoped assembler records no family-query outcome.
+        Ok(scoped_readiness_from_stores(
+            &report, target, within, &store, &store, providers,
+        ))
+    }
+
     fn install_agent_integration(
         &self,
         command: &str,
@@ -1826,6 +1848,15 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
         request: RepositoryStatusRequest,
     ) -> Result<ProductReadinessReport, RepoGrammarError> {
         <Self as CliRuntime>::product_readiness(self, request)
+    }
+
+    fn scoped_readiness(
+        &self,
+        request: RepositoryStatusRequest,
+        target: &str,
+        within: Option<&str>,
+    ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+        <Self as CliRuntime>::scoped_readiness(self, request, target, within)
     }
 
     fn render_source_spans(

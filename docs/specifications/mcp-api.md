@@ -26,9 +26,16 @@ operation semantics. The CLI remains multi-command for human discoverability.
 The current input schema is intentionally small:
 
 - required `operation`: one of the five operation strings above.
-  `inspect_readiness` takes no `target` and ignores the evidence-shaping fields.
+  `inspect_readiness` accepts an optional `target` and/or `within` to request a
+  bounded, source-free SCOPED readiness report (see below); with neither it
+  returns the whole-checkout readiness report and ignores the evidence-shaping
+  fields.
 - optional `target`: non-empty string, at most 8192 bytes, with no control
   characters.
+- optional `within`: non-empty string, at most 8192 bytes, with no control
+  characters. A directory/module scope. Consumed only by `inspect_readiness` to
+  request a scoped queryability report; the family-query operations ignore it
+  (they already scope through `target`).
 - optional `token_budget`: positive integer up to 200000 used to cap selected
   evidence metadata. Supplying it implies `mode: evidence` unless an explicit
   mode is provided.
@@ -152,8 +159,50 @@ commands, so like them it is for readiness triage, not routine per-query loops.
 When readiness cannot be assembled at all, the response is the standard
 `FALLBACK_TO_CODE_SEARCH` object.
 
+#### Scoped readiness (optional `target`/`within`)
+
+When `inspect_readiness` is called with a `target` and/or `within`, the response
+replaces the whole-checkout `readiness` object with a bounded, source-free
+`scoped_readiness` object describing how queryable RepoGrammar is over just that
+directory/module scope. The no-target response is byte-identical to before; the
+two are mutually exclusive and carried under distinct keys (`readiness` vs
+`scoped_readiness`) so consumers can tell them apart. The scoped report carries:
+
+- `summary`: the same `ready`/`degraded`/`not_ready` token as the whole-checkout
+  readiness, projected from the same shared recovery authority, so a scope is
+  never more optimistic than the repository.
+- `queryability`: the scope resolvability verdict —
+  `queryable` (indexed scope with at least one resolvable family on a ready
+  repository), `partial_context` (indexed scope, no resolvable family),
+  `degraded` (indexed scope on a degraded repository), `not_indexed` (the scope
+  resolved to no indexed files; with `scope.prefix_count == 0` the target named
+  no safe directory scope), `not_ready` (the repository cannot serve queries), or
+  `cannot_verify` (a store read failed or the generation changed mid-read).
+- `scope`: `prefix_count` (how many safe directory prefixes were read — a count
+  only, never the paths), `indexed_file_count`, `coverage`
+  (`empty`/`present`/`truncated`), `truncated` (a bounded read hit its cap, so the
+  counts are lower bounds), `languages` (low-cardinality language tokens present
+  in scope), `resolvable_family_count` (distinct families whose evidence occupies
+  the scope, counted WITHOUT hydrating any family), and `freshness`
+  (`fresh`/`stale`/`cannot_verify`/`not_applicable`, projected source-free from the
+  shared repository recovery — not a per-file re-hash).
+- `providers`: the same per-slot integration/availability list as the
+  whole-checkout readiness.
+- `recovery`: the single recovery object from the shared recovery classifier.
+
+Scoped readiness is SOURCE-FREE: it hydrates no family and reads no source
+content (no `SourceStore` access). It records NO family-query telemetry, exactly
+like the no-target inspection. Every field is a low-cardinality enum, count, or
+language token; no raw target, path, or symbol appears in the output. The scope
+must be path-like: a bare single-segment token (e.g. `pkg`) that carries no `/`
+or `.` is rejected by the shared path-safety authority and reads to an empty
+scope (`not_indexed` with `prefix_count 0`), exactly as the directory-scope query
+resolver treats it. When scoped readiness cannot be assembled, the response is the
+standard `FALLBACK_TO_CODE_SEARCH` object.
+
 CLI equivalent: the source-free readiness fields of `repogrammar status --json`
-and `repogrammar doctor --json` (`product_readiness`).
+and `repogrammar doctor --json` (`product_readiness`), and the scoped report via
+`repogrammar doctor --target <scope>` / `--within <scope>`.
 
 ## Missing and stale indexes
 

@@ -20,21 +20,22 @@ use crate::application::query::{
     estimate_partial_context_potential_token_savings, family_query_abstention_reason,
     family_query_route_report, family_query_unknown_metric, found_outcome_token_savings,
     product_readiness_value, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, select_family_evidence, validate_query_target,
-    validate_query_token_budget, AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport,
-    FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode,
-    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
-    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
-    OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport,
-    ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
-    RepoShapeLanguageDiagnostics, ResolvedQueryTarget, SelectedFamilyEvidence,
-    SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket,
-    UnknownInventoryReport, Verbosity, VerbosityTier, PRODUCT_SCHEMA_VERSION,
+    repository_status_unavailable_fallback, scoped_readiness_value, select_family_evidence,
+    validate_query_target, validate_query_token_budget, AlignmentCertificateReport,
+    DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode, FamilyFreshnessCounts,
+    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport,
+    IndexedCodeUnitsReport, IndexedFilesReport, OutcomeTokenSavings, ProductReadinessReport,
+    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
+    ResolvedQueryTarget, ScopedReadinessReport, SelectedFamilyEvidence, SourceSpanRenderReport,
+    TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
+    Verbosity, VerbosityTier, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
-    ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
-    UnknownInventoryLanguageSummary,
+    scoped_readiness_from_stores, ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission,
+    SourceSpanPolicy, UnknownInventoryLanguageSummary,
 };
 use crate::application::query_resolution::Resolution;
 use crate::application::recovery::{
@@ -272,6 +273,15 @@ pub trait CliRuntime {
         _request: RepositoryStatusRequest,
     ) -> Result<ProductReadinessReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("readiness"))
+    }
+
+    fn scoped_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+        _target: &str,
+        _within: Option<&str>,
+    ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("scoped readiness"))
     }
 
     fn install_agent_integration(
@@ -811,8 +821,11 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
         ])),
-        "status" => Some(status_or_doctor_usage("status", "Report repository initialization, manifest, active generation, schema, and storage health.")),
-        "doctor" => Some(status_or_doctor_usage("doctor", "Inspect lifecycle hygiene, storage health, lock state, and recovery guidance.")),
+        "status" => Some(status_or_doctor_usage("status", "Report repository initialization, manifest, active generation, schema, and storage health.", &[])),
+        "doctor" => Some(status_or_doctor_usage("doctor", "Inspect lifecycle hygiene, storage health, lock state, and recovery guidance.", &[
+            "  --target <scope>                   Directory/module scope for a bounded, source-free scoped readiness report.",
+            "  --within <scope>                   Directory/module scope narrowing (alone or with --target).",
+        ])),
         "unlock" => Some(help_text(&[
             "Usage: repogrammar unlock [--project <path>|--path <path>] [--force --yes] [--json] [--quiet|--verbose]",
             "",
@@ -1012,9 +1025,9 @@ fn index_or_sync_usage(command: &str, summary: &str) -> String {
     ])
 }
 
-fn status_or_doctor_usage(command: &str, summary: &str) -> String {
-    help_text(&[
-        &format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--quiet|--verbose]"),
+fn status_or_doctor_usage(command: &str, summary: &str, extra_options: &[&str]) -> String {
+    let mut lines: Vec<&str> = vec![
+        // Usage line is command-specific; filled below.
         "",
         summary,
         "",
@@ -1022,7 +1035,12 @@ fn status_or_doctor_usage(command: &str, summary: &str) -> String {
         "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
         "  --json                             Emit machine-readable output.",
         "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
-    ])
+    ];
+    lines.extend_from_slice(extra_options);
+    let usage_line =
+        format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--quiet|--verbose]");
+    lines[0] = usage_line.as_str();
+    help_text(&lines)
 }
 
 fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
@@ -7376,12 +7394,26 @@ where
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
     };
-    let readiness = runtime
-        .product_readiness(RepositoryStatusRequest {
-            path: request.path.clone(),
-            state_dir_override: request.state_dir_override.clone(),
-        })
-        .ok();
+    let status_request = RepositoryStatusRequest {
+        path: request.path.clone(),
+        state_dir_override: request.state_dir_override.clone(),
+    };
+
+    // A `--target`/`--within` scope requests the bounded, source-free SCOPED
+    // readiness report instead of the whole-checkout doctor view. Additive: with
+    // neither flag the whole-checkout path below is byte-identical to before.
+    if options.target.is_some() || options.within.is_some() {
+        let target = options.target.as_deref().unwrap_or("");
+        return match runtime.scoped_readiness(status_request, target, options.within.as_deref()) {
+            Ok(scoped) if options.json => {
+                CliOutput::success(json_line(scoped_doctor_json(&scoped)))
+            }
+            Ok(scoped) => CliOutput::success(scoped_readiness_human(&scoped)),
+            Err(error) => lifecycle_error("doctor", options.json, error),
+        };
+    }
+
+    let readiness = runtime.product_readiness(status_request).ok();
 
     match runtime.repository_doctor(request) {
         Ok(report) if options.json => {
@@ -7390,6 +7422,52 @@ where
         Ok(report) => CliOutput::success(doctor_human(&report, readiness.as_ref())),
         Err(error) => lifecycle_error("doctor", options.json, error),
     }
+}
+
+/// The machine-readable scoped readiness payload for `doctor --target/--within`:
+/// the shared source-free scoped report under a `command`/`schema_version`
+/// envelope, matching the status/doctor JSON contract.
+fn scoped_doctor_json(scoped: &ScopedReadinessReport) -> Value {
+    let mut value = scoped_readiness_value(scoped);
+    if let Value::Object(map) = &mut value {
+        map.insert("command".to_string(), json!("doctor"));
+        map.insert("schema_version".to_string(), json!(PRODUCT_SCHEMA_VERSION));
+    }
+    value
+}
+
+/// Render the bounded, source-free scoped readiness report as a compact human
+/// block. Carries only tokens and counts — no raw target, path, or symbol.
+fn scoped_readiness_human(scoped: &ScopedReadinessReport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "scoped readiness: {}\tqueryability: {}\n",
+        scoped.summary.as_str(),
+        scoped.queryability.as_str(),
+    ));
+    output.push_str(&format!(
+        "scope: {} prefixes\t{} indexed files\tcoverage: {}\ttruncated: {}\n",
+        scoped.scope_prefix_count,
+        scoped.indexed_file_count,
+        scoped.index_coverage.as_str(),
+        scoped.scope_truncated,
+    ));
+    output.push_str(&format!(
+        "families_in_scope: {}\tfreshness: {}\n",
+        scoped.resolvable_family_count,
+        scoped.freshness.as_str(),
+    ));
+    if !scoped.languages_in_scope.is_empty() {
+        output.push_str(&format!(
+            "languages: {}\n",
+            scoped.languages_in_scope.join(", ")
+        ));
+    }
+    output.push_str(&format!(
+        "recovery: {}\n",
+        recovery_guidance(scoped.recovery.action)
+    ));
+    output
 }
 
 fn handle_prune<F>(
@@ -7798,6 +7876,10 @@ struct LifecycleOptions {
     resync: bool,
     autosync: Option<bool>,
     force: bool,
+    /// Optional directory/module scope for `doctor` scoped readiness. Additive:
+    /// absent keeps the whole-checkout readiness path byte-identical.
+    target: Option<String>,
+    within: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7874,6 +7956,8 @@ impl Default for LifecycleOptions {
             resync: false,
             autosync: None,
             force: false,
+            target: None,
+            within: None,
         }
     }
 }
@@ -8090,6 +8174,16 @@ fn parse_lifecycle_options(command: &str, rest: &[String]) -> Result<LifecycleOp
             "--force" if command == "unlock" => {
                 options.force = true;
                 index += 1;
+            }
+            "--target" if command == "doctor" => {
+                let value = option_value(rest, index, "--target", "a directory/module scope")?;
+                set_scope_option(&mut options.target, "--target", value)?;
+                index += 2;
+            }
+            "--within" if command == "doctor" => {
+                let value = option_value(rest, index, "--within", "a directory/module scope")?;
+                set_scope_option(&mut options.within, "--within", value)?;
+                index += 2;
             }
             value if !value.starts_with('-') => {
                 set_project_path(&mut options.project_path, value)?;
@@ -8594,6 +8688,17 @@ fn set_project_path(target: &mut Option<String>, value: &str) -> Result<(), Stri
         return Err(format!("unexpected positional argument: {value}"));
     }
     *target = Some(value.to_string());
+    Ok(())
+}
+
+/// Set a scoped-readiness scope flag (`--target`/`--within`), rejecting a repeated
+/// flag and validating the value with the shared query-target authority.
+fn set_scope_option(slot: &mut Option<String>, flag: &str, value: &str) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} may be provided at most once"));
+    }
+    validate_query_target(value).map_err(|error| format!("{flag} {error}"))?;
+    *slot = Some(value.to_string());
     Ok(())
 }
 
@@ -11519,6 +11624,24 @@ mod tests {
         ) -> Result<FamilyListReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
             list_families(&store)
+        }
+
+        fn scoped_readiness(
+            &self,
+            request: RepositoryStatusRequest,
+            target: &str,
+            within: Option<&str>,
+        ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+            let store = self.store_for_status_request(&request)?;
+            let report = repository_status_with_storage(request, &store)?;
+            Ok(scoped_readiness_from_stores(
+                &report,
+                target,
+                within,
+                &store,
+                &store,
+                Vec::new(),
+            ))
         }
 
         fn inspect_agent_integration(
@@ -17077,6 +17200,61 @@ mod tests {
         assert!(!doctor
             .stdout
             .contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn doctor_scoped_target_reports_bounded_source_free_scoped_readiness() {
+        let workspace = TempWorkspace::new("cli-doctor-scoped-readiness");
+        let env = |_: &str| None;
+        let runtime = TestRuntime;
+        fs::create_dir_all(workspace.path().join("pkg/sub")).expect("scope dir");
+        fs::write(
+            workspace.path().join("pkg/sub/a.ts"),
+            "export const a = 1;\n",
+        )
+        .expect("write scoped source");
+        let init =
+            run_with_context_and_runtime(["init", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(init.status, 0);
+
+        // JSON scoped readiness: a bounded report under the doctor envelope, with
+        // no whole-checkout doctor `checks`/`readiness` fields.
+        let doctor = run_with_context_and_runtime(
+            ["doctor", "--target", "pkg/sub", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(doctor.status, 0);
+        let value: Value = serde_json::from_str(doctor.stdout.trim()).expect("scoped doctor JSON");
+        assert_eq!(value["command"], "doctor");
+        assert_eq!(value["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(value["summary"], "ready");
+        // The scope resolves the indexed file; without a family it is partial
+        // context, never not_indexed and never not_ready.
+        assert_ne!(value["queryability"], "not_indexed");
+        assert_ne!(value["queryability"], "not_ready");
+        assert_eq!(value["scope"]["prefix_count"], 1);
+        assert_eq!(value["scope"]["indexed_file_count"], 1);
+        assert_eq!(value["scope"]["freshness"], "fresh");
+        assert!(value.get("checks").is_none());
+        // Source-free and path-free: no raw target, path, or workspace path leaks.
+        assert!(!doctor.stdout.contains("pkg/sub/a.ts"));
+        assert!(!doctor
+            .stdout
+            .contains(workspace.path().to_string_lossy().as_ref()));
+
+        // Human scoped readiness renders the same tokens compactly.
+        let human = run_with_context_and_runtime(
+            ["doctor", "--target", "pkg/sub"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+        assert_eq!(human.status, 0);
+        assert!(human.stdout.contains("scoped readiness: ready"));
+        assert!(human.stdout.contains("queryability:"));
+        assert!(!human.stdout.contains("pkg/sub/a.ts"));
     }
 
     #[test]

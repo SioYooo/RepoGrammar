@@ -104,3 +104,38 @@ fuzzy scope path, so it never hydrates more than the one exact family.
 - If usage shows consumers need a first-class candidate-set status, schedule a
   `product-schemas.v2` migration that adds a `CANDIDATE_SET` top-level status and
   folds the additive `resolution` object into it.
+
+## Phase 5 note: scoped readiness (additive, source-free)
+
+Phase 5 adds an optional `target`/`within` to the MCP `inspect_readiness`
+operation and a matching `--target`/`--within` to `repogrammar doctor`. With
+either, the response replaces the whole-checkout `readiness` object with a
+bounded, source-free `scoped_readiness` object describing how queryable
+RepoGrammar is over just that directory/module scope. This stays within the same
+additive `product-schemas.v1` posture as the `resolution` decisions above:
+
+- **No new top-level status token.** The scoped report reuses the existing
+  low-cardinality readiness `summary` vocabulary (`ready`/`degraded`/`not_ready`),
+  projected from the SAME shared repository recovery authority the whole-checkout
+  readiness and the query preflight consume, so a scope is never more optimistic
+  than the repository. It adds a scope-shape `queryability` verdict
+  (`queryable`/`partial_context`/`degraded`/`not_indexed`/`not_ready`/
+  `cannot_verify`) and scope counts, not a new global status.
+- **One authoritative classifier.** The summary, freshness, and single recovery
+  action are all derived from `repository_recovery_for_report`; the summary
+  projection is a single shared helper reused by the whole-checkout assembler.
+  Phase 5 does not fork a second readiness classifier.
+- **Source-free and telemetry-free.** Scoped readiness reuses the bounded
+  directory-scope read/family-mapping ports (`list_active_files_in_directory` +
+  `find_active_families_by_evidence_path`) exactly as the directory-scope query
+  resolver does, but only COUNTS: it hydrates no family, reads no source content
+  (its assembler takes no `SourceStore`), and records no family-query telemetry.
+- **Cardinality/count discipline.** Every scoped field is a low-cardinality enum,
+  count, or language token; a truncated bounded read reports `coverage: truncated`
+  with the counts as lower bounds. No raw target, path, or symbol is emitted, and
+  telemetry (which records nothing on this path) could only ever see the same
+  low-cardinality tokens.
+- **No-target output unchanged.** The whole-checkout `readiness` object and the
+  scoped `scoped_readiness` object are mutually exclusive and carried under
+  distinct keys; the no-target `inspect_readiness`/`doctor` output is
+  byte-identical to before Phase 5.
