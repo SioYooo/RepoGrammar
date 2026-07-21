@@ -24,8 +24,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::{
     ffi::CString,
-    os::fd::{AsRawFd, FromRawFd},
-    os::unix::ffi::OsStrExt,
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd},
+    os::unix::ffi::{OsStrExt, OsStringExt},
 };
 
 const PLAN_SCHEMA_VERSION: u64 = 1;
@@ -296,6 +296,11 @@ impl FileIdentity {
         } else {
             Ok(self == &Self::capture_open_file(file)?)
         }
+    }
+
+    #[cfg(unix)]
+    fn same_unix_stat_object(&self, stat: &libc::stat) -> bool {
+        self.device == unix_stat_device(stat) && self.inode == stat.st_ino
     }
 
     fn to_json_value(&self) -> Value {
@@ -597,13 +602,40 @@ fn verify_quarantined_file(
         return Err(io::Error::last_os_error());
     }
     let stat = unsafe { stat.assume_init() };
-    if planned.identity.device != unix_stat_device(&stat) || planned.identity.inode != stat.st_ino {
+    if !planned.identity.same_unix_stat_object(&stat) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "quarantined leaf identity differs from the cleanup plan",
         ));
     }
     if planned.kind == PlannedFileKind::SymlinkToAuthority {
+        if (stat.st_mode & libc::S_IFMT) != libc::S_IFLNK {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "quarantined command is no longer a symlink",
+            ));
+        }
+        let raw_target = read_link_at(parent_fd, quarantine)?;
+        let parent = Path::new(&planned.path).parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "planned command has no parent")
+        })?;
+        let resolved_target = if raw_target.is_absolute() {
+            raw_target
+        } else {
+            parent.join(raw_target)
+        };
+        let expected_target = planned.symlink_target.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "planned command symlink target is missing",
+            )
+        })?;
+        if !same_lexical_path(&resolved_target, Path::new(expected_target)) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "quarantined command symlink target differs from the cleanup plan",
+            ));
+        }
         return Ok(());
     }
 
@@ -631,6 +663,33 @@ fn verify_quarantined_file(
         ));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn read_link_at(parent_fd: std::os::fd::RawFd, name: &CString) -> io::Result<PathBuf> {
+    const MAX_LINK_BYTES: usize = 64 * 1024;
+    let mut bytes = vec![0_u8; MAX_LINK_BYTES];
+    let length = unsafe {
+        libc::readlinkat(
+            parent_fd,
+            name.as_ptr(),
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+        )
+    };
+    if length < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let length = usize::try_from(length)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid symlink length"))?;
+    if length == bytes.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "command symlink target exceeds the bounded finalizer limit",
+        ));
+    }
+    bytes.truncate(length);
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
 #[cfg(unix)]
@@ -667,12 +726,35 @@ fn secure_remove_planned_directory(directory: &PlannedDirectory) -> io::Result<(
             "owned directory leaf contains NUL",
         )
     })?;
+    let identity = directory.identity.as_ref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "directory lacks planned identity",
+        )
+    })?;
+    let parent_fd = parent.as_raw_fd();
+    let pinned_fd = unsafe {
+        libc::openat(
+            parent_fd,
+            leaf.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY,
+        )
+    };
+    if pinned_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let pinned_directory = unsafe { File::from_raw_fd(pinned_fd) };
+    if !identity.matches(&pinned_directory.metadata()?) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "owned directory identity changed before handle-relative removal",
+        ));
+    }
     let quarantine_name = format!(
         ".repogrammar-uninstall-quarantine-{}",
         secure_random_hex(16)?
     );
     let quarantine = CString::new(quarantine_name.as_bytes()).expect("generated name has no NUL");
-    let parent_fd = parent.as_raw_fd();
     if unsafe { libc::renameat(parent_fd, leaf.as_ptr(), parent_fd, quarantine.as_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
@@ -728,7 +810,7 @@ fn verify_quarantined_directory(
             "directory lacks planned identity",
         )
     })?;
-    if identity.device != unix_stat_device(&stat) || identity.inode != stat.st_ino {
+    if !identity.same_unix_stat_object(&stat) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "quarantined directory identity differs from cleanup plan",
@@ -744,7 +826,14 @@ fn verify_quarantined_directory(
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
-    let stream = unsafe { libc::fdopendir(fd) };
+    let directory = unsafe { File::from_raw_fd(fd) };
+    if !identity.matches(&directory.metadata()?) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "opened quarantined directory identity differs from cleanup plan",
+        ));
+    }
+    let stream = unsafe { libc::fdopendir(directory.into_raw_fd()) };
     if stream.is_null() {
         unsafe { libc::close(fd) };
         return Err(io::Error::last_os_error());
@@ -3145,7 +3234,7 @@ mod tests {
             &mut removal,
         )
         .expect("execute finalizer");
-        assert!(report.is_complete());
+        assert!(report.is_complete(), "{report:?}");
         assert_eq!(
             removal.roles,
             vec![
@@ -3182,7 +3271,7 @@ mod tests {
         let report = execute_product_uninstall_finalizer(validated, commit, parent_exit)
             .expect("zero-worker receipt uninstall");
 
-        assert!(report.is_complete());
+        assert!(report.is_complete(), "{report:?}");
         assert!(!fixture.installation.data_dir.exists());
         assert!(!agent_receipts.exists());
     }
@@ -3220,11 +3309,13 @@ mod tests {
     fn replaced_empty_directory_is_preserved_and_reported_after_file_cleanup() {
         let fixture = Fixture::new(true);
         let agent_receipts = fixture.installation.data_dir.join("install/receipts");
+        let replacement = fixture.root.join("replacement-agent-receipts");
         fs::create_dir_all(&agent_receipts).expect("agent receipt directory");
+        fs::create_dir(&replacement).expect("replacement directory");
         let prepared = fixture.prepare();
         let (validated, commit, parent_exit) = capabilities(&prepared);
         fs::remove_dir(&agent_receipts).expect("remove snapshotted directory");
-        fs::create_dir(&agent_receipts).expect("replace snapshotted directory");
+        fs::rename(&replacement, &agent_receipts).expect("replace snapshotted directory");
 
         let report = execute_product_uninstall_finalizer(validated, commit, parent_exit)
             .expect("directory replacement produces report");
@@ -3258,7 +3349,7 @@ mod tests {
         fs::write(&command.path, b"foreign replacement").expect("foreign replacement");
 
         let error = secure_remove_planned_file(&command).expect_err("identity mismatch");
-        assert!(error.to_string().contains("preserved at"));
+        assert!(error.to_string().contains("preserved at"), "{error}");
         let parent = Path::new(&command.path).parent().expect("command parent");
         let preserved = fs::read_dir(parent)
             .expect("command parent")
@@ -3305,7 +3396,7 @@ mod tests {
         let (validated, commit, parent_exit) = capabilities(&prepared);
         let report = execute_product_uninstall_finalizer(validated, commit, parent_exit)
             .expect("legacy finalizer");
-        assert!(report.is_complete());
+        assert!(report.is_complete(), "{report:?}");
         assert!(!fixture.installation.executable.path.exists());
     }
 

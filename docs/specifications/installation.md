@@ -547,11 +547,15 @@ plan, helper replacement, or ownership drift fails closed.
 
 On Unix, each leaf is moved through an identity-checked open parent descriptor
 to an unpredictable same-directory quarantine name, revalidated there, and
-unlinked relative to that descriptor. Windows source builds obtain the volume
-serial number and file index from stable `GetFileInformationByHandle` calls on
-the no-follow opened handle, then bind disposition to that same identity-checked
-handle. This closes the check-then-delete path replacement window instead of
-trusting a second pathname lookup.
+unlinked relative to that descriptor. Directory deletion pins the validated
+directory handle before quarantine, and command symlinks must still be symlinks
+to the exact planned authority after quarantine; device/inode reuse alone
+cannot authorize deletion of a foreign command. Windows source builds obtain
+the volume serial number and file index from stable
+`GetFileInformationByHandle` calls on the no-follow opened handle, then bind
+disposition to that same identity-checked handle. This closes the
+check-then-delete path replacement window instead of trusting a second pathname
+lookup.
 
 Deletion order is command, workers, product receipt, then managed authority.
 The authority is always last. Already absent owned files are idempotent. Once
