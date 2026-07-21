@@ -116,16 +116,32 @@ Publication is complete only when the finalizer emits exactly
 
 ## Evidence record
 
-Fill only after the relevant event is independently verified:
+Publication completed on 2026-07-22 after independent public verification:
 
-- release commit: pending
-- annotated tag object / dereferenced commit: pending
-- candidate run id / attempt: pending
-- npm stage id / retained SRI: pending
-- immutable GitHub Release URL and asset verification: pending
-- npm package URL, integrity, provenance, and dist-tags: pending
-- finalizer run and exact verdict: pending
+- release commit: `a9a473d614211e4a183d168201eb2f4fa8153d1e`
+- annotated tag object: `ca7b93f98a3b5f3a36ab0b9b85d7033fe4cf3b3f`;
+  dereferenced commit:
+  `a9a473d614211e4a183d168201eb2f4fa8153d1e`
+- candidate workflow run / attempt:
+  [`29864318806`](https://github.com/SioYooo/RepoGrammar/actions/runs/29864318806),
+  attempt `1`
+- npm stage id: `470ceae6-75f1-468f-9794-70f48e49a878`; retained SRI:
+  `sha512-Hf585rOf7Mqab1JimH6lrCylysdXN7X5nIcKmg+gR1bqflqnwJjTYmfM0SJbqEB+uErBy6j64hNZKkgnJN6z9g==`
+- GitHub Release:
+  [immutable `v0.4.2`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.2),
+  public, non-prerelease, and verified with exactly 11 assets
+- npm package:
+  [`@sioyooo/repogrammar@0.4.2`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.2),
+  with the retained SRI, shasum
+  `fc03f2db5523d1464593bc62f147a1cf8eb4b983`, and verified provenance from
+  candidate run `29864318806`; dist-tags are exactly `latest=0.4.2` and
+  `preview=0.2.0-preview.0`
+- public finalizer run:
+  [`29866519177`](https://github.com/SioYooo/RepoGrammar/actions/runs/29866519177)
+- finalizer verdict: `STABLE_RELEASE_READY`
 
-Placeholders are not publication proof. After `STABLE_RELEASE_READY`, update
-the changelog, README/public availability language, launch kit, and this record
-in a separate documentation commit without moving `v0.4.2`.
+The finalizer independently passed the public native archive, pinned curl
+installer plus separate repository `init`, pinned npm, latest npm, preview npm,
+provenance, integrity, and immutable-asset gates. The tag and release assets
+remain immutable; this documentation-only evidence record does not move
+`v0.4.2`.

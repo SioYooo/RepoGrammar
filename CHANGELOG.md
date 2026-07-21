@@ -2,11 +2,23 @@
 
 ## Unreleased
 
-This section describes current source only. It is not evidence that a new Git
-tag, GitHub Release, npm package, provenance record, dist-tag, or public
-finalizer exists.
+No unreleased changes are recorded.
 
-- Prepared the `0.4.2` stable candidate with an explicit public installation
+## 0.4.2 — 2026-07-22 stable channel
+
+RepoGrammar `0.4.2` is the verified patch release that separates public binary
+acquisition, optional coding-agent wiring, and per-repository initialization.
+The annotated `v0.4.2` tag points to release commit
+`a9a473d614211e4a183d168201eb2f4fa8153d1e`; the immutable
+[GitHub Release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.2)
+and [npm package](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.2)
+were independently verified by finalizer run
+[`29866519177`](https://github.com/SioYooo/RepoGrammar/actions/runs/29866519177),
+which emitted `STABLE_RELEASE_READY`.
+
+### Changed
+
+- Published the `0.4.2` stable release with an explicit public installation
   lifecycle: `install.sh --install-cli-only` installs only the managed binary,
   worker, and product receipt; optional coding-agent integration uses
   `repogrammar install`; and every repository uses `repogrammar init`.

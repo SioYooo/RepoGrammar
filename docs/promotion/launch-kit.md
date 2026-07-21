@@ -171,27 +171,27 @@ boundaries.
 These fields are publication-phase facts, not source-state claims. Replace
 them only after the exact public finalizer emits `STABLE_RELEASE_READY`.
 
-- Exact version: `0.4.1`
-- Git tag: `v0.4.1`
-- Release commit: `aa0ca07fcf710b93eaaa03760fc852905e812095`
-- Annotated tag object: `c22c0fd06e8e8d48a441586c3b9b6395b48dc980`
+- Exact version: `0.4.2`
+- Git tag: `v0.4.2`
+- Release commit: `a9a473d614211e4a183d168201eb2f4fa8153d1e`
+- Annotated tag object: `ca7b93f98a3b5f3a36ab0b9b85d7033fe4cf3b3f`
 - Candidate workflow run and attempt:
-  [`29847383172`](https://github.com/SioYooo/RepoGrammar/actions/runs/29847383172),
+  [`29864318806`](https://github.com/SioYooo/RepoGrammar/actions/runs/29864318806),
   attempt `1`
 - GitHub Release:
-  [immutable `v0.4.1`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.1)
+  [immutable `v0.4.2`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.2)
 - Asset inventory: exactly 11 public assets; all checksum and GitHub
   release/asset attestations verified
-- npm stage ID: `ce59e214-77ec-4824-af0f-9d0457af4813`, approved through the
+- npm stage ID: `470ceae6-75f1-468f-9794-70f48e49a878`, approved through the
   maintainer 2FA boundary
 - npm package and integrity:
-  [`@sioyooo/repogrammar@0.4.1`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.1),
-  `sha512-Jfq9evfSdI01fT0eJoXDMsLL92IEbOhpF+SwKMKcmtTIWko7b3QeLiNx/9pAVQ5pI7GazTMSleXEsYiQKzT9AA==`
+  [`@sioyooo/repogrammar@0.4.2`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.2),
+  `sha512-Hf585rOf7Mqab1JimH6lrCylysdXN7X5nIcKmg+gR1bqflqnwJjTYmfM0SJbqEB+uErBy6j64hNZKkgnJN6z9g==`
 - npm provenance: verified SLSA provenance bound to the release workflow,
-  `refs/tags/v0.4.1`, the release commit, and candidate run
-- dist-tags: `latest=0.4.1`, `preview=0.2.0-preview.0`
+  `refs/tags/v0.4.2`, the release commit, and candidate run
+- dist-tags: `latest=0.4.2`, `preview=0.2.0-preview.0`
 - Public finalizer run:
-  [`29848866553`](https://github.com/SioYooo/RepoGrammar/actions/runs/29848866553)
+  [`29866519177`](https://github.com/SioYooo/RepoGrammar/actions/runs/29866519177)
 - Finalizer verdict: `STABLE_RELEASE_READY`
 
 ## Claim guardrails

@@ -1,22 +1,22 @@
 # Limitations
 
-RepoGrammar's current source identity is `0.4.2`; that manifest value does not
-prove a matching tag, GitHub Release, artifact, or npm package exists. Public
-availability requires the independent registry and finalizer evidence in the
-stable checklist. The MCP API and bounded analyzers remain experimental. RepoGrammar
-is designed to be conservative and local-first, not a sound general static
-analyzer or a production-readiness claim.
+RepoGrammar's current source identity and latest verified public stable release
+are `0.4.2`. The matching immutable GitHub Release, npm package, provenance,
+dist-tags, and public product smokes are recorded independently in the stable
+checklist; manifest identity alone is never publication proof. The MCP API and
+bounded analyzers remain experimental. RepoGrammar is designed to be
+conservative and local-first, not a sound general static analyzer or a
+production-readiness claim.
 
 ## Release Availability
 
-- Stable artifacts are available only after the exact `v0.4.1` GitHub release
-  is public and immutable and npm `@sioyooo/repogrammar@0.4.1` is independently
-  verified.
+- Stable artifacts are available from the exact immutable `v0.4.2` GitHub
+  Release and independently verified npm `@sioyooo/repogrammar@0.4.2` package.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
-- Source-checkout dogfood is the safe contributor path before release and npm
-  publication exist.
-- The `0.4.2` candidate rollout and recovery states are tracked in
+- Source-checkout dogfood remains the explicit contributor path; public users
+  should use the pinned release installer or npm launcher.
+- The completed `0.4.2` rollout and finalizer evidence are tracked in
   `release/stable-v0.4.2-release-checklist.md`. The verified `0.4.1` and earlier
   preview records remain historical evidence.
 
