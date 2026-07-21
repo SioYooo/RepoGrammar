@@ -626,6 +626,19 @@ test -x "${PRODUCT_INSTALL_DIR}/bin/repogrammar"
 test -f "${PRODUCT_INSTALL_DIR}/receipts/product-install.json"
 test -f "${PRODUCT_INSTALL_DIR}/workers/python/worker.py"
 test -f "${PRODUCT_COMMAND_DIR}/repogrammar-workers/python/worker.py"
+CONDA_FIRST_DIR="${TMP_ROOT}/conda-first-bin"
+PRODUCT_RECEIPT_BEFORE="${TMP_ROOT}/product-receipt-before.json"
+mkdir -p "$CONDA_FIRST_DIR"
+cp "${PRODUCT_INSTALL_DIR}/receipts/product-install.json" "$PRODUCT_RECEIPT_BEFORE"
+PATH="${CONDA_FIRST_DIR}:${PRODUCT_COMMAND_DIR}:${ORIGINAL_PATH}" \
+REPOGRAMMAR_INSTALL_DIR="$PRODUCT_INSTALL_DIR" \
+"${PRODUCT_COMMAND_DIR}/repogrammar" install \
+  --target none \
+  --scope global \
+  --yes \
+  --no-telemetry >/dev/null
+cmp "$PRODUCT_RECEIPT_BEFORE" "${PRODUCT_INSTALL_DIR}/receipts/product-install.json"
+test ! -e "${CONDA_FIRST_DIR}/repogrammar"
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" init --state-only >/dev/null)
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" index --progress never >/dev/null)
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" families --json >/dev/null)
@@ -671,7 +684,7 @@ if [[ "$NO_RELEASE_STATUS" -eq 0 ]]; then
   exit 1
 fi
 grep -q "release artifact was not found" "$NO_RELEASE_ERR"
-grep -q -- "--version v0.4.2" "$NO_RELEASE_ERR"
+grep -q -- "--version v0.4.3" "$NO_RELEASE_ERR"
 grep -q -- "--from-source" "$NO_RELEASE_ERR"
 grep -q "REPOGRAMMAR_RELEASE_DIR" "$NO_RELEASE_ERR"
 
@@ -774,8 +787,8 @@ CARGO_VERSION="$(awk -F' *= *' '
   /^\[/ { section = $0 }
   section == "[package]" && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
 ' "${SCRIPT_DIR}/../../Cargo.toml")"
-if [[ "$PACKAGE_VERSION" != "0.4.2" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
-  echo "stable source manifests must agree on 0.4.2" >&2
+if [[ "$PACKAGE_VERSION" != "0.4.3" || "$CARGO_VERSION" != "$PACKAGE_VERSION" ]]; then
+  echo "stable source manifests must agree on 0.4.3" >&2
   exit 1
 fi
 PACKAGE_MANIFEST="${SCRIPT_DIR}/../../package.json"
@@ -788,8 +801,8 @@ README_QUICK_START="$(awk '
   in_quick_start && /^## / { exit }
   in_quick_start { print }
 ' "$README_FILE")"
-grep -q 'releases/download/v0\.4\.2/install.sh' <<<"$README_QUICK_START"
-grep -q '^bash install.sh --version v0.4.2 --install-cli-only --yes$' <<<"$README_QUICK_START"
+grep -q 'releases/download/v0\.4\.3/install.sh' <<<"$README_QUICK_START"
+grep -q '^bash install.sh --version v0.4.3 --install-cli-only --yes$' <<<"$README_QUICK_START"
 grep -q '^export PATH="\$HOME/.local/bin:\$PATH"$' <<<"$README_QUICK_START"
 grep -q '^repogrammar install --target auto --scope global --yes --no-telemetry$' <<<"$README_QUICK_START"
 grep -q '^repogrammar init --project "\$PWD" --yes$' <<<"$README_QUICK_START"
@@ -922,7 +935,7 @@ require_workflow_match "$STAGE_PREVIEW_JOB" '^[[:space:]]+npm stage publish.*--t
   "preview must stage the retained package with preview and provenance"
 require_workflow_match "$STAGE_PREVIEW_JOB" '^[[:space:]]+package_file="\./npm-candidate/sioyooo-repogrammar-\$\{\{ needs\.classify\.outputs\.version \}\}\.tgz"' \
   "preview staging must use an explicit relative local tarball path"
-require_workflow_match "$STAGE_STABLE_JOB" '^[[:space:]]+npm stage publish \./npm-candidate/sioyooo-repogrammar-0\.4\.2\.tgz --access public --tag latest --provenance' \
+require_workflow_match "$STAGE_STABLE_JOB" '^[[:space:]]+npm stage publish \./npm-candidate/sioyooo-repogrammar-0\.4\.3\.tgz --access public --tag latest --provenance' \
   "stable must use the one exact registered staging command"
 require_workflow_absence "$RELEASE_WORKFLOW" 'NPM_TOKEN|NODE_AUTH_TOKEN|npm[[:space:]]+publish|npm[[:space:]]+stage[[:space:]]+(approve|reject)|npm[[:space:]]+dist-tag' \
   "release automation must remain token-free, stage-only, and unable to approve or mutate tags"
@@ -962,9 +975,9 @@ require_workflow_match "$STABLE_FINALIZER_BODY" 'contents:[[:space:]]+read' \
   "stable finalization must have read-only repository authority"
 require_workflow_match "$STABLE_FINALIZER_BODY" 'actions:[[:space:]]+read' \
   "stable finalization must have read-only artifact authority"
-require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+gh release verify v0\.4\.2' \
+require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+gh release verify v0\.4\.3' \
   "stable finalization must verify the immutable release attestation"
-require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+gh release verify-asset v0\.4\.2' \
+require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+gh release verify-asset v0\.4\.3' \
   "stable finalization must verify every downloaded release asset"
 require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+npm audit signatures --json --include-attestations' \
   "stable finalization must collect registry signature and provenance evidence"
@@ -990,7 +1003,7 @@ require_workflow_match "$STABLE_FINALIZER_JOB" 'npm-versions\.json' \
   "stable finalization must collect the complete published-version inventory"
 require_workflow_match "$STABLE_FINALIZER_JOB" '^[[:space:]]+run:[[:space:]]+cargo run --quiet --locked --bin repo-guard -- verify-stable-release-evidence --evidence-dir evidence' \
   "stable finalization must delegate the final verdict to repo-guard"
-require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@0\.4\.2' \
+require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@0\.4\.3' \
   "stable finalization must smoke the exact stable npm version"
 require_workflow_match "$STABLE_FINALIZER_JOB" '@sioyooo/repogrammar@preview' \
   "stable finalization must preserve and smoke the preview channel"

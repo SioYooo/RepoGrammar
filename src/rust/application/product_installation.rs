@@ -102,6 +102,56 @@ pub fn product_receipt_path(data_dir: &Path) -> PathBuf {
     data_dir.join("receipts").join(PRODUCT_RECEIPT_FILE)
 }
 
+/// Return the exact command path owned by an existing product receipt.
+///
+/// Absence is the only case that permits callers to discover a default command
+/// directory. A present receipt is validated through the same strict fixed-path
+/// parser used before receipt refresh, so malformed or foreign ownership
+/// evidence fails closed instead of being bypassed by PATH order. Live command
+/// bytes are intentionally not required here because the install transaction
+/// owns repair of a missing or stale managed command.
+pub fn receipted_command_path(data_dir: &Path) -> Result<Option<PathBuf>, RepoGrammarError> {
+    let receipt_path = product_receipt_path(data_dir);
+    match fs::symlink_metadata(&receipt_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(invalid(
+                    "product installation receipt must be a regular file; refusing ownership inference",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(invalid(format!(
+                "failed to inspect product installation receipt: {error}"
+            )))
+        }
+    }
+
+    let bytes = fs::read(&receipt_path).map_err(|error| {
+        invalid(format!(
+            "failed to read product installation receipt: {error}"
+        ))
+    })?;
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid("product installation receipt is malformed"))?;
+    let command_path = parse_owned_command(&value["command"])?.file.path;
+    let request = ProductInstallationRequest {
+        data_dir: data_dir.to_path_buf(),
+        executable_path: expected_authority(data_dir),
+        command_path: command_path.clone(),
+        current_executable_path: None,
+    };
+    validate_existing_receipt_for_refresh(&request, &bytes)?;
+    require_safe_descendant(data_dir, &receipt_path, "product receipt", false)?;
+    let command_dir = command_path
+        .parent()
+        .ok_or_else(|| invalid("product receipt command has no parent directory"))?;
+    require_no_symlink_components(command_dir, "managed command directory")?;
+    require_real_directory(command_dir, "managed command directory")?;
+    Ok(Some(command_path))
+}
+
 /// Record or refresh the first-party acquisition receipt after the authority,
 /// command, and bundled workers have been installed. The write uses a
 /// create-new private staging file and atomic rename on supported platforms.

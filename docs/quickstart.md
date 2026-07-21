@@ -6,14 +6,14 @@ manifest or Git tag does not prove that either public registry is ready.
 ## 1. Verify exact stable availability
 
 ```bash
-npm view @sioyooo/repogrammar@0.4.2 version
+npm view @sioyooo/repogrammar@0.4.3 version
 npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.2/install.sh.sha256
-npx --yes --package @sioyooo/repogrammar@0.4.2 repogrammar version
+curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh.sha256
+npx --yes --package @sioyooo/repogrammar@0.4.3 repogrammar version
 ```
 
 Use the no-build path only when the exact package and GitHub asset exist and
-the dist-tags are `latest=0.4.2` and `preview=0.2.0-preview.0`. The preview tag
+the dist-tags are `latest=0.4.3` and `preview=0.2.0-preview.0`. The preview tag
 must continue to resolve the immutable historical preview.
 
 Python 3.10 or newer is required for the bundled bounded Python analyzer. The
@@ -26,10 +26,10 @@ Download the exact release installer, verify the installer asset itself, then
 let it download and checksum-verify the matching native binary and worker:
 
 ```bash
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.2/install.sh
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.2/install.sh.sha256
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh.sha256
 shasum -a 256 -c install.sh.sha256
-bash install.sh --version v0.4.2 --install-cli-only --yes
+bash install.sh --version v0.4.3 --install-cli-only --yes
 export PATH="$HOME/.local/bin:$PATH"
 repogrammar version
 ```

@@ -1,8 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — 2026-07-22 stable channel
 
-No unreleased changes are recorded.
+### Fixed
+
+- Fixed bare `repogrammar install` and the install stage shared by `setup`
+  after a first-party shell install when a writable Conda or virtual-environment
+  directory precedes the receipt-owned command on PATH. Without an explicit
+  command-directory override, a valid product receipt now supplies the default
+  command path; malformed or foreign receipts still fail closed, and explicit
+  overrides retain strict validation.
 
 ## 0.4.2 — 2026-07-22 stable channel
 

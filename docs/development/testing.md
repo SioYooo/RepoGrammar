@@ -625,6 +625,14 @@ allowed.
   target/scope pass-through for comma-separated, `none`, and
   local-scope install requests, stale PATH prune failure propagation, and
   command removal.
+  Product-receipt coverage must also install into an isolated home/command
+  layout, prepend a different writable Conda-like directory to PATH, and prove
+  a later bare agent-install transaction reuses the receipted command path,
+  leaves the earlier PATH directory untouched, and preserves the receipt.
+  Focused Rust coverage must prove missing/stale managed command repair remains
+  selectable, malformed/foreign receipt evidence fails closed without PATH
+  fallback, and an explicit `REPOGRAMMAR_COMMAND_DIR` retains precedence and
+  strict validation.
   Default tests must not use wrapper scripts to call real `codex` or `claude`
   binaries.
   Windows PowerShell wrapper coverage must include `src/install/install.ps1`
@@ -1607,8 +1615,8 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. The current stable gate requires exact `latest=0.4.2`, exact
-`preview=0.2.0-preview.0`, the preview, prior public `0.4.1`, and new stable
+state. The current stable gate requires exact `latest=0.4.3`, exact
+`preview=0.2.0-preview.0`, the preview, prior public `0.4.2`, and new stable
 versions in the registry inventory, the explicit absence of the failed or
 abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates, and a
 retained-candidate SRI match. Any other prerelease under `preview`, any

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.2"><img alt="Stable version 0.4.2" src="https://img.shields.io/badge/stable-0.4.2-7c3aed?style=flat-square"></a>
+  <a href="https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.3"><img alt="Stable version 0.4.3" src="https://img.shields.io/badge/stable-0.4.3-7c3aed?style=flat-square"></a>
   <img alt="Local first" src="https://img.shields.io/badge/context-local--first-0f766e?style=flat-square">
   <img alt="Read-only MCP" src="https://img.shields.io/badge/MCP-read--only-2563eb?style=flat-square">
   <a href="https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square"></a>
@@ -68,8 +68,8 @@ RepoGrammar provides prebuilt binaries for supported macOS and Linux systems;
 Rust and Cargo are not required.
 
 ```bash
-curl -fsSLo install.sh https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.2/install.sh
-bash install.sh --version v0.4.2 --install-cli-only --yes
+curl -fsSLo install.sh https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh
+bash install.sh --version v0.4.3 --install-cli-only --yes
 export PATH="$HOME/.local/bin:$PATH"
 repogrammar version
 ```
@@ -146,11 +146,11 @@ installed binary for the exact lifecycle commands supported by that version.
   insufficient cases become `UNKNOWN` or `PARTIAL_CONTEXT` with an explicit
   next action.
 
-## Latest in `0.4.2`
+## Latest in `0.4.3`
 
 | Area | Current behavior |
 | --- | --- |
-| Onboarding | The public install path is explicit: `install.sh` installs the binary, agent MCP wiring is optional, and `init` owns each repository's index and autosync. |
+| Onboarding | `install.sh` installs the binary, optional agent MCP wiring reuses the validated product-receipt command path even with Conda/venv PATH prefixes, and `init` owns each repository's index and autosync. |
 | Queries | Exact-first resolution also understands qualified concept phrases such as `FastAPI route`; `mode` controls evidence gathering and `verbosity` controls payload density. |
 | Conformance | `check` returns static-alignment certificates with explicit unresolved obligations and never claims runtime equivalence. |
 | Freshness | Query-time hashes reject stale evidence; explicit `sync` is authoritative, while default repo-local autosync is a best-effort convenience. |

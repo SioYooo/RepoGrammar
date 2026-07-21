@@ -15,7 +15,7 @@ use crate::application::install::{
 };
 #[cfg(test)]
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
-use crate::application::product_installation::ProductOwnershipSource;
+use crate::application::product_installation::{receipted_command_path, ProductOwnershipSource};
 use crate::application::product_uninstall::{ProductUninstallOutcome, ProductUninstallRequest};
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
@@ -5439,6 +5439,17 @@ where
             path_is_on_env_path(path, env_lookup),
         ));
     }
+    if let Some(command_path) =
+        receipted_command_path(Path::new(data_dir)).map_err(|error| error.to_string())?
+    {
+        let command_dir = command_path
+            .parent()
+            .ok_or_else(|| "receipted command has no parent directory".to_string())?;
+        return Ok((
+            command_dir.display().to_string(),
+            path_is_on_env_path(command_dir, env_lookup),
+        ));
+    }
     if let Some(path) = path_entries(env_lookup)
         .into_iter()
         .find(|path| path.is_absolute() && path.is_dir() && !path_is_readonly(path))
@@ -10486,6 +10497,9 @@ mod tests {
         index_repository_with_discovery_parser_frameworks_and_store,
         sync_repository_with_discovery_parser_frameworks_and_store, IndexingRequest,
     };
+    use crate::application::product_installation::{
+        record_product_installation, ProductInstallationRequest,
+    };
     use crate::application::query::TermRetrievalAbstention;
     use crate::application::query::{
         list_code_units, list_families, list_indexed_files,
@@ -10505,6 +10519,142 @@ mod tests {
     use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
+
+    fn record_test_product_installation(workspace: &TempWorkspace) -> (PathBuf, PathBuf, PathBuf) {
+        let root = workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace");
+        let data_dir = root.join("data");
+        let authority = data_dir.join("bin").join(binary_name());
+        let command_dir = root.join("managed-bin");
+        let command_path = command_dir.join(binary_name());
+        let earlier_path_dir = root.join("conda-bin");
+        fs::create_dir_all(authority.parent().expect("authority parent")).expect("authority dir");
+        fs::create_dir_all(&command_dir).expect("command dir");
+        fs::create_dir_all(&earlier_path_dir).expect("earlier PATH dir");
+        fs::write(&authority, b"repogrammar-test-binary").expect("authority");
+        fs::write(&command_path, b"repogrammar-test-binary").expect("command copy");
+        record_product_installation(&ProductInstallationRequest {
+            data_dir: data_dir.clone(),
+            executable_path: authority,
+            command_path,
+            current_executable_path: None,
+        })
+        .expect("product receipt");
+        (data_dir, command_dir, earlier_path_dir)
+    }
+
+    #[test]
+    fn existing_product_receipt_beats_earlier_writable_path_directory() {
+        let workspace = TempWorkspace::new("cli-receipted-command-before-path");
+        let (data_dir, command_dir, earlier_path_dir) =
+            record_test_product_installation(&workspace);
+        let path = std::env::join_paths([&earlier_path_dir, &command_dir])
+            .expect("PATH")
+            .to_string_lossy()
+            .into_owned();
+        let env = |key: &str| match key {
+            "PATH" => Some(path.clone()),
+            _ => None,
+        };
+
+        let (selected, on_path) =
+            default_install_command_dir(&data_dir.display().to_string(), &env)
+                .expect("receipted command directory");
+
+        assert_eq!(selected, command_dir.display().to_string());
+        assert!(on_path);
+        assert!(!earlier_path_dir.join(binary_name()).exists());
+    }
+
+    #[test]
+    fn existing_product_receipt_still_selects_missing_command_for_repair() {
+        let workspace = TempWorkspace::new("cli-receipted-missing-command-repair");
+        let (data_dir, command_dir, earlier_path_dir) =
+            record_test_product_installation(&workspace);
+        fs::remove_file(command_dir.join(binary_name())).expect("remove managed command");
+        let env = |key: &str| match key {
+            "PATH" => Some(earlier_path_dir.display().to_string()),
+            _ => None,
+        };
+
+        let (selected, on_path) =
+            default_install_command_dir(&data_dir.display().to_string(), &env)
+                .expect("receipted missing command directory");
+
+        assert_eq!(selected, command_dir.display().to_string());
+        assert!(!on_path);
+    }
+
+    #[test]
+    fn existing_product_receipt_still_selects_stale_command_for_repair() {
+        let workspace = TempWorkspace::new("cli-receipted-stale-command-repair");
+        let (data_dir, command_dir, earlier_path_dir) =
+            record_test_product_installation(&workspace);
+        fs::write(command_dir.join(binary_name()), b"stale-command")
+            .expect("drift managed command");
+        let env = |key: &str| match key {
+            "PATH" => Some(earlier_path_dir.display().to_string()),
+            _ => None,
+        };
+
+        let (selected, on_path) =
+            default_install_command_dir(&data_dir.display().to_string(), &env)
+                .expect("receipted stale command directory");
+
+        assert_eq!(selected, command_dir.display().to_string());
+        assert!(!on_path);
+    }
+
+    #[test]
+    fn malformed_product_receipt_blocks_path_fallback() {
+        let workspace = TempWorkspace::new("cli-malformed-receipt-blocks-path");
+        let root = workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace");
+        let data_dir = root.join("data");
+        let receipts = data_dir.join("receipts");
+        let earlier_path_dir = root.join("conda-bin");
+        fs::create_dir_all(&receipts).expect("receipts dir");
+        fs::create_dir_all(&earlier_path_dir).expect("earlier PATH dir");
+        fs::write(receipts.join("product-install.json"), b"{}\n").expect("malformed receipt");
+        let env = |key: &str| match key {
+            "PATH" => Some(earlier_path_dir.display().to_string()),
+            _ => None,
+        };
+
+        let error = default_install_command_dir(&data_dir.display().to_string(), &env)
+            .expect_err("malformed receipt must fail closed");
+
+        assert!(error.contains("product receipt command is malformed"));
+    }
+
+    #[test]
+    fn explicit_command_dir_keeps_precedence_over_product_receipt() {
+        let workspace = TempWorkspace::new("cli-explicit-command-dir-precedence");
+        let (data_dir, _receipted_command_dir, earlier_path_dir) =
+            record_test_product_installation(&workspace);
+        let explicit_command_dir = workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace")
+            .join("explicit-bin");
+        fs::create_dir_all(&explicit_command_dir).expect("explicit command dir");
+        let env = |key: &str| match key {
+            "REPOGRAMMAR_COMMAND_DIR" => Some(explicit_command_dir.display().to_string()),
+            "PATH" => Some(earlier_path_dir.display().to_string()),
+            _ => None,
+        };
+
+        let (selected, on_path) =
+            default_install_command_dir(&data_dir.display().to_string(), &env)
+                .expect("explicit command directory");
+
+        assert_eq!(selected, explicit_command_dir.display().to_string());
+        assert!(!on_path);
+    }
 
     fn resolved_unit_target() -> ResolvedQueryTarget {
         ResolvedQueryTarget {

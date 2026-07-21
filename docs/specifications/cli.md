@@ -944,6 +944,12 @@ missing, has a different scope or executable, or does not use exactly the
 `serve` argument is drifted. Foreign and drifted states are preserved and block
 automatic repair. After configuration, both the exact native entry and the
 installed product's exact-one-tool MCP surface must be verified before success.
+When `REPOGRAMMAR_COMMAND_DIR` is absent, bare `install` and the install stage
+shared by `setup` validate and reuse an existing product receipt's exact command
+directory before writable-PATH discovery. A Conda or virtual-environment PATH
+prefix therefore cannot redirect an already receipted managed command. Invalid
+receipt identity fails closed instead of falling back to PATH; an explicit
+command-directory override retains the existing strict validation semantics.
 Re-running `install` refreshes only a RepoGrammar-managed command path and
 skips native agent add commands for already managed target receipts. When the
 selected managed binary or managed command copy already exists, refresh stages

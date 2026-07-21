@@ -1,24 +1,26 @@
 # Limitations
 
-RepoGrammar's current source identity and latest verified public stable release
-are `0.4.2`. The matching immutable GitHub Release, npm package, provenance,
-dist-tags, and public product smokes are recorded independently in the stable
-checklist; manifest identity alone is never publication proof. The MCP API and
-bounded analyzers remain experimental. RepoGrammar is designed to be
+RepoGrammar's current source identity is `0.4.3`; the latest independently
+verified public stable remains `0.4.2` until the `0.4.3` finalizer completes.
+The matching immutable GitHub Release, npm package, provenance, dist-tags, and
+public product smokes are recorded independently in the stable checklist;
+manifest identity alone is never publication proof. The MCP API and bounded
+analyzers remain experimental. RepoGrammar is designed to be
 conservative and local-first, not a sound general static analyzer or a
 production-readiness claim.
 
 ## Release Availability
 
-- Stable artifacts are available from the exact immutable `v0.4.2` GitHub
-  Release and independently verified npm `@sioyooo/repogrammar@0.4.2` package.
+- The exact immutable `v0.4.3` GitHub Release and independently verified npm
+  `@sioyooo/repogrammar@0.4.3` package become public authority only after the
+  complete candidate, approval, and finalizer gates pass.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood remains the explicit contributor path; public users
   should use the pinned release installer or npm launcher.
-- The completed `0.4.2` rollout and finalizer evidence are tracked in
-  `release/stable-v0.4.2-release-checklist.md`. The verified `0.4.1` and earlier
-  preview records remain historical evidence.
+- The pending `0.4.3` rollout and finalizer evidence are tracked in
+  `release/stable-v0.4.3-release-checklist.md`. The verified `0.4.2` and earlier
+  records remain historical evidence.
 
 ## Language And Framework Scope
 
@@ -332,7 +334,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   parse-document response is a future optimization. Adds/removes that only touch
   an isolated path also remain future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in `0.4.2`; a dedicated `ready`
+  signal reports at most `partial` in `0.4.3`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and

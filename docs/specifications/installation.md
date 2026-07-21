@@ -157,10 +157,10 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-candidate and post-publication documentation should pin `v0.4.2` for
-reproducible acquisition. Public-install claims may identify `v0.4.2` as the
-latest verified public stable because its GitHub, npm, provenance, and finalizer
-evidence all passed. When a `latest` or explicit artifact lookup fails,
+candidate and post-publication documentation should pin `v0.4.3` for
+reproducible acquisition. Public-install claims may identify `v0.4.3` as the
+latest verified public stable only after its GitHub, npm, provenance, and
+finalizer evidence all pass. When a `latest` or explicit artifact lookup fails,
 installers must report
 that the release artifact was not found, suggest the exact
 `--version <release-tag>`, and mention `REPOGRAMMAR_RELEASE_DIR` for local
@@ -189,12 +189,13 @@ contributor source-build path. It must not duplicate native agent configuration
 or product-deletion ownership logic outside the Rust application, and it must
 not create or modify `.repogrammar/`.
 
-The current release-source manifests use stable identity `0.4.2`. A source
+The current release-source manifests use stable identity `0.4.3`. A source
 build or source install must report that identity consistently across Cargo and
 npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
-to the independently verified public `0.4.2` GitHub Release and npm package;
-the source manifest by itself remains insufficient evidence.
+to the independently verified public `0.4.2` GitHub Release and npm package
+until the `0.4.3` public finalizer passes; the source manifest by itself remains
+insufficient evidence.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
@@ -310,7 +311,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.4.2.tgz` for the current
+  `npm install -g ./sioyooo-repogrammar-0.4.3.tgz` for the current
   source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
@@ -519,6 +520,16 @@ non-symlink file with the exact schema and fixed paths. Install/update may
 refresh owned hashes but must refuse malformed, foreign, escaped, or
 symlinked ownership evidence. If a later install step fails, the exact previous
 receipt bytes are restored or a newly created receipt is removed.
+
+When `REPOGRAMMAR_COMMAND_DIR` is not explicitly set, a present product receipt
+is the authority for later command-directory selection. Install execution must
+validate the receipt's fixed paths and reuse the parent of its exact
+`command.path` before considering writable PATH entries or the user default.
+PATH order is advisory and must not relocate a receipted command, including
+when Conda or a virtual environment prepends another writable directory. A
+malformed, foreign, escaped, or symlinked receipt fails closed without PATH
+fallback. An explicit `REPOGRAMMAR_COMMAND_DIR` keeps its existing strict
+relocation/update semantics and is never silently overridden by the receipt.
 
 When no receipt exists, legacy inference is conservative and all-or-nothing.
 It requires the exact authority location, a command that is the authority, an
@@ -812,6 +823,11 @@ noninteractive live writes, and a dependency-light text wizard:
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
   when possible and points agent MCP entries at the installed command binary.
+  A later bare `install` or setup install stage without an explicit command-dir
+  override reuses a valid product receipt's exact command directory before PATH
+  discovery, so environment-specific writable PATH prefixes cannot redirect the
+  managed command. Missing or stale managed command bytes remain repairable by
+  the existing install transaction, while invalid receipt identity fails closed.
   When a RepoGrammar-managed agent entry already exists but records an executable
   that no longer matches the current authority (for example after the install
   data directory changed), install re-points that entry at the authority by
