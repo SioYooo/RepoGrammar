@@ -278,17 +278,15 @@
       "query_id": "py-explain-app",
       "fixture_id": "python-v0_1",
       "kind": "explain_deviation",
-      "intent": "context",
+      "intent": "abstention",
       "operation": "explain",
       "target": "fastapi-basic/app.py",
       "mode": "compact",
       "expected": {
-        "outcome": "partial_context",
-        "route": "partial_context_read_plan",
-        "candidates_include": [
-          "family:python:fastapi_route",
-          "family:python:pydantic_model"
-        ]
+        "outcome": "unknown",
+        "route": "conformance_static_alignment",
+        "alignment_status": "INSUFFICIENT_EVIDENCE",
+        "unknown_reason": "InsufficientSupport"
       }
     },
     {
