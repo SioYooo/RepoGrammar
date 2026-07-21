@@ -36,6 +36,7 @@ use crate::application::query::{
     ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
     UnknownInventoryLanguageSummary,
 };
+use crate::application::query_resolution::Resolution;
 use crate::application::recovery::{
     recovery_command, recovery_guidance, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth,
     RecoveryLockState,
@@ -2859,6 +2860,7 @@ fn family_partial_context_json(
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&report.unknowns),
     });
+    insert_resolution(&mut value, report.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut value, source_spans, options.verbosity);
     json_line(value)
 }
@@ -2973,8 +2975,44 @@ fn family_detail_json(
         "source_spans": source_spans_json(source_spans),
         "unknowns": unknowns_json(&family.unknowns),
     });
+    insert_resolution(&mut payload, family.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
     json_line(payload)
+}
+
+/// The additive top-level `resolution` object (CLI shape, byte-parallel with the
+/// MCP [`resolution_value`] renderer). Renders the candidate-set cardinality
+/// (`none`/`one`/`many`/`truncated`) plus bounded, source-free candidate
+/// summaries, and never a `selected_family_id`.
+fn resolution_json(resolution: &Resolution) -> serde_json::Value {
+    json!({
+        "cardinality": resolution.cardinality.as_str(),
+        "candidates": resolution
+            .candidates
+            .iter()
+            .map(|candidate| json!({
+                "family_id": candidate.family_id,
+                "summary": candidate.summary,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Insert the additive `resolution` object into a family response value when the
+/// report carries one and the requested verbosity renders `Standard`-tier fields.
+/// A `None` resolution (every non-scope outcome) leaves the value byte-stable.
+fn insert_resolution(
+    value: &mut serde_json::Value,
+    resolution: Option<&Resolution>,
+    verbosity: Verbosity,
+) {
+    if let Some(resolution) = resolution {
+        if verbosity.renders(VerbosityTier::Standard) {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("resolution".to_string(), resolution_json(resolution));
+            }
+        }
+    }
 }
 
 /// Source-free JSON for the `query_route` envelope (CLI shape, byte-parallel with
@@ -10786,6 +10824,7 @@ mod tests {
                 }],
                 constraint_profile: None,
                 term_retrieval: None,
+                resolution: None,
             }
         }
 
@@ -10986,7 +11025,7 @@ mod tests {
                 }
             };
             if matched {
-                Ok(FamilyLookupReport::Found(Self::detail()))
+                Ok(FamilyLookupReport::Found(Box::new(Self::detail())))
             } else {
                 Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
                     active_generation: "gen-000001".to_string(),
@@ -14442,6 +14481,118 @@ mod tests {
             savings_rollup["by_language"]["typescript/javascript"]["event_count"],
             1
         );
+    }
+
+    /// A directory-scope PARTIAL_CONTEXT report with a `many` resolution, built
+    /// directly so the serializer contract can be asserted without a fixture repo.
+    fn directory_scope_many_report() -> FamilyPartialContextReport {
+        use crate::application::query_resolution::{
+            Resolution, ResolutionCandidate, ResolutionCardinality,
+        };
+        let fastapi = "family:python:fastapi_route:framework_fastapi_route";
+        let sqlalchemy = "family:python:sqlalchemy_model:framework_sqlalchemy_model";
+        FamilyPartialContextReport {
+            active_generation: "gen-000001".to_string(),
+            resolved_target: ResolvedQueryTarget {
+                original_target: "app/api".to_string(),
+                kind: "directory_scope",
+                path: "app/api".to_string(),
+                line: None,
+                byte_range: None,
+                family_id: None,
+                code_unit_id: None,
+                symbol_hints: Vec::new(),
+                residue_terms: Vec::new(),
+                candidate_paths: vec![
+                    "app/api/models.py".to_string(),
+                    "app/api/routes.py".to_string(),
+                ],
+                candidate_family_ids: vec![fastapi.to_string(), sqlalchemy.to_string()],
+                candidate_code_unit_ids: Vec::new(),
+                confidence: "scope",
+                match_kind: "directory_scope",
+            },
+            read_plan: ReadPlan {
+                items: Vec::new(),
+                estimated_tokens: 0,
+                source_snippets_included: false,
+                requires_source_before_edit: false,
+                selection_strategy: "directory_scope_no_read_plan",
+                budget_satisfied: true,
+                truncated: false,
+                line_range_omissions: Vec::new(),
+            },
+            resolved_file_size_bytes: None,
+            resolved_file_language: String::new(),
+            unknowns: vec![FamilyQueryUnknown {
+                class: crate::core::model::UnknownClass::Blocking,
+                reason: crate::core::model::UnknownReasonCode::InsufficientSupport,
+                affected_claim: "pattern family evidence for resolved directory scope".to_string(),
+                recovery: Some("pick one from resolution.candidates".to_string()),
+            }],
+            resolution: Some(Resolution {
+                cardinality: ResolutionCardinality::Many,
+                candidates: vec![
+                    ResolutionCandidate {
+                        family_id: fastapi.to_string(),
+                        summary: "python fastapi.route · DOMINANT_PATTERN".to_string(),
+                    },
+                    ResolutionCandidate {
+                        family_id: sqlalchemy.to_string(),
+                        summary: "python sqlalchemy.model · DOMINANT_PATTERN".to_string(),
+                    },
+                ],
+            }),
+        }
+    }
+
+    #[test]
+    fn cli_partial_context_resolution_many_never_selects_and_keeps_minimal_handles() {
+        let fastapi = "family:python:fastapi_route:framework_fastapi_route";
+        let sqlalchemy = "family:python:sqlalchemy_model:framework_sqlalchemy_model";
+        let report = directory_scope_many_report();
+        let route = family_query_route_report(
+            &FamilyLookupReport::PartialContext(Box::new(report.clone())),
+            FamilyLookupMode::FuzzyQuery,
+        );
+        let options = FamilyOutputOptions::default();
+
+        // Standard: the additive `resolution` object carries `many`, both candidate
+        // summaries, and never a `selected_family_id`.
+        let value: Value = serde_json::from_str(&family_partial_context_json(
+            "find", &report, &route, options, None, None,
+        ))
+        .expect("partial context json");
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["resolution"]["cardinality"], "many");
+        assert_eq!(
+            value["resolution"]["candidates"]
+                .as_array()
+                .expect("candidates")
+                .len(),
+            2
+        );
+        assert_eq!(value["resolution"]["candidates"][0]["family_id"], fastapi);
+        assert!(value["resolution"]["candidates"][0]["summary"].is_string());
+        assert!(value["resolution"].get("selected_family_id").is_none());
+        assert!(value["query_route"]["selected_family_id"].is_null());
+
+        // Minimal: the rich object is dropped, but the narrowing handles survive on
+        // `query_route.follow_up_family_ids`.
+        let minimal = FamilyOutputOptions {
+            verbosity: Verbosity::Minimal,
+            ..options
+        };
+        let value_min: Value = serde_json::from_str(&family_partial_context_json(
+            "find", &report, &route, minimal, None, None,
+        ))
+        .expect("minimal partial context json");
+        assert!(value_min.get("resolution").is_none());
+        let handles = value_min["query_route"]["follow_up_family_ids"]
+            .as_array()
+            .expect("follow-up handles");
+        assert!(handles.iter().any(|handle| handle == fastapi));
+        assert!(handles.iter().any(|handle| handle == sqlalchemy));
     }
 
     #[test]

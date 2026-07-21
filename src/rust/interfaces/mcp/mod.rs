@@ -20,6 +20,7 @@ use crate::application::query::{
 use crate::application::query::{
     ReadPlanPurpose, RenderedSourceSpan, SourceSpanOmission, SourceSpanPolicy,
 };
+use crate::application::query_resolution::Resolution;
 use crate::application::repository::{RepositoryStatusReport, RepositoryStatusRequest};
 use crate::application::telemetry::{
     record_family_query_metric, FamilyQueryCommandCategory, FamilyQueryEntrypoint,
@@ -1184,6 +1185,7 @@ fn family_detail_value(
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&family.unknowns),
     });
+    insert_resolution(&mut payload, family.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
     payload
 }
@@ -1221,6 +1223,7 @@ fn family_partial_context_value(
         "source_spans": source_spans_value(source_spans),
         "unknowns": unknowns_value(&report.unknowns),
     });
+    insert_resolution(&mut payload, report.resolution.as_ref(), options.verbosity);
     drop_unrequested_source_spans(&mut payload, source_spans, options.verbosity);
     payload
 }
@@ -1497,6 +1500,39 @@ fn term_retrieval_value(term: &TermRetrievalRoute) -> Value {
         })),
         "abstention_reason": term.abstention_reason.map(|reason| reason.as_str()),
     })
+}
+
+/// The additive top-level `resolution` object (MCP shape). Renders the
+/// candidate-set cardinality (`none`/`one`/`many`/`truncated`) and bounded,
+/// source-free candidate summaries. It never carries a `selected_family_id`: a
+/// `many`/`none`/`truncated` resolution is a candidate set, not a selection.
+/// Rendered at `standard`/`full` only (`Standard` tier); at `minimal` the
+/// narrowing family handles are preserved by `query_route` instead.
+fn resolution_value(resolution: &Resolution) -> Value {
+    json!({
+        "cardinality": resolution.cardinality.as_str(),
+        "candidates": resolution
+            .candidates
+            .iter()
+            .map(|candidate| json!({
+                "family_id": candidate.family_id,
+                "summary": candidate.summary,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Insert the additive `resolution` object into a family response payload when the
+/// report carries one and the requested verbosity renders `Standard`-tier fields.
+/// A `None` resolution (every non-scope outcome) leaves the payload byte-stable.
+fn insert_resolution(payload: &mut Value, resolution: Option<&Resolution>, verbosity: Verbosity) {
+    if let Some(resolution) = resolution {
+        if verbosity.renders(VerbosityTier::Standard) {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("resolution".to_string(), resolution_value(resolution));
+            }
+        }
+    }
 }
 
 fn resolved_target_value(target: &ResolvedQueryTarget, verbosity: Verbosity) -> Value {
@@ -2812,7 +2848,7 @@ mod tests {
             options,
         );
         let route = family_query_route_report(
-            &FamilyLookupReport::Found(family.clone()),
+            &FamilyLookupReport::Found(Box::new(family.clone())),
             FamilyLookupMode::FuzzyQuery,
         );
         let estimate = EstimatedPotentialTokenSavings::new(1, 1);
@@ -2849,6 +2885,146 @@ mod tests {
         assert_eq!(deep["member_count"], total);
         assert_eq!(deep["members_truncated"], false);
         assert_eq!(deep["members"].as_array().expect("members").len(), total);
+    }
+
+    #[test]
+    fn found_resolution_one_renders_additively_and_drops_at_minimal() {
+        use crate::application::query_resolution::{
+            Resolution, ResolutionCandidate, ResolutionCardinality,
+        };
+        let mut family = family_detail();
+        family.resolution = Some(Resolution {
+            cardinality: ResolutionCardinality::One,
+            candidates: vec![ResolutionCandidate {
+                family_id: family.family_id.clone(),
+                summary: "typescript express.route · DOMINANT_PATTERN".to_string(),
+            }],
+        });
+        let options = FamilyOutputOptions::default();
+        let read_plan = build_read_plan(
+            &family,
+            Some("src/routes/a.ts"),
+            FamilyLookupMode::FuzzyQuery,
+            options,
+        );
+        let route = family_query_route_report(
+            &FamilyLookupReport::Found(Box::new(family.clone())),
+            FamilyLookupMode::FuzzyQuery,
+        );
+        let estimate = EstimatedPotentialTokenSavings::new(1, 1);
+
+        // Standard: the additive `resolution` object is rendered with cardinality
+        // `one`, its single candidate, and NO `selected_family_id` inside it.
+        let value = family_detail_value(
+            McpOperation::FindAnalogues,
+            &family,
+            &route,
+            &read_plan,
+            options,
+            None,
+            &estimate,
+        );
+        assert_eq!(value["resolution"]["cardinality"], "one");
+        assert_eq!(
+            value["resolution"]["candidates"][0]["family_id"],
+            family.family_id
+        );
+        assert!(value["resolution"]["candidates"][0]["summary"].is_string());
+        assert!(value["resolution"].get("selected_family_id").is_none());
+
+        // Minimal: the object is dropped (Standard tier); the family itself is
+        // still in the `family` block, so no narrowing handle is lost.
+        let minimal = FamilyOutputOptions {
+            verbosity: Verbosity::Minimal,
+            ..options
+        };
+        let value_min = family_detail_value(
+            McpOperation::FindAnalogues,
+            &family,
+            &route,
+            &read_plan,
+            minimal,
+            None,
+            &estimate,
+        );
+        assert!(value_min.get("resolution").is_none());
+    }
+
+    #[test]
+    fn partial_context_resolution_many_never_selects_and_keeps_minimal_handles() {
+        use crate::application::query_resolution::{
+            Resolution, ResolutionCandidate, ResolutionCardinality,
+        };
+        let fastapi = "family:python:fastapi_route:framework_fastapi_route";
+        let sqlalchemy = "family:python:sqlalchemy_model:framework_sqlalchemy_model";
+        let FamilyLookupReport::PartialContext(mut report) = partial_context_report() else {
+            panic!("expected partial context");
+        };
+        report.resolution = Some(Resolution {
+            cardinality: ResolutionCardinality::Many,
+            candidates: vec![
+                ResolutionCandidate {
+                    family_id: fastapi.to_string(),
+                    summary: "python fastapi.route · DOMINANT_PATTERN".to_string(),
+                },
+                ResolutionCandidate {
+                    family_id: sqlalchemy.to_string(),
+                    summary: "python sqlalchemy.model · DOMINANT_PATTERN".to_string(),
+                },
+            ],
+        });
+        report.resolved_target.candidate_family_ids =
+            vec![fastapi.to_string(), sqlalchemy.to_string()];
+        let route = family_query_route_report(
+            &FamilyLookupReport::PartialContext(report.clone()),
+            FamilyLookupMode::FuzzyQuery,
+        );
+        let options = FamilyOutputOptions::default();
+
+        // Standard: cardinality `many`, both candidate summaries, and NEVER a
+        // `selected_family_id` — neither inside `resolution` nor on the route.
+        let value = family_partial_context_value(
+            McpOperation::FindAnalogues,
+            &report,
+            &route,
+            &report.read_plan,
+            options,
+            None,
+            None,
+        );
+        assert_eq!(value["status"], "PARTIAL_CONTEXT");
+        assert_eq!(value["resolution"]["cardinality"], "many");
+        assert_eq!(
+            value["resolution"]["candidates"]
+                .as_array()
+                .expect("candidates")
+                .len(),
+            2
+        );
+        assert!(value["resolution"].get("selected_family_id").is_none());
+        assert!(value["query_route"]["selected_family_id"].is_null());
+
+        // Minimal: the rich object is dropped, but the narrowing family handles
+        // survive on `query_route.follow_up_family_ids`.
+        let minimal = FamilyOutputOptions {
+            verbosity: Verbosity::Minimal,
+            ..options
+        };
+        let value_min = family_partial_context_value(
+            McpOperation::FindAnalogues,
+            &report,
+            &route,
+            &report.read_plan,
+            minimal,
+            None,
+            None,
+        );
+        assert!(value_min.get("resolution").is_none());
+        let handles = value_min["query_route"]["follow_up_family_ids"]
+            .as_array()
+            .expect("follow-up handles");
+        assert!(handles.iter().any(|handle| handle == fastapi));
+        assert!(handles.iter().any(|handle| handle == sqlalchemy));
     }
 
     #[test]
@@ -3382,7 +3558,7 @@ mod tests {
                 RepositoryStatus::Initialized {
                     active_generation: "gen-000001".to_string(),
                 },
-                FamilyLookupReport::Found(family_detail()),
+                FamilyLookupReport::Found(Box::new(family_detail())),
             )
         }
 
@@ -3615,6 +3791,7 @@ mod tests {
                         .to_string(),
                 ),
             }],
+            resolution: None,
         }))
     }
 
@@ -3658,6 +3835,7 @@ mod tests {
             }],
             constraint_profile: None,
             term_retrieval: None,
+            resolution: None,
         }
     }
 

@@ -1305,7 +1305,29 @@ taken from the indexed file inventory's stored size; when that size is
 unavailable the block reports null counts with an `unavailable_reason` rather
 than a guessed number. Alignment (`check`) certificates carry the same block
 with `outcome_shape: alignment`; an abstaining certificate reports the null
-block. Exact `family` and `member` lookups continue to return
+block.
+
+When a `find`/`explain` target names a **directory / composite scope**, the
+command reports the resolved candidate-set cardinality through an additive
+top-level `resolution` object (byte-parallel with the MCP shape; see
+`docs/specifications/mcp-api.md` and ADR-0029). No new top-level status token is
+added — the response stays on `product-schemas.v1`:
+
+```json
+"resolution": { "cardinality": "none|one|many|truncated", "candidates": [ { "family_id": "family:...", "summary": "python fastapi.route · DOMINANT_PATTERN" } ] }
+```
+
+A single proven in-scope family is `status: ok` + `resolution.cardinality: one`;
+several in-scope families are `PARTIAL_CONTEXT` + `many` (bounded candidate
+summaries, **never** a `selected_family_id`); a resolved-but-familyless scope is
+`PARTIAL_CONTEXT` + `none` (empty candidates); a bounded read that may hide
+families is `PARTIAL_CONTEXT` + `truncated`. Each candidate `summary` is projected
+from the family search-summary projection (never a hydrated deep family, never raw
+source). `resolution` is an additive `standard`/`full` field, dropped at
+`--verbosity minimal`; for `many`/`truncated` the candidate `family_id`s are also
+carried on `resolved_target.candidate_family_ids` and
+`query_route.follow_up_family_ids`, which are retained at `minimal`, so no
+narrowing handle is lost. Exact `family` and `member` lookups continue to return
 typed `UNKNOWN` when their exact ids are missing. `family`, `member`, `find`,
 `explain`, and `check` JSON outputs must include `query_route` with `route`,
 `input_kind`, `pipeline`, `family_id_policy`, `candidate_limit`,

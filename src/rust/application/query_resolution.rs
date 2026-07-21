@@ -130,6 +130,59 @@ pub enum ResolutionCardinality {
     Truncated,
 }
 
+impl ResolutionCardinality {
+    /// The stable, low-cardinality projection token rendered as
+    /// `resolution.cardinality` and safe to record in telemetry. The four values
+    /// (`none`/`one`/`many`/`truncated`) are the additive candidate-set vocabulary
+    /// of `product-schemas.v1`; no new top-level status token was introduced.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::One => "one",
+            Self::Many => "many",
+            Self::Truncated => "truncated",
+        }
+    }
+}
+
+/// One bounded, source-free candidate in a resolution candidate set.
+///
+/// Identity is limited to the already-public [`ResolutionCandidate::family_id`]
+/// handle; [`ResolutionCandidate::summary`] is a short, source-free line projected
+/// from the committed family search-summary projection (never a hydrated deep
+/// family, never raw source). Safe to surface as a narrowing handle at any
+/// verbosity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolutionCandidate {
+    /// The already-public pattern-family handle.
+    pub family_id: String,
+    /// A short, source-free summary line drawn from the family search-summary
+    /// projection (framework role / classification / language), empty when the
+    /// projection carried no row for this family.
+    pub summary: String,
+}
+
+/// The additive, source-free candidate-set / scope-resolution projection carried
+/// on a resolved lookup report and rendered as the top-level `resolution` object.
+///
+/// It expresses cardinality WITHOUT a new top-level status token: a single
+/// resolved family is [`ResolutionCardinality::One`] on a FOUND outcome; a
+/// resolved locus with several in-scope families is [`ResolutionCardinality::Many`]
+/// on a PARTIAL_CONTEXT outcome with bounded candidate summaries and NO selected
+/// family; a resolved locus with no family is [`ResolutionCardinality::None`]; a
+/// bounded read that could hide further families is
+/// [`ResolutionCardinality::Truncated`]. The candidate set is a bounded set of
+/// narrowing handles, never a selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolution {
+    /// How many families the resolved locus mapped to.
+    pub cardinality: ResolutionCardinality,
+    /// Bounded, source-free candidate handles (present for `one`/`many`/`truncated`;
+    /// empty for `none`). Never a selection: a `many`/`none`/`truncated` resolution
+    /// must never carry a selected family id.
+    pub candidates: Vec<ResolutionCandidate>,
+}
+
 /// A typed conflict detected while parsing hard constraints. Represented, never
 /// resolved, in Phase 1.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -659,5 +712,36 @@ mod tests {
                 assert_eq!(index == other, left == right);
             }
         }
+    }
+
+    #[test]
+    fn resolution_cardinality_tokens_are_the_additive_vocabulary() {
+        // The stable low-cardinality tokens rendered as `resolution.cardinality`.
+        assert_eq!(ResolutionCardinality::None.as_str(), "none");
+        assert_eq!(ResolutionCardinality::One.as_str(), "one");
+        assert_eq!(ResolutionCardinality::Many.as_str(), "many");
+        assert_eq!(ResolutionCardinality::Truncated.as_str(), "truncated");
+    }
+
+    #[test]
+    fn resolution_carries_bounded_source_free_candidate_handles() {
+        let resolution = Resolution {
+            cardinality: ResolutionCardinality::Many,
+            candidates: vec![
+                ResolutionCandidate {
+                    family_id: "family:python:fastapi_route:framework_fastapi_route".to_string(),
+                    summary: "python fastapi.route · DOMINANT_PATTERN".to_string(),
+                },
+                ResolutionCandidate {
+                    family_id: "family:python:sqlalchemy_model:framework_sqlalchemy_model"
+                        .to_string(),
+                    summary: "python sqlalchemy.model · DOMINANT_PATTERN".to_string(),
+                },
+            ],
+        };
+        assert_eq!(resolution.cardinality, ResolutionCardinality::Many);
+        assert_eq!(resolution.candidates.len(), 2);
+        // Identity is limited to the already-public family handle.
+        assert!(resolution.candidates[0].family_id.starts_with("family:"));
     }
 }

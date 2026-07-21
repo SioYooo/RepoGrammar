@@ -254,9 +254,54 @@ the shared `resolved_target` serializer suppresses the pure input echo
 echoes an already-resolved locus (the `check_conformance` target echo); when
 resolution stayed genuinely ambiguous — no single path, family, or unit pinned —
 the corresponding candidate list is retained as the caller's narrowing handle.
-`standard` and `full` keep the complete field set byte-for-byte. Exact `show_family`
+`standard` and `full` keep the complete field set byte-for-byte.
+
+#### The additive `resolution` object (candidate-set cardinality)
+
+`find_analogues` and `explain_deviation` (the `FuzzyQuery` operations) can resolve
+a **directory / composite scope** to a set of pattern families. RepoGrammar
+reports the cardinality of that set through an additive top-level `resolution`
+object rather than a new top-level status token — the response stays on
+`product-schemas.v1` (see ADR-0029 for the compatibility rationale, and
+`docs/specifications/query-resolution.md` for the resolver). Shape:
+
+```json
+"resolution": {
+  "cardinality": "none" | "one" | "many" | "truncated",
+  "candidates": [ { "family_id": "family:...", "summary": "python fastapi.route · DOMINANT_PATTERN" } ]
+}
+```
+
+- `one` → the existing `FOUND` (`status: "ok"`) outcome: a single proven in-scope
+  family, hydrated normally; it is the sole `resolution.candidate`.
+- `many` → `PARTIAL_CONTEXT`: several distinct in-scope families with **no**
+  selection. `resolution.candidates` lists the bounded, source-free candidate
+  summaries; `resolution` **never** carries a `selected_family_id`.
+- `none` → `PARTIAL_CONTEXT`: the directory locus resolved to indexed files but no
+  matching family; `resolution.candidates` is empty.
+- `truncated` → `PARTIAL_CONTEXT`: the bounded scope read may hide further
+  families, so the families seen so far are candidates and no single family is
+  claimed.
+
+Each candidate `summary` is a short line projected from the committed family
+search-summary projection (language, framework role or code-unit kind,
+classification) — never a hydrated deep family and never raw source. The
+`cardinality` token is a low-cardinality enum safe to record in telemetry; the
+candidate `family_id`s are already-public handles. `resolution.candidates` is
+bounded by the same fuzzy candidate cap.
+
+The `resolution` object is an additive **`standard`/`full`** field: non-scope
+outcomes never carry it, so their bytes are unchanged, and it is dropped at
+`verbosity: minimal`. Dropping it at `minimal` loses no narrowing handle — for a
+`many`/`truncated` PARTIAL_CONTEXT the candidate `family_id`s are also on the
+resolved target's `candidate_family_ids` and therefore on
+`query_route.follow_up_family_ids`, both of which are retained at `minimal`.
+
+Exact `show_family`
 lookups still require an exact family id and return typed `UNKNOWN` when that
-family id is missing. `check_conformance` responses carry the static-alignment
+family id is missing. `show_family` never enters the fuzzy scope path, so it never
+carries a candidate-set `resolution` and never hydrates more than the one exact
+family. `check_conformance` responses carry the static-alignment
 certificate fields: `alignment_status`, `runtime_equivalence` (always
 `"UNKNOWN"`), `target_relationship`, `selected_family_id`, `target` (the
 resolved code-unit locator), and `alignment` (the computation — `outcome_reason`,

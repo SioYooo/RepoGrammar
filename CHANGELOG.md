@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added an additive top-level `resolution` object to `find_analogues` /
+  `explain_deviation` (CLI `find`/`explain`) responses that resolve a directory or
+  composite scope. It projects the candidate-set cardinality
+  (`one`/`many`/`none`/`truncated`) plus bounded, source-free `{family_id, summary}`
+  candidate handles, so a multi-family scope surfaces every real in-scope family
+  instead of collapsing into a generic `UNKNOWN`. The cardinality token is
+  telemetry-safe and the candidate summaries are projected from the committed
+  family search-summary projection (never a hydrated deep family, never raw
+  source). No new top-level status token was introduced — the response stays on
+  `product-schemas.v1` (see ADR-0029). `resolution` renders at `standard`/`full`
+  and is dropped at `minimal`, where the candidate `family_id`s remain available as
+  narrowing handles on `query_route.follow_up_family_ids`.
+
+### Changed
+
+- Changed a directory/composite scope that resolves to more than one in-scope
+  pattern family (or to a truncated bounded read) from a typed `UNKNOWN` to a
+  `PARTIAL_CONTEXT` outcome carrying `resolution.cardinality: "many"` /
+  `"truncated"`. A single proven in-scope family remains `FOUND`
+  (`resolution.cardinality: "one"`) and a resolved-but-familyless scope remains
+  `PARTIAL_CONTEXT` (`resolution.cardinality: "none"`). A `many`/`none`/`truncated`
+  resolution never carries a `selected_family_id` — committed family precision is
+  unchanged (a family is selected only when exactly one high-confidence family
+  resolves). Non-scope outcomes are byte-unchanged.
+
 ## 0.4.0 — 2026-07-20 stable channel
 
 RepoGrammar `0.4.0` is the forward-only Build Week stable candidate. The

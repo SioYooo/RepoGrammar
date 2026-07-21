@@ -416,6 +416,17 @@ abstention (a typed `UNKNOWN`, never an emitted family) rather than certainty.
 See `domain-model.md` for the `FamilyPrevalence` record and classification
 rule.
 
+A family is **selected** (`FOUND`) only when exactly one high-confidence family
+resolves. When a fuzzy target resolves a **directory or composite scope** to more
+than one in-scope family, RepoGrammar must never collapse the set into a single
+guess or a generic `UNKNOWN`: it reports `PARTIAL_CONTEXT` and projects the
+candidate-set cardinality through an additive `resolution` object
+(`cardinality: one|many|none|truncated` plus bounded, source-free
+`{family_id, summary}` candidates). A `many`/`none`/`truncated` resolution carries
+**no** `selected_family_id` — the candidates are narrowing handles, not a claim.
+The cardinality is expressed additively on `product-schemas.v1`, without a new
+top-level status token (see ADR-0029 and `docs/specifications/query-resolution.md`).
+
 Structural similarity may generate candidates, but it must not by itself prove
 semantic family membership. Language-native semantic facts take precedence over
 framework heuristics and syntax-only fingerprints. Syntax-origin framework-role

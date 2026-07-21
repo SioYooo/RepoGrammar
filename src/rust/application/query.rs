@@ -9,7 +9,8 @@ use crate::application::family::{
 };
 use crate::application::providers::{provider_recovery_code, ProviderSlotStatus};
 use crate::application::query_resolution::{
-    normalize_directory_prefix, parse_target, TargetConflict, TargetConstraints,
+    normalize_directory_prefix, parse_target, Resolution, ResolutionCandidate,
+    ResolutionCardinality, TargetConflict, TargetConstraints,
 };
 use crate::application::query_terms::{normalize_query, score_family_candidates, MatchedSignals};
 use crate::application::recovery::{
@@ -38,7 +39,8 @@ use crate::error::RepoGrammarError;
 use crate::ports::family_store::{
     ActiveFamily, ActiveFamilyCandidates, FamilyConstraintProfileStore, FamilyStore,
     IndexedFamilyCandidateRecord, IndexedFamilyEvidenceProjectionRecord,
-    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedVariationSlotRecord, StoreError,
+    IndexedFamilyEvidenceRecord, IndexedFamilyMemberRecord, IndexedFamilySearchSummaryRecord,
+    IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
     ActiveRepoShapeStats, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
@@ -372,6 +374,11 @@ pub struct FamilyDetailReport {
     /// Present only when the deterministic term-retrieval fallback selected this
     /// family; carries its source-free route metadata for the query response.
     pub term_retrieval: Option<TermRetrievalRoute>,
+    /// The additive candidate-set / scope-resolution cardinality projection, set
+    /// only when a universal-target-resolution scope path produced this FOUND
+    /// (`ResolutionCardinality::One`). `None` for every non-scope FOUND, which
+    /// keeps those responses byte-stable under `product-schemas.v1`.
+    pub resolution: Option<Resolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,6 +425,13 @@ pub struct FamilyPartialContextReport {
     /// `typescript`), normalized to a low-cardinality scope token when the
     /// savings event is attributed. Empty when unknown.
     pub resolved_file_language: String,
+    /// The additive candidate-set / scope-resolution cardinality projection, set
+    /// only when a universal-target-resolution scope path produced this
+    /// PARTIAL_CONTEXT: `None` (resolved locus, no family), `Many` (several
+    /// in-scope families, no selection), or `Truncated` (bounded read may hide
+    /// further families). `None` for every non-scope PARTIAL_CONTEXT, which keeps
+    /// those responses byte-stable under `product-schemas.v1`.
+    pub resolution: Option<Resolution>,
 }
 
 /// A source-backed static-alignment certificate for the `check` operation.
@@ -468,7 +482,10 @@ pub struct AlignmentCertificateReport {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FamilyLookupReport {
-    Found(FamilyDetailReport),
+    /// Boxed so the (large) detail — which now carries the additive `resolution`
+    /// projection — does not inflate every `FamilyLookupReport` variant, matching
+    /// the already-boxed `PartialContext`/`Alignment` variants.
+    Found(Box<FamilyDetailReport>),
     PartialContext(Box<FamilyPartialContextReport>),
     Unknown(FamilyUnknownReport),
     /// A static-alignment certificate produced by `FamilyLookupMode::Conformance`.
@@ -2658,10 +2675,10 @@ pub fn lookup_family(
     }
     if let Some(matched) = matches.into_iter().next() {
         let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
-        return Ok(FamilyLookupReport::Found(family_detail(
+        return Ok(FamilyLookupReport::Found(Box::new(family_detail(
             matched.family,
             profile,
-        )));
+        ))));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
@@ -3052,10 +3069,10 @@ fn lookup_family_with_freshness_using(
     if let Some(matched) = matches.into_iter().next() {
         if family_evidence_is_fresh(&request, source_store, &matched.family)? {
             let profile = hydrated_constraint_profile(store, &matched.family.family.family_id)?;
-            return Ok(FamilyLookupReport::Found(family_detail(
+            return Ok(FamilyLookupReport::Found(Box::new(family_detail(
                 matched.family,
                 profile,
-            )));
+            ))));
         }
         let family_id = matched.family.family.family_id;
         return Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
@@ -4203,7 +4220,7 @@ fn run_term_retrieval(
             let profile = hydrated_constraint_profile(store, &winner.family.family_id)?;
             let mut detail = family_detail(winner, profile);
             detail.term_retrieval = Some(route);
-            Ok(FamilyLookupReport::Found(detail))
+            Ok(FamilyLookupReport::Found(Box::new(detail)))
         }
         _ => Ok(term_unknown_report(
             active_generation,
@@ -4367,6 +4384,9 @@ fn add_local_context_fallback(
                             recovery_guidance(recovery.action)
                         )),
                     }],
+                    // Non-scope single-file local resolution: no directory-scope
+                    // candidate-set projection, byte-stable under v1.
+                    resolution: None,
                 },
             )))
         }
@@ -4405,15 +4425,28 @@ enum DirectoryScopeResolution {
     /// The scope resolved to no indexed files at all (nonexistent / empty).
     Empty,
     /// The scope resolved to indexed files but no pattern family matched the
-    /// composite; the locus is resolved but there is no family.
-    Familyless { files: Vec<String>, truncated: bool },
+    /// composite; the locus is resolved but there is no family
+    /// ([`ResolutionCardinality::None`]).
+    Familyless { files: Vec<String> },
     /// Multiple directory scopes were jointly unsatisfiable (empty intersection).
     Conflict,
-    /// Exactly one pattern family occupies the (untruncated) scope.
-    Family { family_id: String, truncated: bool },
-    /// More than one distinct family occupies the scope, or the scope was
-    /// truncated so a single family cannot be proven. Never a selection.
-    Candidates { ids: Vec<String>, truncated: bool },
+    /// Exactly one pattern family occupies the (untruncated) scope
+    /// ([`ResolutionCardinality::One`]). Carries the single candidate's
+    /// source-free summary so the FOUND response can project a `one` resolution
+    /// without re-reading the search summaries.
+    Family {
+        family_id: String,
+        candidate: ResolutionCandidate,
+    },
+    /// More than one distinct family occupies the scope
+    /// ([`ResolutionCardinality::Many`]), or the scope was truncated so a single
+    /// family cannot be proven ([`ResolutionCardinality::Truncated`]). Never a
+    /// selection: the bounded candidate summaries are narrowing handles only.
+    Candidates {
+        candidates: Vec<ResolutionCandidate>,
+        files: Vec<String>,
+        truncated: bool,
+    },
 }
 
 /// Resolve a directory / composite scope (or surface a typed hard-constraint
@@ -4475,22 +4508,59 @@ fn directory_scope_fallback(
         DirectoryScopeResolution::Conflict => {
             Ok(directory_scope_conflict_report(active_generation))
         }
-        DirectoryScopeResolution::Familyless { files, truncated } => Ok(
-            directory_scope_partial_context(active_generation, &prefixes, files, truncated),
-        ),
-        DirectoryScopeResolution::Candidates { ids, truncated } => Ok(
-            directory_scope_candidates_report(active_generation, ids, truncated),
-        ),
+        // Resolved locus, no family: PARTIAL_CONTEXT + resolution `none`.
+        DirectoryScopeResolution::Familyless { files } => Ok(directory_scope_partial_context(
+            active_generation,
+            &prefixes,
+            files,
+            Vec::new(),
+            Resolution {
+                cardinality: ResolutionCardinality::None,
+                candidates: Vec::new(),
+            },
+        )),
+        // Several in-scope families (or a truncated read): PARTIAL_CONTEXT +
+        // resolution `many`/`truncated` with bounded candidate summaries and NO
+        // selected family.
+        DirectoryScopeResolution::Candidates {
+            candidates,
+            files,
+            truncated,
+        } => {
+            let cardinality = if truncated {
+                ResolutionCardinality::Truncated
+            } else {
+                ResolutionCardinality::Many
+            };
+            let candidate_family_ids = candidates
+                .iter()
+                .map(|candidate| candidate.family_id.clone())
+                .collect();
+            Ok(directory_scope_partial_context(
+                active_generation,
+                &prefixes,
+                files,
+                candidate_family_ids,
+                Resolution {
+                    cardinality,
+                    candidates,
+                },
+            ))
+        }
+        // Exactly one in-scope family: FOUND + resolution `one`.
         DirectoryScopeResolution::Family {
             family_id,
-            truncated,
+            candidate,
         } => resolve_single_scope_family(
             request,
             family_store,
             source_store,
             active_generation,
             family_id,
-            truncated,
+            Resolution {
+                cardinality: ResolutionCardinality::One,
+                candidates: vec![candidate],
+            },
         ),
     }
 }
@@ -4572,17 +4642,26 @@ fn resolve_directory_scope(
         }
     }
 
+    // `in_scope` is a `BTreeSet`, so the candidate order is deterministic (sorted
+    // by family id); the scoped file list is likewise sorted.
+    let ids: Vec<String> = in_scope.into_iter().collect();
+    let scoped_files: Vec<String> = scoped_files.into_iter().collect();
+
     // A truncated scope may hide further families, so a single-family or
     // familyless conclusion cannot be proven; surface what was seen as candidates
     // (never a selection) with the truncation flag set.
     if truncated {
+        let Some(candidates) = scope_resolution_candidates(family_store, &ids, base_generation)?
+        else {
+            return Ok(DirectoryScopeResolution::GenerationMismatch);
+        };
         return Ok(DirectoryScopeResolution::Candidates {
-            ids: in_scope.into_iter().collect(),
+            candidates,
+            files: scoped_files,
             truncated: true,
         });
     }
 
-    let ids: Vec<String> = in_scope.into_iter().collect();
     match ids.len() {
         0 => {
             if prefixes.len() > 1 {
@@ -4591,19 +4670,94 @@ fn resolve_directory_scope(
             } else {
                 // The locus resolved (files exist) but no family matched.
                 Ok(DirectoryScopeResolution::Familyless {
-                    files: scoped_files.into_iter().collect(),
-                    truncated: false,
+                    files: scoped_files,
                 })
             }
         }
-        1 => Ok(DirectoryScopeResolution::Family {
-            family_id: ids.into_iter().next().expect("one family"),
-            truncated: false,
-        }),
-        _ => Ok(DirectoryScopeResolution::Candidates {
-            ids,
-            truncated: false,
-        }),
+        1 => {
+            let Some(mut candidates) =
+                scope_resolution_candidates(family_store, &ids, base_generation)?
+            else {
+                return Ok(DirectoryScopeResolution::GenerationMismatch);
+            };
+            let candidate = candidates.pop().expect("one candidate for one family");
+            Ok(DirectoryScopeResolution::Family {
+                family_id: ids.into_iter().next().expect("one family"),
+                candidate,
+            })
+        }
+        _ => {
+            let Some(candidates) =
+                scope_resolution_candidates(family_store, &ids, base_generation)?
+            else {
+                return Ok(DirectoryScopeResolution::GenerationMismatch);
+            };
+            Ok(DirectoryScopeResolution::Candidates {
+                candidates,
+                files: scoped_files,
+                truncated: false,
+            })
+        }
+    }
+}
+
+/// Project each in-scope family id into a bounded, source-free
+/// [`ResolutionCandidate`] using the committed family search-summary projection.
+///
+/// Reuses the same `list_active_family_search_summaries` port the ranking path
+/// reads; it never hydrates a deep family. Returns `None` when the summary
+/// projection describes a different generation (a resync landed mid-read), so the
+/// caller abstains rather than attribute a stale summary. `ids` order is
+/// preserved, so the candidate set is deterministic.
+fn scope_resolution_candidates(
+    store: &impl FamilyStore,
+    ids: &[String],
+    base_generation: &str,
+) -> Result<Option<Vec<ResolutionCandidate>>, RepoGrammarError> {
+    let summaries = store
+        .list_active_family_search_summaries()
+        .map_err(family_store_error)?;
+    if summaries.generation_id != base_generation {
+        return Ok(None);
+    }
+    let by_id: BTreeMap<&str, &IndexedFamilySearchSummaryRecord> = summaries
+        .families
+        .iter()
+        .map(|record| (record.family_id.as_str(), record))
+        .collect();
+    Ok(Some(
+        ids.iter()
+            .map(|family_id| ResolutionCandidate {
+                family_id: family_id.clone(),
+                summary: by_id
+                    .get(family_id.as_str())
+                    .map(|record| family_search_summary_line(record))
+                    .unwrap_or_default(),
+            })
+            .collect(),
+    ))
+}
+
+/// A short, source-free one-line summary of a family, projected from its
+/// committed search-summary row. It composes already-public, low-cardinality
+/// projection fields (language, framework role or code-unit kind, classification)
+/// and never touches source text. Empty segments are dropped so a family without
+/// a framework role still yields a coherent line.
+fn family_search_summary_line(record: &IndexedFamilySearchSummaryRecord) -> String {
+    let descriptor = if !record.framework_role.is_empty() {
+        record.framework_role.as_str()
+    } else {
+        record.code_unit_kind.as_str()
+    };
+    let head: Vec<&str> = [record.language.as_str(), descriptor]
+        .into_iter()
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    match (head.is_empty(), record.classification.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => record.classification.clone(),
+        (false, true) => head.join(" "),
+        (false, false) => format!("{} · {}", head.join(" "), record.classification),
     }
 }
 
@@ -4641,7 +4795,7 @@ fn resolve_single_scope_family(
     source_store: &impl SourceStore,
     active_generation: String,
     family_id: String,
-    _truncated: bool,
+    resolution: Resolution,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
     let Some(active_family) = store.show_family(&family_id).map_err(family_store_error)? else {
         // The family vanished between the scope map and hydration (a resync race);
@@ -4653,10 +4807,11 @@ fn resolve_single_scope_family(
     }
     if family_evidence_is_fresh(request, source_store, &active_family)? {
         let profile = hydrated_constraint_profile(store, &active_family.family.family_id)?;
-        return Ok(FamilyLookupReport::Found(family_detail(
-            active_family,
-            profile,
-        )));
+        let mut detail = family_detail(active_family, profile);
+        // The single in-scope family is a proven selection: project a `one`
+        // resolution so the FOUND response carries the additive candidate set.
+        detail.resolution = Some(resolution);
+        return Ok(FamilyLookupReport::Found(Box::new(detail)));
     }
     Ok(FamilyLookupReport::Unknown(FamilyUnknownReport {
         active_generation,
@@ -4705,33 +4860,6 @@ fn directory_scope_conflict_report(active_generation: String) -> FamilyLookupRep
     })
 }
 
-/// Multiple distinct families occupy the scope (or the scope was truncated): keep
-/// them as narrowing candidate handles with NO selected family. Truncation is
-/// made explicit in the recovery text as a source-free flag, never silent.
-fn directory_scope_candidates_report(
-    active_generation: String,
-    ids: Vec<String>,
-    truncated: bool,
-) -> FamilyLookupReport {
-    let candidate_family_ids = normalized_family_ids(ids);
-    let recovery = if truncated {
-        "the directory scope exceeded the bounded read limit (results truncated); narrow to a smaller directory or one pattern family id"
-    } else {
-        "the directory scope maps to multiple pattern families; narrow with a pattern family id or a more specific path"
-    };
-    FamilyLookupReport::Unknown(FamilyUnknownReport {
-        active_generation,
-        candidate_family_ids,
-        unknowns: vec![FamilyQueryUnknown {
-            class: UnknownClass::Blocking,
-            reason: UnknownReasonCode::InsufficientSupport,
-            affected_claim: "query target ambiguity".to_string(),
-            recovery: Some(recovery.to_string()),
-        }],
-        term_retrieval: None,
-    })
-}
-
 /// A typed hard-constraint conflict surfaced as a blocking UNKNOWN. The competing
 /// exact ids are carried as candidate handles so the caller can narrow to one.
 fn target_conflict_report(
@@ -4767,21 +4895,36 @@ fn target_conflict_report(
     })
 }
 
-/// A directory scope whose locus resolved but that holds no matching pattern
-/// family: a PARTIAL_CONTEXT that resolves the scope as read-plan context only,
-/// never inventing a family. The read plan is intentionally empty — the locus is
-/// a directory, not a single file — and the resolved target carries the bounded
-/// child paths as candidate handles.
+/// A directory scope whose locus resolved as a PARTIAL_CONTEXT: the scope is read-
+/// plan context only, never a family selection. The read plan is intentionally
+/// empty — the locus is a directory, not a single file — and the resolved target
+/// carries the bounded child paths plus the in-scope family ids as candidate
+/// handles (so they survive at `minimal`). The additive `resolution` carries the
+/// cardinality (`none`/`many`/`truncated`) and bounded candidate summaries.
+///
+/// The `One` cardinality never reaches this builder: a single proven in-scope
+/// family resolves to a FOUND through [`resolve_single_scope_family`].
 fn directory_scope_partial_context(
     active_generation: String,
     prefixes: &[String],
     files: Vec<String>,
-    truncated: bool,
+    candidate_family_ids: Vec<String>,
+    resolution: Resolution,
 ) -> FamilyLookupReport {
-    let recovery = if truncated {
-        "the directory scope resolved (results truncated at the bounded read limit) but carries no matching pattern family; treat the scope as read-plan context only"
-    } else {
-        "the directory scope resolved to indexed files but carries no matching pattern family; treat the scope as read-plan context only"
+    let recovery = match resolution.cardinality {
+        ResolutionCardinality::None => {
+            "the directory scope resolved to indexed files but carries no matching pattern family; treat the scope as read-plan context only"
+        }
+        ResolutionCardinality::Many => {
+            "the directory scope resolved to multiple in-scope pattern families with no single selection; pick one from resolution.candidates or narrow with a pattern family id or a more specific path"
+        }
+        ResolutionCardinality::Truncated => {
+            "the directory scope exceeded the bounded read limit (results truncated); the families in resolution.candidates are partial — narrow to a smaller directory or one pattern family id"
+        }
+        // Unreachable: a single in-scope family resolves to FOUND, not here.
+        ResolutionCardinality::One => {
+            "the directory scope resolved to a single pattern family"
+        }
     };
     let resolved_target = ResolvedQueryTarget {
         original_target: prefixes.join(" "),
@@ -4794,7 +4937,7 @@ fn directory_scope_partial_context(
         symbol_hints: Vec::new(),
         residue_terms: Vec::new(),
         candidate_paths: files,
-        candidate_family_ids: Vec::new(),
+        candidate_family_ids: normalized_family_ids(candidate_family_ids),
         candidate_code_unit_ids: Vec::new(),
         confidence: "scope",
         match_kind: "directory_scope",
@@ -4811,6 +4954,7 @@ fn directory_scope_partial_context(
             affected_claim: "pattern family evidence for resolved directory scope".to_string(),
             recovery: Some(recovery.to_string()),
         }],
+        resolution: Some(resolution),
     }))
 }
 
@@ -6590,6 +6734,9 @@ fn family_detail(
         unknowns,
         constraint_profile: constraint_profile.map(Box::new),
         term_retrieval: None,
+        // Non-scope FOUND: no candidate-set projection, byte-stable under v1. The
+        // directory-scope single-family path sets a `One` resolution explicitly.
+        resolution: None,
     }
 }
 
@@ -8664,6 +8811,7 @@ mod tests {
             unknowns: Vec::new(),
             constraint_profile: None,
             term_retrieval: None,
+            resolution: None,
         }
     }
 
@@ -11210,6 +11358,7 @@ mod tests {
             resolved_file_size_bytes: size_bytes,
             resolved_file_language: language.to_string(),
             unknowns: Vec::new(),
+            resolution: None,
         }
     }
 
@@ -13453,12 +13602,22 @@ mod tests {
         );
         // A directory-scope resolution uses the bounded scoped read exactly once.
         assert_eq!(index.scoped_file_reads(), 1);
+        // The FOUND carries an additive `one` resolution whose single candidate is
+        // the resolved family (recall@K includes the one-family scope case).
+        let resolution = family.resolution.as_ref().expect("one resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::One);
+        assert_eq!(resolution.candidates.len(), 1);
+        assert_eq!(
+            resolution.candidates[0].family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
     }
 
     #[test]
     fn directory_scope_with_heterogeneous_families_never_false_selects() {
-        // Two distinct families share the directory; the scope must surface both as
-        // candidate handles with NO selected family.
+        // Two distinct families share the directory; the scope resolves to a
+        // PARTIAL_CONTEXT that surfaces both as bounded candidate handles with NO
+        // selected family (resolution `many`).
         let index = FakeStore::new(Vec::new()).with_files(vec![
             indexed_file("app/api/routes.py"),
             indexed_file("app/api/models.py"),
@@ -13487,21 +13646,45 @@ mod tests {
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
-        let FamilyLookupReport::Unknown(unknown) = &report else {
-            panic!("expected Unknown candidates, got {report:?}");
+        let FamilyLookupReport::PartialContext(partial) = &report else {
+            panic!("expected PartialContext candidates, got {report:?}");
         };
+        // The additive resolution carries `many` with bounded candidate summaries
+        // and NO selected family; every real in-scope family appears (recall@K).
+        let resolution = partial.resolution.as_ref().expect("many resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::Many);
+        let candidate_ids: Vec<&str> = resolution
+            .candidates
+            .iter()
+            .map(|candidate| candidate.family_id.as_str())
+            .collect();
         assert_eq!(
-            unknown.candidate_family_ids,
+            candidate_ids,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route",
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+            ]
+        );
+        // Each candidate carries a short, source-free summary line.
+        assert!(resolution
+            .candidates
+            .iter()
+            .all(|candidate| !candidate.summary.is_empty()));
+        // The narrowing handles survive on the resolved target (kept at `minimal`).
+        assert_eq!(
+            partial.resolved_target.candidate_family_ids,
             vec![
                 "family:python:fastapi_route:framework_fastapi_route".to_string(),
                 "family:python:sqlalchemy_model:framework_sqlalchemy_model".to_string(),
             ]
         );
-        assert_eq!(unknown.unknowns[0].affected_claim, "query target ambiguity");
         // The route carries no selected family — zero false selection.
         let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
         assert!(route.selected_family_id.is_none());
-        assert_eq!(route.candidate_family_ids, unknown.candidate_family_ids);
+        assert_eq!(
+            route.candidate_family_ids,
+            partial.resolved_target.candidate_family_ids
+        );
     }
 
     #[test]
@@ -13603,6 +13786,11 @@ mod tests {
             vec!["legacy/scripts/migrate.py".to_string()]
         );
         assert!(partial.read_plan.items.is_empty());
+        // The additive resolution carries `none`: a resolved locus with no family
+        // and an empty candidate set.
+        let resolution = partial.resolution.as_ref().expect("none resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::None);
+        assert!(resolution.candidates.is_empty());
         // The route surfaces no selected family for a familyless scope.
         let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
         assert!(route.selected_family_id.is_none());
@@ -13663,16 +13851,24 @@ mod tests {
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
-        let FamilyLookupReport::Unknown(unknown) = &report else {
-            panic!("expected Unknown under truncation, got {report:?}");
+        let FamilyLookupReport::PartialContext(partial) = &report else {
+            panic!("expected PartialContext under truncation, got {report:?}");
         };
-        // The seen family is a candidate handle, never a selection.
+        // The additive resolution is `truncated`: the seen family is a bounded
+        // candidate handle, never a selection.
+        let resolution = partial.resolution.as_ref().expect("truncated resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::Truncated);
+        let candidate_ids: Vec<&str> = resolution
+            .candidates
+            .iter()
+            .map(|candidate| candidate.family_id.as_str())
+            .collect();
         assert_eq!(
-            unknown.candidate_family_ids,
-            vec!["family:python:fastapi_route:framework_fastapi_route".to_string()]
+            candidate_ids,
+            vec!["family:python:fastapi_route:framework_fastapi_route"]
         );
         // Truncation is explicit in the recovery text, never silent.
-        let recovery = unknown.unknowns[0].recovery.as_deref().unwrap_or_default();
+        let recovery = partial.unknowns[0].recovery.as_deref().unwrap_or_default();
         assert!(recovery.contains("truncated"), "recovery: {recovery}");
         let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
         assert!(route.selected_family_id.is_none());

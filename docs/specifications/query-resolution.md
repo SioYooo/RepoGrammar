@@ -77,25 +77,41 @@ it. Stage 4 acts on the SCOPE tier:
   in-scope families with the positively-scored families from the single
   term-retrieval scoring authority, so `app/api route` narrows to the family that
   is both in the directory and matches the concept.
-- **Outcomes.** A single family in an untruncated scope resolves to `Found`
-  (hydrated through the same freshness + profile gates). A **heterogeneous** scope
-  (more than one distinct family) surfaces the competing families through
-  `candidate_family_ids` with **no** `selected_family_id` — zero false selection.
-  A scope that resolves to indexed files but no matching family returns
-  `PARTIAL_CONTEXT` with a `directory_scope` resolved target (the bounded child
-  paths as candidate handles, an empty read plan — the locus is a directory, not a
-  single file) and no invented family. A scope that resolves to no indexed files
-  returns a typed `UNKNOWN` naming the accurate reason. Jointly unsatisfiable
-  directory scopes, and any parsed hard-constraint conflict (multiple `family:`
-  ids, multiple `unit:` ids, or a mixed family/unit identity), return a typed
-  conflict `UNKNOWN` — never a union or a silently-dropped constraint.
+- **Outcomes and the additive `resolution` projection.** Every scope outcome that
+  resolves a locus carries an additive top-level `resolution` object — a
+  `cardinality` token (`one`/`many`/`none`/`truncated`) plus a bounded, source-free
+  `candidates` array (each `{family_id, summary}`, the summary projected from the
+  committed family search-summary projection — never a hydrated deep family). It is
+  expressed **without a new top-level status token**: the existing `FOUND` /
+  `PARTIAL_CONTEXT` statuses carry it (see the additive-field rationale in
+  ADR-0029). A `many`/`none`/`truncated` resolution **never** carries a
+  `selected_family_id`.
+  - **One family (untruncated) → `FOUND` + `resolution.cardinality = "one"`.** The
+    single proven family is hydrated through the same freshness + profile gates and
+    is the sole candidate in the resolution.
+  - **Heterogeneous scope (more than one distinct family) → `PARTIAL_CONTEXT` +
+    `resolution.cardinality = "many"`.** The bounded competing families are surfaced
+    as candidate summaries with **no** `selected_family_id` — zero false selection.
+    Their `family_id`s are also carried on the `directory_scope` resolved target's
+    `candidate_family_ids` (and thus on `query_route.follow_up_family_ids`), so the
+    narrowing handles survive at `minimal` even though the rich `resolution` object
+    is a `standard`/`full` field.
+  - **Resolved locus with no matching family → `PARTIAL_CONTEXT` +
+    `resolution.cardinality = "none"`** (an empty candidate set) with a
+    `directory_scope` resolved target (the bounded child paths as candidate handles,
+    an empty read plan — the locus is a directory, not a single file) and no invented
+    family.
+  - A scope that resolves to **no indexed files** returns a typed `UNKNOWN` naming
+    the accurate reason (an unresolved locus carries no `resolution`). Jointly
+    unsatisfiable directory scopes, and any parsed hard-constraint conflict
+    (multiple `family:` ids, multiple `unit:` ids, or a mixed family/unit identity),
+    return a typed conflict `UNKNOWN` — never a union or a silently-dropped
+    constraint.
 - **Truncation is never silent.** When the scoped read exceeds its bound, unseen
   files might belong to other families, so the resolver never claims a single
-  family under truncation: it surfaces the seen families as candidates with the
-  truncation stated in the source-free recovery text. The public
-  `resolution.cardinality` field and the bounded candidate-set outcome projection
-  with summaries are deferred to a later phase; this stage only never false-selects
-  and keeps candidates as handles.
+  family under truncation: the outcome is `PARTIAL_CONTEXT` +
+  `resolution.cardinality = "truncated"`, surfacing the families seen so far as
+  bounded candidates with the truncation stated in the source-free recovery text.
 
 A resolved family detail carries a hydrated, metadata-only `constraint_profile`
 (the source-backed specification, or `null` when none was persisted) and a
