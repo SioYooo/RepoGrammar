@@ -27,6 +27,9 @@ serde_json = "1"
 # Production: filesystem adapters compute strict SHA-256 content hashes for
 # repository evidence using the standard RustCrypto implementation.
 sha2 = "0.11"
+# Production: the Unix self-uninstall finalizer uses handle-relative
+# rename/unlink operations to close path-replacement deletion races.
+libc = "0.2.186"
 # Production: Rust self-dogfood indexing uses Tree-sitter Rust for tolerant
 # structural code-unit extraction without executing Cargo, rustc, build scripts,
 # or procedural macros.

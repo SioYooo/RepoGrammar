@@ -1,6 +1,7 @@
 # ADR-0008: Repo-local state boundary
 
-- Status: Accepted; auto-sync default partially superseded by ADR-0027
+- Status: Accepted; auto-sync default partially superseded by ADR-0027 and the
+  machine-product uninstall wording partially superseded by ADR-0028
 - Date: 2026-06-24
 
 ## Context
@@ -36,9 +37,11 @@ runtime artifacts, and global user preferences only. It must not contain
 source-derived family facts, evidence text, repository paths, symbol names, raw
 prompts, query text, or repository-specific SQLite indexes.
 
-`repogrammar install` and `repogrammar uninstall` configure agent integration
-only. They do not create or delete `.repogrammar/`. Repository-local state is
-created by `repogrammar init` and removed by `repogrammar uninit`.
+`repogrammar install` and `repogrammar disconnect` configure or remove
+machine-level agent integration. ADR-0028 changes bare `repogrammar uninstall`
+to receipt-gated removal of the first-party managed machine product. None of
+these commands creates or deletes `.repogrammar/`. Repository-local state is
+created by `repogrammar init` and removed only by `repogrammar uninit`.
 
 The default v0.1 MCP surface should expose one primary tool,
 `repogrammar_context`, with an `operation` field for `find_analogues`,

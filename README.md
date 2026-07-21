@@ -100,6 +100,16 @@ new repositories must be initialized once. See the
 [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
 for advanced installation, CI, manual sync, and cleanup options.
 
+On receipt-aware current source, `repogrammar uninstall --dry-run` previews a
+full managed-machine removal and `repogrammar uninstall --yes` authorizes it.
+Use `repogrammar disconnect --target all --yes` when you only want to remove
+RepoGrammar-owned coding-agent integrations. Repository indexes are deliberately
+separate; remove one with `repogrammar uninit --project /path/to/repo --yes`.
+
+The immutable public `v0.4.0` artifacts predate the `disconnect` rename and
+full self-uninstall contract. Follow the help shipped with an installed binary
+until a patch-forward release containing this source change is published.
+
 ## What you get
 
 - **Pattern families** — repeated, compatible implementations with support,

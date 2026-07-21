@@ -597,8 +597,9 @@ allowed.
   release-artifact path for `src/install/repogrammar-install.sh`, including
   checksum verification, CLI command installation, bundled worker asset
   installation, delegated
-  `repogrammar install` / `repogrammar uninstall` invocation through a fake
-  binary, source-checkout `--from-source` install/configure dogfood without
+  `repogrammar install` / `repogrammar disconnect` / `repogrammar uninstall`
+  delegation through a fake binary, source-checkout `--from-source`
+  install/configure dogfood without
   network access, actionable no-release failure text, refusal to replace an
   unmanaged command without the `--replace-unmanaged-command` opt-in plus
   backup/replacement with it, a directory command path still failing, missing-worker
@@ -1548,9 +1549,10 @@ verifier-environment correction, not a product or publication change.
   messages to `repogrammar serve --project <tmp-fixture>` and verify that
   `repogrammar_context` is advertised.
 - Installer planner smoke: run `repogrammar install --target all --scope global
-  --dry-run` and `repogrammar uninstall --target all --scope global --dry-run`.
-  These commands are human-plan dry runs today; do not add `--json` unless the
-  installer contract grows JSON output.
+  --dry-run`, `repogrammar disconnect --target all --scope global --dry-run`,
+  and `repogrammar uninstall --dry-run --json`. Assert that product uninstall
+  reports only receipt-backed or conservatively inferred owned paths and the
+  repository/user-data preservation boundary.
 
 Optional security scans are source-tree checks, not substitutes for the normal
 Rust, worker, installer, and repo-guard gates:

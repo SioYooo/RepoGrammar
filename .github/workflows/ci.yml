@@ -62,7 +62,8 @@ jobs:
             --binary "${smoke_root}/unpacked/repogrammar" \
             --worker "${smoke_root}/unpacked/workers/python/worker.py" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
-            --expected-version "${expected_version}"
+            --expected-version "${expected_version}" \
+            --require-product-uninstall
 
   linux-packaged-product-smoke:
     name: Linux packaged product lifecycle smoke
@@ -91,7 +92,8 @@ jobs:
             --binary "${smoke_root}/unpacked/repogrammar" \
             --worker "${smoke_root}/unpacked/workers/python/worker.py" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
-            --expected-version "${expected_version}"
+            --expected-version "${expected_version}" \
+            --require-product-uninstall
 
   windows-source-installer-contract:
     name: Windows source-only installer contract

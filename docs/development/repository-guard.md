@@ -12,7 +12,7 @@ cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
 cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap]
 cargo run --quiet --bin repo-guard -- payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>]
-cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>
+cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall]
 cargo run --quiet --bin repo-guard -- smoke-npm-package --tarball <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-stable-release-evidence --evidence-dir <path>
@@ -187,6 +187,29 @@ daemon, and requires its lock/readiness ownership to be removed. It does not
 inspect or modify the developer's real HOME, agent configuration, or repository
 state.
 
+`--require-product-uninstall` adds the receipt-backed machine-lifecycle gate for
+a newly built candidate. In the same isolated environment it stages the
+candidate into the deterministic managed authority and command-symlink layout,
+writes the product receipt through `install --target none`, and creates a
+receipt-owned Codex integration and managed instruction section. It proves that
+`disconnect --dry-run` is write-free, live `disconnect` removes only the agent
+state while preserving the installed product, and the integration can be
+installed again for the complete uninstall path. It then requires product
+`uninstall --dry-run` to preserve byte-identical owned state, invokes live
+`uninstall`, observes only `finalizer_pending` from the parent, waits for the
+post-exit report, and requires that report to be `complete`.
+
+The lifecycle assertions require removal of the native MCP entry, agent
+receipt, managed instruction section, command symlink, both deterministic
+worker copies, product receipt, and managed executable authority. They also
+require preservation of unrelated instruction text, repository-local
+`.repogrammar/`, telemetry and unknown global files, and an unmanaged
+package-manager/PATH copy that the report lists as residual. The finalizer
+helper is derived from the validated receipt-backed managed authority; neither
+the smoke option nor the hidden helper accepts caller-selected deletion paths.
+The option is intentionally explicit because hosts outside the declared
+macOS/Linux lifecycle matrix retain the ordinary packaged-artifact smoke.
+
 ## npm candidate and final evidence
 
 `smoke-npm-package` accepts only a bounded regular, non-symlink tarball whose
@@ -329,6 +352,12 @@ artifacts, or replace publication authority. Expired retained artifacts,
 unavailable attestations, absent provenance, or a failed public smoke prevents
 `STABLE_RELEASE_READY`.
 
+The already-public `v0.4.0` release and its finalizer evidence retain the
+historical packaged-artifact invocation and uninstall behavior embedded in
+that immutable tag. `--require-product-uninstall` is required only in current
+macOS/Linux CI and the release workflow for a new patch-forward candidate; it
+must not be used to reinterpret, rebuild, or retrofit `v0.4.0` evidence.
+
 ## Exit codes
 
 - `0`: requested guard passed.
@@ -350,7 +379,12 @@ authority document from an otherwise complete temporary repository and assert a
 CI runs `repo-guard check` on every push and pull request. Pull requests also
 run `check-diff` when base and head revisions are available. Native Linux and
 macOS jobs, plus every supported release-matrix build, invoke
-`smoke-packaged-artifact` against an unpacked candidate binary and worker.
+`smoke-packaged-artifact` against an unpacked candidate binary and worker. The
+macOS and Linux product-lifecycle jobs, and every newly built release candidate,
+must explicitly pass `--require-product-uninstall`; repository guard rejects a
+workflow that omits any of those three calls. The immutable public `v0.4.0`
+finalizer remains on its historical invocation until a patch-forward release
+identity is built and published.
 The release workflow uses `release-source`, exports its exact outputs through
 `GITHUB_OUTPUT`, and runs the npm candidate evidence commands before OIDC
 staging. Its draft is guarded against replacement and contains exactly eleven

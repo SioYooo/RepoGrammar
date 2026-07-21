@@ -53,7 +53,7 @@ but unrecognized malformed configuration and recommends `repogrammar doctor`.
 The install service snapshots an `OwnedOutdated` integration before removing
 and re-adding it, and restores the exact native entry, receipt, receipt backup,
 and managed instruction state if refresh fails. Setup reports newly configured
-and reconfigured targets separately. Its outer rollback may uninstall only
+and reconfigured targets separately. Its outer rollback may disconnect only
 newly configured targets; a later repository, auto-sync, or MCP failure must
 not delete a refreshed integration that existed before setup. Existing machine
 and repository state is preserved. Setup never enables telemetry.
@@ -173,12 +173,15 @@ Source checkouts may provide a dependency-light wrapper script at
 around release artifacts and the product binary: it may download a prebuilt
 release artifact, verify its checksum, install or repair the user-writable
 `repogrammar` command, install bundled worker assets, call
-`repogrammar install`, call `repogrammar uninstall`, remove the local command
-path after confirmation, clean up stale `repogrammar` copies found on PATH,
-display PATH guidance, or build from source only when the user explicitly
-chooses the contributor source-build path. It must not
-duplicate native agent configuration logic outside the Rust installer, and it
-must not create or modify `.repogrammar/`.
+`repogrammar install`, create the Rust-owned product receipt, delegate
+agent-only removal to `repogrammar disconnect`, and delegate complete owned
+product removal to bare `repogrammar uninstall`. Deprecated command-only
+removal prints migration guidance and does not delete product files. The
+wrapper may retain its existing install/update PATH convergence checks, display
+PATH guidance, or build from source only when the user explicitly chooses the
+contributor source-build path. It must not duplicate native agent configuration
+or product-deletion ownership logic outside the Rust application, and it must
+not create or modify `.repogrammar/`.
 
 The current release-source manifests use stable identity `0.4.0`. A source
 build or source install must report that identity consistently across Cargo and
@@ -344,15 +347,16 @@ agent's instruction behavior require separate isolated pre-release/manual
 evidence; the read-only finalizer does not claim to exercise either one.
 
 Contributor release-readiness smoke may run `repogrammar install --target all
---scope global --dry-run` and `repogrammar uninstall --target all --scope
-global --dry-run` to verify planner boundaries without writing agent
-configuration or repository indexes. These dry-run planner commands currently
-produce human-readable output only; callers must not pass `--json` unless a
-future installer contract explicitly adds JSON output.
+--scope global --dry-run`, `repogrammar disconnect --target all --scope global
+--dry-run`, and `repogrammar uninstall --dry-run` to verify the three distinct
+boundaries without writing agent configuration, product files, or repository
+indexes. Disconnect and product-uninstall dry-runs may emit their documented
+JSON contracts when `--json` is supplied.
 
 ## Commands
 
 - `repogrammar install`
+- `repogrammar disconnect`
 - `repogrammar uninstall`
 
 ## Scope
@@ -380,10 +384,12 @@ are implemented only for global Codex and global Claude Code. Other registry
 targets are configuration-preview/deferred targets until their idempotent
 writer, ownership receipt, uninstall inverse, and tests are implemented.
 
-`repogrammar install` and `repogrammar uninstall` configure agent integration
-only. They must not create, update, or delete `.repogrammar/`, and they must not
-remove project indexes, logs, caches, locks, or repository-local receipts.
-They must not run `init`, `index`, `sync`, or `resync`.
+`repogrammar install` configures machine integration, `repogrammar disconnect`
+removes only receipt-owned coding-agent integration, and bare `repogrammar
+uninstall` removes only the ownership-proven first-party managed machine
+installation. None may create, update, discover, or delete `.repogrammar/`, and
+none may remove project indexes, logs, caches, locks, or repository-local
+receipts. They must not run `init`, `index`, `sync`, or `resync`.
 Agent-safe bootstrap is explicit and per repository: after machine-level
 installation, an agent may run `repogrammar init --yes` only when the user has
 allowed repo-local analysis state and the default repo-local background daemon.
@@ -403,6 +409,13 @@ The installer must:
 
 - install from prebuilt release artifacts for end users;
 - verify release artifact checksums before installing a downloaded binary;
+- write an independent, atomic product installation receipt after placing the
+  managed authority, command entry, and available bundled workers; receipt and
+  assets remain inside the install transaction until product self-test passes,
+  and malformed or drifted existing receipts fail closed;
+- use that receipt, or the strictly bounded legacy proof below, as product
+  deletion authority with exact expected-layout and hash checks before any
+  write;
 - detect supported coding agents;
 - prefer native agent configuration commands where available;
 - preserve all unknown configuration fields;
@@ -436,6 +449,7 @@ The installer must:
 Global user state may contain only installation and user-preference data:
 
 - installed binary and cache metadata;
+- `$DATA_DIR/receipts/product-install.json` for first-party product ownership;
 - agent integration receipts;
 - anonymous telemetry preference and anonymous machine id;
 - downloaded grammar or runtime artifacts that are not repository-derived;
@@ -464,6 +478,105 @@ indexed repository, source evidence paths, prompts, or query targets. Each
 receipt records `target`, `scope`, `mcp_server`, `executable_path`,
 `native_program`, `native_args`, `instruction_file_path` (null when deferred),
 `instruction_action`, `telemetry_enabled`, and `created_unix_seconds` only.
+
+## Product installation receipt
+
+Shell, PowerShell, and direct Rust install/update paths must all call the same
+Rust ownership writer after the authority, command entry, and deterministic
+bundled workers are ready. They must not independently serialize
+or infer product ownership. The receipt path is:
+
+```text
+$DATA_DIR/receipts/product-install.json
+```
+
+Schema version 1 has exactly these top-level fields:
+
+- `schema_version`;
+- `managed_by` (`repogrammar`);
+- `installation_kind` (`first-party-managed`);
+- `version`;
+- absolute `data_dir`;
+- `executable` with absolute path and SHA-256;
+- `command` with absolute path, `authority`/`symlink`/`copy` kind, and SHA-256;
+- `workers`, each with an absolute path and SHA-256.
+
+The authority path is exactly `$DATA_DIR/bin/repogrammar` with the platform
+executable spelling. A symlink command must resolve exactly to the authority; a
+copy must be a regular file byte-identical to it. Worker paths are restricted
+to the first-party data-directory worker and command-adjacent bundled-worker
+locations. Custom worker roots are not receipted first-party layouts.
+
+Receipt activation uses a uniquely named create-new sibling, restrictive Unix
+permissions, file sync, and atomic rename. A present receipt must be a regular
+non-symlink file with the exact schema and fixed paths. Install/update may
+refresh owned hashes but must refuse malformed, foreign, escaped, or
+symlinked ownership evidence. If a later install step fails, the exact previous
+receipt bytes are restored or a newly created receipt is removed.
+
+When no receipt exists, legacy inference is conservative and all-or-nothing.
+It requires the exact authority location, a command that is the authority, an
+exact symlink, or a byte-identical regular copy, a running executable that is
+the authority, that already-validated managed command, or byte-identical to the
+authority, and at least one regular first-party
+worker in a deterministic location. Path drift, missing worker evidence,
+non-regular files, symlink traversal, or ambiguity yields zero deletion and the
+guidance to reinstall RepoGrammar once to create the product receipt, then
+rerun `uninstall`. A present invalid receipt is never bypassed through legacy
+inference.
+
+## Product uninstall finalizer
+
+Product uninstall completes product ownership and all agent/native/instruction
+preflight before agent or product mutation. The temporary helper is a private
+create-new copy of the validated managed authority outside the managed data
+directory. Its cleanup plan is also create-new and private, and contains only
+paths re-derived from the product plan, their hashes and identities, bounded
+empty-directory candidates with their original identities, the exact parent
+PID, helper identity, report path, and a hash of a CSPRNG-generated one-shot
+commit token. The hidden command accepts only that
+absolute private plan path; it cannot accept delete paths.
+
+The helper fully validates the plan and live files before emitting `READY`.
+Only then may the parent remove owned agent integrations. The helper requires a
+matching `COMMIT` message, lifecycle-channel EOF, and proof that the exact
+parent PID exited. Immediately before each deletion it revalidates plan
+identity, path allowlists, parent-directory identity, file identity, hashes,
+and any command symlink target. Directory replacement, root escape, malformed
+plan, helper replacement, or ownership drift fails closed.
+
+On Unix, each leaf is moved through an identity-checked open parent descriptor
+to an unpredictable same-directory quarantine name, revalidated there, and
+unlinked relative to that descriptor. Windows source builds bind disposition
+to an opened, identity-checked file handle. This closes the check-then-delete
+path replacement window instead of trusting a second pathname lookup.
+
+Deletion order is command, workers, product receipt, then managed authority.
+The authority is always last. Already absent owned files are idempotent. Once
+file cleanup succeeds, only deterministic installation directories that are
+still real, empty directories may be removed; non-empty directories and unknown
+files are preserved.
+
+The parent never reports final cleanup as synchronously complete. After a
+successful handoff it reports `finalizer_pending` and the external structured
+report path. The helper may atomically checkpoint an internal `in_progress`
+report while deleting; consumers wait for the terminal `complete` or `partial`
+status. The terminal report records removed dispositions, preserved reasons,
+failure classes, residual copies, and manual recovery.
+Agent removal failure prevents the commit. Spawn or `READY` failure leaves
+agent state untouched. Commit failure attempts reverse-order agent rollback and
+reports rollback failure separately. After commit, any failed deletion blocks
+later owned-file removal and produces a non-success partial report.
+If terminal report publication itself fails, the last atomic `in_progress`
+checkpoint remains non-success evidence; an interactive helper may also use
+stderr as last-resort recovery output. Neither helper nor parent may call that
+success.
+
+The product receipt grants no authority over repository `.repogrammar/`,
+telemetry, research traces, experiment records, unknown global files, or
+package-manager/unmanaged executables. npm/npx, Cargo, source-checkout, and
+other PATH copies are preserved and may only be reported as residual copies.
+Removing repository state always requires a separate explicit `uninit`.
 
 ## Instruction-file integration
 
@@ -526,8 +639,9 @@ analogue comparison, code-behavior diagnosis, or implementation decision is
 involved. These exceptions do not override a covered contract-conformance
 subtask.
 
-The installer must not overwrite unrelated user instructions. `uninstall`
-reverses only RepoGrammar's own managed write. If a file has a malformed or
+The installer must not overwrite unrelated user instructions. `disconnect`,
+including the disconnect transaction inside product `uninstall`, reverses only
+RepoGrammar's own managed write. If a file has a malformed or
 incomplete managed section, the installer must stop and direct the user to a
 manual repair workflow. A complete marker pair alone is not proof of ownership:
 only the exact current content or an exact previously shipped body, including
@@ -558,7 +672,8 @@ operation:
   only the matching operation-owned temporary file. Unlinking the original
   pathname changes the live handle's link count, while retaining the handle
   prevents ordinary inode reuse until the cleanup decision is complete;
-- `uninstall` and rollback reverse exactly the recorded `instruction_action`:
+- `disconnect`, product-uninstall agent cleanup, and rollback reverse exactly
+  the recorded `instruction_action`:
   they remove the managed section and preserve unrelated user content; when
   RepoGrammar created the file (`instruction_action: "created"`) and stripping
   the section leaves it empty, they also delete the file so no empty artifact is
@@ -620,7 +735,12 @@ noninteractive live writes, and a dependency-light text wizard:
   default it downloads a prebuilt release artifact instead of requiring Cargo,
   verifies the checksum, validates archive entry names before extraction,
   installs the bundled worker asset plus CLI, and can then launch agent wiring
-  or uninstall flows. Install/update paths also prune stale PATH copies whose
+  or uninstall flows. After placing CLI assets it delegates a target-none
+  install to the Rust authority so the independent product receipt is written
+  and self-tested. Its agent-only action delegates to `disconnect`, its complete
+  uninstall action delegates to bare `uninstall`, and its deprecated
+  command-only action emits migration guidance without deleting product files.
+  Install/update paths also prune stale PATH copies whose
   checksum differs from the managed executable authority. In a source checkout,
   its interactive menu makes the contributor source-build path first-class, and
   its noninteractive `--from-source` mode supports dogfood before release
@@ -639,12 +759,11 @@ noninteractive live writes, and a dependency-light text wizard:
   authority. If removal is blocked, the script exits nonzero and reports the
   unremoved path. Install/update paths run the same stale PATH cleanup
   automatically.
-  `-Purge` performs a full uninstall: it prints a plan, stops only the
-  repogrammar processes that run the binaries it is about to delete, runs
-  `uninstall --target all` to remove agent MCP entries and receipts, optionally
-  runs `uninit` on `-Project` to remove that repository's `.repogrammar` state,
-  and then deletes every repogrammar binary, worker asset, and the managed data
-  directory, after confirmation unless `-Yes` is passed;
+  `-DisconnectAgents` delegates receipt-owned agent removal to `disconnect`.
+  `-Purge` delegates complete product removal to bare `uninstall` and never
+  directly stops processes or deletes product paths. `-DryRun` forwards the
+  product dry-run. If `-Project` is supplied, the wrapper prints the separate
+  `uninit --project ... --yes` command but preserves that repository state;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
 - the wizard presents Codex and Claude Code, supports multi-select in one run,
@@ -752,11 +871,27 @@ noninteractive live writes, and a dependency-light text wizard:
 - if any selected agent install or receipt write fails, receipts created during
   that run are removed and native entries configured during that run are
   removed in reverse order;
-- `uninstall --target all --scope global --yes` removes all matching
+- `disconnect --target all --scope global --yes` removes all matching
   RepoGrammar-owned first-class agent receipts it finds and ignores missing
   receipts only when at least one owned receipt is removed;
-- explicit single-target uninstall still refuses missing or foreign receipts
+- explicit single-target disconnect still refuses missing or foreign receipts
   rather than removing unmanaged configuration;
+- `uninstall --target ...` is rejected with exact `disconnect --target ...
+  --yes` migration guidance;
+- `uninstall --dry-run` validates the product receipt or strict legacy proof,
+  exact command/authority/worker identities and hashes, and every agent/native
+  pair without writes; live mode additionally requires `--yes`;
+- `uninstall --yes` treats truly absent unowned agent integrations as no-ops,
+  but refuses foreign, malformed, or drifted product or agent state before
+  product cleanup. After the helper `READY` barrier it transactionally removes
+  agent integrations and commits post-exit deletion of only the recorded
+  command, worker files, product receipt, empty owned directories, and managed
+  authority;
+- a committed parent returns `finalizer_pending` with the structured report
+  path. The helper's `complete` or `partial` report, not the parent handoff, is
+  the final filesystem result;
+- other PATH copies, Cargo/npm/npx or source artifacts, telemetry/research and
+  experiment state, unknown files, and repository state remain preserved;
 - live install persists the final anonymous telemetry preference after
   successful agent configuration; non-interactive `--yes` alone persists
   disabled telemetry, interactive install without telemetry flags prompts

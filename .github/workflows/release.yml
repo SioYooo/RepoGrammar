@@ -214,7 +214,8 @@ jobs:
             --binary "${binary}" \
             --worker "${worker}" \
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
-            --expected-version "${expected_version}"
+            --expected-version "${expected_version}" \
+            --require-product-uninstall
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}

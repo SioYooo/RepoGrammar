@@ -25,9 +25,12 @@ INSTALLED_EXECUTABLE="${DATA_BIN_DIR}/repogrammar"
 WORKER_ROOT="${REPOGRAMMAR_WORKER_ROOT:-}"
 ACTION="menu"
 ASSUME_YES=0
+DRY_RUN=0
 REPLACE_UNMANAGED_COMMAND=0
 TARGET_SELECTION="all"
+TARGET_EXPLICIT=0
 INSTALL_SCOPE="global"
+SCOPE_EXPLICIT=0
 USE_SOURCE_BUILD="${REPOGRAMMAR_USE_SOURCE_BUILD:-0}"
 TMP_DIRS=()
 
@@ -54,11 +57,12 @@ Usage:
   repogrammar-install.sh --install-and-configure # install CLI, then run agent wizard
   repogrammar-install.sh --install-cli-only      # install CLI only
   repogrammar-install.sh --uninstall-agents      # remove RepoGrammar-owned agent wiring
-  repogrammar-install.sh --uninstall-command     # remove local repogrammar command
-  repogrammar-install.sh --uninstall-all         # remove agent wiring and local command
+  repogrammar-install.sh --uninstall-command     # deprecated; prints migration guidance
+  repogrammar-install.sh --uninstall-all         # remove the managed product installation
 
 Options:
   --yes                  Do not prompt for installer confirmations
+  --dry-run              Preview --uninstall-all without changing machine state
   --replace-unmanaged-command
                          Allow replacing an existing unmanaged repogrammar
                          command path (backs it up first). Required opt-in;
@@ -80,7 +84,8 @@ Environment:
   REPOGRAMMAR_INSTALL_DIR    Directory for RepoGrammar-managed install state
   REPOGRAMMAR_SOURCE_BINARY  Prebuilt source-checkout binary for dogfood tests;
                              skips the default cargo build
-  REPOGRAMMAR_WORKER_ROOT    Directory for bundled worker assets
+  REPOGRAMMAR_WORKER_ROOT    Legacy override; managed installs reject values
+                             outside <install-dir>/workers so ownership remains auditable
   REPOGRAMMAR_VERSION        Release tag, or latest
   REPOGRAMMAR_USE_SOURCE_BUILD=1  Build from source instead of downloading
 
@@ -104,15 +109,18 @@ parse_args() {
       --uninstall-command) ACTION="uninstall_command"; shift ;;
       --uninstall-all) ACTION="uninstall_all"; shift ;;
       --yes) ASSUME_YES=1; shift ;;
+      --dry-run) DRY_RUN=1; shift ;;
       --replace-unmanaged-command) REPLACE_UNMANAGED_COMMAND=1; shift ;;
       --target)
         [[ $# -ge 2 ]] || die "--target requires a value"
         TARGET_SELECTION="$2"
+        TARGET_EXPLICIT=1
         shift 2
         ;;
       --scope|--location)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         INSTALL_SCOPE="$2"
+        SCOPE_EXPLICIT=1
         shift 2
         ;;
       --version)
@@ -612,11 +620,31 @@ install_cli_from_source() {
 }
 
 install_cli_binary() {
+  local deterministic_worker_root="${DATA_DIR}/workers"
+  if [[ -n "$WORKER_ROOT" && "$WORKER_ROOT" != "$deterministic_worker_root" ]]; then
+    die "custom REPOGRAMMAR_WORKER_ROOT is not supported for first-party managed installs; the product ownership receipt only covers ${deterministic_worker_root} and the managed command worker root"
+  fi
+  if [[ "$WORKER_ROOT" == "$deterministic_worker_root" ]]; then
+    WORKER_ROOT=""
+  fi
   if [[ "$USE_SOURCE_BUILD" == "1" ]]; then
     install_cli_from_source
   else
     install_cli_from_release
   fi
+  record_cli_install_receipt
+}
+
+record_cli_install_receipt() {
+  [[ -x "$COMMAND_PATH" ]] || die "installed repogrammar command is unavailable for receipt creation"
+  REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+  REPOGRAMMAR_EXECUTABLE="$INSTALLED_EXECUTABLE" \
+  "$COMMAND_PATH" install \
+    --target none \
+    --scope global \
+    --yes \
+    --no-telemetry >/dev/null
 }
 
 resolve_repogrammar_command() {
@@ -624,6 +652,16 @@ resolve_repogrammar_command() {
     printf "%s" "$COMMAND_PATH"
   elif command -v repogrammar >/dev/null 2>&1; then
     command -v repogrammar
+  else
+    return 1
+  fi
+}
+
+resolve_managed_repogrammar_command() {
+  if [[ -x "$COMMAND_PATH" && -x "$INSTALLED_EXECUTABLE" ]] && command_path_is_managed; then
+    printf "%s" "$COMMAND_PATH"
+  elif [[ -x "$INSTALLED_EXECUTABLE" ]]; then
+    printf "%s" "$INSTALLED_EXECUTABLE"
   else
     return 1
   fi
@@ -683,7 +721,13 @@ select_agent_target() {
 
 uninstall_connected_agents() {
   local command_path
+  local executable_path
   command_path="$(resolve_repogrammar_command)" || die "repogrammar command is not installed; cannot uninstall managed agent integrations"
+  if [[ -x "$INSTALLED_EXECUTABLE" ]]; then
+    executable_path="$INSTALLED_EXECUTABLE"
+  else
+    executable_path="$command_path"
+  fi
   local target="$TARGET_SELECTION"
   if [[ "$ASSUME_YES" -eq 0 ]]; then
     target="$(select_agent_target)" || {
@@ -697,28 +741,35 @@ uninstall_connected_agents() {
   fi
   REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
   REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
-  REPOGRAMMAR_EXECUTABLE="$command_path" \
-  "$command_path" uninstall \
+  REPOGRAMMAR_EXECUTABLE="$executable_path" \
+  "$command_path" disconnect \
     --target "$target" \
     --scope "$INSTALL_SCOPE" \
     --yes
 }
 
-uninstall_command() {
-  if [[ ! -e "$COMMAND_PATH" ]]; then
-    printf "No repogrammar command found at %s\n" "$COMMAND_PATH"
+deprecated_uninstall_command() {
+  printf "error: --uninstall-command is deprecated because command-only removal leaves managed installation state behind.\n" >&2
+  printf "Use --uninstall-all (or repogrammar uninstall --yes) for the managed product installation.\n" >&2
+  printf "Use --uninstall-agents (or repogrammar disconnect --target all --yes) for coding-agent integrations only.\n" >&2
+  return 2
+}
+
+uninstall_product() {
+  local command_path
+  local args=(uninstall)
+  command_path="$(resolve_managed_repogrammar_command)" || die "managed repogrammar command is unavailable; reinstall once to create an ownership receipt before uninstalling"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    args+=(--dry-run)
+  elif ! prompt_default_no "Remove the RepoGrammar-managed product installation? Repository-local .repogrammar/ state will be preserved."; then
+    printf "Cancelled. The managed RepoGrammar installation was not removed.\n"
     return 0
   fi
-  if [[ ! -L "$COMMAND_PATH" && ! -f "$COMMAND_PATH" ]]; then
-    printf "Refusing to remove non-file command path: %s\n" "$COMMAND_PATH"
-    return 1
-  fi
-  if ! prompt_default_no "Remove repogrammar command at ${COMMAND_PATH}?"; then
-    printf "Cancelled. The repogrammar command was not removed.\n"
-    return 0
-  fi
-  rm -f "$COMMAND_PATH"
-  printf "Removed %s\n" "$COMMAND_PATH"
+  args+=(--yes)
+  REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+  REPOGRAMMAR_EXECUTABLE="$INSTALLED_EXECUTABLE" \
+  "$command_path" "${args[@]}"
 }
 
 print_command_status() {
@@ -746,7 +797,8 @@ main_menu() {
   printf "needed when you choose the contributor source-build path.\n\n"
   printf "It does not index this repository.\n"
   printf "It does not create or modify .repogrammar/.\n"
-  printf "It does not edit instruction files.\n"
+  printf "Agent setup may add receipt-owned instruction sections; disconnect or full\n"
+  printf "uninstall removes only those managed sections.\n"
   printf "Telemetry remains controlled by repogrammar install prompts and flags.\n\n"
   printf "Command directory: %s\n\n" "$COMMAND_DIR"
   printf "Choose an action:\n"
@@ -759,8 +811,7 @@ main_menu() {
   fi
   printf "  3 = configure coding agents only\n"
   printf "  4 = uninstall connected coding-agent integrations\n"
-  printf "  5 = uninstall repogrammar command only\n"
-  printf "  6 = uninstall connected agents and repogrammar command\n"
+  printf "  5 = uninstall the RepoGrammar-managed product installation\n"
   if has_source_checkout; then
     printf "  7 = install/update from release artifact instead\n"
   fi
@@ -789,8 +840,7 @@ run_menu() {
       ;;
     3) run_agent_install ;;
     4) uninstall_connected_agents ;;
-    5) uninstall_command ;;
-    6) uninstall_connected_agents; uninstall_command ;;
+    5) uninstall_product ;;
     7) USE_SOURCE_BUILD=0; install_cli_binary; prune_stale_path_copies; print_command_status ;;
     q|Q) printf "Cancelled. No changes made.\n" ;;
     *) printf "Invalid selection.\n" >&2; exit 2 ;;
@@ -799,14 +849,20 @@ run_menu() {
 
 main() {
   parse_args "$@"
+  if [[ "$DRY_RUN" -eq 1 && "$ACTION" != "uninstall_all" ]]; then
+    die "--dry-run is only valid with --uninstall-all"
+  fi
+  if [[ "$ACTION" == "uninstall_all" && ( "$TARGET_EXPLICIT" -eq 1 || "$SCOPE_EXPLICIT" -eq 1 ) ]]; then
+    die "--target/--scope select coding-agent integrations, not product files; use --uninstall-agents --target <agents> --scope <scope> --yes"
+  fi
   case "$ACTION" in
     print_target) detect_target; printf "\n" ;;
     install_cli_only) install_cli_binary; prune_stale_path_copies; print_command_status ;;
     install_and_configure) install_and_configure ;;
     configure_agents) run_agent_install ;;
     uninstall_agents) uninstall_connected_agents ;;
-    uninstall_command) uninstall_command ;;
-    uninstall_all) uninstall_connected_agents; uninstall_command ;;
+    uninstall_command) deprecated_uninstall_command ;;
+    uninstall_all) uninstall_product ;;
     menu) run_menu ;;
     *) die "unknown action: $ACTION" ;;
   esac

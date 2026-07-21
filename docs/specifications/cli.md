@@ -37,6 +37,7 @@ Agent integration:
 
 - `serve`
 - `install`
+- `disconnect`
 - `uninstall`
 - `instructions`
 
@@ -296,8 +297,8 @@ small marker-fenced section. Without this flag or explicit interactive
 confirmation, root `.gitignore` must remain untouched.
 
 `repogrammar uninit` removes repository-local RepoGrammar state. It is the only
-command that may remove `.repogrammar/`; `repogrammar uninstall` must not remove
-project indexes. `uninit` must make logs deletion explicit.
+command that may remove `.repogrammar/`; `repogrammar uninstall` must not
+discover or remove project indexes. `uninit` must make logs deletion explicit.
 
 `repogrammar prune` removes old inactive index generations from
 `.repogrammar/repogrammar.sqlite` by deleting inactive `index_generations` rows
@@ -830,7 +831,7 @@ defined in the installation specification.
 
 ## Installer commands
 
-`install` and `uninstall` must support:
+`install` supports:
 
 - `--target`
 - `--scope global|project`
@@ -842,9 +843,35 @@ defined in the installation specification.
 - `--no-telemetry`
 - `--no-permissions`
 
-Installer commands configure agents and machine-level integration only. They do
-not create, delete, or rewrite `.repogrammar/`, and they do not run `init`,
-`index`, or `sync`. The installer follows a CodeGraph-style target-registry
+Agent-only removal is a separate command:
+
+```text
+repogrammar disconnect [--target <agent[,agent]>]
+                       [--scope global|project-local]
+                       [--dry-run] [--yes]
+                       [--print-config [agent]] [--json]
+```
+
+`disconnect` accepts `--location` as a scope alias. It does not accept
+telemetry or permission options because it cannot create product state or
+change telemetry consent.
+
+Product removal has a deliberately narrower interface:
+
+```text
+repogrammar uninstall [--dry-run] [--yes] [--json]
+```
+
+Bare `uninstall` removes the ownership-proven first-party managed machine
+installation. It does not share the install/disconnect option parser. Target,
+scope, location, print-config, telemetry, and permission options are rejected
+before any write. In particular, `uninstall --target ...` returns the exact
+migration guidance `use repogrammar disconnect --target ... --yes`; it must not
+guess the historical agent-only meaning.
+
+Install, disconnect, and uninstall are machine-level commands. They do not
+create, delete, or rewrite `.repogrammar/`, and they do not run `init`, `index`,
+or `sync`. The installer follows a CodeGraph-style target-registry
 state machine while preserving RepoGrammar's safety boundaries. `--target`
 accepts `auto`, `all`, `none`, single concrete ids, and comma-separated
 concrete target lists. Recognized concrete ids are `codex`, `claude-code`
@@ -893,9 +920,61 @@ local Cargo-installed `repogrammar.exe` on PATH, the installer may copy that
 executable into RepoGrammar-managed user state and continue without overwriting
 that currently executing command path in the same run. Existing unrelated
 foreign command paths must still be refused rather than adopted silently.
-`uninstall` removes only receipt-owned managed entries. `uninstall --target all
---scope global --yes` removes every owned first-class agent receipt it finds,
-but refuses unmanaged or foreign receipts.
+`disconnect` retains the historical receipt-backed agent-removal algorithm.
+`disconnect --target all --scope global --yes` removes every owned first-class
+agent receipt it finds, while an explicit single target refuses a missing
+receipt. Before its first mutation it validates the complete selected set,
+including exact native executable, scope, enabled state, `serve` argument,
+receipt, and managed instruction-file state. It verifies native absence before
+removing each receipt or managed section. A later target failure rolls already
+touched targets back from their snapshots rather than reporting a partial
+disconnect.
+
+`uninstall --dry-run` validates, without writes, the product receipt or strict
+legacy proof, exact command/authority/worker identities and hashes, and every
+live agent/native pair. Live mode additionally proves that a private helper and
+validated plan can be created, and it requires `--yes`. Preflight treats a
+receipt with no corresponding native entry as drifted, a native RepoGrammar
+entry without a receipt as foreign, and malformed or unsafe instruction state
+as blocking. Truly absent unowned agent integrations are no-ops.
+
+After complete preflight, live uninstall creates a private helper and
+schema-validated cleanup plan, waits for the exact `READY` handshake, removes
+owned agent integrations transactionally, and sends a one-shot `COMMIT`
+capability. The helper also requires lifecycle-channel EOF and proof that the
+exact parent process exited. It then revalidates every allowlisted path, hash,
+file identity, parent-directory identity, and symlink target before removing
+the recorded command entry, bundled workers, product receipt, and managed
+authority, with the authority last. It removes only known installation
+directories proven empty after cleanup.
+
+A live parent result is `finalizer_pending`, not synchronous success, and
+includes `report_path`. The structured finalizer report is authoritative:
+`complete` means every still-present owned file was removed (already-absent
+owned files are idempotent); `partial` lists removed, preserved, failed,
+residual copies, and manual recovery. Helper spawn or `READY` failure leaves
+agent and product state unchanged. Agent-removal failure aborts product cleanup.
+Failure to commit the helper triggers best-effort agent rollback and reports any
+rollback failure. No partial outcome is rendered as success.
+
+Product uninstall preserves Cargo, npm/npx, source-checkout and other
+package-manager copies, unmanaged PATH copies, telemetry preferences, research
+traces, experiment records, unknown global files, and every repository's
+`.repogrammar/`. Residual executable copies may be reported but are never
+deleted by this command. Use `repogrammar uninit --project <path> --yes`
+separately for each repository whose local state should be removed.
+
+Human output names ownership source (`receipt` or `legacy`), owned asset and
+agent counts, exact owned agent receipt/instruction paths, exact owned product
+paths, preserved boundaries, residual copies, and for live handoff the
+structured report path. JSON emits one object with `command`, `status`,
+`dry_run`, `ownership`, `owned_agent_targets`, `agent_planned_paths`, `planned_paths`,
+`finalizer_pending`, nullable `report_path`, `preserved`, `residual_copies`,
+`manual_recovery`, and `message`. Preflight refusal is nonzero and reports
+`status: refused`; the CLI does not serialize it as completion. Dry-run returns
+`status: dry_run`. A committed live parent returns
+`status: finalizer_pending`; only the post-exit report may state `complete` or
+`partial`.
 Dry-run install output reports the native MCP command shape for supported
 global Codex and Claude Code targets and deferred MCP snippet guidance for
 registry targets without live writers. `--print-config <target>` prints a
@@ -1608,9 +1687,12 @@ thin-wrapper/token-saving risk, readiness/blocking reasons, and estimated
 potential read displacement without reporting measured token savings.
 `serve` runs the read-only MCP
 `repogrammar_context` stdio boundary and reuses the same query preflight and
-FamilyStore-backed lookup path. Commands that install or uninstall agent
-configuration now support narrow explicit-target live writes after MCP
-self-test. The CLI now includes the first Python structural indexing slice, but
+FamilyStore-backed lookup path. Commands that install or disconnect agent
+configuration support narrow explicit-target live writes after MCP self-test.
+Receipt-aware first-party installs also support ownership-safe machine-product
+removal through bare `uninstall` without crossing the separate `uninit`
+boundary. The CLI
+now includes the first Python structural indexing slice, but
 Pyrefly/Pyright provider evidence, richer repo-local module resolution, broad
 Python family mining beyond the current framework set, React TS/JS support, and
 TypeScript compiler-backed analysis remain deferred. Narrow exact-anchor Python

@@ -1,7 +1,12 @@
 //! Safe machine-level agent integration planning.
 
+use crate::application::product_installation::{
+    record_product_installation, rollback_product_receipt_write, ProductInstallationRequest,
+    ProductReceiptWrite,
+};
 use crate::error::RepoGrammarError;
 use serde_json::json;
+use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 use std::fs::{self, File, Permissions};
@@ -175,6 +180,36 @@ impl Default for InstallRequest {
     }
 }
 
+/// Request to remove only RepoGrammar-owned coding-agent integrations.
+///
+/// Product installation removal has a separate application contract. Keeping
+/// these fields independent prevents product uninstall from inheriting install
+/// options or from being dispatched through the install service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentDisconnectRequest {
+    pub target: AgentTarget,
+    pub selected_targets: Vec<AgentTarget>,
+    pub scope: InstallScope,
+    pub dry_run: bool,
+    pub print_config: bool,
+    pub print_config_target: Option<AgentTarget>,
+    pub assume_yes: bool,
+}
+
+impl Default for AgentDisconnectRequest {
+    fn default() -> Self {
+        Self {
+            target: AgentTarget::AllSupported,
+            selected_targets: Vec::new(),
+            scope: InstallScope::Global,
+            dry_run: false,
+            print_config: false,
+            print_config_target: None,
+            assume_yes: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallPlan {
     pub target: AgentTarget,
@@ -214,6 +249,82 @@ pub struct InstallExecutionOutcome {
     pub command_path: Option<String>,
     pub command_on_path: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisconnectExecutionOutcome {
+    pub command: &'static str,
+    pub target: AgentTarget,
+    pub scope: InstallScope,
+    pub disconnected_targets: Vec<AgentTarget>,
+    pub receipt_paths: Vec<String>,
+    pub message: String,
+}
+
+/// Fully read-only ownership proof for one agent-disconnect transaction.
+///
+/// The captured state stays private so callers cannot construct a deletion
+/// plan from arbitrary paths. Product uninstall prepares this plan before it
+/// starts its finalizer and executes the same plan only after the helper has
+/// reported `READY`.
+#[derive(Debug, Clone)]
+pub struct PreparedAgentDisconnect {
+    request: AgentDisconnectRequest,
+    context: InstallExecutionContext,
+    snapshots: Vec<OwnedIntegrationSnapshot>,
+}
+
+impl PreparedAgentDisconnect {
+    pub fn targets(&self) -> Vec<AgentTarget> {
+        self.snapshots
+            .iter()
+            .map(|snapshot| snapshot.target)
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.snapshots.is_empty()
+    }
+
+    /// Exact receipt and instruction paths proven owned during preflight.
+    /// Native registrations remain represented by [`Self::targets`] because
+    /// they are agent-managed configuration entries rather than filesystem
+    /// paths.
+    pub fn planned_paths(&self) -> Vec<String> {
+        let mut paths = BTreeSet::new();
+        for snapshot in &self.snapshots {
+            for file in std::iter::once(&snapshot.receipt)
+                .chain(std::iter::once(&snapshot.receipt_backup))
+                .chain(snapshot.instruction_files.iter())
+            {
+                if file.contents.is_some() {
+                    paths.insert(display_path(&file.path));
+                }
+            }
+        }
+        paths.into_iter().collect()
+    }
+}
+
+/// Successfully applied disconnect transaction retained for later rollback.
+///
+/// Product uninstall must keep this value until the finalizer commit signal is
+/// durable. If that signal fails, [`rollback_agent_disconnect`] restores the
+/// exact preflight snapshots in reverse order.
+#[derive(Debug, Clone)]
+pub struct AppliedAgentDisconnect {
+    prepared: PreparedAgentDisconnect,
+    outcome: DisconnectExecutionOutcome,
+}
+
+impl AppliedAgentDisconnect {
+    pub fn outcome(&self) -> &DisconnectExecutionOutcome {
+        &self.outcome
+    }
+
+    pub fn into_outcome(self) -> DisconnectExecutionOutcome {
+        self.outcome
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,61 +672,219 @@ pub fn execute_install(
     })
 }
 
-pub fn execute_uninstall(
-    request: &InstallRequest,
+pub fn execute_disconnect(
+    request: &AgentDisconnectRequest,
     context: &InstallExecutionContext,
     configurator: &impl NativeAgentConfigurator,
-) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-    require_live_write_confirmation(request)?;
+) -> Result<DisconnectExecutionOutcome, RepoGrammarError> {
+    let prepared = prepare_agent_disconnect(request, context, configurator)?;
+    execute_prepared_agent_disconnect(prepared, configurator)
+        .map(AppliedAgentDisconnect::into_outcome)
+}
+
+/// Preflight an ordinary `repogrammar disconnect` without mutating native
+/// configuration, receipts, or instruction files.
+///
+/// Explicit targets preserve the historical missing-receipt refusal. `all`
+/// continues to ignore truly unmanaged targets, but still refuses when no
+/// owned integration exists at all.
+pub fn prepare_agent_disconnect(
+    request: &AgentDisconnectRequest,
+    context: &InstallExecutionContext,
+    configurator: &impl NativeAgentConfigurator,
+) -> Result<PreparedAgentDisconnect, RepoGrammarError> {
+    require_disconnect_confirmation(request)?;
     require_global_live_scope(request.scope)?;
     validate_execution_context(context)?;
-    let selected_targets = selected_concrete_targets(request)?;
+    let selected_targets = selected_disconnect_targets(request)?;
     require_live_writer_support(&selected_targets, request.scope)?;
 
-    let mut configured_targets = Vec::new();
-    let mut receipt_paths = Vec::new();
+    prepare_disconnect_targets(request, context, configurator, selected_targets, false)
+}
+
+/// Preflight all live global agent integrations for full product uninstall.
+///
+/// A genuinely absent receipt plus absent native entry is a no-op. Any native
+/// entry without an owned receipt, any drifted owned entry, any malformed
+/// entry, or any unsafe receipt/instruction file fails the whole preflight
+/// before a single target is changed.
+pub fn prepare_product_agent_disconnect(
+    context: &InstallExecutionContext,
+    configurator: &impl NativeAgentConfigurator,
+) -> Result<PreparedAgentDisconnect, RepoGrammarError> {
+    validate_execution_context(context)?;
+    let request = AgentDisconnectRequest {
+        target: AgentTarget::AllSupported,
+        selected_targets: LIVE_AGENT_TARGETS.to_vec(),
+        scope: InstallScope::Global,
+        assume_yes: true,
+        ..AgentDisconnectRequest::default()
+    };
+    prepare_disconnect_targets(
+        &request,
+        context,
+        configurator,
+        LIVE_AGENT_TARGETS.to_vec(),
+        true,
+    )
+}
+
+fn prepare_disconnect_targets(
+    request: &AgentDisconnectRequest,
+    context: &InstallExecutionContext,
+    configurator: &impl NativeAgentConfigurator,
+    selected_targets: Vec<AgentTarget>,
+    allow_empty: bool,
+) -> Result<PreparedAgentDisconnect, RepoGrammarError> {
+    let ignore_unmanaged = allow_empty
+        || request.target == AgentTarget::AllSupported
+        || !request.selected_targets.is_empty();
+    let mut snapshots = Vec::new();
+
     for target in selected_targets {
-        let receipt_path = receipt_path(context, target, request.scope);
-        if !receipt_path.is_file() {
-            if request.target == AgentTarget::AllSupported || !request.selected_targets.is_empty() {
-                continue;
+        match inspect_agent_integration(context, target, request.scope, configurator)? {
+            AgentIntegrationInspection::OwnedCurrent
+            | AgentIntegrationInspection::OwnedOutdated => snapshots.push(
+                capture_owned_integration(context, target, request.scope, configurator)?,
+            ),
+            AgentIntegrationInspection::Unmanaged if ignore_unmanaged => {}
+            AgentIntegrationInspection::Unmanaged => {
+                return Err(missing_disconnect_receipt_error());
             }
-            return Err(RepoGrammarError::InvalidInput(
-                "no RepoGrammar-managed install receipt found; refusing to remove unmanaged agent configuration"
-                    .to_string(),
-            ));
+            AgentIntegrationInspection::OwnedDrifted => {
+                return Err(RepoGrammarError::InvalidInput(format!(
+                    "RepoGrammar-owned {} receipt does not match native MCP state; refusing disconnect",
+                    target.as_str()
+                )))
+            }
+            AgentIntegrationInspection::Foreign
+            | AgentIntegrationInspection::Malformed => {
+                return Err(RepoGrammarError::InvalidInput(format!(
+                    "native {} MCP state is not proven RepoGrammar-owned; refusing disconnect",
+                    target.as_str()
+                )))
+            }
         }
-        validate_receipt_ownership(&receipt_path, target, request.scope)?;
-        let instruction_path = receipt_instruction_file_path(&receipt_path);
-        let instruction_action = receipt_instruction_action(&receipt_path);
-        configurator.remove_mcp_server(target, request.scope, &context.current_dir)?;
-        if let Some(instruction_path) = instruction_path {
-            revert_managed_instruction(Path::new(&instruction_path), instruction_action)?;
-        }
-        remove_receipt(&receipt_path)?;
-        configured_targets.push(target);
-        receipt_paths.push(display_path(&receipt_path));
     }
-    if configured_targets.is_empty() {
-        return Err(RepoGrammarError::InvalidInput(
-            "no RepoGrammar-managed install receipt found; refusing to remove unmanaged agent configuration"
-                .to_string(),
-        ));
+    if snapshots.is_empty() && !allow_empty {
+        return Err(missing_disconnect_receipt_error());
     }
 
-    Ok(InstallExecutionOutcome {
-        command: "uninstall",
-        target: request.target,
-        scope: request.scope,
-        configured_targets,
-        reconfigured_targets: Vec::new(),
-        skipped_targets: Vec::new(),
-        receipt_paths,
-        installed_executable_path: None,
-        command_path: None,
-        command_on_path: context.command_dir_on_path,
-        message: "RepoGrammar-owned agent MCP integration removed".to_string(),
+    Ok(PreparedAgentDisconnect {
+        request: request.clone(),
+        context: context.clone(),
+        snapshots,
     })
+}
+
+/// Apply a previously prepared disconnect atomically across all selected
+/// targets. Every captured target is revalidated before the first mutation.
+/// Any later failure triggers reverse-order rollback of every target that may
+/// have been touched.
+pub fn execute_prepared_agent_disconnect(
+    prepared: PreparedAgentDisconnect,
+    configurator: &impl NativeAgentConfigurator,
+) -> Result<AppliedAgentDisconnect, RepoGrammarError> {
+    for snapshot in &prepared.snapshots {
+        verify_owned_integration_unchanged(
+            &prepared.context,
+            prepared.request.scope,
+            configurator,
+            snapshot,
+        )?;
+    }
+
+    let mut touched = Vec::new();
+    let mut disconnected_targets = Vec::new();
+    let mut receipt_paths = Vec::new();
+    for snapshot in &prepared.snapshots {
+        touched.push(snapshot.clone());
+        let target = snapshot.target;
+        let mutation = (|| {
+            configurator.remove_mcp_server(
+                target,
+                prepared.request.scope,
+                &prepared.context.current_dir,
+            )?;
+            match configurator.inspect_mcp_server(
+                target,
+                prepared.request.scope,
+                &prepared.context.current_dir,
+            )? {
+                NativeMcpServerState::NotFound => {}
+                NativeMcpServerState::Present(_) | NativeMcpServerState::Malformed => {
+                    return Err(RepoGrammarError::InvalidInput(format!(
+                        "native {} MCP entry was not absent after disconnect",
+                        target.as_str()
+                    )));
+                }
+            }
+            maybe_fail_disconnect_step(target, DisconnectMutationStep::Instruction)?;
+            if let Some((instruction_path, instruction_action)) = &snapshot.receipt_instruction {
+                revert_managed_instruction(instruction_path, *instruction_action)?;
+            }
+            maybe_fail_disconnect_step(target, DisconnectMutationStep::ReceiptBackup)?;
+            remove_snapshot_file_if_unchanged(&snapshot.receipt_backup, "install receipt backup")?;
+            maybe_fail_disconnect_step(target, DisconnectMutationStep::Receipt)?;
+            remove_snapshot_file_if_unchanged(&snapshot.receipt, "install receipt")?;
+            Ok::<(), RepoGrammarError>(())
+        })();
+        if let Err(error) = mutation {
+            let rollback_failures = restore_disconnect_snapshots(
+                &prepared.context,
+                prepared.request.scope,
+                configurator,
+                touched.iter().rev(),
+            );
+            return Err(disconnect_rollback_error(error, rollback_failures));
+        }
+        disconnected_targets.push(target);
+        receipt_paths.push(display_path(&snapshot.receipt.path));
+    }
+
+    let outcome = DisconnectExecutionOutcome {
+        command: "disconnect",
+        target: prepared.request.target,
+        scope: prepared.request.scope,
+        disconnected_targets,
+        receipt_paths,
+        message: if prepared.snapshots.is_empty() {
+            "no RepoGrammar-owned agent MCP integrations were present".to_string()
+        } else {
+            "RepoGrammar-owned agent MCP integration removed".to_string()
+        },
+    };
+    Ok(AppliedAgentDisconnect { prepared, outcome })
+}
+
+/// Roll back a successfully applied disconnect, for example when product
+/// uninstall cannot durably commit its already-ready finalizer. Rollback is
+/// idempotent when the original owned state is already restored.
+pub fn rollback_agent_disconnect(
+    applied: &AppliedAgentDisconnect,
+    configurator: &impl NativeAgentConfigurator,
+) -> Result<(), RepoGrammarError> {
+    let failures = restore_disconnect_snapshots(
+        &applied.prepared.context,
+        applied.prepared.request.scope,
+        configurator,
+        applied.prepared.snapshots.iter().rev(),
+    );
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(RepoGrammarError::InvalidInput(format!(
+            "agent disconnect rollback failed: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
+fn missing_disconnect_receipt_error() -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(
+        "no RepoGrammar-managed install receipt found; refusing to remove unmanaged agent configuration"
+            .to_string(),
+    )
 }
 
 pub fn owned_install_receipt_exists(
@@ -649,7 +918,10 @@ pub fn inspect_agent_integration(
 
     let receipt = receipt_path(context, target, scope);
     let recorded_executable = receipt_executable_path(&receipt).ok_or_else(|| {
-        RepoGrammarError::InvalidInput("install receipt is malformed".to_string())
+        RepoGrammarError::InvalidInput(format!(
+            "{} install receipt is malformed: executable_path is missing or invalid",
+            target.as_str()
+        ))
     })?;
     if !Path::new(&recorded_executable).is_absolute() {
         return Ok(AgentIntegrationInspection::Malformed);
@@ -704,6 +976,24 @@ fn selected_concrete_targets(
     } else {
         request.selected_targets.clone()
     };
+    // First-party shell and PowerShell acquisition paths invoke the same Rust
+    // install service with `--target none` after placing the authority,
+    // command, and workers. That receipt-only path must not invent an agent
+    // mutation, but it still records and self-tests the managed product.
+    if request.target == AgentTarget::None && targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    normalize_concrete_targets(&targets)
+}
+
+fn selected_disconnect_targets(
+    request: &AgentDisconnectRequest,
+) -> Result<Vec<AgentTarget>, RepoGrammarError> {
+    let targets = if request.selected_targets.is_empty() {
+        concrete_targets(request.target)
+    } else {
+        request.selected_targets.clone()
+    };
     normalize_concrete_targets(&targets)
 }
 
@@ -730,6 +1020,17 @@ pub fn normalize_concrete_targets(
 }
 
 pub fn targets_for_display(request: &InstallRequest) -> Vec<AgentTarget> {
+    if !request.selected_targets.is_empty() {
+        return normalize_targets_for_display(&request.selected_targets);
+    }
+    match request.target {
+        AgentTarget::AllSupported => supported_concrete_targets(),
+        AgentTarget::None => Vec::new(),
+        target => vec![target],
+    }
+}
+
+pub fn disconnect_targets_for_display(request: &AgentDisconnectRequest) -> Vec<AgentTarget> {
     if !request.selected_targets.is_empty() {
         return normalize_targets_for_display(&request.selected_targets);
     }
@@ -1060,6 +1361,7 @@ struct CommandInstallRecord {
     created_executable: bool,
     previous_executable: Option<Vec<u8>>,
     previous_command_copy: Option<Vec<u8>>,
+    product_receipt_write: Option<ProductReceiptWrite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1071,10 +1373,11 @@ struct FileSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OwnedIntegrationSnapshot {
     target: AgentTarget,
-    native_executable_path: String,
+    native_config: NativeMcpServerConfig,
     receipt: FileSnapshot,
     receipt_backup: FileSnapshot,
     instruction_files: Vec<FileSnapshot>,
+    receipt_instruction: Option<(PathBuf, InstructionAction)>,
 }
 
 fn capture_owned_integration(
@@ -1085,22 +1388,31 @@ fn capture_owned_integration(
 ) -> Result<OwnedIntegrationSnapshot, RepoGrammarError> {
     let receipt_path = receipt_path(context, target, scope);
     let native_executable_path = receipt_executable_path(&receipt_path).ok_or_else(|| {
-        RepoGrammarError::InvalidInput("install receipt is malformed".to_string())
+        RepoGrammarError::InvalidInput(format!(
+            "{} install receipt changed after inspection: executable_path is missing or invalid",
+            target.as_str()
+        ))
     })?;
-    let native = configurator.inspect_mcp_server(target, scope, &context.current_dir)?;
-    match native {
+    let native_config = match configurator.inspect_mcp_server(
+        target,
+        scope,
+        &context.current_dir,
+    )? {
         NativeMcpServerState::Present(config)
-            if native_config_matches(&config, scope, &native_executable_path) => {}
+            if native_config_matches(&config, scope, &native_executable_path) =>
+        {
+            config
+        }
         _ => {
             return Err(RepoGrammarError::InvalidInput(format!(
                 "RepoGrammar-owned {} integration changed during reconciliation; refusing automatic repair",
                 target.as_str()
             )));
         }
-    }
+    };
 
     let mut instruction_paths = Vec::new();
-    if let Some(path) = receipt_instruction_file_path(&receipt_path) {
+    let receipt_instruction = if let Some(path) = receipt_instruction_file_path(&receipt_path) {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
             return Err(RepoGrammarError::InvalidInput(
@@ -1108,8 +1420,21 @@ fn capture_owned_integration(
                     .to_string(),
             ));
         }
-        instruction_paths.push(path);
-    }
+        let inspection = inspect_managed_instruction_file(&path)?;
+        if matches!(
+            inspection.state,
+            ManagedInstructionState::Foreign | ManagedInstructionState::Malformed
+        ) {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "RepoGrammar-owned {} instruction state is not safely removable",
+                target.as_str()
+            )));
+        }
+        instruction_paths.push(path.clone());
+        Some((path, receipt_instruction_action(&receipt_path)))
+    } else {
+        None
+    };
     if let Some(path) = instruction_file_for(context, target) {
         let path = PathBuf::from(path);
         if !instruction_paths
@@ -1121,15 +1446,26 @@ fn capture_owned_integration(
     }
 
     let receipt_backup_path = receipt_path.with_extension("json.bak");
+    let receipt = capture_file_snapshot(&receipt_path, "install receipt")?;
+    let receipt_backup = capture_file_snapshot(&receipt_backup_path, "install receipt backup")?;
+    if receipt.contents.is_none() {
+        return Err(RepoGrammarError::InvalidInput(
+            "RepoGrammar-owned install receipt disappeared during disconnect preflight".to_string(),
+        ));
+    }
+    if receipt_backup.contents.is_some() {
+        validate_receipt_ownership(&receipt_backup_path, target, scope)?;
+    }
     Ok(OwnedIntegrationSnapshot {
         target,
-        native_executable_path,
-        receipt: capture_file_snapshot(&receipt_path, "install receipt")?,
-        receipt_backup: capture_file_snapshot(&receipt_backup_path, "install receipt backup")?,
+        native_config,
+        receipt,
+        receipt_backup,
         instruction_files: instruction_paths
             .iter()
             .map(|path| capture_file_snapshot(path, "managed instruction file"))
             .collect::<Result<Vec<_>, _>>()?,
+        receipt_instruction,
     })
 }
 
@@ -1154,6 +1490,243 @@ fn capture_file_snapshot(path: &Path, label: &str) -> Result<FileSnapshot, RepoG
         path: path.to_path_buf(),
         contents,
     })
+}
+
+fn verify_owned_integration_unchanged(
+    context: &InstallExecutionContext,
+    scope: InstallScope,
+    configurator: &impl NativeAgentConfigurator,
+    snapshot: &OwnedIntegrationSnapshot,
+) -> Result<(), RepoGrammarError> {
+    match configurator.inspect_mcp_server(snapshot.target, scope, &context.current_dir)? {
+        NativeMcpServerState::Present(config) if config == snapshot.native_config => {}
+        _ => {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "RepoGrammar-owned {} integration changed after disconnect preflight; refusing all mutations",
+                snapshot.target.as_str()
+            )));
+        }
+    }
+    verify_file_snapshot_unchanged(&snapshot.receipt, "install receipt")?;
+    verify_file_snapshot_unchanged(&snapshot.receipt_backup, "install receipt backup")?;
+    for file in &snapshot.instruction_files {
+        verify_file_snapshot_unchanged(file, "managed instruction file")?;
+    }
+    Ok(())
+}
+
+fn verify_file_snapshot_unchanged(
+    snapshot: &FileSnapshot,
+    label: &str,
+) -> Result<(), RepoGrammarError> {
+    match (&snapshot.contents, fs::symlink_metadata(&snapshot.path)) {
+        (None, Err(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        (None, _) => Err(RepoGrammarError::InvalidInput(format!(
+            "{label} changed after disconnect preflight; refusing all mutations"
+        ))),
+        (Some(_), Ok(metadata)) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(RepoGrammarError::InvalidInput(format!(
+                "{label} changed to a non-regular path after disconnect preflight; refusing all mutations"
+            )))
+        }
+        (Some(expected), Ok(_)) => {
+            let current = fs::read(&snapshot.path).map_err(|error| {
+                RepoGrammarError::InvalidInput(format!(
+                    "failed to re-read {label} after disconnect preflight: {error}"
+                ))
+            })?;
+            if &current == expected {
+                Ok(())
+            } else {
+                Err(RepoGrammarError::InvalidInput(format!(
+                    "{label} changed after disconnect preflight; refusing all mutations"
+                )))
+            }
+        }
+        (Some(_), Err(error)) => Err(RepoGrammarError::InvalidInput(format!(
+            "failed to re-inspect {label} after disconnect preflight: {error}"
+        ))),
+    }
+}
+
+fn remove_snapshot_file_if_unchanged(
+    snapshot: &FileSnapshot,
+    label: &str,
+) -> Result<(), RepoGrammarError> {
+    if snapshot.contents.is_none() {
+        return Ok(());
+    }
+    verify_file_snapshot_unchanged(snapshot, label)?;
+    fs::remove_file(&snapshot.path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to remove {label}: {error}"))
+    })
+}
+
+fn restore_disconnect_snapshots<'a>(
+    context: &InstallExecutionContext,
+    scope: InstallScope,
+    configurator: &impl NativeAgentConfigurator,
+    snapshots: impl IntoIterator<Item = &'a OwnedIntegrationSnapshot>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for snapshot in snapshots {
+        failures.extend(restore_disconnect_snapshot(
+            context,
+            scope,
+            configurator,
+            snapshot,
+        ));
+    }
+    failures
+}
+
+fn restore_disconnect_snapshot(
+    context: &InstallExecutionContext,
+    scope: InstallScope,
+    configurator: &impl NativeAgentConfigurator,
+    snapshot: &OwnedIntegrationSnapshot,
+) -> Vec<String> {
+    let native_was_absent =
+        match configurator.inspect_mcp_server(snapshot.target, scope, &context.current_dir) {
+            Ok(NativeMcpServerState::NotFound) => true,
+            Ok(NativeMcpServerState::Present(config)) if config == snapshot.native_config => false,
+            Ok(NativeMcpServerState::Present(_)) | Ok(NativeMcpServerState::Malformed) => {
+                return vec![format!(
+                "native {} rollback refused because the MCP entry changed outside this disconnect",
+                snapshot.target.as_str()
+            )];
+            }
+            Err(error) => {
+                return vec![format!(
+                    "native {} rollback could not inspect current MCP state: {error}",
+                    snapshot.target.as_str()
+                )];
+            }
+        };
+
+    let mut failures = Vec::new();
+    if let Err(error) = restore_disconnect_file_snapshot(&snapshot.receipt, "install receipt") {
+        failures.push(error);
+    }
+    if let Err(error) =
+        restore_disconnect_file_snapshot(&snapshot.receipt_backup, "install receipt backup")
+    {
+        failures.push(error);
+    }
+    for file in snapshot.instruction_files.iter().rev() {
+        if let Err(error) = restore_disconnect_file_snapshot(file, "managed instruction file") {
+            failures.push(error);
+        }
+    }
+    if !failures.is_empty() || !native_was_absent {
+        return failures;
+    }
+
+    if let Err(error) = configurator.add_mcp_server(
+        snapshot.target,
+        scope,
+        &snapshot.native_config.executable_path,
+        &context.current_dir,
+    ) {
+        failures.push(format!(
+            "native {} rollback add failed: {error}",
+            snapshot.target.as_str()
+        ));
+        return failures;
+    }
+    match configurator.inspect_mcp_server(snapshot.target, scope, &context.current_dir) {
+        Ok(NativeMcpServerState::Present(config)) if config == snapshot.native_config => {}
+        Ok(_) => failures.push(format!(
+            "native {} rollback failed verification",
+            snapshot.target.as_str()
+        )),
+        Err(error) => failures.push(format!(
+            "native {} rollback could not be verified: {error}",
+            snapshot.target.as_str()
+        )),
+    }
+    failures
+}
+
+fn restore_disconnect_file_snapshot(snapshot: &FileSnapshot, label: &str) -> Result<(), String> {
+    if snapshot.contents.is_none() {
+        return match fs::symlink_metadata(&snapshot.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err(format!(
+                "{label} rollback preserved a path created after disconnect preflight"
+            )),
+            Err(error) => Err(format!("{label} rollback inspection failed: {error}")),
+        };
+    }
+    restore_file_snapshot(snapshot, label)
+}
+
+fn disconnect_rollback_error(
+    error: RepoGrammarError,
+    rollback_failures: Vec<String>,
+) -> RepoGrammarError {
+    if rollback_failures.is_empty() {
+        RepoGrammarError::InvalidInput(format!("{error}; agent disconnect rolled back"))
+    } else {
+        RepoGrammarError::InvalidInput(format!(
+            "{error}; agent disconnect rollback attempted but failed: {}",
+            rollback_failures.join("; ")
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisconnectMutationStep {
+    Instruction,
+    ReceiptBackup,
+    Receipt,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static DISCONNECT_FAILURE: std::cell::RefCell<Option<(AgentTarget, DisconnectMutationStep)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn inject_disconnect_failure(target: AgentTarget, step: DisconnectMutationStep) {
+    DISCONNECT_FAILURE.with(|failure| *failure.borrow_mut() = Some((target, step)));
+}
+
+#[cfg(test)]
+fn maybe_fail_disconnect_step(
+    target: AgentTarget,
+    step: DisconnectMutationStep,
+) -> Result<(), RepoGrammarError> {
+    let should_fail = DISCONNECT_FAILURE.with(|failure| {
+        let mut failure = failure.borrow_mut();
+        if *failure == Some((target, step)) {
+            *failure = None;
+            true
+        } else {
+            false
+        }
+    });
+    if should_fail {
+        Err(RepoGrammarError::InvalidInput(format!(
+            "injected disconnect {} failure",
+            match step {
+                DisconnectMutationStep::Instruction => "instruction",
+                DisconnectMutationStep::ReceiptBackup => "receipt backup",
+                DisconnectMutationStep::Receipt => "receipt",
+            }
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(test))]
+fn maybe_fail_disconnect_step(
+    _target: AgentTarget,
+    _step: DisconnectMutationStep,
+) -> Result<(), RepoGrammarError> {
+    Ok(())
 }
 
 fn install_cli_command(
@@ -1181,6 +1754,7 @@ fn install_cli_command_with_current_process(
         created_executable: false,
         previous_executable: None,
         previous_command_copy: None,
+        product_receipt_write: None,
     };
 
     fs::create_dir_all(&data_bin_dir).map_err(|error| {
@@ -1248,6 +1822,20 @@ fn install_cli_command_with_current_process(
             let _ = rollback_command_install(&record);
         })?;
         record.created_command = true;
+    }
+
+    let product_request = ProductInstallationRequest {
+        data_dir: PathBuf::from(&context.data_dir),
+        executable_path: PathBuf::from(&record.executable_path),
+        command_path: PathBuf::from(&record.command_path),
+        current_executable_path: current_process_executable.map(Path::to_path_buf),
+    };
+    match record_product_installation(&product_request) {
+        Ok(write) => record.product_receipt_write = Some(write),
+        Err(error) => {
+            let rollback_failures = rollback_command_install(&record);
+            return Err(install_rollback_error(error, rollback_failures));
+        }
     }
 
     Ok(record)
@@ -1504,7 +2092,11 @@ fn restore_owned_integration(
         };
     match native {
         NativeMcpServerState::Present(config)
-            if native_config_matches(&config, request.scope, &snapshot.native_executable_path) => {}
+            if native_config_matches(
+                &config,
+                request.scope,
+                &snapshot.native_config.executable_path,
+            ) => {}
         NativeMcpServerState::Present(config)
             if native_config_matches(&config, request.scope, replacement_executable) =>
         {
@@ -1514,7 +2106,7 @@ fn restore_owned_integration(
                 configurator,
                 snapshot.target,
                 replacement_executable,
-                Some(&snapshot.native_executable_path),
+                Some(&snapshot.native_config.executable_path),
             ) {
                 Ok(removal) => removal,
                 Err(error) => {
@@ -1569,15 +2161,11 @@ fn restore_snapshot_native(
     let _ = configurator.add_mcp_server(
         snapshot.target,
         request.scope,
-        &snapshot.native_executable_path,
+        &snapshot.native_config.executable_path,
         &context.current_dir,
     );
     match configurator.inspect_mcp_server(snapshot.target, request.scope, &context.current_dir) {
-        Ok(NativeMcpServerState::Present(config))
-            if native_config_matches(&config, request.scope, &snapshot.native_executable_path) =>
-        {
-            Ok(())
-        }
+        Ok(NativeMcpServerState::Present(config)) if config == snapshot.native_config => Ok(()),
         Ok(_) => Err(format!(
             "reconfigured {} native restore failed verification; preserving current state",
             snapshot.target.as_str()
@@ -1647,6 +2235,11 @@ fn rollback_command_install(command_record: &CommandInstallRecord) -> Vec<String
     } else if let Some(previous) = &command_record.previous_executable {
         if let Err(error) = fs::write(&command_record.executable_path, previous) {
             failures.push(format!("installed executable restore failed: {error}"));
+        }
+    }
+    if let Some(write) = &command_record.product_receipt_write {
+        if let Err(error) = rollback_product_receipt_write(write) {
+            failures.push(error);
         }
     }
     failures
@@ -1724,6 +2317,18 @@ fn require_live_write_confirmation(request: &InstallRequest) -> Result<(), RepoG
     } else {
         Err(RepoGrammarError::InvalidInput(
             "live install/uninstall writes require --yes".to_string(),
+        ))
+    }
+}
+
+fn require_disconnect_confirmation(
+    request: &AgentDisconnectRequest,
+) -> Result<(), RepoGrammarError> {
+    if request.assume_yes {
+        Ok(())
+    } else {
+        Err(RepoGrammarError::InvalidInput(
+            "live disconnect writes require --yes".to_string(),
         ))
     }
 }
@@ -1846,8 +2451,12 @@ fn validate_receipt_ownership(
     let contents = fs::read_to_string(receipt_path).map_err(|error| {
         RepoGrammarError::InvalidInput(format!("failed to read install receipt: {error}"))
     })?;
-    let value: serde_json::Value = serde_json::from_str(&contents)
-        .map_err(|_| RepoGrammarError::InvalidInput("install receipt is malformed".to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(&contents).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "install receipt is malformed at {}: {error}",
+            display_path(receipt_path)
+        ))
+    })?;
     let valid = value.get("schema_version").and_then(|value| value.as_u64()) == Some(1)
         && value.get("managed_by").and_then(|value| value.as_str()) == Some("repogrammar")
         && value.get("mcp_server").and_then(|value| value.as_str()) == Some(MCP_SERVER_NAME)
@@ -1860,12 +2469,6 @@ fn validate_receipt_ownership(
             "install receipt is not owned by this RepoGrammar target/scope".to_string(),
         ))
     }
-}
-
-fn remove_receipt(receipt_path: &Path) -> Result<(), RepoGrammarError> {
-    fs::remove_file(receipt_path).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!("failed to remove install receipt: {error}"))
-    })
 }
 
 fn receipt_executable_path(receipt_path: &Path) -> Option<String> {
@@ -3191,6 +3794,29 @@ mod tests {
     }
 
     #[test]
+    fn receipt_only_install_records_product_without_agent_mutation() {
+        let workspace = TempInstallWorkspace::new("receipt-only-product");
+        let request = InstallRequest {
+            target: AgentTarget::None,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let outcome = execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("receipt-only install");
+
+        assert!(outcome.configured_targets.is_empty());
+        assert!(configurator.actions.borrow().is_empty());
+        assert_eq!(self_test.calls.borrow().len(), 1);
+        assert!(
+            crate::application::product_installation::product_receipt_path(&workspace.data_dir)
+                .is_file()
+        );
+    }
+
+    #[test]
     fn live_all_target_installs_supported_agents_transactionally() {
         let workspace = TempInstallWorkspace::new("all-target-transaction");
         let request = InstallRequest {
@@ -3537,6 +4163,10 @@ mod tests {
         assert!(
             !receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
         );
+        assert!(
+            !crate::application::product_installation::product_receipt_path(&workspace.data_dir)
+                .exists()
+        );
         assert!(!workspace.command_path().exists());
     }
 
@@ -3781,8 +4411,12 @@ mod tests {
                 .expect("receipt JSON");
         receipt_value["executable_path"] = serde_json::json!("/stale/previous/bin/repogrammar");
         fs::write(&receipt_path, format!("{receipt_value}\n")).expect("rewrite old receipt");
+        assert_eq!(
+            receipt_executable_path(&receipt_path).as_deref(),
+            Some("/stale/previous/bin/repogrammar")
+        );
         let receipt_backup = receipt_path.with_extension("json.bak");
-        fs::write(&receipt_backup, "pre-existing receipt backup\n").expect("seed receipt backup");
+        fs::copy(&receipt_path, &receipt_backup).expect("seed valid receipt backup");
         configurator.set_native_present(AgentTarget::Codex, "/stale/previous/bin/repogrammar");
         configurator.actions.borrow_mut().clear();
 
@@ -4195,8 +4829,8 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_removes_only_receipted_managed_targets() {
-        let workspace = TempInstallWorkspace::new("uninstall-receipt");
+    fn disconnect_removes_only_receipted_managed_targets() {
+        let workspace = TempInstallWorkspace::new("disconnect-receipt");
         let request = InstallRequest {
             target: AgentTarget::Codex,
             scope: InstallScope::Global,
@@ -4209,10 +4843,11 @@ mod tests {
             .expect("install first");
         configurator.actions.borrow_mut().clear();
 
+        let disconnect = disconnect_request(AgentTarget::Codex);
         let outcome =
-            execute_uninstall(&request, &workspace.context, &configurator).expect("uninstall");
+            execute_disconnect(&disconnect, &workspace.context, &configurator).expect("disconnect");
 
-        assert_eq!(outcome.configured_targets, vec![AgentTarget::Codex]);
+        assert_eq!(outcome.disconnected_targets, vec![AgentTarget::Codex]);
         assert_eq!(configurator.actions.borrow().len(), 1);
         assert!(
             !receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
@@ -4220,7 +4855,93 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_refuses_foreign_receipt_without_native_remove() {
+    fn disconnect_requires_confirmation_before_inspection_or_mutation() {
+        let workspace = TempInstallWorkspace::new("disconnect-confirmation");
+        let configurator = FakeConfigurator::default();
+        let request = AgentDisconnectRequest {
+            target: AgentTarget::Codex,
+            ..AgentDisconnectRequest::default()
+        };
+
+        let error = execute_disconnect(&request, &workspace.context, &configurator)
+            .expect_err("live disconnect requires confirmation");
+
+        assert!(error
+            .to_string()
+            .contains("disconnect writes require --yes"));
+        assert!(configurator.actions.borrow().is_empty());
+    }
+
+    #[test]
+    fn disconnect_refuses_receipt_native_drift_before_remove() {
+        let workspace = TempInstallWorkspace::new("disconnect-native-drift");
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+        execute_install(&request, &workspace.context, &configurator, &self_test)
+            .expect("install first");
+        configurator.actions.borrow_mut().clear();
+        configurator.set_native_present(AgentTarget::Codex, "/foreign/repogrammar");
+
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("drift must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("does not match native MCP state"));
+        assert!(configurator.actions.borrow().is_empty());
+        assert!(
+            receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
+        );
+    }
+
+    #[test]
+    fn disconnect_preserves_receipt_when_native_entry_remains_after_remove() {
+        let workspace = TempInstallWorkspace::new("disconnect-remove-not-absent");
+        let install = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &install,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install first");
+        configurator.actions.borrow_mut().clear();
+        configurator.suppress_remove_state(AgentTarget::Codex);
+
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("native entry must be absent before receipt removal");
+
+        assert!(error
+            .to_string()
+            .contains("was not absent after disconnect"));
+        assert!(
+            receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
+        );
+        assert_eq!(configurator.actions.borrow().len(), 1);
+    }
+
+    #[test]
+    fn disconnect_refuses_foreign_receipt_without_native_remove() {
         let workspace = TempInstallWorkspace::new("foreign-receipt");
         let receipt = receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
         fs::create_dir_all(receipt.parent().expect("receipt parent")).expect("receipts dir");
@@ -4229,34 +4950,30 @@ mod tests {
             r#"{"schema_version":1,"managed_by":"someone-else","target":"codex","scope":"global"}"#,
         )
         .expect("foreign receipt");
-        let request = InstallRequest {
-            target: AgentTarget::Codex,
-            scope: InstallScope::Global,
-            assume_yes: true,
-            ..InstallRequest::default()
-        };
         let configurator = FakeConfigurator::default();
 
-        let error = execute_uninstall(&request, &workspace.context, &configurator)
-            .expect_err("foreign receipt");
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("foreign receipt");
 
         assert!(error.to_string().contains("not owned"));
         assert_eq!(configurator.actions.borrow().len(), 0);
     }
 
     #[test]
-    fn uninstall_refuses_missing_receipt_without_native_remove() {
+    fn disconnect_refuses_missing_receipt_without_native_remove() {
         let workspace = TempInstallWorkspace::new("missing-receipt");
-        let request = InstallRequest {
-            target: AgentTarget::Codex,
-            scope: InstallScope::Global,
-            assume_yes: true,
-            ..InstallRequest::default()
-        };
         let configurator = FakeConfigurator::default();
 
-        let error = execute_uninstall(&request, &workspace.context, &configurator)
-            .expect_err("missing receipt");
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("missing receipt");
 
         assert!(error
             .to_string()
@@ -4265,8 +4982,8 @@ mod tests {
     }
 
     #[test]
-    fn all_target_uninstall_removes_existing_owned_receipts_and_ignores_missing() {
-        let workspace = TempInstallWorkspace::new("uninstall-all");
+    fn all_target_disconnect_removes_existing_owned_receipts_and_ignores_missing() {
+        let workspace = TempInstallWorkspace::new("disconnect-all");
         let install_codex = InstallRequest {
             target: AgentTarget::Codex,
             scope: InstallScope::Global,
@@ -4284,16 +5001,14 @@ mod tests {
         .expect("install codex");
         configurator.actions.borrow_mut().clear();
 
-        let uninstall_all = InstallRequest {
-            target: AgentTarget::AllSupported,
-            scope: InstallScope::Global,
-            assume_yes: true,
-            ..InstallRequest::default()
-        };
-        let outcome = execute_uninstall(&uninstall_all, &workspace.context, &configurator)
-            .expect("uninstall all");
+        let outcome = execute_disconnect(
+            &disconnect_request(AgentTarget::AllSupported),
+            &workspace.context,
+            &configurator,
+        )
+        .expect("disconnect all");
 
-        assert_eq!(outcome.configured_targets, vec![AgentTarget::Codex]);
+        assert_eq!(outcome.disconnected_targets, vec![AgentTarget::Codex]);
         assert!(
             !receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
         );
@@ -4301,18 +5016,16 @@ mod tests {
     }
 
     #[test]
-    fn all_target_uninstall_refuses_when_no_owned_receipts_exist() {
-        let workspace = TempInstallWorkspace::new("uninstall-all-missing");
-        let request = InstallRequest {
-            target: AgentTarget::AllSupported,
-            scope: InstallScope::Global,
-            assume_yes: true,
-            ..InstallRequest::default()
-        };
+    fn all_target_disconnect_refuses_when_no_owned_receipts_exist() {
+        let workspace = TempInstallWorkspace::new("disconnect-all-missing");
         let configurator = FakeConfigurator::default();
 
-        let error = execute_uninstall(&request, &workspace.context, &configurator)
-            .expect_err("missing all receipts");
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::AllSupported),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("missing all receipts");
 
         assert!(error
             .to_string()
@@ -4321,8 +5034,8 @@ mod tests {
     }
 
     #[test]
-    fn all_target_uninstall_refuses_foreign_receipt_without_native_remove() {
-        let workspace = TempInstallWorkspace::new("uninstall-all-foreign");
+    fn all_target_disconnect_refuses_foreign_receipt_without_native_remove() {
+        let workspace = TempInstallWorkspace::new("disconnect-all-foreign");
         let receipt = receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
         fs::create_dir_all(receipt.parent().expect("receipt parent")).expect("receipts dir");
         fs::write(
@@ -4330,19 +5043,260 @@ mod tests {
             r#"{"schema_version":1,"managed_by":"someone-else","target":"codex","scope":"global"}"#,
         )
         .expect("foreign receipt");
-        let request = InstallRequest {
-            target: AgentTarget::AllSupported,
-            scope: InstallScope::Global,
-            assume_yes: true,
-            ..InstallRequest::default()
-        };
         let configurator = FakeConfigurator::default();
 
-        let error = execute_uninstall(&request, &workspace.context, &configurator)
-            .expect_err("foreign all receipt");
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::AllSupported),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("foreign all receipt");
 
         assert!(error.to_string().contains("not owned"));
         assert_eq!(configurator.actions.borrow().len(), 0);
+    }
+
+    #[test]
+    fn product_disconnect_preflights_every_target_before_any_write() {
+        let workspace = TempInstallWorkspace::new("product-disconnect-preflight");
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::Codex,
+                scope: InstallScope::Global,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install codex");
+        configurator.actions.borrow_mut().clear();
+        configurator.set_native_present(AgentTarget::ClaudeCode, "/foreign/repogrammar");
+
+        let error = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect_err("foreign second target must reject the complete preflight");
+
+        assert!(error.to_string().contains("not proven RepoGrammar-owned"));
+        assert!(configurator.actions.borrow().is_empty());
+        assert!(
+            receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
+        );
+        assert!(matches!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::Present(_)
+        ));
+    }
+
+    #[test]
+    fn product_disconnect_allows_every_target_to_be_truly_unmanaged() {
+        let workspace = TempInstallWorkspace::new("product-disconnect-empty");
+        let configurator = FakeConfigurator::default();
+
+        let prepared = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect("empty product disconnect preflight");
+        assert!(prepared.is_empty());
+        let applied = execute_prepared_agent_disconnect(prepared, &configurator)
+            .expect("empty product disconnect execution");
+
+        assert!(applied.outcome().disconnected_targets.is_empty());
+        assert!(configurator.actions.borrow().is_empty());
+    }
+
+    #[test]
+    fn second_agent_remove_failure_restores_first_agent_transactionally() {
+        let workspace = TempInstallWorkspace::new("disconnect-second-remove-failure");
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::AllSupported,
+                selected_targets: LIVE_AGENT_TARGETS.to_vec(),
+                scope: InstallScope::Global,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install both agents");
+        configurator.actions.borrow_mut().clear();
+        configurator.fail_remove(AgentTarget::ClaudeCode);
+
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::AllSupported),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("second remove failure must roll back the first target");
+
+        assert!(error.to_string().contains("agent disconnect rolled back"));
+        for target in LIVE_AGENT_TARGETS {
+            assert!(matches!(
+                configurator.native_state(target),
+                NativeMcpServerState::Present(_)
+            ));
+            assert!(receipt_path(&workspace.context, target, InstallScope::Global).exists());
+        }
+    }
+
+    #[test]
+    fn absence_check_failure_restores_owned_disconnect_state() {
+        let workspace = TempInstallWorkspace::new("disconnect-absence-rollback");
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::Codex,
+                scope: InstallScope::Global,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install codex");
+        configurator.actions.borrow_mut().clear();
+        configurator.suppress_remove_state(AgentTarget::Codex);
+
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("absence verification must fail");
+
+        assert!(error.to_string().contains("agent disconnect rolled back"));
+        assert!(matches!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::Present(_)
+        ));
+        assert!(
+            receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
+        );
+    }
+
+    #[test]
+    fn instruction_failure_restores_native_receipt_and_instruction() {
+        let mut workspace = TempInstallWorkspace::new("disconnect-instruction-rollback");
+        let instruction = workspace.root.join("AGENTS.md");
+        workspace
+            .context
+            .instruction_files
+            .push((AgentTarget::Codex, instruction.display().to_string()));
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::Codex,
+                scope: InstallScope::Global,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install with instructions");
+        let expected_instruction = fs::read(&instruction).expect("instruction snapshot");
+        inject_disconnect_failure(AgentTarget::Codex, DisconnectMutationStep::Instruction);
+
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("injected instruction failure");
+
+        assert!(error.to_string().contains("agent disconnect rolled back"));
+        assert_eq!(
+            fs::read(&instruction).expect("restored instruction"),
+            expected_instruction
+        );
+        assert!(
+            receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global).exists()
+        );
+        assert!(matches!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::Present(_)
+        ));
+    }
+
+    #[test]
+    fn receipt_failure_restores_native_and_receipt() {
+        let workspace = TempInstallWorkspace::new("disconnect-receipt-rollback");
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::Codex,
+                scope: InstallScope::Global,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install codex");
+        let receipt = receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
+        let expected_receipt = fs::read(&receipt).expect("receipt snapshot");
+        inject_disconnect_failure(AgentTarget::Codex, DisconnectMutationStep::Receipt);
+
+        let error = execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect_err("injected receipt failure");
+
+        assert!(error.to_string().contains("agent disconnect rolled back"));
+        assert_eq!(
+            fs::read(&receipt).expect("restored receipt"),
+            expected_receipt
+        );
+        assert!(matches!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::Present(_)
+        ));
+    }
+
+    #[test]
+    fn explicit_rollback_conflict_is_reported_without_overwriting_foreign_native_state() {
+        let workspace = TempInstallWorkspace::new("disconnect-rollback-conflict");
+        let configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::Codex,
+                scope: InstallScope::Global,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install codex");
+        let prepared = prepare_agent_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &workspace.context,
+            &configurator,
+        )
+        .expect("prepare disconnect");
+        let applied =
+            execute_prepared_agent_disconnect(prepared, &configurator).expect("apply disconnect");
+        configurator.set_native_present(AgentTarget::Codex, "/foreign/repogrammar");
+
+        let error = rollback_agent_disconnect(&applied, &configurator)
+            .expect_err("foreign replacement must block rollback");
+
+        assert!(error
+            .to_string()
+            .contains("changed outside this disconnect"));
+        assert!(matches!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::Present(config)
+                if config.executable_path == "/foreign/repogrammar"
+        ));
     }
 
     #[test]
@@ -5120,9 +6074,9 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_removes_managed_instruction_section_recorded_in_receipt() {
-        let workspace = TempInstallWorkspace::new("instruction-uninstall");
-        let instructions = TempDir::new("instruction-uninstall-target");
+    fn disconnect_removes_managed_instruction_section_recorded_in_receipt() {
+        let workspace = TempInstallWorkspace::new("instruction-disconnect");
+        let instructions = TempDir::new("instruction-disconnect-target");
         let instruction_path = instructions.file("AGENTS.md");
         fs::write(&instruction_path, "# Existing user guide\n\nkeep me\n").expect("seed");
         let mut context = workspace.context.clone();
@@ -5142,9 +6096,14 @@ mod tests {
             .contains(MANAGED_INSTRUCTION_BEGIN));
         configurator.actions.borrow_mut().clear();
 
-        execute_uninstall(&request, &context, &configurator).expect("uninstall");
+        execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &context,
+            &configurator,
+        )
+        .expect("disconnect");
 
-        let after = fs::read_to_string(&instruction_path).expect("after uninstall");
+        let after = fs::read_to_string(&instruction_path).expect("after disconnect");
         assert!(!after.contains(MANAGED_INSTRUCTION_BEGIN));
         assert!(!after.contains(MANAGED_INSTRUCTION_END));
         assert!(after.contains("keep me"));
@@ -5206,9 +6165,9 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_deletes_repogrammar_created_instruction_file() {
-        let workspace = TempInstallWorkspace::new("instruction-uninstall-created");
-        let instructions = TempDir::new("instruction-uninstall-created-target");
+    fn disconnect_deletes_repogrammar_created_instruction_file() {
+        let workspace = TempInstallWorkspace::new("instruction-disconnect-created");
+        let instructions = TempDir::new("instruction-disconnect-created-target");
         let instruction_path = instructions.file("AGENTS.md");
         let mut context = workspace.context.clone();
         context.instruction_files =
@@ -5228,16 +6187,30 @@ mod tests {
         );
         configurator.actions.borrow_mut().clear();
 
-        execute_uninstall(&request, &context, &configurator).expect("uninstall");
+        execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &context,
+            &configurator,
+        )
+        .expect("disconnect");
 
         assert!(
             !instruction_path.exists(),
-            "uninstall must delete an instruction file RepoGrammar created from scratch"
+            "disconnect must delete an instruction file RepoGrammar created from scratch"
         );
     }
 
     struct TempDir {
         path: PathBuf,
+    }
+
+    fn disconnect_request(target: AgentTarget) -> AgentDisconnectRequest {
+        AgentDisconnectRequest {
+            target,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..AgentDisconnectRequest::default()
+        }
     }
 
     impl TempDir {
@@ -5248,6 +6221,7 @@ mod tests {
                 unique_suffix()
             ));
             fs::create_dir_all(&path).expect("temp dir");
+            let path = fs::canonicalize(&path).expect("canonical temp dir");
             Self { path }
         }
 
@@ -5276,6 +6250,10 @@ mod tests {
                 unique_suffix()
             ));
             fs::create_dir_all(&root).expect("workspace");
+            // macOS exposes `/var` as a symlink to `/private/var`. Production
+            // installation paths deliberately reject lexical symlink ancestors,
+            // so keep this fixture representative by using the canonical root.
+            let root = fs::canonicalize(&root).expect("canonical workspace");
             let executable = root.join("repogrammar");
             let mut file = fs::File::create(&executable).expect("executable");
             writeln!(file, "stub").expect("write executable");
@@ -5328,6 +6306,8 @@ mod tests {
         fail_add_target: Option<AgentTarget>,
         fail_probe_target: Option<AgentTarget>,
         suppress_add_state_target: Option<AgentTarget>,
+        fail_remove_target: RefCell<Option<AgentTarget>>,
+        suppress_remove_state_target: RefCell<Option<AgentTarget>>,
         native_states: RefCell<Vec<(AgentTarget, NativeMcpServerState)>>,
         scripted_inspections: RefCell<Vec<(AgentTarget, NativeMcpServerState)>>,
     }
@@ -5370,6 +6350,14 @@ mod tests {
             inspections: impl IntoIterator<Item = (AgentTarget, NativeMcpServerState)>,
         ) {
             self.scripted_inspections.borrow_mut().extend(inspections);
+        }
+
+        fn fail_remove(&self, target: AgentTarget) {
+            *self.fail_remove_target.borrow_mut() = Some(target);
+        }
+
+        fn suppress_remove_state(&self, target: AgentTarget) {
+            *self.suppress_remove_state_target.borrow_mut() = Some(target);
         }
     }
 
@@ -5451,7 +6439,14 @@ mod tests {
                 ],
             };
             self.actions.borrow_mut().push(action.clone());
-            self.set_native_state(target, NativeMcpServerState::NotFound);
+            if *self.fail_remove_target.borrow() == Some(target) {
+                return Err(RepoGrammarError::InvalidInput(
+                    "native remove failed".to_string(),
+                ));
+            }
+            if *self.suppress_remove_state_target.borrow() != Some(target) {
+                self.set_native_state(target, NativeMcpServerState::NotFound);
+            }
             Ok(action)
         }
     }
