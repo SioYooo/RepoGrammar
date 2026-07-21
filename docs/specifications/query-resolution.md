@@ -237,15 +237,20 @@ only removes ids already carried by `follow_up_family_ids`.
 
 ### Calibration summary
 
-Calibrated against the 79-query product-eval corpus (`query-corpus-v1.json`;
-42 retrieval + 25 abstention + 12 context after the gold adjudications). With
-vocabulary v2 at `MIN_RETRIEVAL_SCORE = 10` and `MIN_RETRIEVAL_MARGIN = 1`,
-hit@1 is **25/42** and MRR is **0.595**, up from vocabulary v1's 21/42 and
-0.500. The four additional matches are the two fixture phrasings and the
-`unit test` / `test case` synonym queries covered by the qualified table. Every
-hard constraint remains unchanged: zero false-family selections, 25/25 correct
-abstentions, zero selections on abstention gold, 4/4 unsupported rejections,
-6/6 ambiguity precision, 13/14 candidate recall, and 12/12 context matches.
+Calibrated against the product-eval corpus (`query-corpus-v1.json`), now 107
+queries (47 retrieval + 34 abstention + 26 context) after the universal
+target-resolution expansion added directory, composite, candidate-set,
+two-sided explain/check (`against`), and scoped-readiness cases. On the
+term-retrieval subset, vocabulary v2 at `MIN_RETRIEVAL_SCORE = 10` and
+`MIN_RETRIEVAL_MARGIN = 1` scores hit@1 **25/42** and MRR **0.595** (up from
+vocabulary v1's 21/42 and 0.500; the four additional matches are the two
+fixture phrasings and the `unit test` / `test case` synonym queries covered by
+the qualified table). Across the full corpus, hit@1 is **30/47** and MRR is
+**0.638**. Every hard constraint holds: zero false-family selections, committed
+family precision **38/38**, 34/34 correct abstentions, zero selections on
+abstention gold, 4/4 unsupported rejections, 6/6 ambiguity precision, 16/17
+candidate recall, 26/26 context matches, and 10/10 directory / 3/3 composite /
+4/4 conflict scope resolution.
 
 The earlier v1 threshold sweep put hit@1 on a plateau across
 `MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regressed to 18/42 (the
