@@ -115,6 +115,8 @@ context lives under `.agents/memories/`.
   and `specifications/storage.md`.
 - Default repository auto-sync after init:
   `decisions/ADR-0027-init-default-repository-autosync.md`.
+- Ownership-aware product uninstall and agent disconnect:
+  `decisions/ADR-0028-receipted-product-self-uninstall.md`.
 - Concurrent filesystem confinement preflight:
   `decisions/ADR-0023-handle-relative-filesystem-confinement-preflight.md`.
   The decision requires
