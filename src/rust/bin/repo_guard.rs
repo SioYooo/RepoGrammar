@@ -3075,6 +3075,12 @@ struct EvalExpected {
     /// `inspect_readiness` case. A numeric gold, so a familyless (`0`) scope is
     /// distinguished from a queryable one.
     resolvable_family_count: Option<u64>,
+    /// Expected term-retrieval `abstention_reason` token, matched against
+    /// `query_route.term_retrieval.abstention_reason`. Present only for a scored
+    /// term-retrieval abstention (e.g. a margin tie's `margin_too_close`); it
+    /// pins the tie mechanism rather than the generic `InsufficientSupport`
+    /// reason every empty abstention shares.
+    abstention_reason: Option<String>,
 }
 
 impl EvalExpected {
@@ -3106,6 +3112,7 @@ impl EvalExpected {
             queryability: optional_object_string(object, "queryability")?,
             scope_coverage: optional_object_string(object, "scope_coverage")?,
             resolvable_family_count: optional_object_u64(object, "resolvable_family_count")?,
+            abstention_reason: optional_object_string(object, "abstention_reason")?,
         })
     }
 
@@ -3159,6 +3166,9 @@ impl EvalExpected {
         if let Some(count) = self.resolvable_family_count {
             map.insert("resolvable_family_count".to_string(), count.into());
         }
+        if let Some(reason) = &self.abstention_reason {
+            map.insert("abstention_reason".to_string(), reason.clone().into());
+        }
         serde_json::Value::Object(map)
     }
 }
@@ -3197,6 +3207,13 @@ struct EvalActual {
     scope_coverage: Option<String>,
     /// The scoped-readiness `scope.resolvable_family_count`, when present.
     resolvable_family_count: Option<u64>,
+    /// The term-retrieval `abstention_reason` token
+    /// (`margin_too_close`/`truncated_tie`/`below_min_score`/...), read from
+    /// `query_route.term_retrieval.abstention_reason`. `None` for every route
+    /// that did not run the deterministic term-retrieval fallback. This is the
+    /// only field that distinguishes a scored term-retrieval tie
+    /// (`margin_too_close`) from a generic `InsufficientSupport` abstention.
+    abstention_reason: Option<String>,
 }
 
 impl EvalActual {
@@ -3267,6 +3284,11 @@ impl EvalActual {
         let resolvable_family_count = scope
             .and_then(|scope| scope.get("resolvable_family_count"))
             .and_then(serde_json::Value::as_u64);
+        let abstention_reason = query_route
+            .and_then(|route| route.get("term_retrieval"))
+            .and_then(|term| term.get("abstention_reason"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         Ok(Self {
             outcome: EvalOutcome::classify_status(status),
             route,
@@ -3283,6 +3305,7 @@ impl EvalActual {
             queryability,
             scope_coverage,
             resolvable_family_count,
+            abstention_reason,
         })
     }
 
@@ -3303,6 +3326,7 @@ impl EvalActual {
             "queryability": self.queryability,
             "scope_coverage": self.scope_coverage,
             "resolvable_family_count": self.resolvable_family_count,
+            "abstention_reason": self.abstention_reason,
         })
     }
 }
@@ -3586,6 +3610,11 @@ fn evaluate_match(expected: &EvalExpected, actual: &EvalActual) -> (bool, Vec<St
             mismatches.push("resolvable_family_count".to_string());
         }
     }
+    if let Some(reason) = &expected.abstention_reason {
+        if actual.abstention_reason.as_deref() != Some(reason.as_str()) {
+            mismatches.push("abstention_reason".to_string());
+        }
+    }
     (mismatches.is_empty(), mismatches)
 }
 
@@ -3808,6 +3837,7 @@ fn baseline_actual(selection: BaselineSelection, active_generation: Option<Strin
         queryability: None,
         scope_coverage: None,
         resolvable_family_count: None,
+        abstention_reason: None,
     }
 }
 
@@ -10263,6 +10293,7 @@ verify-stable-release-evidence --evidence-dir evidence
             queryability: None,
             scope_coverage: None,
             resolvable_family_count: None,
+            abstention_reason: None,
         }
     }
 
@@ -10283,6 +10314,7 @@ verify-stable-release-evidence --evidence-dir evidence
             queryability: None,
             scope_coverage: None,
             resolvable_family_count: None,
+            abstention_reason: None,
         }
     }
 
@@ -10369,6 +10401,7 @@ verify-stable-release-evidence --evidence-dir evidence
             queryability: None,
             scope_coverage: None,
             resolvable_family_count: None,
+            abstention_reason: None,
         };
         let (is_match, _) = evaluate_match(&expected, &stale);
         assert!(is_match);
@@ -10381,6 +10414,56 @@ verify-stable-release-evidence --evidence-dir evidence
         let (is_match, fields) = evaluate_match(&expected, &wrong);
         assert!(!is_match);
         assert!(fields.contains(&"unknown_reason".to_string()));
+    }
+
+    #[test]
+    fn product_eval_matcher_enforces_term_retrieval_abstention_reason() {
+        // A scored term-retrieval margin tie: both the actual and the gold share
+        // the generic InsufficientSupport reason, so only `abstention_reason`
+        // distinguishes the tie from any other empty abstention.
+        let value = serde_json::json!({
+            "status": "UNKNOWN",
+            "query_route": {
+                "route": "discovery_unknown",
+                "selected_family_id": null,
+                "candidate_family_ids": [
+                    "family:python:pydantic_model:framework_pydantic_model",
+                    "family:python:sqlalchemy_model:framework_sqlalchemy_model"
+                ],
+                "term_retrieval": {
+                    "route": "term_retrieval_unknown",
+                    "top_score": 10,
+                    "margin": 0,
+                    "abstention_reason": "margin_too_close"
+                }
+            },
+            "unknowns": [{ "reason": "InsufficientSupport" }]
+        });
+        let actual = EvalActual::from_query_json(&value).expect("parse term-tie actual");
+        assert_eq!(
+            actual.abstention_reason.as_deref(),
+            Some("margin_too_close")
+        );
+
+        let expected = EvalExpected {
+            outcome: Some(EvalOutcome::Unknown),
+            unknown_reason: Some("InsufficientSupport".to_string()),
+            abstention_reason: Some("margin_too_close".to_string()),
+            ..EvalExpected::default()
+        };
+        let (is_match, _) = evaluate_match(&expected, &actual);
+        assert!(is_match);
+        assert!(!is_false_family_selection(&expected, &actual));
+
+        // A different (or absent) abstention reason is a first-class mismatch, so
+        // the tie gold cannot be satisfied by an unrelated empty abstention.
+        let wrong = EvalExpected {
+            abstention_reason: Some("below_min_score".to_string()),
+            ..expected.clone()
+        };
+        let (is_match, fields) = evaluate_match(&wrong, &actual);
+        assert!(!is_match);
+        assert!(fields.contains(&"abstention_reason".to_string()));
     }
 
     #[test]
@@ -10435,6 +10518,7 @@ verify-stable-release-evidence --evidence-dir evidence
             queryability: None,
             scope_coverage: None,
             resolvable_family_count: None,
+            abstention_reason: None,
         };
         let (is_match, mismatch_fields) = evaluate_match(&expected, &actual);
         let entry = serde_json::json!({
@@ -10886,6 +10970,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 queryability: None,
                 scope_coverage: None,
                 resolvable_family_count: None,
+                abstention_reason: None,
             }
         }
         let single_gold = EvalExpected {
