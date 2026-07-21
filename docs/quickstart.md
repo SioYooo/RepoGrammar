@@ -39,6 +39,13 @@ integration, initializes and indexes the repository, starts that repository's
 autosync daemon, and runs the read-only product MCP self-test. Foreign,
 malformed, or drifted agent configuration is preserved and reported.
 
+By default setup also writes RepoGrammar's marker-fenced pre-flight gate into the
+detected agent's global instruction file (`~/.codex/AGENTS.md` for Codex,
+`~/.claude/CLAUDE.md` for Claude Code) so the agent prefers RepoGrammar over
+grep/read. The write is reversible via `disconnect`; add `--no-instructions` to
+register the MCP server without it. `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>`
+overrides the target path.
+
 For CI or a deterministic one-shot index without a daemon:
 
 ```bash

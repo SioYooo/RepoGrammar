@@ -39,3 +39,4 @@ Current accepted ADRs:
 - ADR-0027: Init starts repository auto-sync by default.
 - ADR-0028: Ownership-aware product uninstall and agent disconnect.
 - ADR-0029: Additive candidate-set resolution cardinality.
+- ADR-0030: Default auto-wired agent instruction files.

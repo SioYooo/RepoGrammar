@@ -34,6 +34,10 @@ pub struct SetupRequest {
     pub target: SetupTarget,
     pub dry_run: bool,
     pub autosync: bool,
+    /// When true (default), setup writes RepoGrammar's marker-fenced pre-flight
+    /// gate into each configured agent's global instruction file. `--no-instructions`
+    /// registers the MCP server without that write.
+    pub write_instructions: bool,
 }
 
 impl SetupRequest {
@@ -43,6 +47,7 @@ impl SetupRequest {
             target: SetupTarget::Auto,
             dry_run: false,
             autosync: true,
+            write_instructions: true,
         }
     }
 }
