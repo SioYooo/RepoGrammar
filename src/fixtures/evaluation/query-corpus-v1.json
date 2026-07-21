@@ -20,6 +20,21 @@
       "fixture_id": "directory-scopes",
       "root": "src/fixtures/evaluation/directory-scopes",
       "description": "Nested Python repo reusing the recognized v0.1 patterns under app/ (plus a plain plain/util/ package and the dynamic-unknown/tests/sub/ indexed-but-familyless directory), so directory and composite scope resolution (single/heterogeneous/familyless/nonexistent cardinalities) and hard-constraint conflicts can be evaluated deterministically against the real 7e09caa binary."
+    },
+    {
+      "fixture_id": "wave3-truncated",
+      "root": "src/fixtures/evaluation/wave3-truncated",
+      "description": "A single directory pkg/bulk/ holding 66 one-class Pydantic model files (all one pydantic_model family), exceeding DIRECTORY_SCOPE_FILE_LIMIT=64, so a directory scope over pkg/bulk/ resolves resolution.cardinality=truncated and never makes a single-family claim even though every visible file shares one family."
+    },
+    {
+      "fixture_id": "wave3-ambiguity",
+      "root": "src/fixtures/evaluation/wave3-ambiguity",
+      "description": "The same basename models.py in two directories that belong to different families (alpha/models.py is a sqlalchemy_model family, beta/models.py is a pydantic_model family), so a bare-basename target is ambiguous across directories and must abstain with both families surfaced as candidates rather than false-selecting one."
+    },
+    {
+      "fixture_id": "wave3-term-tie",
+      "root": "src/fixtures/evaluation/wave3-term-tie",
+      "description": "Exactly two families, one pydantic_model (schemas.py) and one sqlalchemy_model (orm.py), so the term-retrieval query 'pydantic sqlalchemy model' scores both at framework(6)+concept(4)=10 with margin 0, forcing a margin_too_close abstention rather than a false selection."
     }
   ],
   "queries": [
@@ -1538,13 +1553,63 @@
         "scope_coverage": "empty",
         "resolvable_family_count": 0
       }
+    },
+    {
+      "query_id": "dir-truncated-bulk-pydantic",
+      "fixture_id": "wave3-truncated",
+      "kind": "directory_truncated",
+      "intent": "context",
+      "operation": "find",
+      "target": "pkg/bulk/",
+      "mode": "compact",
+      "comment": "Directory truncation: pkg/bulk/ holds 66 one-class pydantic_model files, exceeding DIRECTORY_SCOPE_FILE_LIMIT=64. The bounded scoped read reports truncated, so the scope resolves to PARTIAL_CONTEXT with resolution.cardinality=truncated and NO selected family even though every visible file shares the one pydantic_model family: a single-family claim cannot be proven while unseen files might belong to other families. Asserting partial_context + truncated with no family constraint guarantees the case never counts a family selection, so false_family_selections stays 0.",
+      "expected": {
+        "outcome": "partial_context",
+        "resolution_cardinality": "truncated"
+      }
+    },
+    {
+      "query_id": "ambiguity-same-basename-models",
+      "fixture_id": "wave3-ambiguity",
+      "kind": "same_basename_multi_directory",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "models.py",
+      "mode": "compact",
+      "comment": "Same basename across directories with different families: models.py exists in alpha/ (sqlalchemy_model family) and beta/ (pydantic_model family). A bare-basename target has no single owning locus, so the fuzzy path-suffix resolution surfaces BOTH families as candidates and abstains with InsufficientSupport rather than false-selecting one directory's family. selected_family stays null (no family constraint asserted), so this never counts as a false selection; candidates_include pins that both ambiguous families are surfaced for recovery.",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "candidates_include": [
+          "family:python:pydantic_model",
+          "family:python:sqlalchemy_model"
+        ]
+      }
+    },
+    {
+      "query_id": "term-tie-pydantic-sqlalchemy-model",
+      "fixture_id": "wave3-term-tie",
+      "kind": "term_tie",
+      "intent": "abstention",
+      "operation": "find",
+      "target": "pydantic sqlalchemy model",
+      "mode": "compact",
+      "comment": "Term-retrieval margin tie: the fixture has exactly two families (pydantic_model and sqlalchemy_model). The query names both framework filters (pydantic, sqlalchemy) and the ambiguous bare concept 'model' (which maps to both ValidationModel and DataAccess). Each surviving family scores framework(6)+concept(4)=10, tying at the top with margin 0 < MIN_RETRIEVAL_MARGIN. Retrieval abstains with term_retrieval.abstention_reason=margin_too_close and InsufficientSupport, selecting no family. abstention_reason is the only field that distinguishes this scored tie from a generic empty abstention, so it is pinned here alongside both tied candidates.",
+      "expected": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "abstention_reason": "margin_too_close",
+        "candidates_include": [
+          "family:python:pydantic_model",
+          "family:python:sqlalchemy_model"
+        ]
+      }
     }
   ],
   "_deferred_wave2_kinds": {
-    "note": "Remaining wave-2 deferrals after the wave-2 top-up landed the explain-unit certificate, check --against, and scoped-readiness cases with real gold from the 2ea0b6f binary. The kinds below still need behaviors or fixtures not deterministically expressible here.",
+    "note": "Remaining wave-2 deferrals after wave-3 landed directory_truncated, same_basename_multi_directory, and term_tie with real gold from the 9a08e63 binary (wave3-truncated, wave3-ambiguity, wave3-term-tie fixtures). Only multi_family_member remains, for a structural reason, not a missing-fixture reason.",
     "deferred": [
-      "directory_truncated (resolution.cardinality=truncated needs a directory exceeding DIRECTORY_SCOPE_FILE_LIMIT=64 indexed files; the directory-scopes fixture indexes only 36 files, so a purpose-built large fixture is still required)",
-      "same_basename_multi_directory / multi_family_member / term_tie (best-effort ambiguity cases; existing fixtures resolve them deterministically without a distinct tie, so deferred until a purpose-built fixture exists)"
+      "multi_family_member (structurally impossible through real indexing, so deferring rather than faking gold): the index keys family membership on a code_unit_id that embeds the unit's single pattern kind (e.g. '#pydantic_model:' vs '#sqlalchemy_model:'), and family mining assigns each unit to exactly one FamilyKey; same-kind families then partition their members disjointly by constraint-profile cluster (verified: the two pydantic_model versions in the directory-scopes fixture have disjoint member sets). Therefore no single code_unit_id is ever a member of >1 family, so find_active_families_by_member can return >1 candidate only for a synthetic unit-test store, never for a real fixture. A purpose-built dual-inheritance class (class Customer(Base, BaseModel)) was tried and did not yield a dual-family unit; the DeclarativeBase produced one sqlalchemy_model unit and the Pydantic side produced no competing unit for the same id. Faking this would require hand-writing family_members rows, which is not real binary gold."
     ]
   }
 }

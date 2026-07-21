@@ -133,7 +133,10 @@ fields, all enforced field-by-field: `expected.target_relationship`
 against a two-sided certificate's top-level `target_relationship`; and
 `expected.queryability`, `expected.scope_coverage`, and
 `expected.resolvable_family_count` against the scoped-readiness
-`scoped_readiness.queryability`/`scope.coverage`/`scope.resolvable_family_count`.
+`scoped_readiness.queryability`/`scope.coverage`/`scope.resolvable_family_count`;
+and `expected.abstention_reason` (e.g. `margin_too_close`) against
+`query_route.term_retrieval.abstention_reason`, which pins a scored
+term-retrieval tie apart from a generic `InsufficientSupport` abstention.
 A case may also carry an optional `against` string (the `--against`
 comparison-family scope); the corpus loader rejects it on any operation other
 than `explain`/`check`. The `inspect_readiness` operation has no CLI verb, so the
@@ -143,10 +146,12 @@ schema is `product-eval-results.v3` (strictly additive over v2), whose
 `summary.metrics` adds `committed_precision`, `answerable_rate`,
 `partial_context_rate`, `candidate_recall_at_k`, `directory_query_recall`,
 `composite_query_recall`, `conflict_accuracy`, and the `unknown_by_reason`
-histogram alongside the existing retrieval and safety counters. The remaining
-deferred kinds (`directory_truncated`, needing a >64-file scope; and the
-best-effort ambiguity ties) are enumerated in the corpus
-`_deferred_wave2_kinds` marker. See
+histogram alongside the existing retrieval and safety counters. Wave 3 lands
+`directory_truncated` (the `wave3-truncated` fixture's >64-file `pkg/bulk/`
+scope), `same_basename_multi_directory` (the `wave3-ambiguity` fixture), and
+`term_tie` (the `wave3-term-tie` fixture) with real binary gold; only
+`multi_family_member` stays deferred, for a structural reason enumerated in the
+corpus `_deferred_wave2_kinds` marker. See
 [Testing](testing.md#directory--composite-scope-and-conflict-cases) for the full
 kind taxonomy and metric definitions.
 
