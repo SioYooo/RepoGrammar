@@ -123,7 +123,7 @@ command pinned because the npm launcher does not install a bare command on
 `PATH`:
 
 ```text
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
+npx --yes --package @sioyooo/repogrammar@0.4.1 \
   repogrammar setup --project /path/to/your/repo --target codex
 ```
 

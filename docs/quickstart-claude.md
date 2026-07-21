@@ -83,7 +83,7 @@ After the exact npm version, complete npm channel mapping, and matching GitHub
 asset pass the availability gate in `quickstart.md`:
 
 ```text
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
+npx --yes --package @sioyooo/repogrammar@0.4.1 \
   repogrammar setup --project /path/to/your/repo --target claude-code
 ```
 

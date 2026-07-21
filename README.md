@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Source version 0.4.0" src="https://img.shields.io/badge/source-0.4.0-7c3aed?style=flat-square">
+  <img alt="Source version 0.4.1" src="https://img.shields.io/badge/source-0.4.1-7c3aed?style=flat-square">
   <img alt="Local first" src="https://img.shields.io/badge/context-local--first-0f766e?style=flat-square">
   <img alt="Read-only MCP" src="https://img.shields.io/badge/MCP-read--only-2563eb?style=flat-square">
   <a href="https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square"></a>
@@ -137,7 +137,7 @@ until a patch-forward release containing this source change is published.
   insufficient cases become `UNKNOWN` or `PARTIAL_CONTEXT` with an explicit
   next action.
 
-## Latest in `0.4.0`
+## Latest in `0.4.1`
 
 | Area | Current behavior |
 | --- | --- |

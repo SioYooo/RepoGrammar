@@ -109,7 +109,7 @@ The commit, code, test, and specification history records these additions:
   hardening.
 
 The exact mapping lives in the [CHANGELOG](../../CHANGELOG.md),
-[v0.4.0 release checklist](../release/stable-v0.4.0-release-checklist.md), and
+[v0.4.1 release checklist](../release/stable-v0.4.1-release-checklist.md), and
 [RC verdict](../experiments/product-core-rc-verdict.md).
 
 ## GPT-5.6 and Codex usage
@@ -127,7 +127,7 @@ evidence to the coding agent.
 ## Five-minute judge path
 
 Use the exact public package and commands in the root [README](../../README.md).
-Every command is pinned to `@sioyooo/repogrammar@0.4.0` and runs through `npx`,
+Every command is pinned to `@sioyooo/repogrammar@0.4.1` and runs through `npx`,
 so the path does not require Rust/Cargo or assume a globally installed binary.
 It clones the MIT-licensed `fastapi/full-stack-fastapi-template` at commit
 `4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8`, then demonstrates:
@@ -169,8 +169,8 @@ boundaries.
 These fields are publication-phase facts, not source-state claims. Replace
 them only after the exact public finalizer emits `STABLE_RELEASE_READY`.
 
-- Exact version: `0.4.0`
-- Git tag: `v0.4.0`
+- Exact version: `0.4.1`
+- Git tag: `v0.4.1`
 - Tag SHA: `<PENDING PUBLICATION EVIDENCE>`
 - Candidate workflow run and attempt: `<PENDING PUBLICATION EVIDENCE>`
 - GitHub Release: `<PENDING PUBLICATION EVIDENCE>`
@@ -178,7 +178,7 @@ them only after the exact public finalizer emits `STABLE_RELEASE_READY`.
 - npm stage ID: `<PENDING HUMAN-APPROVED STAGE>`
 - npm package and integrity: `<PENDING PUBLICATION EVIDENCE>`
 - npm provenance: `<PENDING PUBLICATION EVIDENCE>`
-- dist-tags: expected `latest=0.4.0`, `preview=0.2.0-preview.0`
+- dist-tags: expected `latest=0.4.1`, `preview=0.2.0-preview.0`
 - Public finalizer run: `<PENDING PUBLICATION EVIDENCE>`
 - Finalizer verdict: `<PENDING STABLE_RELEASE_READY>`
 
