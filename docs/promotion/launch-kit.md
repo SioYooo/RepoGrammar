@@ -109,7 +109,7 @@ The commit, code, test, and specification history records these additions:
   hardening.
 
 The exact mapping lives in the [CHANGELOG](../../CHANGELOG.md),
-[v0.4.2 release checklist](../release/stable-v0.4.2-release-checklist.md), and
+[v0.4.3 release checklist](../release/stable-v0.4.3-release-checklist.md), and
 [RC verdict](../experiments/product-core-rc-verdict.md).
 
 ## GPT-5.6 and Codex usage
@@ -127,7 +127,7 @@ evidence to the coding agent.
 ## Five-minute judge path
 
 Use the exact public installer and commands in the root [README](../../README.md).
-The judge path pins the immutable `v0.4.2` `install.sh`, installs only the
+The judge path pins the immutable `v0.4.3` `install.sh`, installs only the
 product binary and bundled worker, optionally wires a coding agent with
 `repogrammar install`, and initializes each repository separately with
 `repogrammar init`. It does not require Rust or Cargo. It clones the
@@ -171,27 +171,27 @@ boundaries.
 These fields are publication-phase facts, not source-state claims. Replace
 them only after the exact public finalizer emits `STABLE_RELEASE_READY`.
 
-- Exact version: `0.4.2`
-- Git tag: `v0.4.2`
-- Release commit: `a9a473d614211e4a183d168201eb2f4fa8153d1e`
-- Annotated tag object: `ca7b93f98a3b5f3a36ab0b9b85d7033fe4cf3b3f`
+- Exact version: `0.4.3`
+- Git tag: `v0.4.3`
+- Release commit: `c0d72bb48f0edaed0a15ea1eb7ccbd01df0fa1b0`
+- Annotated tag object: `eb4544012a0addf6ef36375d1a9893df266a29ef`
 - Candidate workflow run and attempt:
-  [`29864318806`](https://github.com/SioYooo/RepoGrammar/actions/runs/29864318806),
+  [`29870606932`](https://github.com/SioYooo/RepoGrammar/actions/runs/29870606932),
   attempt `1`
 - GitHub Release:
-  [immutable `v0.4.2`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.2)
+  [immutable `v0.4.3`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.3)
 - Asset inventory: exactly 11 public assets; all checksum and GitHub
   release/asset attestations verified
-- npm stage ID: `470ceae6-75f1-468f-9794-70f48e49a878`, approved through the
+- npm stage ID: `82c8ebae-e4de-43c8-8155-64694762d952`, approved through the
   maintainer 2FA boundary
 - npm package and integrity:
-  [`@sioyooo/repogrammar@0.4.2`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.2),
-  `sha512-Hf585rOf7Mqab1JimH6lrCylysdXN7X5nIcKmg+gR1bqflqnwJjTYmfM0SJbqEB+uErBy6j64hNZKkgnJN6z9g==`
+  [`@sioyooo/repogrammar@0.4.3`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.3),
+  `sha512-G2pzS0CAjxn1kornK2yLLgmqL/ZGuYDCMMus5Fc+UM+uWiBHFvPIzCXCRiN28Nlks/TDNYD/dLQehfXWUvQDiA==`
 - npm provenance: verified SLSA provenance bound to the release workflow,
-  `refs/tags/v0.4.2`, the release commit, and candidate run
-- dist-tags: `latest=0.4.2`, `preview=0.2.0-preview.0`
+  `refs/tags/v0.4.3`, the release commit, and candidate run
+- dist-tags: `latest=0.4.3`, `preview=0.2.0-preview.0`
 - Public finalizer run:
-  [`29866519177`](https://github.com/SioYooo/RepoGrammar/actions/runs/29866519177)
+  [`29871676832`](https://github.com/SioYooo/RepoGrammar/actions/runs/29871676832)
 - Finalizer verdict: `STABLE_RELEASE_READY`
 
 ## Claim guardrails

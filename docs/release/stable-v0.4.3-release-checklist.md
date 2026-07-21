@@ -120,7 +120,22 @@ Publication is complete only when the finalizer emits exactly
 
 ## Evidence record
 
-Pending. Record the release commit, annotated tag object, candidate run and
-attempt, npm stage id and retained SRI, immutable GitHub release, public npm
-integrity/provenance, finalizer run, and exact `STABLE_RELEASE_READY` verdict
-only after independent public verification completes.
+The independent public verification completed on 2026-07-22 (Australia/Melbourne):
+
+- Release commit: `c0d72bb48f0edaed0a15ea1eb7ccbd01df0fa1b0`.
+- Annotated tag object: `eb4544012a0addf6ef36375d1a9893df266a29ef`;
+  dereferencing `v0.4.3` resolves to the release commit above.
+- Candidate workflow: [run `29870606932`, attempt `1`](https://github.com/SioYooo/RepoGrammar/actions/runs/29870606932).
+- npm stage: `82c8ebae-e4de-43c8-8155-64694762d952`, approved through the
+  maintainer 2FA boundary.
+- Retained candidate and public npm SRI:
+  `sha512-G2pzS0CAjxn1kornK2yLLgmqL/ZGuYDCMMus5Fc+UM+uWiBHFvPIzCXCRiN28Nlks/TDNYD/dLQehfXWUvQDiA==`;
+  public npm shasum: `4eb8ca3116f58d3acac8071e844fe5bb105b2aac`.
+- GitHub Release: [immutable `v0.4.3`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.3),
+  normal and non-prerelease, with exactly 11 verified public assets.
+- npm package: [`@sioyooo/repogrammar@0.4.3`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.3),
+  with SLSA provenance bound to `.github/workflows/release.yml`,
+  `refs/tags/v0.4.3`, the release commit, and candidate run above.
+- Dist-tags: `latest=0.4.3`, `preview=0.2.0-preview.0`.
+- Public finalizer: [run `29871676832`](https://github.com/SioYooo/RepoGrammar/actions/runs/29871676832),
+  verdict exactly `STABLE_RELEASE_READY`.

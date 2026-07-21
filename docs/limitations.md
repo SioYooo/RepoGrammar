@@ -1,7 +1,7 @@
 # Limitations
 
-RepoGrammar's current source identity is `0.4.3`; the latest independently
-verified public stable remains `0.4.2` until the `0.4.3` finalizer completes.
+RepoGrammar's current source identity and latest independently verified public
+stable are `0.4.3`.
 The matching immutable GitHub Release, npm package, provenance, dist-tags, and
 public product smokes are recorded independently in the stable checklist;
 manifest identity alone is never publication proof. The MCP API and bounded
@@ -12,13 +12,13 @@ production-readiness claim.
 ## Release Availability
 
 - The exact immutable `v0.4.3` GitHub Release and independently verified npm
-  `@sioyooo/repogrammar@0.4.3` package become public authority only after the
-  complete candidate, approval, and finalizer gates pass.
+  `@sioyooo/repogrammar@0.4.3` package are the current public authority after
+  the complete candidate, approval, and finalizer gates passed.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood remains the explicit contributor path; public users
   should use the pinned release installer or npm launcher.
-- The pending `0.4.3` rollout and finalizer evidence are tracked in
+- The completed `0.4.3` rollout and finalizer evidence are tracked in
   `release/stable-v0.4.3-release-checklist.md`. The verified `0.4.2` and earlier
   records remain historical evidence.
 

@@ -193,9 +193,8 @@ The current release-source manifests use stable identity `0.4.3`. A source
 build or source install must report that identity consistently across Cargo and
 npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
-to the independently verified public `0.4.2` GitHub Release and npm package
-until the `0.4.3` public finalizer passes; the source manifest by itself remains
-insufficient evidence.
+to the independently verified public `0.4.3` GitHub Release and npm package;
+the source manifest by itself remains insufficient evidence.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
