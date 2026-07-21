@@ -101,6 +101,15 @@ changed after indexing, instead of fabricating a deviation from stale facts. A
 target with no comparison family, an ambiguous family key, or an unsupported role
 also abstains with `INSUFFICIENT_EVIDENCE` and never surfaces a selected family.
 
+- **Directory scope reads are bounded.** A directory-scope target resolves through
+  a bounded, generation-consistent prefix read (a fixed cap on child files). A
+  directory holding more files than the bound reports truncation explicitly, and
+  because unseen files might belong to other families the resolver never claims a
+  single family under truncation — it surfaces the seen families as candidate
+  handles instead. Narrow to a smaller directory or a specific pattern family id.
+  See `docs/specifications/query-resolution.md` for the full scope-resolution
+  semantics.
+
 ## Source Text
 
 RepoGrammar returns metadata by default. Source text is opt-in through:

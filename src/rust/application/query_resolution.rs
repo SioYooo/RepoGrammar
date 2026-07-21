@@ -32,8 +32,8 @@
 use std::collections::BTreeSet;
 
 use crate::application::query::{
-    split_query_path_locator, target_has_path_locator_shape, target_identifier_tokens,
-    PATH_LOCATOR_EXTENSIONS,
+    is_safe_query_path_text, split_query_path_locator, target_has_path_locator_shape,
+    target_identifier_tokens, PATH_LOCATOR_EXTENSIONS,
 };
 use crate::application::query_terms::{normalize_query, Concept, MAX_QUERY_TOKENS};
 
@@ -287,6 +287,30 @@ pub fn parse_target(raw: &str, within: Option<&str>, against: Option<&str>) -> T
         against: against.map(str::to_string),
         conflicts,
     }
+}
+
+/// Normalize a directory-scope prefix into a safe, canonical repo-relative form,
+/// or `None` when it is unsafe to read.
+///
+/// Deterministic, source-free, and I/O-free. It strips leading `./` segments and
+/// any trailing slash, then applies the shared [`is_safe_query_path_text`]
+/// authority as the safety gate. Reusing that authority (rather than collapsing
+/// first, which would hide the signal) is what rejects an absolute path, a `..`
+/// traversal, a backslash, a scheme (`://`), a control character, or an empty
+/// segment (including a redundant `//`). A prefix that returns `None` must never
+/// be used to read a directory scope.
+pub fn normalize_directory_prefix(raw: &str) -> Option<String> {
+    let mut candidate = raw.trim();
+    // Strip a leading `./` (possibly repeated) without touching a leading `/`,
+    // `..`, backslash, or scheme, so the safety gate below still sees those.
+    while let Some(rest) = candidate.strip_prefix("./") {
+        candidate = rest;
+    }
+    let candidate = candidate.trim_end_matches('/');
+    if candidate.is_empty() || !is_safe_query_path_text(candidate) {
+        return None;
+    }
+    Some(candidate.to_string())
 }
 
 /// Append `token` to `sink` if not already present, preserving first-seen order.
@@ -583,6 +607,42 @@ mod tests {
             .conflicts
             .iter()
             .all(|conflict| !matches!(conflict, TargetConflict::MultipleUnitIds(_))));
+    }
+
+    #[test]
+    fn directory_prefix_normalization_canonicalizes_safe_scopes() {
+        assert_eq!(
+            normalize_directory_prefix("app/api"),
+            Some("app/api".to_string())
+        );
+        // Trailing slash, `./` prefix, and collapsed double separators.
+        assert_eq!(
+            normalize_directory_prefix("./app/api/"),
+            Some("app/api".to_string())
+        );
+        // A single interior segment is preserved verbatim.
+        assert_eq!(
+            normalize_directory_prefix("src/rust/interfaces/cli"),
+            Some("src/rust/interfaces/cli".to_string())
+        );
+    }
+
+    #[test]
+    fn directory_prefix_normalization_rejects_malformed_separators() {
+        // A redundant separator leaves an empty segment, which the shared safety
+        // authority rejects rather than silently repairing.
+        assert_eq!(normalize_directory_prefix("app//api"), None);
+    }
+
+    #[test]
+    fn directory_prefix_normalization_rejects_unsafe_scopes() {
+        // Absolute path, parent traversal, backslash, and scheme are never used to
+        // read a scope.
+        assert_eq!(normalize_directory_prefix("/etc/passwd"), None);
+        assert_eq!(normalize_directory_prefix("app/../secrets"), None);
+        assert_eq!(normalize_directory_prefix("app\\api"), None);
+        assert_eq!(normalize_directory_prefix("file://app/api"), None);
+        assert_eq!(normalize_directory_prefix("   "), None);
     }
 
     #[test]

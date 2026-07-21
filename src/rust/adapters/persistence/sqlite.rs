@@ -27,7 +27,8 @@ use crate::ports::index_store::{
     IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
     PythonModuleInterfaceRecord, PythonModuleInterfaceStore, RepoShapeLanguageStats,
-    StorageCleanReport, StorageCleanRequest, StorageInspection, STORAGE_SCHEMA_VERSION,
+    ScopedIndexedFiles, StorageCleanReport, StorageCleanRequest, StorageInspection,
+    STORAGE_SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::fs;
@@ -781,6 +782,21 @@ impl IndexStore for SqliteIndexStore {
         Ok(ActiveIndexedFiles {
             generation_id,
             files,
+        })
+    }
+
+    fn list_active_files_in_directory(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<ScopedIndexedFiles, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_only()?;
+        let (files, truncated) =
+            query_indexed_files_in_directory(&connection, &generation_id, prefix, limit)?;
+        Ok(ScopedIndexedFiles {
+            generation_id,
+            files,
+            truncated,
         })
     }
 
@@ -4023,6 +4039,104 @@ fn stored_family_search_path_components(
         .into_iter()
         .take(FAMILY_SEARCH_PATH_COMPONENT_CAP)
         .collect())
+}
+
+/// The exclusive upper bound of the byte-ordered key range whose keys all start
+/// with `lower`: `lower` with its rightmost byte that is not `0xFF` incremented
+/// by one and every following byte dropped. Returns `None` when every byte is
+/// `0xFF` (no finite successor exists, so the caller scans to the end of the
+/// range). This is the standard prefix-range successor and pairs with a
+/// `path >= lower AND path < upper` scan over a `BINARY`-collated key.
+fn prefix_range_upper_bound(lower: &str) -> Option<String> {
+    let mut bytes = lower.as_bytes().to_vec();
+    while let Some(last) = bytes.pop() {
+        if last != 0xFF {
+            bytes.push(last + 1);
+            // The incremented prefix is guaranteed valid UTF-8: ASCII path
+            // separators only ever increment within ASCII, and a multi-byte
+            // continuation/lead is incremented only after all trailing bytes were
+            // dropped, keeping the result a valid boundary marker.
+            return String::from_utf8(bytes).ok();
+        }
+    }
+    None
+}
+
+/// Bounded prefix range scan of the active generation's indexed files whose path
+/// is a strict child of the directory `prefix`. Uses the `(generation_id, path)`
+/// primary key (BINARY collation) via a `path >= ?2 AND path < ?3` range so the
+/// scan touches only the directory's rows. Fetches `limit + 1` rows to detect
+/// truncation without a second query, then truncates to `limit`.
+fn query_indexed_files_in_directory(
+    connection: &Connection,
+    generation_id: &str,
+    prefix: &str,
+    limit: usize,
+) -> Result<(Vec<IndexedFileRecord>, bool), IndexStoreError> {
+    let limit = limit.max(1);
+    let fetch = i64::try_from(limit.saturating_add(1)).map_err(|_| {
+        IndexStoreError::InvalidRecord("directory scope row limit is invalid".to_string())
+    })?;
+    // The lower bound is the directory boundary `prefix/`; the trailing slash
+    // excludes a file at exactly `prefix` (a file is not a directory) and admits
+    // only strict children `prefix/...`.
+    let lower = format!("{}/", prefix.trim_end_matches('/'));
+    let upper = prefix_range_upper_bound(&lower);
+    let mut statement = connection
+        .prepare(if upper.is_some() {
+            "SELECT path, content_hash, size_bytes, language \
+             FROM indexed_files \
+             WHERE generation_id = ?1 AND path >= ?2 AND path < ?3 \
+             ORDER BY path COLLATE BINARY \
+             LIMIT ?4"
+        } else {
+            "SELECT path, content_hash, size_bytes, language \
+             FROM indexed_files \
+             WHERE generation_id = ?1 AND path >= ?2 \
+             ORDER BY path COLLATE BINARY \
+             LIMIT ?4"
+        })
+        .map_err(sql_unavailable)?;
+    let map_row = |row: &rusqlite::Row<'_>| {
+        let content_hash = row.get::<_, String>(1)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            content_hash,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    };
+    let rows = match &upper {
+        Some(upper) => statement
+            .query_map(params![generation_id, lower, upper, fetch], map_row)
+            .map_err(sql_unavailable)?,
+        None => statement
+            .query_map(params![generation_id, lower, fetch], map_row)
+            .map_err(sql_unavailable)?,
+    };
+    let mut files = Vec::new();
+    for row in rows {
+        let (path, content_hash, size_bytes, language) = row.map_err(sql_unavailable)?;
+        validate_stored_repo_relative_path(&path, "stored indexed file path")?;
+        validate_stored_non_empty_text(&language, "stored indexed file language")?;
+        files.push(IndexedFileRecord {
+            path,
+            content_hash: ContentHash::new(content_hash).map_err(|_| {
+                IndexStoreError::InvalidState(
+                    "stored indexed file content hash is invalid".to_string(),
+                )
+            })?,
+            size_bytes: u64::try_from(size_bytes).map_err(|_| {
+                IndexStoreError::InvalidState("stored indexed file size is invalid".to_string())
+            })?,
+            language,
+        });
+    }
+    let truncated = files.len() > limit;
+    if truncated {
+        files.truncate(limit);
+    }
+    Ok((files, truncated))
 }
 
 fn query_indexed_files(
@@ -9883,6 +9997,131 @@ mod tests {
             .activate_generation(&generation)
             .expect("activate seed generation");
         generation
+    }
+
+    fn seed_active_generation_with_files(store: &SqliteIndexStore, paths: &[&str]) {
+        let generation = store.prepare_next_generation().expect("prepare active");
+        {
+            let mut session =
+                SqliteGenerationWriteSession::open(store, &generation).expect("open session");
+            for path in paths {
+                session
+                    .record_indexed_file(&file(path))
+                    .expect("record file");
+            }
+            session.finish().expect("finish session");
+        }
+        store
+            .activate_generation(&generation)
+            .expect("activate seed generation");
+    }
+
+    #[test]
+    fn scoped_directory_read_returns_only_strict_children_in_path_order() {
+        let workspace = TempWorkspace::new("sqlite-scoped-directory-children");
+        let store = store(&workspace);
+        // A file at exactly the prefix, strict children (including a nested one),
+        // and a sibling directory that shares a prefix string but not a boundary.
+        seed_active_generation_with_files(
+            &store,
+            &[
+                "app/api",
+                "app/api/routes.py",
+                "app/api/models.py",
+                "app/api/v1/handlers.py",
+                "app/apix/other.py",
+                "app/services/db.py",
+            ],
+        );
+        let scoped = store
+            .list_active_files_in_directory("app/api", 16)
+            .expect("scoped read");
+        let paths = scoped
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>();
+        // `app/api` itself (a file, not a directory) and the `app/apix` sibling are
+        // excluded; only strict `app/api/` children remain, in byte-`path` order.
+        assert_eq!(
+            paths,
+            vec![
+                "app/api/models.py",
+                "app/api/routes.py",
+                "app/api/v1/handlers.py",
+            ]
+        );
+        assert!(!scoped.truncated);
+    }
+
+    #[test]
+    fn scoped_directory_read_reports_truncation_beyond_the_bound() {
+        let workspace = TempWorkspace::new("sqlite-scoped-directory-truncation");
+        let store = store(&workspace);
+        seed_active_generation_with_files(
+            &store,
+            &["pkg/a.py", "pkg/b.py", "pkg/c.py", "pkg/d.py"],
+        );
+        let scoped = store
+            .list_active_files_in_directory("pkg", 2)
+            .expect("scoped read");
+        assert_eq!(scoped.files.len(), 2);
+        assert_eq!(scoped.files[0].path, "pkg/a.py");
+        assert_eq!(scoped.files[1].path, "pkg/b.py");
+        assert!(scoped.truncated);
+    }
+
+    #[test]
+    fn scoped_directory_read_of_absent_scope_is_empty_and_untruncated() {
+        let workspace = TempWorkspace::new("sqlite-scoped-directory-absent");
+        let store = store(&workspace);
+        seed_active_generation_with_files(&store, &["app/api/routes.py"]);
+        let scoped = store
+            .list_active_files_in_directory("does/not/exist", 16)
+            .expect("scoped read");
+        assert!(scoped.files.is_empty());
+        assert!(!scoped.truncated);
+    }
+
+    #[test]
+    fn scoped_directory_read_query_plan_uses_the_primary_key_range() {
+        let workspace = TempWorkspace::new("sqlite-scoped-directory-plan");
+        let store = store(&workspace);
+        seed_active_generation_with_files(&store, &["app/api/routes.py"]);
+        let (generation_id, connection) = store
+            .open_active_generation_read_only()
+            .expect("open active read");
+        let lower = "app/api/".to_string();
+        let upper = prefix_range_upper_bound(&lower).expect("finite upper bound");
+        let mut statement = connection
+            .prepare(
+                "EXPLAIN QUERY PLAN \
+                 SELECT path, content_hash, size_bytes, language \
+                 FROM indexed_files \
+                 WHERE generation_id = ?1 AND path >= ?2 AND path < ?3 \
+                 ORDER BY path COLLATE BINARY \
+                 LIMIT ?4",
+            )
+            .expect("prepare explain");
+        let plan = statement
+            .query_map(params![generation_id, lower, upper, 17_i64], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("run explain")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect plan")
+            .join(" | ");
+        // The range scan rides the `(generation_id, path)` primary key (SQLite
+        // reports the implicit unique PK index as `sqlite_autoindex_..._1`) as a
+        // bounded `SEARCH`, never a full-table `SCAN`.
+        assert!(
+            plan.contains("SEARCH indexed_files USING INDEX sqlite_autoindex_indexed_files_1"),
+            "expected a primary-key range SEARCH, got: {plan}"
+        );
+        assert!(
+            !plan.contains("SCAN indexed_files"),
+            "unexpected full table scan: {plan}"
+        );
     }
 
     #[test]

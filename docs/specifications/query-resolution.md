@@ -45,6 +45,57 @@ exact identifier.
 3. **Local-context read plan (unchanged).** Where term retrieval abstains and its
    preconditions still hold (a path-shaped target resolving to one indexed file or
    unit), the existing `PARTIAL_CONTEXT` local-context fallback still applies.
+4. **Directory / composite scope resolution.** When every earlier stage still
+   abstained with an empty-candidate `query target` block and the parsed target
+   named a directory scope (a `/`-containing token that is not a file locator,
+   e.g. `src/rust/interfaces/cli`) — alone or combined with concept, framework, or
+   language ranking signals — the scope is resolved deterministically (see below).
+   A non-directory target with no hard-constraint conflict flows through this stage
+   unchanged, so every prior outcome is byte-identical.
+
+### Directory and composite scope resolution
+
+The target parser (`application::query_resolution::parse_target`) classifies a
+raw target into orthogonal HARD (exact `family:`/`unit:`/path locks), SCOPE
+(directory prefixes, language), and RANKING (concept, framework role, symbol,
+residue) tiers, and records any typed hard-constraint conflict without resolving
+it. Stage 4 acts on the SCOPE tier:
+
+- **Scope establishment.** Each directory prefix is normalized (strip `./`,
+  trailing slash) and safety-checked by the shared `is_safe_query_path_text`
+  authority; an absolute path, a `..` traversal, a backslash, a scheme, a control
+  character, or an empty segment is rejected and never used to read. Each safe
+  prefix is resolved through the bounded `IndexStore::list_active_files_in_directory`
+  read-model port — a prefix range scan over the `(generation_id, path)` primary
+  key that returns at most a fixed limit of child files in `path` order and a
+  `truncated` flag. The scoped read and every family lookup are checked against the
+  same active `generation_id`; a resync mismatch abstains unchanged.
+- **Family mapping.** The bounded scoped files are mapped to the pattern families
+  whose evidence lives within the scope (via the existing
+  `find_active_families_by_evidence_path` projection). Multiple directory scopes
+  default to **intersection**. A composite target additionally intersects the
+  in-scope families with the positively-scored families from the single
+  term-retrieval scoring authority, so `app/api route` narrows to the family that
+  is both in the directory and matches the concept.
+- **Outcomes.** A single family in an untruncated scope resolves to `Found`
+  (hydrated through the same freshness + profile gates). A **heterogeneous** scope
+  (more than one distinct family) surfaces the competing families through
+  `candidate_family_ids` with **no** `selected_family_id` — zero false selection.
+  A scope that resolves to indexed files but no matching family returns
+  `PARTIAL_CONTEXT` with a `directory_scope` resolved target (the bounded child
+  paths as candidate handles, an empty read plan — the locus is a directory, not a
+  single file) and no invented family. A scope that resolves to no indexed files
+  returns a typed `UNKNOWN` naming the accurate reason. Jointly unsatisfiable
+  directory scopes, and any parsed hard-constraint conflict (multiple `family:`
+  ids, multiple `unit:` ids, or a mixed family/unit identity), return a typed
+  conflict `UNKNOWN` — never a union or a silently-dropped constraint.
+- **Truncation is never silent.** When the scoped read exceeds its bound, unseen
+  files might belong to other families, so the resolver never claims a single
+  family under truncation: it surfaces the seen families as candidates with the
+  truncation stated in the source-free recovery text. The public
+  `resolution.cardinality` field and the bounded candidate-set outcome projection
+  with summaries are deferred to a later phase; this stage only never false-selects
+  and keeps candidates as handles.
 
 A resolved family detail carries a hydrated, metadata-only `constraint_profile`
 (the source-backed specification, or `null` when none was persisted) and a
