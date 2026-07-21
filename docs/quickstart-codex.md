@@ -1,10 +1,8 @@
 # Codex Quickstart
 
-This flow uses the zero-friction setup orchestrator to wire Codex, initialize
-the current repository, build its index, start auto-sync, and run a product MCP
-self-test behind one reviewed plan. Use the general quickstart's complete
-exact-version and channel-availability gate; when any check fails, acquire from
-source.
+This flow keeps machine integration and repository initialization explicit.
+Use the general quickstart's exact-version availability gate; when any check
+fails, acquire from source.
 
 ## Acquire RepoGrammar From Source
 
@@ -16,39 +14,34 @@ bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
 repogrammar version
 ```
 
-## Preview And Run Codex Setup
+## Preview And Apply Codex Wiring
 
-From the repository Codex will work on:
+```text
+repogrammar install --target codex --scope global --dry-run --no-telemetry
+repogrammar install --target codex --scope global --yes --no-telemetry
+```
+
+Then initialize each repository separately:
 
 ```text
 cd /path/to/your/repo
-repogrammar setup --target codex --dry-run
-repogrammar setup --target codex
+repogrammar init --project "$PWD" --yes
+repogrammar status --project "$PWD"
 ```
 
-The live command presents one plan and asks once before writing. For a reviewed
-noninteractive run, use:
-
-```text
-repogrammar setup --target codex --yes
-```
-
-Setup never enables telemetry. It writes only through the existing reversible
-Codex MCP integration boundary, retains valid pre-existing state, starts
-repo-local auto-sync by default, and rolls back only machine configuration that
-the current failed attempt created. A missing `codex` CLI leaves a usable
-repository index and returns one install-agent action rather than destroying
-the repository-only result.
+Agent installation never creates `.repogrammar/`; repository `init` never
+configures Codex. `init` starts repo-local autosync by default. Add
+`--no-autosync --progress never` for a one-shot index.
 
 ## Verify The Global Codex Pre-flight
 
-Setup refreshes a managed instruction block only when the existing Codex
+Agent wiring refreshes a managed instruction block only when the existing Codex
 integration is safely owned **and** an explicit instruction-file override is
-configured for that setup path. First identify the actual global guide used by
-your Codex installation or local policy. RepoGrammar does not discover or guess
-that path. If you have verified that the common candidate below is your active
-guide, inspect or refresh it explicitly without reconfiguring MCP or touching
-repository state:
+configured for that install path. First identify the actual global guide used
+by your Codex installation or local policy. RepoGrammar does not discover or
+guess that path. If you have verified that the common candidate below is your
+active guide, inspect or refresh it explicitly without reconfiguring MCP or
+touching repository state:
 
 ```text
 repogrammar instructions status --file "$HOME/.codex/AGENTS.md" --json
@@ -123,8 +116,10 @@ command pinned because the npm launcher does not install a bare command on
 `PATH`:
 
 ```text
-npx --yes --package @sioyooo/repogrammar@0.4.1 \
-  repogrammar setup --project /path/to/your/repo --target codex
+npx --yes --package @sioyooo/repogrammar@0.4.2 \
+  repogrammar install --target codex --scope global --yes --no-telemetry
+npx --yes --package @sioyooo/repogrammar@0.4.2 \
+  repogrammar init --project /path/to/your/repo --yes
 ```
 
 If any check fails, use the source acquisition path above.

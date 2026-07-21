@@ -66,7 +66,7 @@ The check command verifies:
   mutation authority;
 - preview staging has one registered assignment for its exact
   `./npm-candidate/...tgz` local tarball, and stable staging has one registered
-  literal command for `./npm-candidate/sioyooo-repogrammar-0.4.1.tgz`; a bare
+  literal command for `./npm-candidate/sioyooo-repogrammar-0.4.2.tgz`; a bare
   package path that npm could parse as GitHub shorthand, dynamic npm
   subcommands, marker-only comments, or alternate packing and staging paths
   fail the guard;
@@ -212,8 +212,9 @@ The gate proves exact version agreement before making repository state. It then
 runs the packaged `instructions sync` path against an explicit `AGENTS.md` in
 the isolated HOME, requires managed-contract version 3 and exact managed-block
 content, and proves that this operation neither creates a `CLAUDE.md` mirror nor
-repository `.repogrammar` state. It also proves truthful setup dry-run and live
-setup JSON, the product MCP self-test, explicit full `resync`, unchanged
+repository `.repogrammar` state. It then proves explicit live `init` JSON and
+repository state before running the combined `setup` compatibility path only
+for the product MCP self-test, followed by explicit full `resync`, unchanged
 incremental copy-forward, and the packaged `find`/advisory `check` path. It then
 starts the real detached autosync daemon at a 100 ms poll interval, verifies that
 readiness survives at least three poll intervals, edits the isolated fixture,
@@ -263,14 +264,15 @@ immutable GitHub state and the exact eleven assets, including the public
 attestation evidence; SHA-256 sidecars; semantically identical retained,
 GitHub, and public npm candidate manifests; registry SRI; exact `latest` and
 `preview` tag keys; public channel and installer versions; the exact packaged
-native-smoke success line; and truthful pinned/latest live setup JSON.
+native-smoke success line; and truthful installer, pinned, and latest live
+`init` JSON.
 Historical optional setup dry-run evidence is accepted only when it remains
 truthful.
 
 Each public npm launcher lane (`pinned`, `latest`, and `preview`) must execute
 from its own external `${RUNNER_TEMP}` work directory, with its own HOME, npm
 cache, binary cache, and tool-only PATH. That PATH must include `git` because
-the public setup smoke performs repository initialization. The launcher helper
+the public `init` smoke resolves repository identity. The launcher helper
 changes directory inside a child shell so one lane cannot change the workflow
 step's ambient directory. Running `npx --package` from the checked-out
 RepoGrammar root is not valid evidence: npm can treat the root's same-name
@@ -281,7 +283,7 @@ launcher tool list that omits `git`.
 
 The npm provenance gate consumes only the structured output from
 `npm audit signatures --json --include-attestations`. It requires one verified
-`@sioyooo/repogrammar@0.4.1` entry from the exact registry and exactly one SLSA
+`@sioyooo/repogrammar@0.4.2` entry from the exact registry and exactly one SLSA
 Provenance v1 declaration. npm 11.18 reports that declaration under the
 `attestations.provenance` object and provides both npm publish-v0.1 and SLSA
 entries in `attestationBundles`; the guard requires that exact two-bundle
@@ -289,7 +291,7 @@ inventory, including exactly one publish-v0.1 bundle and exactly one SLSA v1
 bundle, then requires an in-toto JSON DSSE payload for SLSA provenance. Its
 bounded dependency-free base64 decoder binds the decoded predicate and subject
 digest to the candidate SHA-512, the GitHub-hosted workflow builder to
-`.github/workflows/release.yml`, the push tag to `refs/tags/v0.4.1`, the
+`.github/workflows/release.yml`, the push tag to `refs/tags/v0.4.2`, the
 resolved dependency URI to the same repository and tag, its git commit to the
 checked-out release SHA, and the invocation identity to the exact retained
 Actions run id and attempt. It does not inspect certificates, raw signature
@@ -324,8 +326,8 @@ The release dist-tag classifier verifies the complete public npm state after a
 publication becomes visible:
 
 - preview preserves the existing `preview-dist-tag-action` policy;
-- the registered stable `0.4.1` policy requires exact `latest=0.4.1`, exact
-  `preview=0.2.0-preview.0`, and the preview, prior public `0.4.0`, and new
+- the registered stable `0.4.2` policy requires exact `latest=0.4.2`, exact
+  `preview=0.2.0-preview.0`, and the preview, prior public `0.4.1`, and new
   stable versions in the bounded complete inventory. The failed or abandoned,
   unpublished `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates are
   explicitly forbidden; any candidate's presence in the registry inventory
@@ -380,8 +382,8 @@ Release immutability remains a maintainer preflight before tag creation. The
 read-only finalizer needs no long-lived admin token: the public release API plus
 `gh release verify` and every `gh release verify-asset` result are the release
 evidence. The corrected post-public finalizer definition is dispatched from
-`main`, but its checkout remains pinned to immutable `v0.4.1` and its inputs
-must identify the exact successful `v0.4.1` tag-run attempt. Updating verifier
+`main`, but its checkout remains pinned to immutable `v0.4.2` and its inputs
+must identify the exact successful `v0.4.2` tag-run attempt. Updating verifier
 orchestration after tagging therefore cannot move the tag, rebuild release
 artifacts, or replace publication authority. Expired retained artifacts,
 unavailable attestations, absent provenance, or a failed public smoke prevents
@@ -431,6 +433,6 @@ execution, runs each public npm channel from a separate external lane working
 directory, and delegates the final verdict to `repo-guard`. Manual verification
 uses `release-dist-tag-action` against public tags and the complete inventory;
 stable requires exact
-`latest=0.4.1`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
+`latest=0.4.2`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
 without registry writes. Manual release dispatch remains build-only and manual
 finalization remains read-only.

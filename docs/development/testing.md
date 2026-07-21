@@ -1607,8 +1607,8 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. The current stable gate requires exact `latest=0.4.1`, exact
-`preview=0.2.0-preview.0`, the preview, prior public `0.4.0`, and new stable
+state. The current stable gate requires exact `latest=0.4.2`, exact
+`preview=0.2.0-preview.0`, the preview, prior public `0.4.1`, and new stable
 versions in the registry inventory, the explicit absence of the failed or
 abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates, and a
 retained-candidate SRI match. Any other prerelease under `preview`, any
@@ -1623,9 +1623,9 @@ asset attestation and checksum, npm signature/provenance verification, and the
 exact tag-run id and successful run attempt. The finalizer must verify public
 npm pack metadata against the public manifest before executing a package or
 launcher, then run the downloaded public Linux archive, downloaded public shell
-installer, pinned live repository-only setup, unversioned live
-repository-only setup, and preview version smoke. Version/tag checks or a
-setup dry run alone are not a finalizer. Native-agent integration and fresh
+installer plus installer-driven repository init, pinned live repository init,
+unversioned live repository init, and preview version smoke. Version/tag checks
+or a setup dry run alone are not a finalizer. Native-agent integration and fresh
 coding-agent instruction behavior remain separate isolated pre-release/manual
 evidence rather than automatic finalizer evidence.
 
@@ -1638,7 +1638,7 @@ public package's bin. The installer shell contract test locks the three work
 directories, the dynamic lane `cd`, and the child-shell boundary.
 It also locks the `${RUNNER_TEMP}` root and the workflow's visible rejection of
 verifier definitions dispatched from a ref other than `main`. The contract
-requires `git` in the tool-only PATH so the setup smoke can initialize its
+requires `git` in the tool-only PATH so the init smoke can initialize its
 isolated fixture repository.
 
 The first post-public finalizer run, `29587973589`, was bound to candidate run
@@ -1666,7 +1666,7 @@ verifier-environment correction, not a product or publication change.
   version`. The direct binary override is contributor dogfood only; published
   npm use still downloads release artifacts.
 - Repository lifecycle smoke: copy a committed release fixture to `/tmp`, run
-  `repogrammar setup --project <tmp-fixture> --yes --no-autosync --json
+  `repogrammar init --project <tmp-fixture> --yes --no-autosync --json
   --progress never` with a fresh temporary HOME and no live agent target, then
   check `status --json`, `doctor --json`, `unknowns --json`, and
   `stats --unknowns --json` against that temporary project.

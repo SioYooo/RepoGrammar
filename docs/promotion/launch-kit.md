@@ -109,7 +109,7 @@ The commit, code, test, and specification history records these additions:
   hardening.
 
 The exact mapping lives in the [CHANGELOG](../../CHANGELOG.md),
-[v0.4.1 release checklist](../release/stable-v0.4.1-release-checklist.md), and
+[v0.4.2 release checklist](../release/stable-v0.4.2-release-checklist.md), and
 [RC verdict](../experiments/product-core-rc-verdict.md).
 
 ## GPT-5.6 and Codex usage
@@ -126,13 +126,15 @@ evidence to the coding agent.
 
 ## Five-minute judge path
 
-Use the exact public package and commands in the root [README](../../README.md).
-Every command is pinned to `@sioyooo/repogrammar@0.4.1` and runs through `npx`,
-so the path does not require Rust/Cargo or assume a globally installed binary.
-It clones the MIT-licensed `fastapi/full-stack-fastapi-template` at commit
+Use the exact public installer and commands in the root [README](../../README.md).
+The judge path pins the immutable `v0.4.2` `install.sh`, installs only the
+product binary and bundled worker, optionally wires a coding agent with
+`repogrammar install`, and initializes each repository separately with
+`repogrammar init`. It does not require Rust or Cargo. It clones the
+MIT-licensed `fastapi/full-stack-fastapi-template` at commit
 `4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8`, then demonstrates:
 
-1. repository setup and indexing;
+1. binary installation followed by separate repository initialization and indexing;
 2. a successful family query at `verbosity minimal`;
 3. a bounded read plan;
 4. static alignment with runtime equivalence still UNKNOWN;
