@@ -433,6 +433,11 @@ framework heuristics and syntax-only fingerprints. Syntax-origin framework-role
 facts can record that a code unit has a recognizable framework role shape, but
 `FRAMEWORK_HEURISTIC` certainty is not enough to prove family membership,
 resolved handler identity, runtime lifecycle equivalence, or conformance.
+The two-sided static-alignment operations `check_conformance` and
+`explain_deviation` (the latter is a real deviation projection, not a `find`
+alias) resolve a subject unit against one comparison family — pinned by the
+optional `against` scope or inferred — and report a `target_relationship`; both
+carry `runtime_equivalence: "UNKNOWN"` and never claim runtime conformance.
 Freshness is a required gate before semantic facts can become inputs to future
 family claim builders. A fresh supported fact kind is still only eligible input;
 it is not a `DOMINANT_PATTERN`, `VARIATION`, `EXCEPTION`, or conformance result

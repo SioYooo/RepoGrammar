@@ -1602,6 +1602,7 @@ impl CliRuntime for ProductCliRuntime {
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        against: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         let store = self.store_for_status_request(&request)?;
@@ -1614,6 +1615,7 @@ impl CliRuntime for ProductCliRuntime {
             &store,
             &FilesystemSourceStore,
             target,
+            against,
             mode,
         )
     }
@@ -1816,9 +1818,10 @@ impl McpReadOnlyRuntime for ProductCliRuntime {
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        against: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
-        <Self as CliRuntime>::family_lookup(self, request, target, mode)
+        <Self as CliRuntime>::family_lookup(self, request, target, against, mode)
     }
 
     fn product_readiness(
@@ -3773,19 +3776,20 @@ mod tests {
 
     fn assert_unknown_query_json(command: &str, value: &Value) {
         assert_eq!(value["command"], command);
-        if command == "check" {
-            // The static-alignment check never returns UNKNOWN/PARTIAL_CONTEXT; a
-            // target with no comparison family abstains with INSUFFICIENT_EVIDENCE
-            // and never surfaces a selected family or a runtime-equivalence claim.
+        if matches!(command, "check" | "explain") {
+            // `check` and `explain` share the two-sided static-alignment path and
+            // never return UNKNOWN/PARTIAL_CONTEXT for a resolvable-but-unsupported
+            // target: it abstains with INSUFFICIENT_EVIDENCE, never surfacing a
+            // selected family or a runtime-equivalence claim.
             assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
             assert_eq!(value["implemented"], true);
             assert_eq!(value["runtime_equivalence"], "UNKNOWN");
             assert!(value["selected_family_id"].is_null());
             assert!(value["alignment"].is_null());
-            assert!(value.get("check").is_none());
+            assert!(value.get(command).is_none());
             return;
         }
-        if matches!(command, "find" | "explain") && value["status"] == "PARTIAL_CONTEXT" {
+        if command == "find" && value["status"] == "PARTIAL_CONTEXT" {
             assert_eq!(value["implemented"], true);
             assert_eq!(value["read_plan"]["source_snippets_included"], false);
             assert_eq!(value["read_plan"]["requires_source_before_edit"], true);
@@ -3804,8 +3808,8 @@ mod tests {
     /// of its comparison family: statically aligned, MEMBER relationship, the
     /// selected family surfaced on the route, no deviations, and the
     /// runtime-equivalence obligation carried but never discharged.
-    fn assert_member_statically_aligned(value: &Value, family_id: &str) {
-        assert_eq!(value["command"], "check");
+    fn assert_member_statically_aligned(command: &str, value: &Value, family_id: &str) {
+        assert_eq!(value["command"], command);
         assert_eq!(value["schema_version"], "product-schemas.v1");
         assert_eq!(value["implemented"], true);
         assert_eq!(value["status"], "STATICALLY_ALIGNED");
@@ -3816,6 +3820,7 @@ mod tests {
         assert_eq!(value["query_route"]["selected_family_id"], family_id);
         // No runtime-conformance verdict leaks.
         assert!(value.get("check").is_none());
+        assert!(value.get("explain").is_none());
         assert!(value["alignment"]["pass"].is_null());
         assert!(value["alignment"]["conforms"].is_null());
         assert!(value["alignment"]["static_deviations"]
@@ -3835,10 +3840,11 @@ mod tests {
                 "{command} UNKNOWN leaked families: {value}"
             );
         }
-        let forbidden_fields: &[&str] = if command == "check" {
-            // A static-alignment certificate is always structured (read_plan,
-            // resolved target locator) but never carries a family claim, an
-            // evidence bundle, or a runtime-conformance verdict.
+        let forbidden_fields: &[&str] = if matches!(command, "check" | "explain") {
+            // A static-alignment certificate (shared by `check` and `explain`) is
+            // always structured (read_plan, resolved target locator) but never
+            // carries a family claim, an evidence bundle, or a runtime-conformance
+            // verdict.
             &[
                 "family",
                 "member",
@@ -3847,6 +3853,7 @@ mod tests {
                 "evidence",
                 "output",
                 "check",
+                "explain",
             ]
         } else if value["status"] == "PARTIAL_CONTEXT" {
             &["family", "member", "members", "variation_slots", "evidence"]
@@ -4324,11 +4331,12 @@ mod tests {
 
     fn assert_python_stale_unknown(command: &str, value: &Value, family_id: &str) {
         assert_eq!(value["command"], command);
-        if command == "check" {
-            // A stale target must abstain: the static-alignment check verifies the
-            // target file's freshness first and reports INSUFFICIENT_EVIDENCE with a
-            // StaleEvidence reason, never fabricating an alignment from stale facts.
-            // The affected claim names the stale target file, not the family.
+        if matches!(command, "check" | "explain") {
+            // A stale target must abstain: the two-sided static-alignment flow
+            // (shared by `check` and `explain`) verifies the target file's freshness
+            // first and reports INSUFFICIENT_EVIDENCE with a StaleEvidence reason,
+            // never fabricating an alignment from stale facts. The affected claim
+            // names the stale target file, not the family.
             let _ = family_id;
             assert_eq!(value["status"], "INSUFFICIENT_EVIDENCE");
             assert_eq!(value["implemented"], true);
@@ -4336,6 +4344,7 @@ mod tests {
             assert!(value["selected_family_id"].is_null());
             assert!(value["alignment"].is_null());
             assert!(value.get("check").is_none());
+            assert!(value.get("explain").is_none());
             assert_eq!(value["unknowns"][0]["class"], "blocking_unknown");
             assert_eq!(value["unknowns"][0]["reason"], "StaleEvidence");
             assert!(value["unknowns"][0]["affected_claim"]
@@ -5308,7 +5317,7 @@ mod tests {
         );
         let check_json = parse_machine_output("check", &check, &workspace);
         // users.ts is a member of the express family, so it statically aligns.
-        assert_member_statically_aligned(&check_json, &family_id);
+        assert_member_statically_aligned("check", &check_json, &family_id);
 
         fs::write(
             workspace.path().join("users.ts"),
@@ -5928,25 +5937,33 @@ mod tests {
             assert_eq!(member_json["status"], "ok");
             assert_python_exact_anchor_family_detail("member", &member_json, *case);
 
-            for command in ["find", "explain"] {
-                let output = run_with_runtime(
-                    cli_args(command, workspace.path(), &[case.evidence_path, "--json"]),
-                    &runtime,
-                );
-                let value = parse_machine_output(command, &output, &workspace);
-                assert_eq!(value["status"], "ok", "{command} should find family");
-                assert_python_exact_anchor_family_detail(command, &value, *case);
-            }
+            // `find` discovers the family from the evidence path (fuzzy discovery).
+            let find = run_with_runtime(
+                cli_args("find", workspace.path(), &[case.evidence_path, "--json"]),
+                &runtime,
+            );
+            let find_json = parse_machine_output("find", &find, &workspace);
+            assert_eq!(find_json["status"], "ok", "find should find family");
+            assert_python_exact_anchor_family_detail("find", &find_json, *case);
 
-            // A check target must pin exactly one code unit; the member evidence
-            // file holds several member units, so certify a specific member by its
-            // unit id. The pinned member statically aligns with its own family.
+            // `explain` and `check` both run the two-sided static-alignment flow and
+            // must pin exactly one code unit; the member evidence file holds several
+            // member units, so target a specific member by its unit id. The pinned
+            // member statically aligns with its own family, and `explain` projects a
+            // real MEMBER relationship (never a `find` alias).
+            let explain = run_with_runtime(
+                cli_args("explain", workspace.path(), &[&member_id, "--json"]),
+                &runtime,
+            );
+            let explain_json = parse_machine_output("explain", &explain, &workspace);
+            assert_member_statically_aligned("explain", &explain_json, case.family_id);
+
             let check = run_with_runtime(
                 cli_args("check", workspace.path(), &[&member_id, "--json"]),
                 &runtime,
             );
             let check_json = parse_machine_output("check", &check, &workspace);
-            assert_member_statically_aligned(&check_json, case.family_id);
+            assert_member_statically_aligned("check", &check_json, case.family_id);
 
             let family_auto_evidence = run_with_runtime(
                 cli_args(
@@ -7825,7 +7842,7 @@ mod tests {
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_member_statically_aligned(&check_json, &family_id);
+        assert_member_statically_aligned("check", &check_json, &family_id);
 
         // Default MCP output is also source-free.
         let default_mcp = mcp_context_payload(
@@ -9200,7 +9217,11 @@ mod tests {
         );
         assert_eq!(families_json["families"][0]["support"], 3);
 
-        for command in ["family", "find", "explain"] {
+        // `find` (fuzzy discovery) and `family` (exact id) still resolve the family
+        // from the path/handle. `explain` no longer aliases `find`: it runs the
+        // two-sided static-alignment flow and is asserted below against a pinned
+        // member unit.
+        for command in ["family", "find"] {
             let args = if command == "family" {
                 vec![family_id.as_str(), "--json"]
             } else {
@@ -9268,12 +9289,21 @@ mod tests {
             .as_str()
             .expect("member id")
             .to_string();
+        // `explain` on the pinned member projects a real MEMBER relationship
+        // certificate (the deviation projection), not a family-context bundle.
+        let explain = run_with_runtime(
+            cli_args("explain", workspace.path(), &[&member_id, "--json"]),
+            &runtime,
+        );
+        let explain_json = parse_machine_output("explain", &explain, &workspace);
+        assert_member_statically_aligned("explain", &explain_json, &family_id);
+
         let check = run_with_runtime(
             cli_args("check", workspace.path(), &[&member_id, "--json"]),
             &runtime,
         );
         let check_json = parse_machine_output("check", &check, &workspace);
-        assert_member_statically_aligned(&check_json, &family_id);
+        assert_member_statically_aligned("check", &check_json, &family_id);
 
         fs::write(
             workspace.path().join("routes.py"),
@@ -12309,23 +12339,24 @@ pythonpath = ["src"]
         );
         assert_python_exact_anchor_evidence("family", &show, case, "deep", None);
 
+        // Pin one member unit (the evidence file holds several), so `explain` and
+        // `check` resolve unambiguously to a MEMBER + STATICALLY_ALIGNED
+        // certificate. `explain_deviation` is no longer a `find` alias: it projects
+        // the real MEMBER relationship through the two-sided static-alignment path.
+        let member_id = show["members"][0]["code_unit_id"]
+            .as_str()
+            .expect("member id")
+            .to_string();
         let explain = mcp_context_payload(
             &runtime,
             &workspace,
             serde_json::json!({
                 "operation": "explain_deviation",
-                "target": case.evidence_path,
+                "target": member_id,
             }),
         );
-        assert_eq!(explain["status"], "ok");
-        assert_python_exact_anchor_family_detail("explain", &explain, case);
+        assert_member_statically_aligned("explain", &explain, case.family_id);
 
-        // Pin one member unit (the evidence file holds several), so the check
-        // resolves unambiguously to a MEMBER + STATICALLY_ALIGNED certificate.
-        let member_id = show["members"][0]["code_unit_id"]
-            .as_str()
-            .expect("member id")
-            .to_string();
         let check = mcp_context_payload(
             &runtime,
             &workspace,
@@ -12334,7 +12365,7 @@ pythonpath = ["src"]
                 "target": member_id,
             }),
         );
-        assert_member_statically_aligned(&check, case.family_id);
+        assert_member_statically_aligned("check", &check, case.family_id);
 
         let input = format!(
             "{}\n{}\n{}\n",

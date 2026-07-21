@@ -4,6 +4,16 @@
 
 ### Added
 
+- Added an optional `against` input to the two-sided static-alignment operations
+  `explain_deviation` / `check_conformance` (CLI `explain` / `check`, `--against`).
+  It names the COMPARISON family and pins it to exactly one fresh ready family (an
+  exact `family:` id, framework role, or pattern); an ambiguous or unmatched
+  `against` abstains with `INSUFFICIENT_EVIDENCE`, `selected_family_id: null`, and
+  bounded candidate handles, never a false selection. `against` is additive to the
+  closed input schema (every existing `target`-only call is byte-compatible) and is
+  rejected — never silently ignored — on any other operation/command. See ADR-0029
+  (Phase 4 note).
+
 - Added an additive top-level `resolution` object to `find_analogues` /
   `explain_deviation` (CLI `find`/`explain`) responses that resolve a directory or
   composite scope. It projects the candidate-set cardinality
@@ -19,6 +29,17 @@
 
 ### Changed
 
+- Changed `explain_deviation` (CLI `explain`) from a `find_analogues` alias into a
+  real deviation projection: it now runs the same two-sided static-alignment
+  resolution as `check_conformance`, resolving the subject to exactly one code unit
+  and one comparison family, and always reports a real `target_relationship`
+  (`MEMBER` / `LEGAL_VARIATION` / `NEAR_MISS` / `EXCEPTION` / `BLOCKED_UNKNOWN` /
+  `OUT_OF_SCOPE` / `INCOMPATIBILITY`; `COMPETING_PATTERN` stays reserved) with
+  `runtime_equivalence: "UNKNOWN"`. A target that cannot be pinned to one unit + one
+  family (ambiguous, stale, unindexed, out of scope, or family-less) now abstains
+  with a typed `INSUFFICIENT_EVIDENCE`/`UNKNOWN` and `selected_family_id: null`
+  instead of returning fuzzy family context. `find_analogues` is unchanged. This is
+  a user-visible contract change; affected fixtures were regenerated deliberately.
 - Changed a directory/composite scope that resolves to more than one in-scope
   pattern family (or to a truncated bounded read) from a typed `UNKNOWN` to a
   `PARTIAL_CONTEXT` outcome carrying `resolution.cardinality: "many"` /

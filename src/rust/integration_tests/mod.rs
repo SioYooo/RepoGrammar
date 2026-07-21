@@ -595,6 +595,7 @@ impl McpReadOnlyRuntime for BenchmarkMcpRuntime<'_> {
         &self,
         _request: RepositoryStatusRequest,
         target: Option<&str>,
+        _against: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, crate::error::RepoGrammarError> {
         lookup_family(self.store, target, mode)

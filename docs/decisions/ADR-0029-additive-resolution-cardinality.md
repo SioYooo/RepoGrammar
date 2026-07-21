@@ -104,3 +104,41 @@ fuzzy scope path, so it never hydrates more than the one exact family.
 - If usage shows consumers need a first-class candidate-set status, schedule a
   `product-schemas.v2` migration that adds a `CANDIDATE_SET` top-level status and
   folds the additive `resolution` object into it.
+
+## Phase 4 note — additive `against` and two-sided operation projection
+
+- Date: 2026-07-21
+
+Phase 4 of the universal-target-resolution work makes `explain_deviation` a real
+deviation projection (no longer a `find_analogues` alias) and adds an additive
+`against` input to the two operations that name a comparison side
+(`explain_deviation` / `check_conformance`, CLI `explain` / `check`).
+
+- **`against` is additive to the closed input schema.** It is an optional string
+  (same length/character bounds as `target`) accepted only for the two-sided
+  operations and rejected — never silently ignored — elsewhere. Omitting it keeps
+  the existing inference (subject unit's own family, else the single fresh ready
+  family of its `(language, kind, role)` key), so every pre-Phase-4 `target`-only
+  call is byte-compatible. `against` pins the comparison side to **exactly one**
+  fresh ready family through the shared family-resolution authority; an ambiguous
+  or unmatched `against` abstains with `INSUFFICIENT_EVIDENCE`, a `null`
+  `selected_family_id`, and bounded candidate handles. Comparison resolution
+  **never false-selects**.
+- **`explain_deviation` now shares `check_conformance`'s two-sided static-alignment
+  path** (`FamilyLookupMode::Conformance`, `check_static_alignment`,
+  `compute_alignment`), so it emits the same certificate and always carries a real
+  `target_relationship` when a unit and family both resolve, abstaining with
+  `selected_family_id: null` otherwise. The two operations differ only in the
+  `command`/`operation` label. This is a user-visible contract change (explain now
+  resolves the subject to one code unit and abstains on ambiguous/family-less
+  targets instead of returning fuzzy family context); recorded in the CHANGELOG and
+  the affected fixtures regenerated deliberately.
+- **Invariants preserved.** Exactly one unit + one family are pinned before any
+  `compute_alignment`; `runtime_equivalence` stays `"UNKNOWN"` in every response;
+  stale/conflict/ambiguity outcomes are never upgraded into a certificate; and
+  `COMPETING_PATTERN` remains a reserved `target_relationship` token that no path —
+  including `against` — emits. The `product-eval` `false_family_selections` metric
+  stays `0`.
+
+ADR-0028 is reserved for the parallel installer workstream and is intentionally
+not used here.

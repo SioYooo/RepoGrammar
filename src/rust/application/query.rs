@@ -1023,9 +1023,14 @@ pub enum FamilyLookupMode {
     ExactFamilyId,
     ExactMemberId,
     FuzzyQuery,
-    /// Static-alignment check. Resolves the target to a specific code unit,
-    /// selects a comparison family, and returns a `FamilyLookupReport::Alignment`
-    /// certificate. Never emits a runtime-conformance verdict.
+    /// Two-sided static-alignment resolution shared by `check_conformance` and
+    /// `explain_deviation`. Resolves the target to a specific code unit, pins a
+    /// single comparison family (the caller-named `against` family when provided,
+    /// else inferred from membership or the unit's key), and returns a
+    /// `FamilyLookupReport::Alignment` certificate carrying `target_relationship`.
+    /// Never emits a runtime-conformance verdict: `runtime_equivalence` stays
+    /// `UNKNOWN`. The two operations differ only in output labeling/emphasis, not
+    /// in the resolution or the `compute_alignment` projection.
     Conformance,
 }
 
@@ -1114,11 +1119,16 @@ fn query_route_name(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'st
         (FamilyLookupReport::Found(_), FamilyLookupMode::ExactMemberId) => "exact_member_hydrate",
         (FamilyLookupReport::PartialContext(_), _) => "partial_context_read_plan",
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => "discovery_unknown",
-        (FamilyLookupReport::Unknown(_), _) => "exact_lookup_unknown",
         // The alignment route is built directly by `alignment_query_route_report`;
-        // these arms only satisfy exhaustiveness for the conformance mode.
-        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        // these arms only satisfy exhaustiveness for the conformance mode. A
+        // Conformance-mode abstention names the conformance route even if it
+        // arrives in the Unknown shape (production abstentions are Alignment).
+        (
+            FamilyLookupReport::Found(_) | FamilyLookupReport::Unknown(_),
+            FamilyLookupMode::Conformance,
+        )
         | (FamilyLookupReport::Alignment(_), _) => "conformance_static_alignment",
+        (FamilyLookupReport::Unknown(_), _) => "exact_lookup_unknown",
     }
 }
 
@@ -1198,7 +1208,7 @@ fn query_route_why(report: &FamilyLookupReport, mode: FamilyLookupMode) -> &'sta
         (FamilyLookupReport::Unknown(_), FamilyLookupMode::FuzzyQuery) => {
             "candidate discovery or local target resolution could not produce a single supported family without overclaiming"
         }
-        (FamilyLookupReport::Found(_), FamilyLookupMode::Conformance)
+        (FamilyLookupReport::Found(_) | FamilyLookupReport::Unknown(_), FamilyLookupMode::Conformance)
         | (FamilyLookupReport::Alignment(_), _) => {
             "check resolved the target to a code unit and statically compared it against the selected family's constraint profile; runtime equivalence remains UNKNOWN"
         }
@@ -3099,12 +3109,22 @@ pub fn lookup_family_with_freshness_and_local_context(
     family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
+    against: Option<&str>,
     mode: FamilyLookupMode,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
-    // The conformance check resolves the target and comparison family through the
-    // same shared pipeline, then layers the static-alignment certificate on top.
+    // The conformance/deviation operations both resolve the target and comparison
+    // family through the same shared two-sided pipeline, then layer the
+    // static-alignment certificate (or deviation projection) on top. `against`,
+    // when present, pins the comparison side to exactly one family.
     if mode == FamilyLookupMode::Conformance {
-        return check_static_alignment(request, index_store, family_store, source_store, target);
+        return check_static_alignment(
+            request,
+            index_store,
+            family_store,
+            source_store,
+            target,
+            against,
+        );
     }
     // An empty target abstains through the exact layer; every fallback below is a
     // no-op on it, so the base report is the final answer.
@@ -3178,7 +3198,9 @@ fn check_static_alignment(
     family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
     source_store: &impl SourceStore,
     target: Option<&str>,
+    against: Option<&str>,
 ) -> Result<FamilyLookupReport, RepoGrammarError> {
+    let against = against.map(str::trim).filter(|against| !against.is_empty());
     let snapshot = index_store
         .load_active_claim_input_snapshot()
         .map_err(index_store_error)?;
@@ -3280,7 +3302,11 @@ fn check_static_alignment(
         ));
     }
 
-    // (3) Membership: the unit's own family, else the single ready family of key.
+    // (3) Comparison family. `against`, when present, pins exactly ONE comparison
+    // family (the caller-named side); otherwise the family is inferred from the
+    // subject's own membership, else the single ready family of its key. The
+    // subject's membership set is computed first so `is_member` is decided against
+    // whichever family is finally pinned (including a caller-named `against`).
     let member_candidates = family_store
         .find_active_families_by_member(&unit.id)
         .map_err(family_store_error)?;
@@ -3292,9 +3318,33 @@ fn check_static_alignment(
     member_family_ids.sort();
     member_family_ids.dedup();
 
-    let (family_id, is_member) = if member_family_ids.len() == 1 {
+    let (family_id, is_member) = if let Some(against) = against {
+        // Caller-pinned comparison side: resolve `against` to exactly ONE fresh
+        // ready family through the shared family-resolution pipeline. Ambiguity or
+        // no match abstains with bounded candidate handles; it never false-selects.
+        match resolve_against_family(&request, family_store, source_store, against)? {
+            AgainstFamilySelection::One(family_id) => {
+                let is_member = member_family_ids.iter().any(|id| id == &family_id);
+                (family_id, is_member)
+            }
+            AgainstFamilySelection::Abstain(candidates) => {
+                let mut resolved = resolved_target_for_unit(target, unit, None);
+                resolved.candidate_family_ids = candidates.clone();
+                return Ok(alignment_abstain(
+                    active_generation,
+                    AlignmentStatus::InsufficientEvidence,
+                    empty_alignment_read_plan(),
+                    vec![candidate_ambiguity_unknown(
+                        "check comparison family (against) ambiguity",
+                        &candidates,
+                    )],
+                    resolved,
+                ));
+            }
+        }
+    } else if member_family_ids.len() == 1 {
         (
-            member_family_ids.into_iter().next().expect("one family"),
+            member_family_ids.first().cloned().expect("one family"),
             true,
         )
     } else if member_family_ids.is_empty() {
@@ -3650,6 +3700,59 @@ fn select_comparison_family_by_key(
         0 => KeyFamilySelection::None,
         1 => KeyFamilySelection::One(key_candidates.into_iter().next().expect("one candidate")),
         _ => KeyFamilySelection::Ambiguous(key_candidates),
+    })
+}
+
+/// The comparison family a caller-named `against` scope resolved to.
+enum AgainstFamilySelection {
+    /// Exactly one fresh ready comparison family was pinned.
+    One(String),
+    /// The `against` scope did not pin exactly one fresh ready family. Carries the
+    /// bounded candidate handles (empty when nothing matched); NEVER a selection.
+    Abstain(Vec<String>),
+}
+
+/// Resolve a caller-named `against` comparison scope to exactly ONE fresh ready
+/// pattern family, or abstain with bounded candidate handles.
+///
+/// This reuses the shared family-resolution authority
+/// ([`lookup_family_with_freshness_using`], the exact-family / role / pattern
+/// discovery + freshness gate) rather than re-deriving selection here:
+///
+/// * an exact `family:` id resolves that family directly (fresh) → [`AgainstFamilySelection::One`];
+/// * a framework role or pattern resolves the unique fresh ready family of that
+///   role, else the bounded candidate set → [`AgainstFamilySelection::Abstain`];
+/// * a stale, missing, or ambiguous `against` never selects — it abstains with
+///   whatever narrowing candidate handles the resolver surfaced.
+///
+/// `against` names the COMPARISON family only; it is never resolved as a code
+/// locus, so the local-context / directory-scope fallbacks are intentionally not
+/// consulted here.
+fn resolve_against_family(
+    request: &FamilyEvidenceFreshnessRequest,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    against: &str,
+) -> Result<AgainstFamilySelection, RepoGrammarError> {
+    let constraints = parse_target(against, None, None);
+    let report = lookup_family_with_freshness_using(
+        request.clone(),
+        family_store,
+        source_store,
+        against,
+        &constraints,
+        FamilyLookupMode::FuzzyQuery,
+    )?;
+    Ok(match report {
+        FamilyLookupReport::Found(family) => AgainstFamilySelection::One(family.family_id.clone()),
+        FamilyLookupReport::Unknown(unknown) => {
+            AgainstFamilySelection::Abstain(normalized_family_ids(unknown.candidate_family_ids))
+        }
+        // `lookup_family_with_freshness_using` only ever returns Found/Unknown;
+        // any other shape is treated as a no-selection abstention defensively.
+        FamilyLookupReport::PartialContext(_) | FamilyLookupReport::Alignment(_) => {
+            AgainstFamilySelection::Abstain(Vec::new())
+        }
     })
 }
 
@@ -13077,6 +13180,70 @@ mod tests {
     }
 
     #[test]
+    fn resolve_against_family_pins_exact_family_and_never_false_selects() {
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "app/api/routes.py",
+        )]);
+        let fresh = TermRetrievalSourceStore { fresh: true };
+
+        // An exact `family:` id pins exactly ONE fresh ready comparison family.
+        match resolve_against_family(
+            &family_freshness_request(),
+            &store,
+            &fresh,
+            "family:python:fastapi_route:framework_fastapi_route",
+        )
+        .expect("against resolution")
+        {
+            AgainstFamilySelection::One(family_id) => assert_eq!(
+                family_id,
+                "family:python:fastapi_route:framework_fastapi_route"
+            ),
+            AgainstFamilySelection::Abstain(_) => {
+                panic!("a fresh exact family id must pin exactly one comparison family")
+            }
+        }
+
+        // An unmatched `against` scope abstains with no candidate and no selection.
+        match resolve_against_family(
+            &family_freshness_request(),
+            &store,
+            &fresh,
+            "family:python:nonexistent:none",
+        )
+        .expect("against resolution")
+        {
+            AgainstFamilySelection::Abstain(candidates) => assert!(candidates.is_empty()),
+            AgainstFamilySelection::One(family_id) => {
+                panic!("an unmatched against must never false-select {family_id}")
+            }
+        }
+
+        // A stale exact family never selects: it abstains with the family only as a
+        // bounded candidate handle, honoring the no-false-selection invariant.
+        let stale = TermRetrievalSourceStore { fresh: false };
+        match resolve_against_family(
+            &family_freshness_request(),
+            &store,
+            &stale,
+            "family:python:fastapi_route:framework_fastapi_route",
+        )
+        .expect("against resolution")
+        {
+            AgainstFamilySelection::Abstain(candidates) => assert_eq!(
+                candidates,
+                vec!["family:python:fastapi_route:framework_fastapi_route".to_string()]
+            ),
+            AgainstFamilySelection::One(family_id) => {
+                panic!("a stale against must never select {family_id}")
+            }
+        }
+    }
+
+    #[test]
     fn term_retrieval_abstains_on_margin_tie() {
         let store = FakeFamilyStore::with_families(vec![
             term_family(
@@ -13317,6 +13484,7 @@ mod tests {
             &store,
             &source,
             Some("family:python:fastapi_route:framework_fastapi_route"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("exact lookup");
@@ -13335,6 +13503,7 @@ mod tests {
             &store,
             &source,
             Some("How are FastAPI routes implemented?"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("first");
@@ -13344,6 +13513,7 @@ mod tests {
             &store,
             &source,
             Some("How are FastAPI routes implemented?"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("second");
@@ -13404,6 +13574,7 @@ mod tests {
             &store,
             &source,
             Some(shared_member),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13450,6 +13621,7 @@ mod tests {
             &store,
             &source,
             Some("framework:fastapi.route"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13486,6 +13658,7 @@ mod tests {
             &store,
             &source,
             Some("How does fastapi.Depends injection work in fastapi routes?"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13590,6 +13763,7 @@ mod tests {
             &store,
             &source,
             Some("app/api"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13643,6 +13817,7 @@ mod tests {
             &store,
             &source,
             Some("app/api"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13718,6 +13893,7 @@ mod tests {
             // `route` is a pattern concept that only the fastapi route family
             // matches; the sqlalchemy model family is excluded by the intersection.
             Some("app/api route"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13746,6 +13922,7 @@ mod tests {
             &store,
             &source,
             Some("does/not/exist"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13773,6 +13950,7 @@ mod tests {
             &store,
             &source,
             Some("legacy/scripts"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13807,6 +13985,7 @@ mod tests {
             &store,
             &source,
             Some("family:python:one family:python:two"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");
@@ -13848,6 +14027,7 @@ mod tests {
             &store,
             &source,
             Some("pkg/sub"),
+            None,
             FamilyLookupMode::FuzzyQuery,
         )
         .expect("lookup");

@@ -106,6 +106,7 @@ pub trait McpReadOnlyRuntime {
         &self,
         request: RepositoryStatusRequest,
         target: Option<&str>,
+        against: Option<&str>,
         mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError>;
 
@@ -197,6 +198,10 @@ pub struct McpJsonRpcOutcome {
 struct ContextArguments {
     operation: McpOperation,
     target: Option<String>,
+    /// Optional caller-named comparison family scope. Additive to the closed input
+    /// schema; only meaningful for `explain_deviation` / `check_conformance`, where
+    /// it pins the comparison side to exactly one family.
+    against: Option<String>,
     output_options: FamilyOutputOptions,
     include_source_spans: bool,
 }
@@ -224,6 +229,12 @@ pub fn tool_schema() -> Value {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": MAX_MCP_TARGET_BYTES,
+                },
+                "against": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_MCP_TARGET_BYTES,
+                    "description": "Optional comparison-family scope for explain_deviation and check_conformance: an exact family: id, framework role, or pattern that pins the single comparison family. Omitted, the comparison family is inferred from the target unit's membership or its (language, kind, role) key. Ambiguous or unmatched against abstains with candidate handles; it never false-selects.",
                 },
                 "token_budget": {
                     "type": "integer",
@@ -309,6 +320,7 @@ pub fn handle_context_call(
         QueryPreflightReport::Ready => match runtime.family_lookup(
             request.clone(),
             arguments.target.as_deref(),
+            arguments.against.as_deref(),
             lookup_mode_for_operation(arguments.operation),
         ) {
             Ok(FamilyLookupReport::Found(family)) => {
@@ -621,11 +633,14 @@ fn alignment_outcome_status(
 fn lookup_mode_for_operation(operation: McpOperation) -> FamilyLookupMode {
     match operation {
         McpOperation::ShowFamily => FamilyLookupMode::ExactFamilyId,
-        McpOperation::FindAnalogues | McpOperation::ExplainDeviation => {
-            FamilyLookupMode::FuzzyQuery
+        McpOperation::FindAnalogues => FamilyLookupMode::FuzzyQuery,
+        // `explain_deviation` is no longer a `find` alias: it resolves the target
+        // to a code unit and a single comparison family and projects a real
+        // deviation certificate (`target_relationship`) through the shared
+        // two-sided static-alignment path, exactly as `check_conformance` does.
+        McpOperation::ExplainDeviation | McpOperation::CheckConformance => {
+            FamilyLookupMode::Conformance
         }
-        // check_conformance runs the static-alignment flow.
-        McpOperation::CheckConformance => FamilyLookupMode::Conformance,
         // inspect_readiness never enters the family-lookup path.
         McpOperation::InspectReadiness => {
             unreachable!("inspect_readiness is not a family-query operation")
@@ -884,6 +899,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             key.as_str(),
             "operation"
                 | "target"
+                | "against"
                 | "token_budget"
                 | "mode"
                 | "verbosity"
@@ -919,6 +935,32 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             ));
         }
     };
+    let against = match object.get("against") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_query_target(value).map_err(|error| {
+                McpProtocolError::invalid_params(format!("repogrammar_context against {error}"))
+            })?;
+            Some(value.clone())
+        }
+        Some(_) => {
+            return Err(McpProtocolError::invalid_params(
+                "repogrammar_context against must be a string when provided",
+            ));
+        }
+    };
+    // `against` names the comparison family for the two-sided operations only.
+    // Reject it elsewhere rather than silently ignoring it.
+    if against.is_some()
+        && !matches!(
+            operation,
+            McpOperation::ExplainDeviation | McpOperation::CheckConformance
+        )
+    {
+        return Err(McpProtocolError::invalid_params(
+            "repogrammar_context against is only valid with explain_deviation or check_conformance",
+        ));
+    }
     let token_budget = if let Some(token_budget) = object.get("token_budget") {
         let Some(value) = token_budget.as_u64() else {
             return Err(McpProtocolError::invalid_params(
@@ -997,6 +1039,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
     Ok(ContextArguments {
         operation,
         target,
+        against,
         output_options: FamilyOutputOptions {
             evidence_mode,
             token_budget,
@@ -2298,6 +2341,49 @@ mod tests {
     }
 
     #[test]
+    fn context_arguments_accept_against_only_for_two_sided_operations() {
+        // `against` is additive to the closed input schema and appears as a bounded
+        // string property.
+        let schema = tool_schema();
+        assert_eq!(
+            schema["inputSchema"]["properties"]["against"]["maxLength"],
+            MAX_MCP_TARGET_BYTES
+        );
+
+        // Accepted and captured for the two-sided operations.
+        for operation in ["explain_deviation", "check_conformance"] {
+            let parsed = parse_context_arguments(&json!({
+                "operation": operation,
+                "target": "unit:app/api/routes.py#fastapi_route:read:0-1:1",
+                "against": "family:python:fastapi_route:framework_fastapi_route",
+            }))
+            .expect("against accepted for two-sided operation");
+            assert_eq!(
+                parsed.against.as_deref(),
+                Some("family:python:fastapi_route:framework_fastapi_route")
+            );
+        }
+
+        // Rejected (never silently ignored) for other operations.
+        let rejected = parse_context_arguments(&json!({
+            "operation": "find_analogues",
+            "target": "src/routes/a.ts",
+            "against": "family:python:fastapi_route:framework_fastapi_route",
+        }))
+        .expect_err("against must be rejected for find_analogues");
+        assert_eq!(rejected.code(), -32602);
+
+        // Control characters / oversized against are rejected like target.
+        let oversized = "y".repeat(MAX_MCP_TARGET_BYTES + 1);
+        let bad = parse_context_arguments(&json!({
+            "operation": "check_conformance",
+            "against": oversized,
+        }))
+        .expect_err("oversized against must be rejected");
+        assert_eq!(bad.code(), -32602);
+    }
+
+    #[test]
     fn context_arguments_parse_verbosity_default_valid_and_invalid() {
         // Absent verbosity defaults to the byte-stable `standard` shape.
         let default = parse_context_arguments(&json!({"operation": "find_analogues"}))
@@ -2655,7 +2741,13 @@ mod tests {
 
         assert_eq!(response["status"], "UNKNOWN");
         assert_eq!(response["implemented"], true);
-        assert_eq!(response["query_route"]["route"], "discovery_unknown");
+        // `explain_deviation` now resolves through the shared two-sided
+        // static-alignment path (no longer a fuzzy `find` alias), so a
+        // Conformance-mode abstention names the conformance route.
+        assert_eq!(
+            response["query_route"]["route"],
+            "conformance_static_alignment"
+        );
         assert_eq!(
             response["query_route"]["family_id_policy"],
             "family_ids_are_returned_follow_up_handles_not_required_initial_inputs"
@@ -3647,6 +3739,7 @@ mod tests {
             &self,
             _request: RepositoryStatusRequest,
             target: Option<&str>,
+            _against: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             self.lookup_calls.set(self.lookup_calls.get() + 1);

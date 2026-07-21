@@ -230,6 +230,7 @@ pub trait CliRuntime {
         &self,
         _request: RepositoryStatusRequest,
         _target: Option<&str>,
+        _against: Option<&str>,
         _mode: FamilyLookupMode,
     ) -> Result<FamilyLookupReport, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("family"))
@@ -1199,6 +1200,12 @@ where
             format!("{command} does not accept --all; use an explicit --mode for query detail\n"),
         );
     }
+    if options.against.is_some() && !matches!(command, "explain" | "check") {
+        return CliOutput::failure(
+            2,
+            format!("{command} does not accept --against; --against names the comparison family for explain and check only\n"),
+        );
+    }
     let request = RepositoryStatusRequest {
         path: repository_root(current_dir, options.project_path.as_deref()),
         state_dir_override: state_dir_override(env_lookup),
@@ -1294,6 +1301,7 @@ where
             match runtime.family_lookup(
                 request.clone(),
                 options.target.as_deref(),
+                options.against.as_deref(),
                 lookup_mode_for_command(command),
             ) {
                 Ok(report) if options.json => {
@@ -1433,10 +1441,11 @@ fn lookup_mode_for_command(command: &str) -> FamilyLookupMode {
     match command {
         "family" => FamilyLookupMode::ExactFamilyId,
         "member" => FamilyLookupMode::ExactMemberId,
-        // `check` runs the static-alignment flow; `find`/`explain` stay on the
-        // shared fuzzy family-resolution pipeline.
-        "check" => FamilyLookupMode::Conformance,
-        "find" | "explain" => FamilyLookupMode::FuzzyQuery,
+        // `check` and `explain` both run the two-sided static-alignment flow:
+        // `explain` is no longer a `find` alias but a real deviation projection
+        // (`target_relationship`). `find` stays on the fuzzy discovery pipeline.
+        "check" | "explain" => FamilyLookupMode::Conformance,
+        "find" => FamilyLookupMode::FuzzyQuery,
         _ => FamilyLookupMode::FuzzyQuery,
     }
 }
@@ -7711,6 +7720,9 @@ fn handle_deferred_long_running(command: &str, options: &LifecycleOptions) -> Cl
 struct QueryOptions {
     project_path: Option<String>,
     target: Option<String>,
+    /// Optional caller-named comparison family scope (`--against`), meaningful only
+    /// for `explain` / `check`, where it pins the comparison side to one family.
+    against: Option<String>,
     json: bool,
     evidence_mode: FamilyEvidenceMode,
     mode_explicit: bool,
@@ -8403,6 +8415,12 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
             "--project" => {
                 let value = option_value(rest, index, "--project", "a project path")?;
                 set_project_path(&mut options.project_path, value)?;
+                index += 2;
+            }
+            "--against" => {
+                let value = option_value(rest, index, "--against", "a comparison family scope")?;
+                validate_query_target(value).map_err(|error| format!("--against {error}"))?;
+                options.against = Some(value.to_string());
                 index += 2;
             }
             "--token-budget" => {
@@ -11011,6 +11029,7 @@ mod tests {
             &self,
             _request: RepositoryStatusRequest,
             target: Option<&str>,
+            _against: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let matched = match mode {
@@ -11538,11 +11557,13 @@ mod tests {
             &self,
             request: RepositoryStatusRequest,
             target: Option<&str>,
+            against: Option<&str>,
             mode: FamilyLookupMode,
         ) -> Result<FamilyLookupReport, RepoGrammarError> {
             let store = self.store_for_status_request(&request)?;
-            // The conformance check needs the freshness gate and a source store,
-            // exactly like production; other modes keep the source-store-free path.
+            // The conformance/deviation flow needs the freshness gate and a source
+            // store, exactly like production; other modes keep the source-store-free
+            // path.
             if mode == FamilyLookupMode::Conformance {
                 return lookup_family_with_freshness_and_local_context(
                     crate::application::query::FamilyEvidenceFreshnessRequest {
@@ -11553,6 +11574,7 @@ mod tests {
                     &store,
                     &FilesystemSourceStore,
                     target,
+                    against,
                     mode,
                 );
             }
@@ -13747,6 +13769,49 @@ mod tests {
                 .expect("families detail option")
                 .all
         );
+    }
+
+    #[test]
+    fn query_options_parse_and_gate_against_scope() {
+        // `--against` parses into the query options as the comparison-family scope.
+        let parsed = parse_query_options(&[
+            "--against".to_string(),
+            "family:python:fastapi_route:framework_fastapi_route".to_string(),
+            "unit:app/api/routes.py#fastapi_route:read:0-1:1".to_string(),
+        ])
+        .expect("--against parses");
+        assert_eq!(
+            parsed.against.as_deref(),
+            Some("family:python:fastapi_route:framework_fastapi_route")
+        );
+
+        // `--against` validates its value like a target (rejects control text).
+        assert!(parse_query_options(&["--against".to_string(), "bad\nvalue".to_string()]).is_err());
+        // `--against` requires a value.
+        assert!(parse_query_options(&["--against".to_string()]).is_err());
+
+        // `explain`/`check` accept `--against`; other query commands reject it
+        // (never silently ignore) with a nonzero exit.
+        let workspace = TempWorkspace::new("cli-query-against-gate");
+        let env = |_: &str| None;
+        for command in ["find", "family", "member"] {
+            let output = run_with_context(
+                [
+                    command,
+                    "--against",
+                    "family:python:fastapi_route:framework_fastapi_route",
+                    "target",
+                ],
+                workspace.path(),
+                &env,
+            );
+            assert_eq!(output.status, 2, "{command} must reject --against");
+            assert!(
+                output.stderr.contains("does not accept --against"),
+                "{command} rejection message: {}",
+                output.stderr
+            );
+        }
     }
 
     #[test]

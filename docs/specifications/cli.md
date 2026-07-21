@@ -88,12 +88,24 @@ It is exact-family-id only and is intended for family ids returned by earlier
 `find`, `explain`, `check`, or `member` queries.
 
 `repogrammar explain` is the CLI equivalent of the `explain_deviation`
-operation.
+operation. It is no longer a `find` alias: it runs the same two-sided
+static-alignment resolution as `check` and projects a real deviation certificate.
+It resolves the target to exactly one indexed code unit, pins one comparison
+family, and projects a `target_relationship` — `MEMBER`, `LEGAL_VARIATION`,
+`NEAR_MISS`, `EXCEPTION`, `BLOCKED_UNKNOWN`, `OUT_OF_SCOPE`, or `INCOMPATIBILITY`
+(the reserved `COMPETING_PATTERN` token is emitted by no path) — whenever a unit
+and family both resolve, abstaining with a typed `INSUFFICIENT_EVIDENCE`/`UNKNOWN`
+and a `null` `selected_family_id` otherwise. It claims no runtime behavior
+(`runtime_equivalence: "UNKNOWN"`). `--include-variations` / `--include-exceptions`
+request the legal-variation and exception coverage labels. Pin one unit with a
+path, path:line, path:byte-range, or `unit:` locator; a bare path mapping to
+several family-eligible units abstains rather than guessing.
 
 `repogrammar check` is the CLI equivalent of the `check_conformance` operation.
 It is a source-backed *static-alignment* check, not a runtime-conformance
-verdict. It resolves the target to a specific indexed code unit, selects a
-comparison pattern family (the unit's own family when it is a member, otherwise
+verdict. It resolves the target to a specific indexed code unit, pins a
+comparison pattern family (the caller-named `--against` family when provided,
+otherwise the unit's own family when it is a member, otherwise
 the single fresh ready family of the unit's `(language, kind, role)` key), and
 compares the target's indexed feature profile against that family's constraint
 profile. The top-level `status` is one of the static-alignment tokens
@@ -114,6 +126,12 @@ All query commands must support:
 - `--include-variations`
 - `--include-exceptions`
 - `--include-source-spans`
+
+`explain` and `check` additionally accept `--against <scope>`, which pins the
+comparison family to exactly one family (an exact `family:` id, framework role, or
+pattern that resolves to the unique fresh ready family; an ambiguous or unmatched
+`--against` abstains with candidate handles and never false-selects). `--against`
+is rejected on any other query command rather than silently ignored.
 
 Successful `find`, `family`, `member`, `explain`, and `check` outputs include
 metadata-only `estimated_potential_token_savings` diagnostics with
@@ -1257,11 +1275,14 @@ stale listing is never turned into `status: UNKNOWN`. The freshness-free
 freshness) omits the `freshness` field and the counts.
 `family`, `member`, `find`, `explain`, and `check` accept the first positional
 operand as their target. `family <target>` is an exact family-id lookup.
-`member <target>` is an exact code-unit/member-id lookup. `find`, `explain`,
-and `check` use an internal `discover -> hydrate -> compose` loop over the
+`member <target>` is an exact code-unit/member-id lookup. `find` uses an
+internal `discover -> hydrate -> compose` loop over the
 target the caller already has: repo-relative paths or suffixes, exact
 member/code-unit ids, exact member roles, exact family ids, and supported
-query-safe pattern text. These commands may accept family ids, but family ids are
+query-safe pattern text. `explain` and `check` instead run the two-sided
+static-alignment path: they resolve the SUBJECT to exactly one code unit by
+locator and pin one COMPARISON family (via `--against` or inference), reusing that
+same family-discovery loop only for the comparison side. These commands may accept family ids, but family ids are
 not required initial inputs; returned family ids are follow-up handles for exact
 inspection. They must not treat short substrings such as a framework name,
 classification label, or directory fragment as a successful family match. When a

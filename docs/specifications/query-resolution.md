@@ -412,12 +412,17 @@ constants.
 
 ## Static-alignment check resolution
 
-The `check` operation (CLI `check`, MCP `check_conformance`,
-`FamilyLookupMode::Conformance`) reuses this resolution pipeline and layers a
-source-backed static-alignment certificate on top. It is implemented in
-`application::query::check_static_alignment` and decides the alignment with the
-single authority `application::conformance::compute_alignment`. It never proves
-runtime equivalence: every certificate carries `runtime_equivalence: UNKNOWN`.
+The two-sided static-alignment operations (`FamilyLookupMode::Conformance`) —
+`check` (CLI `check`, MCP `check_conformance`) and `explain` (CLI `explain`, MCP
+`explain_deviation`) — reuse this resolution pipeline and layer a source-backed
+static-alignment certificate on top. Both are implemented in
+`application::query::check_static_alignment` and decide the alignment with the
+single authority `application::conformance::compute_alignment`; they differ only in
+the `command`/`operation` label and emphasis, not in the resolution or projection.
+`explain` is no longer a `find` alias: it produces the same certificate, so it
+always carries a real `target_relationship` when a unit and family both resolve.
+Neither ever proves runtime equivalence: every certificate carries
+`runtime_equivalence: UNKNOWN`.
 
 Resolution proceeds in three deterministic stages:
 
@@ -438,13 +443,21 @@ Resolution proceeds in three deterministic stages:
    - a target that matches no indexed file/unit, or whose locator contains no unit,
      abstains without a certificate.
 
-2. **Comparison-family selection.** When the resolved unit is a member
-   (`find_active_families_by_member`), its own family is the comparison family
-   (`MEMBER`). When it is a non-member, the single fresh ready family of its
-   `(language, kind, role)` key is selected from the source-free
-   `list_active_family_search_summaries` projection. Multiple plausible families
-   abstain with `INSUFFICIENT_EVIDENCE` and candidate ids; no family for the key,
-   or a target with no supported role or non-eligible kind, abstains
+2. **Comparison-family selection.** Exactly one comparison family is pinned before
+   any `compute_alignment` call. When the caller supplies the optional `against`
+   scope, it pins the comparison side directly: `against` is resolved through the
+   shared family-resolution authority (`resolve_against_family`, reusing the exact
+   `family:` id / framework-role / pattern discovery plus the freshness gate) to
+   **exactly one** fresh ready family; an ambiguous or unmatched `against` abstains
+   with `INSUFFICIENT_EVIDENCE` and bounded candidate handles, never a false
+   selection. With `against` present, `MEMBER` is decided by whether the resolved
+   subject unit is a member of the caller-named family. When `against` is omitted
+   and the resolved unit is a member (`find_active_families_by_member`), its own
+   family is the comparison family (`MEMBER`); when it is a non-member, the single
+   fresh ready family of its `(language, kind, role)` key is selected from the
+   source-free `list_active_family_search_summaries` projection. Multiple plausible
+   families abstain with `INSUFFICIENT_EVIDENCE` and candidate ids; no family for
+   the key, or a target with no supported role or non-eligible kind, abstains
    `OUT_OF_SCOPE`; a stale comparison family abstains with `StaleEvidence`. A
    selected family is **never** surfaced for an abstaining outcome (the field is
    structurally `None`), so an abstention is never telemetered as a resolved
@@ -502,12 +515,14 @@ observed among an untruncated enumeration.
 
 The non-member relationship is classified deterministically as `BLOCKED_UNKNOWN`
 (a blocking unknown prevented membership), `EXCEPTION` (a required-feature
-violation against the only ready family of its key — source-backed negative
-evidence), or `NEAR_MISS` (satisfies every required constraint but was not
-admitted); `OUT_OF_SCOPE` names an unsupported kind/role. `COMPETING_PATTERN` is
-**reserved and not yet emitted**: a member always compares against its own family,
-so no current path constructs it. Deviation summaries are RepoGrammar feature
-TOKENS, never repository source text.
+violation against the comparison family — source-backed negative evidence), or
+`NEAR_MISS` (satisfies every required constraint but was not admitted);
+`OUT_OF_SCOPE` names an unsupported kind/role. This non-member classification also
+covers a caller-named `against` family the subject is not a member of (e.g. a
+member of one family compared against a different named family). `COMPETING_PATTERN`
+is **reserved and not yet emitted**: no current path — including `against` — ever
+constructs it. Deviation summaries are RepoGrammar feature TOKENS, never repository
+source text.
 
 ### Certificate serialization: scale guard and duplicate handles
 
