@@ -46,12 +46,18 @@ exact identifier.
    preconditions still hold (a path-shaped target resolving to one indexed file or
    unit), the existing `PARTIAL_CONTEXT` local-context fallback still applies.
 4. **Directory / composite scope resolution.** When every earlier stage still
-   abstained with an empty-candidate `query target` block and the parsed target
+   abstained on a `query target` block and the parsed target
    named a directory scope (a `/`-containing token that is not a file locator,
    e.g. `src/rust/interfaces/cli`) — alone or combined with concept, framework, or
    language ranking signals — the scope is resolved deterministically (see below).
-   A non-directory target with no hard-constraint conflict flows through this stage
-   unchanged, so every prior outcome is byte-identical.
+   The explicit `/`-scope and conflict sub-cases act only on a **clean**
+   empty-candidate abstention, exactly as before. A non-directory target with no
+   hard-constraint conflict flows through this stage unchanged, so every prior
+   outcome is byte-identical, **except** the bare-directory fallback probe: a
+   still-abstaining single whitespace-free bareword (no `/`, no exact
+   `family:`/`unit:`/path lock, no conflict) that names a **real** indexed
+   directory now resolves as a directory scope instead of returning UNKNOWN (see
+   *Bare-directory fallback* below).
 
 ### Directory and composite scope resolution
 
@@ -113,6 +119,48 @@ it. Stage 4 acts on the SCOPE tier:
   `resolution.cardinality = "truncated"`, surfacing the families seen so far as
   bounded candidates with the truncation stated in the source-free recovery text.
 
+#### Bare-directory fallback
+
+A directory scope in the SCOPE tier requires an interior `/` (a multi-segment
+token such as `backend/app/api`). A **bare single-segment** token like `backend`
+or `src` carries no `/` and no `.`, so `parse_target` keeps it a
+`NaturalLanguage` target for ranking and it never enters the SCOPE tier. To let
+`find backend` resolve the families under a real top-level `backend/` directory
+without hijacking single-word concept or natural-language queries, stage 4 adds a
+**fallback-time probe** that runs **last**, only on a still-abstaining `query
+target` UNKNOWN — after the exact/role/evidence layers **and** term retrieval have
+already declined. This ordering is the safety guarantee: a single word that is a
+resolvable concept or framework is answered by term retrieval first and never
+reaches the probe.
+
+The probe fires only for a bareword that pins no exact identity (`family:`,
+`unit:`, or a path locator), names no `/`-containing scope, and carries no
+hard-constraint conflict (`bare_directory_candidate`). Because a bare
+directory-name token residue-matches the path components of the families it
+contains, term retrieval typically abstains **with** below-selection-floor residue
+candidates rather than an empty set; the probe therefore keys on the shared
+`query target` abstention shape (`is_query_target_abstention`) regardless of those
+below-floor candidates — a candidate-set-too-broad, ambiguity, or stale-evidence
+block still passes through untouched, and the explicit `/`-scope and conflict
+paths keep their original clean-abstention (empty-candidate) gate, so their
+outcomes are byte-identical.
+
+The candidate token is safety-checked with the shared per-segment authority
+(`is_safe_path_segment`, factored out of `is_safe_query_path_text`), which rejects
+`.`/`..`, a backslash, a control character, and the empty string. Path-likeness —
+which `is_safe_query_path_text` additionally demands of a full path and which a
+bareword lacks by construction — is instead established by the bounded index read:
+the token is probed once through `list_active_files_in_directory`, and **only if
+the read returns real indexed files** (in the active generation) is it fed into the
+**same** `resolve_directory_scope` path as an explicit prefix. A token that names
+no indexed directory reads to **zero files** and the abstention is returned
+**unchanged** (the natural-language interpretation is preserved — never converted
+into the "empty directory scope" UNKNOWN an explicit prefix produces). A resolved
+bare directory then yields the identical `one → FOUND` /
+`heterogeneous → candidates (no selection)` / `familyless → PARTIAL_CONTEXT` /
+`truncated` classification, reusing the same generation-consistency, safety, and
+truncation logic — zero false family selection.
+
 A resolved family detail carries a hydrated, metadata-only `constraint_profile`
 (the source-backed specification, or `null` when none was persisted) and a
 `read_plan` whose purposes follow representative selection: `canonical_evidence`
@@ -149,9 +197,11 @@ discipline. Unlike the query path, it only COUNTS: it never hydrates, selects, o
 projects a family, never reads source content, and records no telemetry. It
 therefore surfaces the scope's indexed-file coverage, languages present, and the
 count of families whose evidence occupies the scope as a bounded queryability
-report, without ever selecting a family. As in the query path, a bare
-single-segment token that carries no `/` or `.` is not a path-like scope and reads
-to an empty scope.
+report, without ever selecting a family. Scoped readiness normalizes with
+`normalize_directory_prefix`/`is_safe_query_path_text`, so — unlike the query
+path's bare-directory fallback — a bare single-segment token that carries no `/`
+or `.` is not a path-like scope and reads to an empty scope (`not_indexed`); the
+bare-directory probe is a query-path fallback only and is not reused here.
 
 ### Abstention gates and reasons
 

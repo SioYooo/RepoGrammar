@@ -9,6 +9,20 @@ CLI behavior until this work is published under a new patch-forward version.
 
 ### Added
 
+- Added a fallback-time bare-directory resolution to the query path: a bare
+  single-segment target (e.g. `find backend`) that names a real top-level indexed
+  directory now resolves the pattern families under it instead of returning
+  `UNKNOWN`. The probe runs last — only after the exact/role/evidence layers and
+  term retrieval have already abstained — and resolves only when a bounded index
+  read finds real files under the token, reusing the existing
+  `resolve_directory_scope` classification (single → `FOUND`, heterogeneous →
+  candidates with no selection, familyless → `PARTIAL_CONTEXT`, truncated → no
+  selection). A bareword that is not a real indexed directory (including every
+  single-word concept or natural-language query) reads to zero files and the
+  abstention is preserved unchanged, so natural-language queries are never
+  hijacked and no family is ever falsely selected. Multi-segment directory scopes,
+  path locators, exact ids, concepts, and scoped readiness are unchanged. See
+  `docs/specifications/query-resolution.md` (*Bare-directory fallback*).
 - Added an atomic product installation receipt at
   `$DATA_DIR/receipts/product-install.json`. First-party shell, PowerShell, and
   Rust installation paths share the same ownership writer and record the exact

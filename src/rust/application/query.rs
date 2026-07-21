@@ -4123,16 +4123,32 @@ fn term_retrieval_fallback(
 /// (`query target ambiguity`) blocks both carry candidate ids and must pass
 /// through untouched, so they are excluded here.
 fn term_retrieval_eligible(report: &FamilyUnknownReport) -> bool {
-    report.candidate_family_ids.is_empty()
-        && matches!(
-            report.unknowns.as_slice(),
-            [FamilyQueryUnknown {
-                class: UnknownClass::Blocking,
-                reason: UnknownReasonCode::InsufficientSupport,
-                affected_claim,
-                ..
-            }] if affected_claim == "query target"
-        )
+    report.candidate_family_ids.is_empty() && is_query_target_abstention(report)
+}
+
+/// True when the report is the single, blocking `query target` `InsufficientSupport`
+/// abstention that the exact/role/evidence layers and term retrieval raise when
+/// they cannot support a claim — the shared shape both [`term_retrieval_eligible`]
+/// and the directory-scope fallback key on.
+///
+/// Unlike [`term_retrieval_eligible`], this authority ignores
+/// [`FamilyUnknownReport::candidate_family_ids`]: a term-retrieval abstention may
+/// carry below-selection-floor residue candidates (a bare directory-name token
+/// residue-matches the path components of the families it contains), yet it is
+/// still an abstention — term retrieval selected nothing. It excludes the
+/// candidate-set-too-broad (`query target candidate set`), ambiguity
+/// (`query target ambiguity`), and stale-evidence blocks, which carry their own
+/// claims and must pass through untouched.
+fn is_query_target_abstention(report: &FamilyUnknownReport) -> bool {
+    matches!(
+        report.unknowns.as_slice(),
+        [FamilyQueryUnknown {
+            class: UnknownClass::Blocking,
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim,
+            ..
+        }] if affected_claim == "query target"
+    )
 }
 
 /// Known repository source-file extensions that mark a bare (slash-free) token
@@ -4568,42 +4584,138 @@ fn directory_scope_fallback(
     if mode != FamilyLookupMode::FuzzyQuery {
         return Ok(report);
     }
-    // Only act on a still-empty abstention. A candidate-set, ambiguity, or
-    // stale-evidence block keeps its own claim, candidates, and recovery verbatim.
+    // Both directory-scope paths act only on the term-retrieval `query target`
+    // abstention. A candidate-set, ambiguity, or stale-evidence block keeps its own
+    // claim, candidates, and recovery verbatim.
     let FamilyLookupReport::Unknown(ref unknown) = report else {
         return Ok(report);
     };
-    if !term_retrieval_eligible(unknown) {
+    if !is_query_target_abstention(unknown) {
         return Ok(report);
     }
     let active_generation = unknown.active_generation.clone();
 
-    // A hard-constraint conflict (multiple family/unit ids, or mixed) is surfaced
-    // as a typed conflict — never a union, never a silently-dropped constraint.
-    if let Some(conflict) = constraints.conflicts.first() {
-        return Ok(target_conflict_report(active_generation, conflict));
+    // Explicit `/`-containing directory scopes and hard-constraint conflicts are
+    // resolved only on a CLEAN abstention (no candidate ids), exactly as before —
+    // a below-min residue candidate on such a target must keep its own report.
+    if term_retrieval_eligible(unknown) {
+        // A hard-constraint conflict (multiple family/unit ids, or mixed) is
+        // surfaced as a typed conflict — never a union, never a silently-dropped
+        // constraint.
+        if let Some(conflict) = constraints.conflicts.first() {
+            return Ok(target_conflict_report(active_generation, conflict));
+        }
+        if !constraints.scope.directory_prefixes.is_empty() {
+            // Normalize + safety-check every prefix; an unsafe prefix is never read.
+            let prefixes: Vec<String> = constraints
+                .scope
+                .directory_prefixes
+                .iter()
+                .filter_map(|prefix| normalize_directory_prefix(prefix))
+                .collect();
+            if prefixes.is_empty() {
+                return Ok(report);
+            }
+            return report_directory_scope(
+                request,
+                index_store,
+                family_store,
+                source_store,
+                report,
+                constraints,
+                &prefixes,
+                active_generation,
+            );
+        }
     }
 
-    // Nothing to resolve unless the target named a directory scope.
-    if constraints.scope.directory_prefixes.is_empty() {
+    // Bare-directory probe. A still-abstaining, single whitespace-free bareword
+    // that pins no exact identity and names no `/`-containing scope (so it stays a
+    // NaturalLanguage target for ranking) is probed — LAST, after every other
+    // interpretation abstained — as a candidate top-level directory. A pattern
+    // concept or framework word that term retrieval could resolve was already
+    // resolved above and never reaches here; a bareword that is NOT a real indexed
+    // directory reads to zero files and the abstention is preserved unchanged, so
+    // natural-language queries are never hijacked and no family is ever selected
+    // that the directory-scope resolver cannot prove.
+    let Some(token) = bare_directory_candidate(constraints) else {
+        return Ok(report);
+    };
+    // A bare single segment carries no `/`, so it needs no `/`-normalization; apply
+    // the same per-segment safety the path-text authority enforces. An unsafe token
+    // (`.`/`..`, backslash, control) is never read.
+    if !is_safe_path_segment(token) {
         return Ok(report);
     }
-    // Normalize + safety-check every prefix; an unsafe prefix is never read.
-    let prefixes: Vec<String> = constraints
-        .scope
-        .directory_prefixes
-        .iter()
-        .filter_map(|prefix| normalize_directory_prefix(prefix))
-        .collect();
-    if prefixes.is_empty() {
+    let scoped = index_store
+        .list_active_files_in_directory(token, DIRECTORY_SCOPE_FILE_LIMIT)
+        .map_err(index_store_error)?;
+    // A resync between the exact layers and this probe, or a token that is not a
+    // real indexed directory, both leave the abstention unchanged.
+    if scoped.generation_id != active_generation || scoped.files.is_empty() {
         return Ok(report);
     }
+    let prefixes = vec![token.to_string()];
+    report_directory_scope(
+        request,
+        index_store,
+        family_store,
+        source_store,
+        report,
+        constraints,
+        &prefixes,
+        active_generation,
+    )
+}
 
+/// The candidate bare-directory token for the fallback-time directory probe: the
+/// single whitespace-free bareword of a still-abstaining target that pins no exact
+/// identity (`family:`/`unit:`/path locator), names no `/`-containing directory
+/// scope, and carries no hard-constraint conflict. Returns `None` for anything
+/// else, so multi-token prose, explicit directory scopes, path locators, and exact
+/// ids never enter the bare probe. Purely a fallback-time read of the already
+/// parsed [`TargetConstraints`]; it never reclassifies the target's form.
+fn bare_directory_candidate(constraints: &TargetConstraints) -> Option<&str> {
+    if !constraints.conflicts.is_empty()
+        || !constraints.scope.directory_prefixes.is_empty()
+        || constraints.hard.family_id.is_some()
+        || constraints.hard.unit_id.is_some()
+        || !constraints.hard.path_locators.is_empty()
+        || constraints.is_unit_prefixed()
+    {
+        return None;
+    }
+    let mut tokens = constraints.original.split_whitespace();
+    let token = tokens.next()?;
+    if tokens.next().is_some() || token.contains('/') {
+        return None;
+    }
+    Some(token)
+}
+
+/// Resolve the safe directory `prefixes` through the shared, generation-checked,
+/// bounded scope resolver and project the single deterministic outcome vocabulary
+/// (FOUND / candidates-no-select / PARTIAL_CONTEXT / typed conflict / empty). The
+/// one authority both the explicit `/`-scope path and the bare-directory probe
+/// route through, so neither forks the classification, safety, or truncation
+/// logic. `report` is the untouched abstention returned verbatim on a
+/// generation mismatch.
+#[allow(clippy::too_many_arguments)]
+fn report_directory_scope(
+    request: &FamilyEvidenceFreshnessRequest,
+    index_store: &impl IndexStore,
+    family_store: &(impl FamilyStore + FamilyConstraintProfileStore),
+    source_store: &impl SourceStore,
+    report: FamilyLookupReport,
+    constraints: &TargetConstraints,
+    prefixes: &[String],
+    active_generation: String,
+) -> Result<FamilyLookupReport, RepoGrammarError> {
     match resolve_directory_scope(
         index_store,
         family_store,
         constraints,
-        &prefixes,
+        prefixes,
         &active_generation,
     )? {
         DirectoryScopeResolution::GenerationMismatch => Ok(report),
@@ -4614,7 +4726,7 @@ fn directory_scope_fallback(
         // Resolved locus, no family: PARTIAL_CONTEXT + resolution `none`.
         DirectoryScopeResolution::Familyless { files } => Ok(directory_scope_partial_context(
             active_generation,
-            &prefixes,
+            prefixes,
             files,
             Vec::new(),
             Resolution {
@@ -4641,7 +4753,7 @@ fn directory_scope_fallback(
                 .collect();
             Ok(directory_scope_partial_context(
                 active_generation,
-                &prefixes,
+                prefixes,
                 files,
                 candidate_family_ids,
                 Resolution {
@@ -5521,12 +5633,25 @@ pub(crate) fn is_safe_query_path_text(path: &str) -> bool {
     !path.is_empty()
         && (path.contains('/') || path.contains('.'))
         && !path.starts_with('/')
-        && !path.contains('\\')
         && !path.contains("://")
-        && !path.chars().any(char::is_control)
-        && path
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+        && path.split('/').all(is_safe_path_segment)
+}
+
+/// A single repo-relative path segment is safe when it is non-empty, is not a
+/// `.`/`..` traversal, and carries no backslash or control character.
+///
+/// The shared segment authority: [`is_safe_query_path_text`] applies it to every
+/// `/`-split segment, and the fallback-time bare-directory probe applies it to a
+/// lone bareword. A bare directory token intentionally lacks the `/`-or-`.`
+/// path-likeness signal [`is_safe_query_path_text`] additionally demands; for the
+/// probe, path-likeness is instead established by the bounded index read returning
+/// real indexed files, while these per-segment security rejections still apply.
+pub(crate) fn is_safe_path_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && !segment.contains('\\')
+        && !segment.chars().any(char::is_control)
 }
 
 pub(crate) fn target_identifier_tokens(target: &str) -> Vec<&str> {
@@ -14439,6 +14564,203 @@ mod tests {
         assert!(recovery.contains("truncated"), "recovery: {recovery}");
         let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
         assert!(route.selected_family_id.is_none());
+    }
+
+    #[test]
+    fn bare_single_segment_directory_resolves_found() {
+        // A bare, single-segment token that names a REAL top-level indexed
+        // directory now resolves to the single family under it instead of the
+        // natural-language UNKNOWN it produced before. Note the token `backend`
+        // residue-matches the family's path component, so term retrieval abstains
+        // WITH a below-min candidate — the bare probe still resolves it.
+        let index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("backend/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "backend/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("backend"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Found(family) = &report else {
+            panic!("expected Found for a bare indexed directory, got {report:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        let resolution = family.resolution.as_ref().expect("one resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::One);
+        assert_eq!(resolution.candidates.len(), 1);
+    }
+
+    #[test]
+    fn bare_single_segment_heterogeneous_directory_never_false_selects() {
+        // A bare token naming a REAL heterogeneous directory surfaces both families
+        // as bounded candidate handles with NO selected family — zero false select,
+        // exactly as a multi-segment directory does.
+        let index = FakeStore::new(Vec::new()).with_files(vec![
+            indexed_file("backend/routes.py"),
+            indexed_file("backend/models.py"),
+        ]);
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:python:fastapi_route:framework_fastapi_route",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "backend/routes.py",
+            ),
+            term_family(
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+                "framework:sqlalchemy.model",
+                "DOMINANT_PATTERN",
+                "backend/models.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("backend"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::PartialContext(partial) = &report else {
+            panic!("expected PartialContext candidates, got {report:?}");
+        };
+        let resolution = partial.resolution.as_ref().expect("many resolution");
+        assert_eq!(resolution.cardinality, ResolutionCardinality::Many);
+        let candidate_ids: Vec<&str> = resolution
+            .candidates
+            .iter()
+            .map(|candidate| candidate.family_id.as_str())
+            .collect();
+        assert_eq!(
+            candidate_ids,
+            vec![
+                "family:python:fastapi_route:framework_fastapi_route",
+                "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+            ]
+        );
+        // No selected family — zero false selection.
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+    }
+
+    #[test]
+    fn bare_token_that_is_not_a_directory_stays_unknown() {
+        // A bare token that names NO indexed directory reads to zero files: the
+        // abstention is preserved verbatim and the natural-language interpretation
+        // is never hijacked into a fabricated scope or family.
+        let index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("backend/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "backend/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            // `widgets` matches no indexed directory prefix.
+            Some("widgets"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("expected the abstention preserved, got {report:?}");
+        };
+        // The term-retrieval abstention (never a directory-scope claim) survives.
+        assert_eq!(unknown.unknowns[0].affected_claim, "query target");
+        assert!(unknown.term_retrieval.is_some());
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+    }
+
+    #[test]
+    fn bare_concept_word_is_not_hijacked_into_a_directory() {
+        // A bare token that IS a pattern concept (`route`) but names NO indexed
+        // directory stays the concept/natural-language abstention: term retrieval
+        // recognized the concept and abstained (a bare concept scores below the
+        // selection floor), the bare probe found no `route/` subtree, and the
+        // report is preserved — no directory scope, no selected family.
+        let index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("backend/api/routes.py")]);
+        let store = FakeFamilyStore::with_families(vec![term_family(
+            "family:python:fastapi_route:framework_fastapi_route",
+            "framework:fastapi.route",
+            "DOMINANT_PATTERN",
+            "backend/api/routes.py",
+        )]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        let report = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &index,
+            &store,
+            &source,
+            Some("route"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Unknown(unknown) = &report else {
+            panic!("a bare concept word must not resolve to a directory, got {report:?}");
+        };
+        assert_eq!(unknown.unknowns[0].affected_claim, "query target");
+        // Term retrieval saw the concept and abstained below the selection floor.
+        let term = unknown.term_retrieval.as_ref().expect("term route");
+        assert_eq!(
+            term.abstention_reason,
+            Some(TermRetrievalAbstention::BelowMinScore)
+        );
+        let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+        assert!(route.selected_family_id.is_none());
+
+        // Ordering guarantee: a query term retrieval CAN resolve is answered by
+        // term retrieval and never reaches the bare-directory probe — the scoped
+        // read is never taken. A fresh index isolates the read counter.
+        let fresh_index =
+            FakeStore::new(Vec::new()).with_files(vec![indexed_file("backend/api/routes.py")]);
+        let resolved = lookup_family_with_freshness_and_local_context(
+            family_freshness_request(),
+            &fresh_index,
+            &store,
+            &source,
+            Some("How are FastAPI routes implemented?"),
+            None,
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("lookup");
+        let FamilyLookupReport::Found(family) = &resolved else {
+            panic!("expected term-retrieval Found, got {resolved:?}");
+        };
+        assert_eq!(
+            family.family_id,
+            "family:python:fastapi_route:framework_fastapi_route"
+        );
+        assert_eq!(
+            fresh_index.scoped_file_reads(),
+            0,
+            "term-retrieval Found must not reach the bare-directory probe"
+        );
     }
 
     // -----------------------------------------------------------------------
