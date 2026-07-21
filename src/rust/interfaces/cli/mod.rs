@@ -653,7 +653,7 @@ fn full_usage() -> String {
         "  repogrammar <command> -h",
         "",
         "Project lifecycle:",
-        "  setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
+        "  setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
         "      Complete agent wiring, repository indexing, autosync, and MCP self-test in one plan.",
         "  init [--project <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
         "      Create repo-local state, build the active index, and start autosync by default.",
@@ -703,8 +703,8 @@ fn full_usage() -> String {
         "Agent integration:",
         "  serve [--project <path>]",
         "      Run the read-only MCP stdio server from the product binary.",
-        "  install [--target <agent[,agent]>] [--scope global|project-local] [--dry-run] [--yes] [--print-config [agent]]",
-        "      Configure RepoGrammar as a read-only MCP server for agents.",
+        "  install [--target <agent[,agent]>] [--scope global|project-local] [--dry-run] [--yes] [--print-config [agent]] [--no-instructions]",
+        "      Configure RepoGrammar as a read-only MCP server for agents and wire the pre-flight gate into agent instructions.",
         "  disconnect [--target <agent[,agent]>] [--scope global|project-local] [--dry-run] [--yes] [--print-config [agent]] [--json]",
         "      Remove only receipt-owned RepoGrammar coding-agent integrations.",
         "  uninstall [--dry-run] [--yes] [--json]",
@@ -742,9 +742,10 @@ fn help_text(lines: &[&str]) -> String {
 pub fn command_usage(command: &str) -> Option<String> {
     match command {
         "setup" => Some(help_text(&[
-            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
+            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
             "",
             "Builds one reversible onboarding plan, asks once, then wires a detected agent, initializes and indexes the repository, starts autosync, and verifies the read-only MCP server.",
+            "Wiring an agent also adds RepoGrammar's marker-fenced pre-flight gate to its global instruction file by default; use --no-instructions to register the MCP server only.",
             "Telemetry remains off. Missing agents do not prevent repository-only setup. Foreign or malformed integration is never overwritten.",
             "",
             "Options:",
@@ -753,6 +754,7 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --yes                             Confirm the complete plan noninteractively.",
             "  --dry-run                         Inspect the plan without any writes.",
             "  --no-autosync                     Build the active index without starting background sync.",
+            "  --no-instructions                 Wire the MCP server without writing the pre-flight gate to the agent's instruction file.",
             "  --json                            Emit one machine-readable result object.",
             "  --progress auto|always|never      Control indexing progress on stderr.",
         ])),
@@ -1098,10 +1100,11 @@ fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
 
 fn install_usage(command: &str, summary: &str) -> String {
     help_text(&[
-        &format!("Usage: repogrammar {command} [--target <target[,target]>] [--scope global|project-local] [--location global|local] [--dry-run] [--yes] [--print-config [target]] [--telemetry|--no-telemetry] [--no-permissions]"),
+        &format!("Usage: repogrammar {command} [--target <target[,target]>] [--scope global|project-local] [--location global|local] [--dry-run] [--yes] [--print-config [target]] [--telemetry|--no-telemetry] [--no-permissions] [--no-instructions]"),
         "",
         summary,
         "Installer commands configure agent integration only; they do not initialize, index, or rewrite .repogrammar/.",
+        "By default install also adds RepoGrammar's marker-fenced pre-flight gate to each live agent's global instruction file (~/.codex/AGENTS.md, ~/.claude/CLAUDE.md); the write is reversible via disconnect and never overwrites a foreign section.",
         "",
         "Targets:",
         "  auto, all, none, codex, claude-code, claude, cursor, opencode, hermes, gemini, antigravity, kiro",
@@ -1115,6 +1118,7 @@ fn install_usage(command: &str, summary: &str) -> String {
         "  --print-config [target]             Print MCP config snippet without live writes.",
         "  --telemetry, --no-telemetry         Explicit anonymous telemetry consent choice for install.",
         "  --no-permissions                   Reserve no extra permission prompts.",
+        "  --no-instructions                  Register the MCP server without writing the pre-flight gate to the agent's instruction file. Override the target path with REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>.",
     ])
 }
 
@@ -3799,7 +3803,10 @@ where
         targets: &[AgentTarget],
     ) -> Result<SetupAgentMutation, SetupOperationError> {
         self.runtime
-            .install_agent_integration(setup_install_request(targets), self.install_context.clone())
+            .install_agent_integration(
+                setup_install_request(targets, self.options.no_instructions),
+                self.install_context.clone(),
+            )
             .map(|outcome| SetupAgentMutation {
                 newly_configured: outcome.configured_targets,
                 reconfigured: outcome.reconfigured_targets,
@@ -3919,6 +3926,7 @@ where
     request.target = options.target;
     request.dry_run = options.dry_run;
     request.autosync = options.autosync;
+    request.write_instructions = !options.no_instructions;
     let plan = match plan_setup(request, &probe) {
         Ok(plan) => plan,
         Err(failure) => return setup_planning_error(options.json, failure.stage, failure.class),
@@ -3972,7 +3980,7 @@ where
     }
 }
 
-fn setup_install_request(targets: &[AgentTarget]) -> InstallRequest {
+fn setup_install_request(targets: &[AgentTarget], no_instructions: bool) -> InstallRequest {
     InstallRequest {
         target: if targets.len() == supported_concrete_targets().len() {
             AgentTarget::AllSupported
@@ -3983,6 +3991,7 @@ fn setup_install_request(targets: &[AgentTarget]) -> InstallRequest {
         assume_yes: true,
         telemetry_enabled: false,
         telemetry_explicitly_configured: false,
+        no_instructions,
         selected_targets: targets.to_vec(),
         ..InstallRequest::default()
     }
@@ -4049,6 +4058,13 @@ fn setup_plan_human(plan: &SetupPlan) -> String {
             setup_stage_label(action.stage),
             setup_disposition_label(action.disposition)
         ));
+    }
+    if plan.request().write_instructions {
+        output.push_str(
+            "- agent instructions: add RepoGrammar pre-flight gate to each agent's global instruction file (~/.codex/AGENTS.md, ~/.claude/CLAUDE.md); reversible via disconnect\n",
+        );
+    } else {
+        output.push_str("- agent instructions: skipped (--no-instructions)\n");
     }
     output.push_str("- telemetry: unchanged by setup; off by default\n");
     output.push_str("- rollback: only changes created and owned by this run\n");
@@ -4180,6 +4196,7 @@ fn setup_outcome_json(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
         "status": setup_outcome_status_token(outcome.status),
         "target": setup_target_token(plan.request().target),
         "autosync_requested": plan.request().autosync,
+        "instructions_requested": plan.request().write_instructions,
         "telemetry_changed": false,
         "telemetry_enabled_by_setup": false,
         "ready_agent_targets": ready_agent_targets.iter().map(|target| target.as_str()).collect::<Vec<_>>(),
@@ -5281,7 +5298,20 @@ where
     }
     targets
         .into_iter()
-        .flat_map(|target| target_adapter(target).describe_paths(request.scope, env_lookup))
+        .flat_map(|target| {
+            let adapter = target_adapter(target);
+            if request.no_instructions {
+                vec![
+                    adapter.native_plan_line(request.scope),
+                    format!(
+                        "instruction: opt-out; --no-instructions skips the {} pre-flight gate write",
+                        adapter.target_id()
+                    ),
+                ]
+            } else {
+                adapter.describe_paths(request.scope, env_lookup)
+            }
+        })
         .collect()
 }
 
@@ -8272,6 +8302,7 @@ struct SetupCliOptions {
     yes: bool,
     dry_run: bool,
     autosync: bool,
+    no_instructions: bool,
     json: bool,
     progress: ProgressMode,
 }
@@ -8284,6 +8315,7 @@ impl Default for SetupCliOptions {
             yes: false,
             dry_run: false,
             autosync: true,
+            no_instructions: false,
             json: false,
             progress: ProgressMode::Auto,
         }
@@ -8530,6 +8562,10 @@ fn parse_setup_options(rest: &[String]) -> Result<SetupCliOptions, String> {
             }
             "--no-autosync" => {
                 options.autosync = false;
+                index += 1;
+            }
+            "--no-instructions" => {
+                options.no_instructions = true;
                 index += 1;
             }
             "--json" => {
@@ -9137,6 +9173,10 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
             }
             "--no-permissions" => {
                 request.no_permissions = true;
+                index += 1;
+            }
+            "--no-instructions" => {
+                request.no_instructions = true;
                 index += 1;
             }
             other => return Err(format!("unknown installer option: {other}")),
@@ -12690,7 +12730,58 @@ mod tests {
         assert_eq!(value["telemetry_changed"], false);
         assert_eq!(value["telemetry_enabled_by_setup"], false);
         assert_eq!(value["limitations"][0], "no_live_agent");
+        assert_eq!(value["instructions_requested"], true);
         assert!(!project.path().join(DEFAULT_STATE_DIR).exists());
+        assert_eq!(fs::read_dir(home.path()).expect("home").count(), 0);
+    }
+
+    #[test]
+    fn setup_dry_run_plan_reports_instruction_wiring_and_opt_out() {
+        let project = TempWorkspace::new("cli-setup-instruction-plan-project");
+        let home = TempWorkspace::new("cli-setup-instruction-plan-home");
+        let env = |key: &str| match key {
+            "HOME" => Some(home.path().display().to_string()),
+            "PATH" => Some(String::new()),
+            _ => None,
+        };
+
+        let default_plan = run_with_context_and_runtime(
+            [
+                "setup",
+                "--target",
+                "auto",
+                "--dry-run",
+                "--progress",
+                "never",
+            ],
+            project.path(),
+            &env,
+            &TestRuntime,
+        );
+        assert_eq!(default_plan.status, 0, "{}", default_plan.stderr);
+        assert!(default_plan
+            .stdout
+            .contains("agent instructions: add RepoGrammar pre-flight gate"));
+
+        let opt_out_plan = run_with_context_and_runtime(
+            [
+                "setup",
+                "--target",
+                "auto",
+                "--dry-run",
+                "--no-instructions",
+                "--json",
+                "--progress",
+                "never",
+            ],
+            project.path(),
+            &env,
+            &TestRuntime,
+        );
+        assert_eq!(opt_out_plan.status, 0, "{}", opt_out_plan.stderr);
+        let value: Value = serde_json::from_str(opt_out_plan.stdout.trim()).expect("setup JSON");
+        assert_eq!(value["instructions_requested"], false);
+        // Dry-run performs no writes regardless of instruction preference.
         assert_eq!(fs::read_dir(home.path()).expect("home").count(), 0);
     }
 
@@ -18912,6 +19003,66 @@ mod tests {
         assert!(output.stdout.contains("native_mcp: codex mcp add"));
         assert!(output.stdout.contains("instruction: deferred"));
         assert!(output.stdout.contains("REPOGRAMMAR_INSTRUCTION_FILE_CODEX"));
+    }
+
+    #[test]
+    fn install_dry_run_reports_default_instruction_plan_with_home() {
+        let workspace = TempWorkspace::new("install-dry-run-default-instruction");
+        let home = TempWorkspace::new("install-dry-run-default-home");
+        let home_str = home.path().display().to_string();
+        let env = move |key: &str| (key == "HOME").then(|| home_str.clone());
+        let output = run_with_context(
+            [
+                "install",
+                "--target",
+                "codex",
+                "--scope",
+                "global",
+                "--dry-run",
+                "--no-telemetry",
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("instruction: managed section -> "));
+        assert!(output.stdout.contains(
+            &home
+                .path()
+                .join(".codex")
+                .join("AGENTS.md")
+                .display()
+                .to_string()
+        ));
+        // No files are written during a dry-run.
+        assert!(!home.path().join(".codex").exists());
+    }
+
+    #[test]
+    fn install_dry_run_reports_instruction_opt_out() {
+        let workspace = TempWorkspace::new("install-dry-run-opt-out");
+        let home = TempWorkspace::new("install-dry-run-opt-out-home");
+        let home_str = home.path().display().to_string();
+        let env = move |key: &str| (key == "HOME").then(|| home_str.clone());
+        let output = run_with_context(
+            [
+                "install",
+                "--target",
+                "codex",
+                "--scope",
+                "global",
+                "--dry-run",
+                "--no-instructions",
+                "--no-telemetry",
+            ],
+            workspace.path(),
+            &env,
+        );
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.contains("instruction: opt-out"));
+        assert!(!output.stdout.contains("managed section ->"));
     }
 
     #[test]

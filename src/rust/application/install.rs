@@ -159,6 +159,11 @@ pub struct InstallRequest {
     pub print_config_target: Option<AgentTarget>,
     pub assume_yes: bool,
     pub no_permissions: bool,
+    /// When true, register the native MCP server but skip writing RepoGrammar's
+    /// marker-fenced pre-flight gate into the agent's instruction file. Default
+    /// is `false`: install auto-wires the instruction file for live-writer
+    /// targets with a known default global path.
+    pub no_instructions: bool,
     pub telemetry_enabled: bool,
     pub telemetry_explicitly_configured: bool,
 }
@@ -174,6 +179,7 @@ impl Default for InstallRequest {
             print_config_target: None,
             assume_yes: false,
             no_permissions: false,
+            no_instructions: false,
             telemetry_enabled: false,
             telemetry_explicitly_configured: false,
         }
@@ -225,9 +231,10 @@ pub struct InstallExecutionContext {
     pub command_dir_on_path: bool,
     pub data_dir: String,
     pub current_dir: String,
-    /// Resolved absolute instruction-file paths per target. Populated only when a
-    /// `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override resolves to an absolute
-    /// path; otherwise instruction writing stays deferred for that target.
+    /// Resolved absolute instruction-file paths per target. Populated from an
+    /// absolute `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override, or, when no
+    /// override is set, from the target's known default global instruction file
+    /// (live-writer targets only). Targets without either stay deferred.
     pub instruction_files: Vec<(AgentTarget, String)>,
 }
 
@@ -551,7 +558,12 @@ pub fn execute_install(
         if !reconfigured {
             mutations.configured_targets.push(target);
         }
-        let (instruction_path, instruction_action) = match instruction_file_for(context, target) {
+        let instruction_target = if request.no_instructions {
+            None
+        } else {
+            instruction_file_for(context, target)
+        };
+        let (instruction_path, instruction_action) = match instruction_target {
             Some(path) => match write_managed_instruction_section(Path::new(path)) {
                 Ok(instruction_action) => (Some(path.to_string()), instruction_action),
                 Err(error) => {
@@ -2820,23 +2832,60 @@ pub fn instruction_env_var(target: AgentTarget) -> String {
     )
 }
 
-/// Resolve a target's instruction-file path from an environment override. Returns
-/// `None` (deferred) unless the override resolves to an absolute path, because
-/// RepoGrammar must not guess real Codex/Claude instruction-file locations.
+/// Resolve a target's instruction-file path.
+///
+/// An absolute `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override always wins. When
+/// the override is absent, install auto-wires the target's known default global
+/// instruction file (see [`default_instruction_file`]) resolved against the home
+/// directory reported by `lookup("HOME")`. A present-but-non-absolute override
+/// stays deferred and never falls back to the default, preserving the explicit
+/// "do not guess" contract for a caller that set an invalid path. Targets without
+/// a known default (everything except the concrete live writers) stay deferred.
 pub fn resolve_instruction_file<F>(target: AgentTarget, lookup: &F) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let raw = lookup(&instruction_env_var(target))?;
+    if let Some(raw) = lookup(&instruction_env_var(target)) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Path::new(trimmed)
+                .is_absolute()
+                .then(|| trimmed.to_string());
+        }
+    }
+    let home = instruction_home_directory(lookup)?;
+    default_instruction_file(target, &home).map(|path| path.display().to_string())
+}
+
+/// The known default global instruction file for a live-writer target.
+///
+/// Only the concrete live writers ([`supported_concrete_targets`], i.e. Codex and
+/// Claude Code) have a default; every other target returns `None` so it stays
+/// deferred/plan-only. Paths are macOS/Linux home-relative; no Windows layout is
+/// produced because public installation supports Linux and macOS only.
+pub fn default_instruction_file(target: AgentTarget, home: &Path) -> Option<PathBuf> {
+    match target {
+        AgentTarget::Codex => Some(home.join(".codex").join("AGENTS.md")),
+        AgentTarget::ClaudeCode => Some(home.join(".claude").join("CLAUDE.md")),
+        _ => None,
+    }
+}
+
+/// Resolve the home directory used to place default instruction files, through
+/// the injectable `lookup` (the same `HOME` resolution the install command uses
+/// for its data/command directories). Returns `None` when `HOME` is unset, empty,
+/// or non-absolute so callers stay deferred rather than guessing a location.
+fn instruction_home_directory<F>(lookup: &F) -> Option<PathBuf>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let raw = lookup("HOME")?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if Path::new(trimmed).is_absolute() {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
+    let path = PathBuf::from(trimmed);
+    path.is_absolute().then_some(path)
 }
 
 fn malformed_managed_section_error() -> RepoGrammarError {
@@ -6071,6 +6120,192 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
         assert_eq!(value["instruction_action"], "deferred");
         assert!(value["instruction_file_path"].is_null());
+    }
+
+    #[test]
+    fn default_instruction_file_covers_only_live_writers() {
+        let home = Path::new("/home/tester");
+        assert_eq!(
+            default_instruction_file(AgentTarget::Codex, home),
+            Some(PathBuf::from("/home/tester/.codex/AGENTS.md"))
+        );
+        assert_eq!(
+            default_instruction_file(AgentTarget::ClaudeCode, home),
+            Some(PathBuf::from("/home/tester/.claude/CLAUDE.md"))
+        );
+        // Only the concrete live writers get a default; deferred targets stay None.
+        assert_eq!(
+            supported_concrete_targets(),
+            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+        for target in [
+            AgentTarget::Cursor,
+            AgentTarget::Opencode,
+            AgentTarget::Hermes,
+            AgentTarget::Gemini,
+            AgentTarget::Antigravity,
+            AgentTarget::Kiro,
+        ] {
+            assert_eq!(default_instruction_file(target, home), None);
+        }
+    }
+
+    #[test]
+    fn resolve_instruction_file_auto_wires_default_global_files() {
+        let home = TempDir::new("resolve-default-home");
+        let home_str = home.path.display().to_string();
+        let lookup = |key: &str| (key == "HOME").then(|| home_str.clone());
+
+        // Without an override, live writers resolve their known default global file.
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup),
+            Some(
+                home.path
+                    .join(".codex")
+                    .join("AGENTS.md")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::ClaudeCode, &lookup),
+            Some(
+                home.path
+                    .join(".claude")
+                    .join("CLAUDE.md")
+                    .display()
+                    .to_string()
+            )
+        );
+        // A deferred (non-live-writer) target has no default even with HOME set.
+        assert_eq!(resolve_instruction_file(AgentTarget::Cursor, &lookup), None);
+
+        // An absolute env override always wins over the default.
+        let key = instruction_env_var(AgentTarget::Codex);
+        let absolute = if cfg!(windows) {
+            "C:\\override\\AGENTS.md"
+        } else {
+            "/srv/override/AGENTS.md"
+        };
+        let lookup_override = |requested: &str| {
+            if requested == key {
+                Some(absolute.to_string())
+            } else if requested == "HOME" {
+                Some(home_str.clone())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup_override),
+            Some(absolute.to_string())
+        );
+
+        // A present-but-relative override stays deferred and never falls back to
+        // the default, preserving the explicit "do not guess" contract.
+        let lookup_relative = |requested: &str| {
+            if requested == key {
+                Some("relative/AGENTS.md".to_string())
+            } else if requested == "HOME" {
+                Some(home_str.clone())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup_relative),
+            None
+        );
+
+        // No HOME means no default; the target stays deferred.
+        let lookup_no_home = |_: &str| None;
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup_no_home),
+            None
+        );
+    }
+
+    #[test]
+    fn install_skips_instruction_write_when_no_instructions_requested() {
+        let workspace = TempInstallWorkspace::new("instruction-opt-out");
+        let instructions = TempDir::new("instruction-opt-out-target");
+        let instruction_path = instructions.file("AGENTS.md");
+        let mut context = workspace.context.clone();
+        context.instruction_files =
+            vec![(AgentTarget::Codex, instruction_path.display().to_string())];
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            no_instructions: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        let outcome =
+            execute_install(&request, &context, &configurator, &self_test).expect("install");
+
+        assert!(
+            !instruction_path.exists(),
+            "--no-instructions must register the MCP server without writing the instruction file"
+        );
+        let receipt = fs::read_to_string(&outcome.receipt_paths[0]).expect("receipt");
+        let value: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
+        assert_eq!(value["instruction_action"], "deferred");
+        assert!(value["instruction_file_path"].is_null());
+    }
+
+    #[test]
+    fn install_auto_wires_resolved_default_and_disconnect_reverses() {
+        let workspace = TempInstallWorkspace::new("instruction-default-roundtrip");
+        let home = TempDir::new("instruction-default-roundtrip-home");
+        let home_str = home.path.display().to_string();
+        let lookup = |key: &str| (key == "HOME").then(|| home_str.clone());
+
+        // Resolve the default exactly as install_execution_context would.
+        let default_path =
+            resolve_instruction_file(AgentTarget::Codex, &lookup).expect("default resolved");
+        let default_path = PathBuf::from(default_path);
+        assert_eq!(default_path, home.path.join(".codex").join("AGENTS.md"));
+
+        // Seed prior user content at the default location so the round-trip proves
+        // disconnect strips only the managed section and preserves the rest.
+        fs::create_dir_all(default_path.parent().expect("codex dir")).expect("create codex dir");
+        fs::write(&default_path, "# Codex global guide\n\nkeep me\n").expect("seed user content");
+
+        let mut context = workspace.context.clone();
+        context.instruction_files = vec![(AgentTarget::Codex, default_path.display().to_string())];
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            scope: InstallScope::Global,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let self_test = FakeSelfTest::default();
+
+        execute_install(&request, &context, &configurator, &self_test).expect("install");
+        let after_install = fs::read_to_string(&default_path).expect("after install");
+        assert!(after_install.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(after_install.contains(MANAGED_INSTRUCTION_END));
+        assert!(after_install.contains("keep me"));
+        configurator.actions.borrow_mut().clear();
+
+        execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &context,
+            &configurator,
+        )
+        .expect("disconnect");
+
+        let after_disconnect = fs::read_to_string(&default_path).expect("after disconnect");
+        assert!(!after_disconnect.contains(MANAGED_INSTRUCTION_BEGIN));
+        assert!(!after_disconnect.contains(MANAGED_INSTRUCTION_END));
+        assert!(
+            after_disconnect.contains("keep me"),
+            "disconnect must preserve pre-existing user content"
+        );
     }
 
     #[test]

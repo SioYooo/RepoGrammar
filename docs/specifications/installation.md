@@ -442,7 +442,9 @@ The installer must:
   schema through `tools/list`;
 - store an installation receipt sufficient for precise, reversible uninstall;
 - never remove configuration that was not created by RepoGrammar;
-- treat instruction-file modification as optional and marker-fenced.
+- auto-wire the marker-fenced pre-flight section into each live-writer target's
+  known global instruction file by default, opt out with `--no-instructions`,
+  and override the target path with `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>`.
 
 ## Global installation state
 
@@ -587,8 +589,9 @@ Removing repository state always requires a separate explicit `uninit`.
 ## Instruction-file integration
 
 The MCP initialize response is the canonical runtime guidance for agents.
-Installer-written instruction-file content is optional and must be short,
-preferably no more than 30 lines.
+Installer-written instruction-file content is short, preferably no more than 30
+lines. It is written into each live-writer target's global instruction file by
+default at install/setup time, and can be suppressed with `--no-instructions`.
 
 When writing to files such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`,
 RepoGrammar must use this exact marker fence:
@@ -693,14 +696,40 @@ concurrent-mutation scenario is unsupported; callers must not run competing
 instruction writers, and a release must not claim stronger confinement without
 the native evidence required by ADR-0023.
 
-Because real Codex/Claude global instruction-file locations are not yet verified,
-live instruction writing is deferred by default. The installer resolves a
-target's instruction-file path only from the explicit environment override
-`REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` (for example
-`REPOGRAMMAR_INSTRUCTION_FILE_CODEX`) and only when it resolves to an absolute
-path. When no path is resolved, the receipt records `instruction_action:
-"deferred"` and no file is written. RepoGrammar never guesses an instruction-file
-path.
+By default `install` and `setup` auto-wire the managed pre-flight section into
+each live-writer target's known global instruction file, so a freshly installed
+agent is told to consult RepoGrammar before grep/find/manual reads. The resolved
+default paths (macOS and Linux only) are:
+
+- `codex` -> `<home>/.codex/AGENTS.md`
+- `claude-code` -> `<home>/.claude/CLAUDE.md`
+
+`<home>` is resolved from `HOME` through the same injectable environment lookup
+the installer uses for its data and command directories, so tests and sandboxes
+can redirect it without touching a real home directory. Only the two concrete
+live-writer targets (`supported_concrete_targets()`) have a default;
+`cursor`, `opencode`, `hermes`, `gemini`, `antigravity`, and `kiro` stay
+deferred/plan-only and write nothing.
+
+The write is opt-out and overridable, and it stays reversible:
+
+- `--no-instructions` on `install` or `setup` registers the native MCP server
+  without writing any instruction file; the receipt records
+  `instruction_action: "deferred"` and `instruction_file_path: null`.
+- The explicit environment override `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` (for
+  example `REPOGRAMMAR_INSTRUCTION_FILE_CODEX`) still wins over the default when
+  it resolves to an absolute path. A present-but-non-absolute override is refused
+  and stays deferred rather than falling back to the default.
+- When no default and no override resolve (for example when `HOME` is unset), the
+  receipt records `instruction_action: "deferred"` and no file is written.
+- The default path is recorded in the install receipt exactly like an override,
+  so `disconnect`, product-uninstall agent cleanup, and rollback remove the
+  managed section from the same default file.
+
+This writes only the marker-fenced consumer pre-flight gate into the agent's own
+global instruction file. It is not the same as RepoGrammar's mirrored
+`AGENTS.md`/`CLAUDE.md` repository-contract policy, which is never imposed on a
+consuming repository.
 
 Users may inspect or refresh instruction guidance independently from native MCP
 registration with:

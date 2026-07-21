@@ -825,6 +825,9 @@ agent-specific file path is guessed. `status` is read-only. Live `sync` and
 writes. The command must never create repository state, initialize an index,
 reconfigure native MCP integration, or mirror another instruction filename.
 Selecting `AGENTS.md` does not authorize a `CLAUDE.md` write, and vice versa.
+`install` and `setup` already auto-wire each live-writer target's default global
+instruction file; these explicit-file commands remain for inspecting, refreshing,
+or removing the managed block at an arbitrary path independent of installation.
 
 The content contract is versioned independently from the product version.
 Status reports `missing`, `current`, `outdated`, `foreign`, or `malformed`.
@@ -930,6 +933,23 @@ is default-yes. `all` and `auto` resolve to the current first-class live targets
 for safe noninteractive writes. Registry targets without a live writer must fail
 before command-path, receipt, or native config writes and direct the user to
 `--dry-run` or `--print-config`. Project-local writes remain deferred.
+
+By default `install` and `setup` also auto-wire RepoGrammar's marker-fenced
+pre-flight section into each live-writer target's known global instruction file:
+`codex` -> `<home>/.codex/AGENTS.md` and `claude-code` -> `<home>/.claude/CLAUDE.md`
+(macOS and Linux only). `<home>` comes from `HOME` through the installer's
+injectable environment lookup. Deferred targets (`cursor`, `opencode`, `hermes`,
+`gemini`, `antigravity`, `kiro`) have no default and write nothing. `--no-instructions`
+on `install` or `setup` registers the native MCP server without any instruction
+write. An absolute `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override still wins
+over the default; a non-absolute override stays deferred. The resolved path,
+default or override, is recorded in the receipt so `disconnect` reverses it. The
+dry-run plan prints `instruction: managed section -> <path>` for a resolved
+default, `instruction: opt-out ...` under `--no-instructions`, and
+`instruction: deferred ...` when nothing resolves. This writes only the consumer
+pre-flight gate into the agent's global instruction file and never imposes
+RepoGrammar's mirrored `AGENTS.md`/`CLAUDE.md` repository policy on a consuming
+repository.
 
 `install` places the `repogrammar` command in a user-writable command directory
 when possible, runs a read-only MCP self-test before native configuration,

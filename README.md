@@ -97,6 +97,12 @@ cd /path/to/your/repo
 repogrammar setup --target auto
 ```
 
+`setup` (and `install`) also add RepoGrammar's short pre-flight gate to each
+detected agent's global instruction file by default (`~/.codex/AGENTS.md`,
+`~/.claude/CLAUDE.md`) so the agent consults RepoGrammar before falling back to
+grep/read. The write is reversible via `disconnect` and never overwrites a
+foreign section. Pass `--no-instructions` to wire the MCP server only.
+
 ### 3. Initialize every other repository
 
 Each repository needs its own local index. Run `init` once inside every other
