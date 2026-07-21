@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Source version 0.4.1" src="https://img.shields.io/badge/source-0.4.1-7c3aed?style=flat-square">
+  <a href="https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.1"><img alt="Stable version 0.4.1" src="https://img.shields.io/badge/stable-0.4.1-7c3aed?style=flat-square"></a>
   <img alt="Local first" src="https://img.shields.io/badge/context-local--first-0f766e?style=flat-square">
   <img alt="Read-only MCP" src="https://img.shields.io/badge/MCP-read--only-2563eb?style=flat-square">
   <a href="https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square"></a>
@@ -119,9 +119,9 @@ Use `repogrammar disconnect --target all --yes` when you only want to remove
 RepoGrammar-owned coding-agent integrations. Repository indexes are deliberately
 separate; remove one with `repogrammar uninit --project /path/to/repo --yes`.
 
-The immutable public `v0.4.0` artifacts predate the `disconnect` rename and
-full self-uninstall contract. Follow the help shipped with an installed binary
-until a patch-forward release containing this source change is published.
+The immutable public `v0.4.1` release includes the `disconnect` rename and the
+receipted full self-uninstall contract. Follow the help shipped with the
+installed binary for the exact lifecycle commands supported by that version.
 
 ## What you get
 

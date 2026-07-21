@@ -4,24 +4,27 @@
 
 This section describes current source only. It is not evidence that a new Git
 tag, GitHub Release, npm package, provenance record, dist-tag, or public
-finalizer exists. Nothing is pending on this development line beyond the
-`0.4.1` work recorded below.
+finalizer exists. No unreleased source changes are recorded here.
 
 ## 0.4.1 — 2026-07-22 stable channel
 
-RepoGrammar `0.4.1` is the patch-forward stable candidate that succeeds the
-public `0.4.0` release. It adds the additive Universal Target Resolution
+RepoGrammar `0.4.1` is the verified patch-forward stable release that succeeds
+the public `0.4.0` release. It adds the additive Universal Target Resolution
 public surface — the optional `against`/`within` inputs, the top-level
 `resolution` object, scoped readiness, and bare single-segment directory
 resolution — plus the receipted product self-uninstall, on top of the `0.4.0`
-source without moving, replacing, or reusing any `0.4.0` artifact. The `0.4.0`
-artifacts retain their shipped CLI behavior until this work is published under
-the `0.4.1` identity.
+source without moving, replacing, or reusing any `0.4.0` artifact. The
+annotated `v0.4.1` tag points to release commit
+`aa0ca07fcf710b93eaaa03760fc852905e812095`; the immutable
+[GitHub Release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.1)
+and [npm package](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.1)
+were independently verified by finalizer run
+[`29848866553`](https://github.com/SioYooo/RepoGrammar/actions/runs/29848866553),
+which emitted `STABLE_RELEASE_READY`.
 
-This source record does not prove that the `v0.4.1` tag, immutable GitHub
-Release, npm package, provenance, dist-tags, or public finalizer exist. Those
-facts must be independently recorded only after the canonical stable checklist
-completes. The release makes no production-readiness, 1.0 API-stability,
+The canonical stable checklist records the immutable release, exact assets,
+npm integrity and provenance, dist-tags, public product smokes, and finalizer
+evidence. The release makes no production-readiness, 1.0 API-stability,
 sound-analysis, runtime-equivalence, Windows-support, hallucination-prevention,
 or measured-token-savings claim.
 

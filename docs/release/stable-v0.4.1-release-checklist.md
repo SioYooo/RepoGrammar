@@ -5,9 +5,9 @@ This checklist is the canonical two-phase publication gate for RepoGrammar
 Universal Target Resolution public surface (`against`/`within` inputs, the
 top-level `resolution` object, scoped readiness, and bare single-segment
 directory resolution) and the receipted product self-uninstall. `0.4.0` is the
-immediate public stable predecessor and remains the last independently verified
-public stable release until both GitHub and npm publication complete for `0.4.1`
-and the read-only finalizer emits `STABLE_RELEASE_READY`.
+immediate public stable predecessor. GitHub and npm publication for `0.4.1`
+completed, and read-only finalizer run `29848866553` emitted
+`STABLE_RELEASE_READY`.
 
 This release does not claim production readiness, 1.0 API stability, a stable
 MCP API, sound static analysis, measured token savings, runtime equivalence,
@@ -18,8 +18,8 @@ checklist does not expand them.
 
 ## Retained predecessor and abandoned-version evidence
 
-- `0.4.0` is the immediate public stable predecessor and the last independently
-  verified public stable release. Its published tag, release, assets, and npm
+- `0.4.0` is the immediate public stable predecessor and retained independently
+  verified historical release. Its published tag, release, assets, and npm
   package must not be moved, deleted, replaced, or reused as authority for
   `0.4.1` bytes. Its own publication is recorded in
   `stable-v0.4.0-release-checklist.md`, which is retained historical evidence
@@ -230,18 +230,32 @@ public finalizer.
 
 ## Evidence record
 
-Fill these only from verified external state:
+Verified external state:
 
-- release commit: `<pending merge>`
-- tag and tag SHA: `<pending v0.4.1 tag>`
-- candidate run id / attempt: `<pending successful v0.4.1 tag run>`
-- npm stage id and integrity: `<pending protected stage>`
-- GitHub Release URL: `<pending public immutable release>`
-- npm package URL: `<pending public npm package>`
-- finalizer run: `<pending STABLE_RELEASE_READY>`
-- public installer / pinned npm / latest npm / preview smoke:
-  `<pending public finalizer>`
+- release commit: `aa0ca07fcf710b93eaaa03760fc852905e812095`
+- annotated tag: `v0.4.1`; tag object
+  `c22c0fd06e8e8d48a441586c3b9b6395b48dc980`; dereferenced commit matches the
+  release commit
+- candidate run id / attempt:
+  [`29847383172`](https://github.com/SioYooo/RepoGrammar/actions/runs/29847383172),
+  attempt `1`, successful
+- npm stage id: `ce59e214-77ec-4824-af0f-9d0457af4813`; approved through the
+  maintainer 2FA boundary; candidate SRI
+  `sha512-Jfq9evfSdI01fT0eJoXDMsLL92IEbOhpF+SwKMKcmtTIWko7b3QeLiNx/9pAVQ5pI7GazTMSleXEsYiQKzT9AA==`
+- GitHub Release URL:
+  <https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.1>; public,
+  non-prerelease, immutable, with exactly 11 checksum- and attestation-verified
+  assets
+- npm package URL:
+  <https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.1>; public with the
+  retained SRI and provenance; dist-tags are exactly `latest=0.4.1` and
+  `preview=0.2.0-preview.0`
+- finalizer run:
+  [`29848866553`](https://github.com/SioYooo/RepoGrammar/actions/runs/29848866553),
+  successful with exact verdict `STABLE_RELEASE_READY`
+- public installer, native archive, pinned npm, latest npm, preview npm,
+  repository setup/index, and MCP self-test smokes: passed in finalizer run
+  `29848866553`
 
-These pending fields are release gates, not claims that publication has
-occurred. After finalization, replace them with exact evidence and keep only the
-human video, `/feedback`, and Devpost actions pending in the submission kit.
+Only the human video, `/feedback`, and Devpost actions remain pending in the
+submission kit.
