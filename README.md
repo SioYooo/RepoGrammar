@@ -60,7 +60,7 @@ tools locate code; RepoGrammar adds a repository-local contract for deciding
 which repeated implementations are compatible, what still needs to be read,
 and when the answer must abstain.
 
-## Installation
+## Quick start
 
 RepoGrammar supports macOS and glibc-based Linux. Windows and musl Linux are
 not currently supported installation targets.
@@ -108,10 +108,7 @@ shasum -a 256 -c install.sh.sha256
 On Linux, use `sha256sum -c install.sh.sha256` instead. Then install the CLI:
 
 ```bash
-bash install.sh \
-  --version v0.4.3 \
-  --install-cli-only \
-  --yes
+bash install.sh --version v0.4.3 --install-cli-only --yes
 
 export PATH="$HOME/.local/bin:$PATH"
 repogrammar version
@@ -136,11 +133,7 @@ Skip this step when only the CLI is needed. To detect an installed Codex or
 Claude Code client and configure the read-only RepoGrammar MCP server globally:
 
 ```bash
-repogrammar install \
-  --target auto \
-  --scope global \
-  --yes \
-  --no-telemetry
+repogrammar install --target auto --scope global --yes --no-telemetry
 ```
 
 Restart an already-running coding-agent session after this command completes.
@@ -154,9 +147,7 @@ Every repository needs its own local RepoGrammar state and index:
 ```bash
 cd /path/to/repository
 
-repogrammar init \
-  --project "$PWD" \
-  --yes
+repogrammar init --project "$PWD" --yes
 
 repogrammar status \
   --project "$PWD"
