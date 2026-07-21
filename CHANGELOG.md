@@ -4,8 +4,26 @@
 
 This section describes current source only. It is not evidence that a new Git
 tag, GitHub Release, npm package, provenance record, dist-tag, or public
-finalizer exists. The immutable public `v0.4.0` artifacts retain their shipped
-CLI behavior until this work is published under a new patch-forward version.
+finalizer exists. Nothing is pending on this development line beyond the
+`0.4.1` work recorded below.
+
+## 0.4.1 — 2026-07-22 stable channel
+
+RepoGrammar `0.4.1` is the patch-forward stable candidate that succeeds the
+public `0.4.0` release. It adds the additive Universal Target Resolution
+public surface — the optional `against`/`within` inputs, the top-level
+`resolution` object, scoped readiness, and bare single-segment directory
+resolution — plus the receipted product self-uninstall, on top of the `0.4.0`
+source without moving, replacing, or reusing any `0.4.0` artifact. The `0.4.0`
+artifacts retain their shipped CLI behavior until this work is published under
+the `0.4.1` identity.
+
+This source record does not prove that the `v0.4.1` tag, immutable GitHub
+Release, npm package, provenance, dist-tags, or public finalizer exist. Those
+facts must be independently recorded only after the canonical stable checklist
+completes. The release makes no production-readiness, 1.0 API-stability,
+sound-analysis, runtime-equivalence, Windows-support, hallucination-prevention,
+or measured-token-savings claim.
 
 ### Added
 

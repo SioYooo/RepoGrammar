@@ -1,6 +1,6 @@
 # Limitations
 
-RepoGrammar's current source identity is `0.4.0`; that manifest value does not
+RepoGrammar's current source identity is `0.4.1`; that manifest value does not
 prove a matching tag, GitHub Release, artifact, or npm package exists. Public
 availability requires the independent registry and finalizer evidence in the
 stable checklist. The MCP API and bounded analyzers remain experimental. RepoGrammar
@@ -9,15 +9,15 @@ analyzer or a production-readiness claim.
 
 ## Release Availability
 
-- Stable artifacts are available only after the exact `v0.4.0` GitHub release
-  is public and immutable and npm `@sioyooo/repogrammar@0.4.0` is independently
+- Stable artifacts are available only after the exact `v0.4.1` GitHub release
+  is public and immutable and npm `@sioyooo/repogrammar@0.4.1` is independently
   verified.
 - The npm wrapper is available only after that exact immutable npm version is
   approved from staged publication; source manifests do not prove availability.
 - Source-checkout dogfood is the safe contributor path before release and npm
   publication exist.
 - The two-phase immutable rollout and recovery states are tracked in
-  `release/stable-v0.4.0-release-checklist.md`. The earlier preview record
+  `release/stable-v0.4.1-release-checklist.md`. The earlier preview record
   remains in `release/public-preview-release-checklist.md`.
 
 ## Language And Framework Scope
@@ -332,7 +332,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   parse-document response is a future optimization. Adds/removes that only touch
   an isolated path also remain future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in `0.4.0`; a dedicated `ready`
+  signal reports at most `partial` in `0.4.1`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and
