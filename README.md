@@ -205,6 +205,55 @@ only agent integrations, and
 `repogrammar uninit --project /path/to/repository --yes` to remove one
 repository's local index.
 
+## Five-minute judge testing path
+
+After cloning this repository and completing the installation above, run the
+following commands from the RepoGrammar repository root. This path exercises
+the installed release binary, repository initialization, storage readiness,
+family inventory, and one source-backed pattern lookup without requiring Rust
+or Cargo:
+
+```bash
+repogrammar version
+
+repogrammar init \
+  --project "$PWD" \
+  --yes \
+  --no-autosync \
+  --progress never
+
+repogrammar status --project "$PWD"
+repogrammar families --project "$PWD"
+
+repogrammar find \
+  "src/fixtures/python/release/v0_1/positive-strong-evidence/routes.py:7" \
+  --project "$PWD" \
+  --mode compact \
+  --verbosity minimal
+```
+
+The expected evidence is:
+
+- `repogrammar version` reports `0.4.3`;
+- status reports an initialized repository, available storage, and an active
+  generation;
+- `families` reports ready implementation pattern groups; and
+- `find` reports `pattern family found`, identifies
+  `Python · FastAPI Route`, and returns a bounded source span to read. It still
+  states that dynamic or runtime behavior remains unproven.
+
+If coding-agent integration was enabled, verify the native MCP registration as
+an additional machine-level check:
+
+```bash
+codex mcp get repogrammar --json
+# or: claude mcp get repogrammar
+```
+
+For the full recorded judge journey—including a target-repository patch,
+runtime test, stale-evidence rejection, explicit sync, and cleanup—follow the
+[Build Week demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md).
+
 ## What you get
 
 - **Pattern families** — repeated, compatible implementations with support,
