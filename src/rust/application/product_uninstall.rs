@@ -235,31 +235,34 @@ struct FileIdentity {
 }
 
 impl FileIdentity {
+    #[cfg(not(windows))]
     fn capture(metadata: &Metadata) -> Self {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
-        #[cfg(windows)]
-        use std::os::windows::fs::MetadataExt;
 
-        let modified_unix_nanos = metadata
-            .modified()
-            .ok()
-            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-            .and_then(|duration| u64::try_from(duration.as_nanos()).ok());
         Self {
             len: metadata.len(),
-            modified_unix_nanos,
+            modified_unix_nanos: modified_unix_nanos(metadata),
             #[cfg(unix)]
             device: metadata.dev(),
             #[cfg(unix)]
             inode: metadata.ino(),
-            #[cfg(windows)]
-            volume_serial_number: metadata.volume_serial_number(),
-            #[cfg(windows)]
-            file_index: metadata.file_index(),
         }
     }
 
+    #[cfg(windows)]
+    fn capture_open_file(file: &File) -> io::Result<Self> {
+        let metadata = file.metadata()?;
+        let (volume_serial_number, file_index) = windows_file_identity(file)?;
+        Ok(Self {
+            len: metadata.len(),
+            modified_unix_nanos: modified_unix_nanos(&metadata),
+            volume_serial_number: Some(volume_serial_number),
+            file_index: Some(file_index),
+        })
+    }
+
+    #[cfg(not(windows))]
     fn matches(&self, metadata: &Metadata) -> bool {
         if metadata.is_dir() {
             #[cfg(unix)]
@@ -267,15 +270,7 @@ impl FileIdentity {
                 use std::os::unix::fs::MetadataExt;
                 return self.device == metadata.dev() && self.inode == metadata.ino();
             }
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                return self.volume_serial_number.is_some()
-                    && self.file_index.is_some()
-                    && self.volume_serial_number == metadata.volume_serial_number()
-                    && self.file_index == metadata.file_index();
-            }
-            #[cfg(not(any(unix, windows)))]
+            #[cfg(not(unix))]
             {
                 // This finalizer is not supported on a platform where a
                 // directory replacement cannot be distinguished from the
@@ -284,6 +279,23 @@ impl FileIdentity {
             }
         }
         self == &Self::capture(metadata)
+    }
+
+    #[cfg(windows)]
+    fn same_windows_object(&self, file: &File) -> io::Result<bool> {
+        let (volume_serial_number, file_index) = windows_file_identity(file)?;
+        Ok(self.volume_serial_number == Some(volume_serial_number)
+            && self.file_index == Some(file_index))
+    }
+
+    #[cfg(windows)]
+    fn matches_open_file(&self, file: &File) -> io::Result<bool> {
+        let metadata = file.metadata()?;
+        if metadata.is_dir() {
+            self.same_windows_object(file)
+        } else {
+            Ok(self == &Self::capture_open_file(file)?)
+        }
     }
 
     fn to_json_value(&self) -> Value {
@@ -342,6 +354,67 @@ impl FileIdentity {
             #[cfg(windows)]
             file_index: optional_u64(object, "file_index", "file identity")?,
         })
+    }
+}
+
+fn modified_unix_nanos(metadata: &Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+}
+
+fn capture_file_identity(
+    path: &Path,
+    metadata: &Metadata,
+    label: &str,
+) -> Result<FileIdentity, RepoGrammarError> {
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        let handle = open_windows_delete_handle(path).map_err(|error| {
+            invalid(format!(
+                "failed to open {label} for Windows identity capture: {error}"
+            ))
+        })?;
+        FileIdentity::capture_open_file(&handle).map_err(|error| {
+            invalid(format!(
+                "failed to capture {label} Windows file identity: {error}"
+            ))
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, label);
+        Ok(FileIdentity::capture(metadata))
+    }
+}
+
+fn file_identity_matches_path(
+    expected: &FileIdentity,
+    path: &Path,
+    metadata: &Metadata,
+    label: &str,
+) -> Result<bool, RepoGrammarError> {
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        let handle = open_windows_delete_handle(path).map_err(|error| {
+            invalid(format!(
+                "failed to open {label} for Windows identity validation: {error}"
+            ))
+        })?;
+        expected.matches_open_file(&handle).map_err(|error| {
+            invalid(format!(
+                "failed to validate {label} Windows file identity: {error}"
+            ))
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, label);
+        Ok(expected.matches(metadata))
     }
 }
 
@@ -776,16 +849,11 @@ extern "C" {
 
 #[cfg(windows)]
 fn secure_remove_planned_file(file: &PlannedFile) -> io::Result<()> {
-    use std::os::windows::fs::MetadataExt;
     let mut handle = open_windows_delete_handle(Path::new(&file.path))?;
-    let metadata = handle.metadata()?;
     let identity_matches = if file.kind == PlannedFileKind::SymlinkToAuthority {
-        file.identity.volume_serial_number.is_some()
-            && file.identity.file_index.is_some()
-            && file.identity.volume_serial_number == metadata.volume_serial_number()
-            && file.identity.file_index == metadata.file_index()
+        file.identity.same_windows_object(&handle)?
     } else {
-        file.identity.matches(&metadata)
+        file.identity.matches_open_file(&handle)?
     };
     if !identity_matches {
         return Err(io::Error::new(
@@ -811,7 +879,7 @@ fn secure_remove_planned_directory(directory: &PlannedDirectory) -> io::Result<(
             "Windows directory appeared after finalizer preflight",
         )
     })?;
-    if !identity.matches(&handle.metadata()?) {
+    if !identity.matches_open_file(&handle)? {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "opened Windows directory identity differs from cleanup plan",
@@ -862,8 +930,51 @@ fn mark_windows_handle_for_deletion(file: &File) -> io::Result<()> {
 }
 
 #[cfg(windows)]
+fn windows_file_identity(file: &File) -> io::Result<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+
+    let mut information = ByHandleFileInformation::default();
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let file_index =
+        (u64::from(information.file_index_high) << 32) | u64::from(information.file_index_low);
+    Ok((information.volume_serial_number, file_index))
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+#[repr(C)]
+struct WindowsFileTime {
+    low_date_time: u32,
+    high_date_time: u32,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+#[repr(C)]
+struct ByHandleFileInformation {
+    file_attributes: u32,
+    creation_time: WindowsFileTime,
+    last_access_time: WindowsFileTime,
+    last_write_time: WindowsFileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
+    fn GetFileInformationByHandle(
+        handle: *mut std::ffi::c_void,
+        information: *mut ByHandleFileInformation,
+    ) -> i32;
+
     fn SetFileInformationByHandle(
         handle: *mut std::ffi::c_void,
         information_class: u32,
@@ -983,7 +1094,7 @@ pub fn validate_product_uninstall_finalizer_invocation(
 ) -> Result<ValidatedProductUninstallFinalizer, RepoGrammarError> {
     validate_private_plan_path(plan_path)?;
     let metadata = regular_nonsymlink_metadata(plan_path, "cleanup plan")?;
-    let plan_identity = FileIdentity::capture(&metadata);
+    let plan_identity = capture_file_identity(plan_path, &metadata, "cleanup plan")?;
     let bytes = read_limited(plan_path, 1024 * 1024, "cleanup plan")?;
     let plan_sha256 = sha256_bytes(&bytes);
     let value: Value = serde_json::from_slice(&bytes)
@@ -1524,7 +1635,7 @@ fn snapshot_file(
         kind,
         sha256: expected_sha256.to_string(),
         symlink_target,
-        identity: FileIdentity::capture(&metadata),
+        identity: capture_file_identity(path, &metadata, role.as_str())?,
         parent,
     })
 }
@@ -1544,7 +1655,7 @@ fn snapshot_parent(path: &Path) -> Result<ParentIdentity, RepoGrammarError> {
     Ok(ParentIdentity {
         path: path_text(parent, "owned file parent")?,
         canonical_path: path_text(&canonical, "canonical owned file parent")?,
-        identity: FileIdentity::capture(&metadata),
+        identity: capture_file_identity(parent, &metadata, "owned file parent")?,
     })
 }
 
@@ -1596,7 +1707,11 @@ fn snapshot_directory_candidate(path: &Path) -> Result<PlannedDirectory, RepoGra
                     &canonical,
                     "canonical empty installation directory",
                 )?),
-                identity: Some(FileIdentity::capture(&metadata)),
+                identity: Some(capture_file_identity(
+                    path,
+                    &metadata,
+                    "empty installation directory",
+                )?),
                 parent: Some(snapshot_parent(path)?),
             })
         }
@@ -1653,7 +1768,7 @@ fn revalidate_planned_file(
         }
     };
     revalidate_parent(&file.parent)?;
-    if !file.identity.matches(&metadata) {
+    if !file_identity_matches_path(&file.identity, path, &metadata, "owned file")? {
         return Err(invalid(
             "owned file identity changed after finalizer preflight",
         ));
@@ -1692,7 +1807,7 @@ fn revalidate_parent(parent: &ParentIdentity) -> Result<(), RepoGrammarError> {
         .map_err(|error| invalid(format!("owned file parent disappeared or changed: {error}")))?;
     if metadata.file_type().is_symlink()
         || !metadata.is_dir()
-        || !parent.identity.matches(&metadata)
+        || !file_identity_matches_path(&parent.identity, path, &metadata, "owned file parent")?
     {
         return Err(invalid("owned file parent directory identity changed"));
     }
@@ -1708,8 +1823,12 @@ fn revalidate_plan_file(
     validated: &ValidatedProductUninstallFinalizer,
 ) -> Result<(), RepoGrammarError> {
     let metadata = regular_nonsymlink_metadata(&validated.plan_path, "cleanup plan")?;
-    if !validated.plan_identity.matches(&metadata)
-        || sha256_regular_file(&validated.plan_path)? != validated.plan_sha256
+    if !file_identity_matches_path(
+        &validated.plan_identity,
+        &validated.plan_path,
+        &metadata,
+        "cleanup plan",
+    )? || sha256_regular_file(&validated.plan_path)? != validated.plan_sha256
     {
         return Err(invalid("cleanup plan changed after helper validation"));
     }
@@ -1740,7 +1859,12 @@ fn revalidate_empty_directory_candidate(
             let expected_identity = directory.identity.as_ref().ok_or_else(|| {
                 invalid("empty installation directory appeared after finalizer preflight")
             })?;
-            if !expected_identity.matches(&metadata) {
+            if !file_identity_matches_path(
+                expected_identity,
+                path,
+                &metadata,
+                "empty installation directory",
+            )? {
                 return Err(invalid("empty installation directory identity changed"));
             }
             let canonical = fs::canonicalize(path).map_err(|error| {
@@ -2773,13 +2897,25 @@ mod tests {
         let temp_root = fs::canonicalize(std::env::temp_dir()).expect("canonical temp");
         let root = create_private_finalizer_directory(&temp_root).expect("fixture root");
         let directory = root.join("replace-me");
+        let replacement = root.join("replacement");
         fs::create_dir(&directory).expect("create original directory");
-        let original = fs::symlink_metadata(&directory).expect("original metadata");
-        let identity = FileIdentity::capture(&original);
+        fs::create_dir(&replacement).expect("create replacement directory");
+        let original_handle =
+            open_windows_delete_handle(&directory).expect("open original directory");
+        let identity =
+            FileIdentity::capture_open_file(&original_handle).expect("capture original identity");
+        assert!(identity
+            .matches_open_file(&original_handle)
+            .expect("match original identity"));
+        drop(original_handle);
         fs::remove_dir(&directory).expect("remove original directory");
-        fs::create_dir(&directory).expect("create replacement directory");
-        let replacement = fs::symlink_metadata(&directory).expect("replacement metadata");
-        assert!(!identity.matches(&replacement));
+        fs::rename(&replacement, &directory).expect("replace directory path");
+        let replacement_handle =
+            open_windows_delete_handle(&directory).expect("open replacement directory");
+        assert!(!identity
+            .matches_open_file(&replacement_handle)
+            .expect("compare replacement identity"));
+        drop(replacement_handle);
         let _ = fs::remove_dir_all(&root);
     }
 
