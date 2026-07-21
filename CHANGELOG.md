@@ -4,7 +4,15 @@
 
 This section describes current source only. It is not evidence that a new Git
 tag, GitHub Release, npm package, provenance record, dist-tag, or public
-finalizer exists. No unreleased source changes are recorded here.
+finalizer exists.
+
+- Prepared the `0.4.2` stable candidate with an explicit public installation
+  lifecycle: `install.sh --install-cli-only` installs only the managed binary,
+  worker, and product receipt; optional coding-agent integration uses
+  `repogrammar install`; and every repository uses `repogrammar init`.
+- Pinned the judge-facing curl path to `v0.4.2`, documented PATH and installer
+  checksum verification, and separated binary acquisition from repository
+  initialization in release smoke coverage.
 
 ## 0.4.1 — 2026-07-22 stable channel
 

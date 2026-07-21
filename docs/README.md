@@ -17,10 +17,9 @@ development, and governance documentation.
   specifications.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
-- `release/`: maintainer-owned release runbooks. The stable `0.4.1` checklist
-  is the canonical two-phase immutable publication gate; the stable `0.4.0`
-  checklist and the public-preview checklist remain historical evidence for
-  their predecessor releases.
+- `release/`: maintainer-owned release runbooks. The stable `0.4.2` checklist
+  is the canonical two-phase immutable publication gate; the stable `0.4.1`
+  checklist and earlier checklists remain historical release evidence.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
@@ -88,8 +87,8 @@ context lives under `.agents/memories/`.
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
-- Stable `0.4.1` two-phase immutable publication and instruction-adoption gate:
-  `release/stable-v0.4.1-release-checklist.md`.
+- Stable `0.4.2` two-phase immutable publication and split-installation gate:
+  `release/stable-v0.4.2-release-checklist.md`.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
 - Build Week zero-friction onboarding authority and execution evidence:

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.1"><img alt="Stable version 0.4.1" src="https://img.shields.io/badge/stable-0.4.1-7c3aed?style=flat-square"></a>
+  <a href="https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.2"><img alt="Stable version 0.4.2" src="https://img.shields.io/badge/stable-0.4.2-7c3aed?style=flat-square"></a>
   <img alt="Local first" src="https://img.shields.io/badge/context-local--first-0f766e?style=flat-square">
   <img alt="Read-only MCP" src="https://img.shields.io/badge/MCP-read--only-2563eb?style=flat-square">
   <a href="https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square"></a>
@@ -68,10 +68,16 @@ RepoGrammar provides prebuilt binaries for supported macOS and Linux systems;
 Rust and Cargo are not required.
 
 ```bash
-curl -fsSL https://github.com/SioYooo/RepoGrammar/releases/latest/download/install.sh -o install.sh
-bash install.sh --install-cli-only --yes
+curl -fsSLo install.sh https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.2/install.sh
+bash install.sh --version v0.4.2 --install-cli-only --yes
+export PATH="$HOME/.local/bin:$PATH"
 repogrammar version
 ```
+
+The installer downloads the matching native archive and bundled Python worker,
+verifies the archive checksum, installs the managed command, and records the
+product receipt. It does not configure a coding agent or create repository
+`.repogrammar/` state.
 
 Already have Node? The same release is published to npm, so you can download and
 run it in one step — no separate install:
@@ -86,30 +92,33 @@ so Rust and Cargo are still not required. See the
 [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
 for version-pinned `npx` commands and CI usage.
 
-### 2. Set up your coding agent and first repository
+### 2. Optionally connect a coding agent
 
-Run this once inside your first repository. It configures a detected Codex or
-Claude Code integration, initializes that repository, and starts its autosync
-daemon.
-
-```bash
-cd /path/to/your/repo
-repogrammar setup --target auto
-```
-
-### 3. Initialize every other repository
-
-Each repository needs its own local index. Run `init` once inside every other
-repository where you want RepoGrammar available:
+Skip this step if you only want the CLI. To connect a detected Codex or Claude
+Code installation to the read-only RepoGrammar MCP server, run:
 
 ```bash
-cd /path/to/another/repo
-repogrammar init
+repogrammar install --target auto --scope global --yes --no-telemetry
 ```
 
-After `setup` or `init`, RepoGrammar automatically keeps that repository's
-index synchronized as code changes. There is no global repository scanner, so
-new repositories must be initialized once. See the
+### 3. Initialize each repository
+
+Each repository needs its own local index. Run `init` once in every repository
+where you want RepoGrammar available:
+
+```bash
+cd /path/to/repository
+repogrammar init --project "$PWD" --yes
+repogrammar status --project "$PWD"
+```
+
+`init` builds the active index and starts that repository's autosync daemon by
+default. For CI or a deterministic one-shot index, add
+`--no-autosync --progress never`. There is no global repository scanner, so new
+repositories must be initialized once. `repogrammar setup` remains the optional
+combined onboarding shortcut for users who explicitly want agent wiring and
+current-repository initialization in one reviewed plan; it is not required by
+the installation flow above. See the
 [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
 for advanced installation, CI, manual sync, and cleanup options.
 
@@ -119,7 +128,7 @@ Use `repogrammar disconnect --target all --yes` when you only want to remove
 RepoGrammar-owned coding-agent integrations. Repository indexes are deliberately
 separate; remove one with `repogrammar uninit --project /path/to/repo --yes`.
 
-The immutable public `v0.4.1` release includes the `disconnect` rename and the
+The immutable public `v0.4.1` release introduced the `disconnect` rename and the
 receipted full self-uninstall contract. Follow the help shipped with the
 installed binary for the exact lifecycle commands supported by that version.
 
@@ -137,11 +146,11 @@ installed binary for the exact lifecycle commands supported by that version.
   insufficient cases become `UNKNOWN` or `PARTIAL_CONTEXT` with an explicit
   next action.
 
-## Latest in `0.4.1`
+## Latest in `0.4.2`
 
 | Area | Current behavior |
 | --- | --- |
-| Onboarding | One `setup` flow composes safe agent integration, repository initialization, indexing, MCP self-test, and repo-local autosync. |
+| Onboarding | The public install path is explicit: `install.sh` installs the binary, agent MCP wiring is optional, and `init` owns each repository's index and autosync. |
 | Queries | Exact-first resolution also understands qualified concept phrases such as `FastAPI route`; `mode` controls evidence gathering and `verbosity` controls payload density. |
 | Conformance | `check` returns static-alignment certificates with explicit unresolved obligations and never claims runtime equivalence. |
 | Freshness | Query-time hashes reject stale evidence; explicit `sync` is authoritative, while default repo-local autosync is a best-effort convenience. |

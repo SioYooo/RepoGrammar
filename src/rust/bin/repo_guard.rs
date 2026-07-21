@@ -102,13 +102,13 @@ const SOURCE_EXTENSIONS: &[&str] = &[
 const IGNORED_DIRS: &[&str] = &[".git", "target", ".codegraph", ".repogrammar"];
 const IGNORED_DIR_PREFIXES: &[&str] = &[".repogrammar-"];
 const MAX_GITDIR_POINTER_BYTES: u64 = 4 * 1024;
-const STABLE_RELEASE_VERSION: &str = "0.4.1";
+const STABLE_RELEASE_VERSION: &str = "0.4.2";
 const STABLE_PREVIEW_VERSION: &str = "0.2.0-preview.0";
-const STABLE_PREVIOUS_PUBLIC_VERSION: &str = "0.4.0";
+const STABLE_PREVIOUS_PUBLIC_VERSION: &str = "0.4.1";
 const FAILED_STABLE_RELEASE_VERSIONS: &[&str] = &["0.2.0", "0.2.1", "0.3.0", "0.3.1", "0.3.2"];
 const PREVIEW_NPM_STAGE_PACKAGE_ASSIGNMENT: &str = r#"package_file="./npm-candidate/sioyooo-repogrammar-${{ needs.classify.outputs.version }}.tgz""#;
 const STABLE_NPM_STAGE_COMMAND: &str =
-    "npm stage publish ./npm-candidate/sioyooo-repogrammar-0.4.1.tgz --access public --tag latest --provenance";
+    "npm stage publish ./npm-candidate/sioyooo-repogrammar-0.4.2.tgz --access public --tag latest --provenance";
 const NPM_PACKAGE_NAME: &str = "@sioyooo/repogrammar";
 const MAX_NPM_CANDIDATE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RELEASE_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -125,7 +125,7 @@ const GITHUB_WORKFLOW_BUILD_TYPE_V1: &str =
 const GITHUB_HOSTED_BUILDER: &str = "https://github.com/actions/runner/github-hosted";
 const RELEASE_REPOSITORY_URL: &str = "https://github.com/SioYooo/RepoGrammar";
 const RELEASE_WORKFLOW_PATH: &str = ".github/workflows/release.yml";
-const RELEASE_DEPENDENCY_URI: &str = "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.4.1";
+const RELEASE_DEPENDENCY_URI: &str = "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.4.2";
 const NPM_PACKAGE_FILES: &[&str] = &[
     "package/LICENSE",
     "package/README.md",
@@ -1273,27 +1273,31 @@ fn smoke_packaged_artifact(
         return Err("instruction sync modified state outside its explicit file".to_string());
     }
 
-    let dry_run = smoke.run_json(
-        "setup dry-run",
+    let init = smoke.run_json(
+        "repository init",
         &[
-            "setup",
+            "init",
             "--project",
             &project,
-            "--target",
-            "auto",
-            "--dry-run",
+            "--yes",
             "--no-autosync",
             "--json",
             "--progress",
             "never",
         ],
     )?;
-    if dry_run["status"] != "dry_run" || dry_run["repository_index_ready"] != false {
-        return Err("setup dry-run readiness was not truthful".to_string());
+    validate_live_init(&init)?;
+
+    if !smoke.project.join(".repogrammar").is_dir() {
+        return Err("repository init did not create repository-local state".to_string());
     }
 
+    // Keep the product MCP self-test gate after repository initialization. On
+    // this already-ready repository setup must not be the authority that
+    // creates the index; it only exercises the existing combined compatibility
+    // journey and product self-test.
     let setup = smoke.run_json(
-        "live setup",
+        "post-init product self-test",
         &[
             "setup",
             "--project",
@@ -1312,7 +1316,7 @@ fn smoke_packaged_artifact(
         || setup["agent_query_ready"] != false
         || !setup["suggested_question"].is_null()
     {
-        return Err("live setup or product MCP self-test evidence was not truthful".to_string());
+        return Err("post-init product MCP self-test evidence was not truthful".to_string());
     }
 
     let resync = smoke.run_json(
@@ -1923,7 +1927,7 @@ fn verify_stable_release_evidence(
     }
 
     let release = read_evidence_json(&directory, "github-release.json")?;
-    if release["tag_name"] != "v0.4.1"
+    if release["tag_name"] != "v0.4.2"
         || release["draft"] != false
         || release["prerelease"] != false
         || release["immutable"] != true
@@ -2092,7 +2096,7 @@ fn verify_stable_release_evidence(
     if candidate_run["name"] != "Release"
         || candidate_run["event"] != "push"
         || candidate_run["conclusion"] != "success"
-        || candidate_run["head_branch"] != "v0.4.1"
+        || candidate_run["head_branch"] != "v0.4.2"
         || candidate_run["path"] != RELEASE_WORKFLOW_PATH
         || candidate_run["head_sha"].as_str() != Some(expected_sha)
     {
@@ -2106,10 +2110,10 @@ fn verify_stable_release_evidence(
     verify_npm_provenance(&audit, manifest_sha512, expected_sha, run_id, run_attempt)?;
 
     for (name, expected) in [
-        ("pinned-version.txt", "repogrammar 0.4.1"),
-        ("latest-version.txt", "repogrammar 0.4.1"),
+        ("pinned-version.txt", "repogrammar 0.4.2"),
+        ("latest-version.txt", "repogrammar 0.4.2"),
         ("preview-version.txt", "repogrammar 0.2.0-preview.0"),
-        ("public-installer-version.txt", "repogrammar 0.4.1"),
+        ("public-installer-version.txt", "repogrammar 0.4.2"),
     ] {
         if read_evidence_text(&directory, name)?.trim() != expected {
             return Err("public npm version smoke did not match the expected channel".to_string());
@@ -2120,8 +2124,12 @@ fn verify_stable_release_evidence(
     {
         return Err("public native product smoke did not pass".to_string());
     }
-    for setup_name in ["pinned-setup.json", "latest-setup.json"] {
-        validate_live_setup(&read_evidence_json(&directory, setup_name)?)?;
+    for init_name in [
+        "public-installer-init.json",
+        "pinned-init.json",
+        "latest-init.json",
+    ] {
+        validate_live_init(&read_evidence_json(&directory, init_name)?)?;
     }
     let dry_run_path = directory.join("setup.json");
     if dry_run_path.exists() {
@@ -2194,13 +2202,15 @@ fn validate_npm_candidate_manifest(
     Ok(())
 }
 
-fn validate_live_setup(setup: &serde_json::Value) -> Result<(), String> {
-    if setup["product_self_test_state"] != "passed"
-        || setup["repository_index_ready"] != true
-        || setup["agent_query_ready"] != false
-        || !setup["suggested_question"].is_null()
+fn validate_live_init(init: &serde_json::Value) -> Result<(), String> {
+    if init["command"] != "init"
+        || init["status"] != "initialized"
+        || init["indexing"] == "not_implemented"
+        || init["resync"]["command"] != "resync"
+        || init["resync"]["status"] != "complete"
+        || init["autosync"] != serde_json::Value::Null
     {
-        return Err("public live setup evidence is not truthful".to_string());
+        return Err("public live repository init evidence is not truthful".to_string());
     }
     Ok(())
 }
@@ -2316,7 +2326,7 @@ fn validate_slsa_provenance(
         || build_definition["buildType"] != GITHUB_WORKFLOW_BUILD_TYPE_V1
         || workflow["repository"] != RELEASE_REPOSITORY_URL
         || workflow["path"] != RELEASE_WORKFLOW_PATH
-        || workflow["ref"] != "refs/tags/v0.4.1"
+        || workflow["ref"] != "refs/tags/v0.4.2"
         || github["event_name"] != "push"
         || dependencies[0]["uri"] != RELEASE_DEPENDENCY_URI
         || dependencies[0]["digest"]["gitCommit"] != expected_sha
@@ -7348,8 +7358,8 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         "permissions:",
         "contents: read",
         "actions: read",
-        "gh release verify v0.4.1",
-        "gh release verify-asset v0.4.1",
+        "gh release verify v0.4.2",
+        "gh release verify-asset v0.4.2",
         "npm-candidate-manifest.json",
         "test \"$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')\" = \"11\"",
         "--jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}'",
@@ -7361,8 +7371,9 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         "smoke-npm-package",
         "evidence/public-native-smoke.txt",
         "evidence/public-installer-version.txt",
-        "evidence/pinned-setup.json",
-        "evidence/latest-setup.json",
+        "evidence/public-installer-init.json",
+        "evidence/pinned-init.json",
+        "evidence/latest-init.json",
         "verify-stable-release-evidence --evidence-dir evidence",
     ];
     let pack_verification_precedes_execution = finalizer
@@ -7904,8 +7915,8 @@ mod tests {
                 STABLE_RELEASE_VERSION,
                 STABLE_RELEASE_VERSION,
                 STABLE_RELEASE_VERSION,
-                r#"{"latest":"0.4.1","preview":"0.4.1"}"#,
-                r#"["0.4.1"]"#,
+                r#"{"latest":"0.4.2","preview":"0.4.2"}"#,
+                r#"["0.4.2"]"#,
             ),
             Err("preview does not match the required stable predecessor")
         );
@@ -7914,8 +7925,8 @@ mod tests {
                 STABLE_RELEASE_VERSION,
                 "0.1.0-preview.9",
                 STABLE_RELEASE_VERSION,
-                r#"{"latest":"0.4.1","preview":"0.1.0-preview.9"}"#,
-                r#"["0.1.0-preview.9","0.4.1"]"#,
+                r#"{"latest":"0.4.2","preview":"0.1.0-preview.9"}"#,
+                r#"["0.1.0-preview.9","0.4.2"]"#,
             ),
             Err("preview does not match the required stable predecessor")
         );
@@ -7935,7 +7946,7 @@ mod tests {
                 STABLE_PREVIEW_VERSION,
                 STABLE_RELEASE_VERSION,
                 &stable_tags,
-                r#"["0.4.1"]"#,
+                r#"["0.4.2"]"#,
             ),
             Err("preview does not reference a published version")
         );
@@ -7955,14 +7966,14 @@ mod tests {
                 STABLE_PREVIEW_VERSION,
                 STABLE_RELEASE_VERSION,
                 &stable_tags,
-                r#"["0.2.0-preview.0","0.4.1"]"#,
+                r#"["0.2.0-preview.0","0.4.2"]"#,
             ),
             Err("previous public stable version is not published")
         );
 
         for tags in [
-            r#"{"latest":"0.4.1"}"#,
-            r#"{"latest":"0.4.1","preview":"0.2.0-preview.0","beta":"0.4.1"}"#,
+            r#"{"latest":"0.4.2"}"#,
+            r#"{"latest":"0.4.2","preview":"0.2.0-preview.0","beta":"0.4.2"}"#,
         ] {
             assert_eq!(
                 release_dist_tag_action(
@@ -7980,7 +7991,7 @@ mod tests {
                 STABLE_RELEASE_VERSION,
                 STABLE_PREVIEW_VERSION,
                 STABLE_RELEASE_VERSION,
-                r#"{"latest":"0.4.1","preview":"0.1.0-preview.9"}"#,
+                r#"{"latest":"0.4.2","preview":"0.1.0-preview.9"}"#,
                 &published_stable,
             ),
             Err("dist-tag inventory does not match the classified values")
@@ -8038,15 +8049,15 @@ mod tests {
             [
                 "release-dist-tag-action",
                 "--version",
-                "0.4.1",
+                "0.4.2",
                 "--preview",
                 "0.2.0-preview.0",
                 "--latest",
-                "0.4.1",
+                "0.4.2",
                 "--tags-json",
-                r#"{"latest":"0.4.1","preview":"0.2.0-preview.0"}"#,
+                r#"{"latest":"0.4.2","preview":"0.2.0-preview.0"}"#,
                 "--versions-json",
-                r#"["0.2.0-preview.0","0.2.2","0.4.0","0.4.1"]"#,
+                r#"["0.2.0-preview.0","0.2.2","0.4.0","0.4.1","0.4.2"]"#,
             ],
             Path::new("."),
         );
@@ -8262,7 +8273,7 @@ mod tests {
             valid_release_workflow().replace("id-token: write", "id-token: read"),
             valid_release_workflow().replace(
                 STABLE_NPM_STAGE_COMMAND,
-                "npm stage inspect ./npm-candidate/sioyooo-repogrammar-0.4.1.tgz --access public --tag latest --provenance",
+                "npm stage inspect ./npm-candidate/sioyooo-repogrammar-0.4.2.tgz --access public --tag latest --provenance",
             ),
         ] {
             write_file(
@@ -8298,7 +8309,7 @@ mod tests {
 
         let invalid = valid_release_workflow().replace(
             STABLE_NPM_STAGE_COMMAND,
-            "npm stage publish npm-candidate/sioyooo-repogrammar-0.4.1.tgz --access public --tag latest --provenance",
+            "npm stage publish npm-candidate/sioyooo-repogrammar-0.4.2.tgz --access public --tag latest --provenance",
         );
         assert_ne!(invalid, valid_release_workflow());
         write_file(
@@ -8431,7 +8442,7 @@ mod tests {
         let exact = STABLE_NPM_STAGE_COMMAND;
         let dynamic = valid_release_workflow().replace(
             exact,
-            &format!("# {exact}\n    npm \"${{subcommand}}\" ./npm-candidate/sioyooo-repogrammar-0.4.1.tgz --access public --tag latest --provenance"),
+            &format!("# {exact}\n    npm \"${{subcommand}}\" ./npm-candidate/sioyooo-repogrammar-0.4.2.tgz --access public --tag latest --provenance"),
         );
         write_file(
             root.path().join(".github/workflows/release.yml"),
@@ -8512,8 +8523,9 @@ mod tests {
             "verify-npm-pack-evidence",
             "evidence/public-native-smoke.txt",
             "evidence/public-installer-version.txt",
-            "evidence/pinned-setup.json",
-            "evidence/latest-setup.json",
+            "evidence/public-installer-init.json",
+            "evidence/pinned-init.json",
+            "evidence/latest-init.json",
         ] {
             let invalid = valid_stable_finalize_workflow().replace(marker, "removed");
             write_file(
@@ -8659,7 +8671,7 @@ npm@11.18.0
     name: npm-package-${{ needs.classify.outputs.version }}
     smoke-npm-package
     verify-npm-pack-evidence
-    npm stage publish ./npm-candidate/sioyooo-repogrammar-0.4.1.tgz --access public --tag latest --provenance
+    npm stage publish ./npm-candidate/sioyooo-repogrammar-0.4.2.tgz --access public --tag latest --provenance
 "#
         .to_string()
     }
@@ -8697,8 +8709,8 @@ candidate_run_attempt:
 permissions:
 contents: read
 actions: read
-gh release verify v0.4.1
-gh release verify-asset v0.4.1
+gh release verify v0.4.2
+gh release verify-asset v0.4.2
 npm-candidate-manifest.json
 test "$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
 --jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}'
@@ -8712,8 +8724,9 @@ npm audit signatures --json --include-attestations
 smoke-npm-package
 evidence/public-native-smoke.txt
 evidence/public-installer-version.txt
-evidence/pinned-setup.json
-evidence/latest-setup.json
+evidence/public-installer-init.json
+evidence/pinned-init.json
+evidence/latest-init.json
 if: github.ref != 'refs/heads/main'
 smoke_root="${RUNNER_TEMP}/public-release-smoke"
 for tool in node npm npx python3 sh bash tar gzip git uname ldd getconf sha256sum curl chmod mkdir cp mv rm ln; do
@@ -8784,7 +8797,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "--fixture",
                 "missing-fixture.py",
                 "--expected-version",
-                "0.4.1",
+                "0.4.2",
             ],
             root.path(),
         );
@@ -8981,7 +8994,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "dependency_uri" => {
                     statement["predicate"]["buildDefinition"]["resolvedDependencies"][0]["uri"] =
                         serde_json::Value::String(
-                            "git+https://github.com/foreign/RepoGrammar@refs/tags/v0.4.1"
+                            "git+https://github.com/foreign/RepoGrammar@refs/tags/v0.4.2"
                                 .to_string(),
                         );
                 }
@@ -9172,8 +9185,9 @@ verify-stable-release-evidence --evidence-dir evidence
             "tag_key",
             "native_smoke",
             "installer_version",
-            "pinned_setup",
-            "latest_setup",
+            "installer_init",
+            "pinned_init",
+            "latest_init",
             "dry_run_setup",
         ] {
             let root = TempRoot::new(&format!("stable-public-smoke-{field}"));
@@ -9194,14 +9208,17 @@ verify-stable-release-evidence --evidence-dir evidence
                     evidence.join("public-installer-version.txt"),
                     b"repogrammar 0.2.0-preview.0\n",
                 ),
-                "pinned_setup" | "latest_setup" => {
-                    let path = evidence.join(format!(
-                        "{}-setup.json",
-                        field.strip_suffix("_setup").expect("setup field prefix")
-                    ));
-                    let mut setup = read_json(&path);
-                    setup["agent_query_ready"] = serde_json::Value::Bool(true);
-                    write_json(path, &setup);
+                "installer_init" | "pinned_init" | "latest_init" => {
+                    let filename = match field {
+                        "installer_init" => "public-installer-init.json",
+                        "pinned_init" => "pinned-init.json",
+                        "latest_init" => "latest-init.json",
+                        _ => unreachable!(),
+                    };
+                    let path = evidence.join(filename);
+                    let mut init = read_json(&path);
+                    init["status"] = serde_json::Value::String("failed".to_string());
+                    write_json(path, &init);
                 }
                 "dry_run_setup" => {
                     let path = evidence.join("setup.json");
@@ -9736,7 +9753,7 @@ verify-stable-release-evidence --evidence-dir evidence
             "schema_version": 1,
             "package_name": NPM_PACKAGE_NAME,
             "version": STABLE_RELEASE_VERSION,
-            "filename": "sioyooo-repogrammar-0.4.1.tgz",
+            "filename": "sioyooo-repogrammar-0.4.2.tgz",
             "sha512": hex_digest(&digest),
             "integrity": format!("sha512-{}", base64_encode(&digest)),
             "files": NPM_PACKAGE_FILES,
@@ -9749,7 +9766,7 @@ verify-stable-release-evidence --evidence-dir evidence
         serde_json::json!({
             "_type": IN_TOTO_STATEMENT_V1,
             "subject": [{
-                "name": "pkg:npm/%40sioyooo/repogrammar@0.4.1",
+                "name": "pkg:npm/%40sioyooo/repogrammar@0.4.2",
                 "digest": {"sha512": hex_digest(&[0x2a_u8; 64])}
             }],
             "predicateType": SLSA_PROVENANCE_V1,
@@ -9760,7 +9777,7 @@ verify-stable-release-evidence --evidence-dir evidence
                         "workflow": {
                             "repository": RELEASE_REPOSITORY_URL,
                             "path": RELEASE_WORKFLOW_PATH,
-                            "ref": "refs/tags/v0.4.1"
+                            "ref": "refs/tags/v0.4.2"
                         }
                     },
                     "internalParameters": {"github": {"event_name": "push"}},
@@ -9799,7 +9816,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "location": "node_modules/@sioyooo/repogrammar",
                 "registry": NPM_REGISTRY_URL,
                 "attestations": {
-                    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@sioyooo%2frepogrammar@0.4.1",
+                    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@sioyooo%2frepogrammar@0.4.2",
                     "provenance": {"predicateType": SLSA_PROVENANCE_V1}
                 },
                 "attestationBundles": [
@@ -9860,7 +9877,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(
             evidence.join("github-release.json"),
             &serde_json::json!({
-                "tag_name": "v0.4.1",
+                "tag_name": "v0.4.2",
                 "draft": false,
                 "prerelease": false,
                 "immutable": true,
@@ -9883,7 +9900,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(
             evidence.join("public-npm-pack.json"),
             &serde_json::json!([{
-                "filename": "sioyooo-repogrammar-0.4.1.tgz",
+                "filename": "sioyooo-repogrammar-0.4.2.tgz",
                 "integrity": manifest["integrity"],
                 "files": [
                     {"path": "LICENSE"},
@@ -9925,7 +9942,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "name": "Release",
                 "path": RELEASE_WORKFLOW_PATH,
                 "event": "push",
-                "head_branch": "v0.4.1",
+                "head_branch": "v0.4.2",
                 "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "conclusion": "success"
             }),
@@ -9939,10 +9956,10 @@ verify-stable-release-evidence --evidence-dir evidence
             &stable_audit_signatures(&stable_provenance_statement()),
         );
         for (name, value) in [
-            ("pinned-version.txt", "repogrammar 0.4.1\n"),
-            ("latest-version.txt", "repogrammar 0.4.1\n"),
+            ("pinned-version.txt", "repogrammar 0.4.2\n"),
+            ("latest-version.txt", "repogrammar 0.4.2\n"),
             ("preview-version.txt", "repogrammar 0.2.0-preview.0\n"),
-            ("public-installer-version.txt", "repogrammar 0.4.1\n"),
+            ("public-installer-version.txt", "repogrammar 0.4.2\n"),
             (
                 "public-native-smoke.txt",
                 "packaged artifact smoke passed\n",
@@ -9950,14 +9967,16 @@ verify-stable-release-evidence --evidence-dir evidence
         ] {
             write_file(evidence.join(name), value.as_bytes());
         }
-        let live_setup = serde_json::json!({
-            "product_self_test_state": "passed",
-            "repository_index_ready": true,
-            "agent_query_ready": false,
-            "suggested_question": null
+        let live_init = serde_json::json!({
+            "command": "init",
+            "status": "initialized",
+            "indexing": "syntax_only_code_units",
+            "resync": {"command": "resync", "status": "complete"},
+            "autosync": null
         });
-        write_json(evidence.join("pinned-setup.json"), &live_setup);
-        write_json(evidence.join("latest-setup.json"), &live_setup);
+        write_json(evidence.join("public-installer-init.json"), &live_init);
+        write_json(evidence.join("pinned-init.json"), &live_init);
+        write_json(evidence.join("latest-init.json"), &live_init);
         write_json(
             evidence.join("setup.json"),
             &serde_json::json!({

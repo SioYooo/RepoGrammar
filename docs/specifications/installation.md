@@ -12,15 +12,19 @@ The ownership model has three separate layers:
    RepoGrammar index and daemon, or `repogrammar init --no-autosync` for a
    deterministic one-shot index without background sync.
 
-`repogrammar setup` is the primary onboarding journey after the CLI has been
-acquired. It composes layers 2 and 3 in one reviewed plan and one confirmation,
-but it does not merge their ownership or rollback rules. The npm launcher and
-release installers remain responsible only for acquiring the product binary and
-bundled worker, then forwarding setup arguments unchanged. Setup delegates
-machine-level writes to the existing install service and receipts, delegates
-repository state/index/auto-sync to the existing lifecycle services, and ends
-with a read-only product-binary MCP self-test. It never downloads itself and
-does not make `repogrammar install` initialize or delete `.repogrammar/`.
+The public onboarding contract uses those three explicit layers. The npm
+launcher and release installers acquire only the product binary and bundled
+worker. `repogrammar install` is the optional coding-agent setup step, and
+`repogrammar init` is the per-repository initialization step.
+
+`repogrammar setup` remains a compatibility shortcut that composes layers 2 and
+3 in one reviewed plan and one confirmation. It does not merge their ownership
+or rollback rules and is not required by the public installation path. Setup
+delegates machine-level writes to the existing install service and receipts,
+delegates repository state/index/auto-sync to the existing lifecycle services,
+and ends with a read-only product-binary MCP self-test. It never downloads
+itself and does not make `repogrammar install` initialize or delete
+`.repogrammar/`.
 
 `setup --target auto` selects only detected targets with a live writer. If none
 are available, setup still initializes and indexes the repository and reports a
@@ -114,9 +118,10 @@ bundled Python worker asset under `workers/python/worker.py`, and must have a
 matching `.sha256` checksum asset.
 The release build must unpack and execute each exact archive on its native
 runner before upload. The packaged binary smoke enforces Python 3.10+ and runs
-`version`, isolated `setup --dry-run --json`, isolated live setup through the
-product MCP self-test, full and incremental sync of the committed Pydantic
-release fixture, and its bounded `find` plus static-alignment `check` path. The
+`version`, isolated instruction sync, explicit live `init --no-autosync`, the
+combined `setup` compatibility path only for the product MCP self-test, full
+and incremental sync of the committed Pydantic release fixture, and its bounded
+`find` plus static-alignment `check` path. The
 `check` result must be a static-alignment token (`STATICALLY_ALIGNED`,
 `STATIC_DEVIATION`, `PARTIAL_ALIGNMENT`, `INSUFFICIENT_EVIDENCE`, or `UNKNOWN`)
 with `runtime_equivalence: "UNKNOWN"` rather than being promoted to runtime
@@ -152,9 +157,9 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-candidate and post-publication documentation should pin `v0.4.1` for
+candidate and post-publication documentation should pin `v0.4.2` for
 reproducible acquisition, but public-install claims must remain on the last
-verified public stable (`v0.4.0`) until GitHub, npm, and finalizer evidence all
+verified public stable (`v0.4.1`) until GitHub, npm, and finalizer evidence all
 pass. When a `latest` or explicit artifact lookup fails, installers must report
 that the release artifact was not found, suggest the exact
 `--version <release-tag>`, and mention `REPOGRAMMAR_RELEASE_DIR` for local
@@ -183,12 +188,12 @@ contributor source-build path. It must not duplicate native agent configuration
 or product-deletion ownership logic outside the Rust application, and it must
 not create or modify `.repogrammar/`.
 
-The current release-source manifests use stable identity `0.4.1`. A source
+The current release-source manifests use stable identity `0.4.2`. A source
 build or source install must report that identity consistently across Cargo and
 npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
-to `0.4.1` only after exact-version GitHub and npm checks confirm publication;
-until then `0.4.0` remains the last verified public stable release.
+to `0.4.2` only after exact-version GitHub and npm checks confirm publication;
+until then `0.4.1` remains the last verified public stable release.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
@@ -304,7 +309,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.4.1.tgz` for the current
+  `npm install -g ./sioyooo-repogrammar-0.4.2.tgz` for the current
   source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
