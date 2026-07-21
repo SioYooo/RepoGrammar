@@ -2,8 +2,24 @@
 
 ## Unreleased
 
+This section describes current source only. It is not evidence that a new Git
+tag, GitHub Release, npm package, provenance record, dist-tag, or public
+finalizer exists. The immutable public `v0.4.0` artifacts retain their shipped
+CLI behavior until this work is published under a new patch-forward version.
+
 ### Added
 
+- Added an atomic product installation receipt at
+  `$DATA_DIR/receipts/product-install.json`. First-party shell, PowerShell, and
+  Rust installation paths share the same ownership writer and record the exact
+  data directory, authority, command kind and hashes, plus deterministic
+  bundled worker paths and hashes.
+- Added conservative legacy-install ownership inference and a private post-exit
+  uninstall finalizer. The helper requires a validated create-new cleanup plan,
+  exact `READY`, one-shot `COMMIT`, lifecycle-channel EOF, parent-exit proof,
+  and deletion-time identity checks before removing any product file.
+- Added structured finalizer reports with complete/partial status, removed,
+  preserved, failed, residual-copy, and manual-recovery fields.
 - Added an optional `against` input to the two-sided static-alignment operations
   `explain_deviation` / `check_conformance` (CLI `explain` / `check`, `--against`).
   It names the COMPARISON family and pins it to exactly one fresh ready family (an
@@ -13,7 +29,6 @@
   closed input schema (every existing `target`-only call is byte-compatible) and is
   rejected — never silently ignored — on any other operation/command. See ADR-0029
   (Phase 4 note).
-
 - Added an optional `target`/`within` (a directory/module scope) to the MCP
   `inspect_readiness` operation and a matching `--target`/`--within` to
   `repogrammar doctor`, returning a bounded, source-free SCOPED queryability
@@ -46,6 +61,17 @@
 
 ### Changed
 
+- Changed bare `repogrammar uninstall [--dry-run] [--yes] [--json]` to remove
+  only the ownership-proven first-party managed machine installation. The
+  previous receipt-backed coding-agent removal is now `repogrammar disconnect`.
+  `uninstall --target ...` fails with migration guidance instead of guessing
+  the old meaning. This is an intentional pre-1.0 breaking CLI correction.
+- Made first-party installer wrappers delegate agent-only removal to
+  `disconnect` and complete product removal to `uninstall`; deprecated
+  command-only removal no longer deletes product files directly.
+- Product uninstall preserves repository-local `.repogrammar/`, telemetry,
+  research and experiment records, unknown global files, and npm/Cargo or
+  unmanaged PATH copies. Residual copies are reported rather than removed.
 - Changed `explain_deviation` (CLI `explain`) from a `find_analogues` alias into a
   real deviation projection: it now runs the same two-sided static-alignment
   resolution as `check_conformance`, resolving the subject to exactly one code unit
@@ -66,6 +92,18 @@
   resolution never carries a `selected_family_id` — committed family precision is
   unchanged (a family is selected only when exactly one high-confidence family
   resolves). Non-scope outcomes are byte-unchanged.
+
+### Fixed
+
+- Made product uninstall preflight every product asset and native agent state
+  before mutation. Agent-removal or helper failures stop binary cleanup;
+  pre-commit failures roll back agent mutations where possible, while failures
+  after finalizer commit produce a truthful partial report rather than success.
+- Bound final deletion to verified parent descriptors/handles, CSPRNG
+  quarantine names and commit capabilities, snapshotted empty-directory
+  identities, and atomic in-progress report checkpoints. Receipt-backed
+  zero-worker installs and empty agent-receipt directories now uninstall
+  without weakening legacy ownership evidence.
 
 ## 0.4.0 — 2026-07-20 stable channel
 

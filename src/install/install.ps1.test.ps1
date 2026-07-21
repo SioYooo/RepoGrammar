@@ -81,6 +81,50 @@ try {
     $SourceBinary = Join-Path $RepoRoot "target\debug\repogrammar.exe"
     Assert-PathExists $SourceBinary "source binary was not built"
 
+    $CustomWorkerCommandDir = Join-Path $TempRoot "custom-worker-bin"
+    $CustomWorkerInstallDir = Join-Path $TempRoot "custom-worker-data"
+    $CustomWorkerRoot = Join-Path $TempRoot "custom-workers"
+    $CustomWorkerOut = Join-Path $TempRoot "custom-worker.out"
+    $SavedCustomWorkerEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -InstallCliOnly `
+            -FromSource `
+            -SourceBinary $SourceBinary `
+            -CommandDir $CustomWorkerCommandDir `
+            -InstallDir $CustomWorkerInstallDir `
+            -WorkerRoot $CustomWorkerRoot `
+            -Yes *> $CustomWorkerOut
+        $CustomWorkerStatus = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $SavedCustomWorkerEap
+    }
+    if ($CustomWorkerStatus -eq 0) {
+        throw "custom worker-root install unexpectedly succeeded"
+    }
+    Assert-Contains $CustomWorkerOut "custom -WorkerRoot/REPOGRAMMAR_WORKER_ROOT is not supported"
+    if ((Test-Path $CustomWorkerCommandDir) -or (Test-Path $CustomWorkerInstallDir) -or (Test-Path $CustomWorkerRoot)) {
+        throw "rejected custom worker-root install wrote managed files"
+    }
+
+    $PurgeTargetOut = Join-Path $TempRoot "purge-target.out"
+    $SavedPurgeTargetEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -Purge `
+            -Target codex `
+            -Yes *> $PurgeTargetOut
+        $PurgeTargetStatus = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $SavedPurgeTargetEap
+    }
+    if ($PurgeTargetStatus -eq 0) {
+        throw "product wrapper silently accepted -Target"
+    }
+    Assert-Contains $PurgeTargetOut "Use -DisconnectAgents -Target"
+
     $TestHome = Join-Path $TempRoot "home"
     New-Item -ItemType Directory -Force -Path $TestHome | Out-Null
     $env:USERPROFILE = $TestHome
@@ -102,6 +146,7 @@ try {
     }
     Assert-PathExists (Join-Path $CommandDir "repogrammar.exe") "command was not installed"
     Assert-PathExists (Join-Path $InstallDir "bin\repogrammar.exe") "managed binary was not installed"
+    Assert-PathExists (Join-Path $InstallDir "receipts\product-install.json") "product installation receipt was not written"
     Assert-PathExists (Join-Path $InstallDir "workers\python\worker.py") "worker asset was not installed"
     Assert-PathExists (Join-Path $CommandDir "repogrammar-workers\python\worker.py") "command worker asset was not installed"
     & (Join-Path $CommandDir "repogrammar.exe") version | Out-Null
@@ -441,13 +486,15 @@ exit /B 1
     }
     Assert-PathExists (Join-Path $AutoPruneCommandDir "repogrammar.exe") "command copy must survive automatic prune"
 
-    # -Purge removes binaries/workers/data under a fake home + restricted PATH, so
-    # it can never touch the developer's real install or running processes.
+    # -Purge delegates full removal to the ownership-validating Rust CLI. It must
+    # preserve repository state and package-manager/unmanaged PATH copies.
     $PurgeHome = Join-Path $TempRoot "purge-home"
     $PurgeCommandDir = Join-Path $TempRoot "purge-bin"
     $PurgeInstallDir = Join-Path $TempRoot "purge-data"
     $PurgeExtraDir = Join-Path $TempRoot "purge-extra"
-    New-Item -ItemType Directory -Force -Path $PurgeHome, $PurgeExtraDir | Out-Null
+    $PurgeRepo = Join-Path $TempRoot "purge-repo"
+    $PurgeCargoDir = Join-Path $PurgeHome ".cargo\bin"
+    New-Item -ItemType Directory -Force -Path $PurgeHome, $PurgeExtraDir, $PurgeCargoDir, (Join-Path $PurgeRepo ".repogrammar") | Out-Null
     Invoke-InstallerWithPath $PurgeCommandDir {
         & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
             -InstallCliOnly `
@@ -461,6 +508,24 @@ exit /B 1
         throw "purge setup install failed with exit code $LASTEXITCODE"
     }
     Set-Content -Path (Join-Path $PurgeExtraDir "repogrammar.exe") -Value "extra-copy"
+    Set-Content -Path (Join-Path $PurgeCargoDir "repogrammar.exe") -Value "cargo-copy"
+    Set-Content -Path (Join-Path $PurgeRepo ".repogrammar\sentinel") -Value "keep"
+    $PurgeDryRunOut = Join-Path $TempRoot "purge-dry-run.out"
+    Invoke-InstallerWithPath "$PurgeCommandDir;$PurgeExtraDir;$PurgeCargoDir" {
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -Purge `
+            -DryRun `
+            -Project $PurgeRepo `
+            -CommandDir $PurgeCommandDir `
+            -InstallDir $PurgeInstallDir `
+            -Yes *> $PurgeDryRunOut
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "purge dry-run failed with exit code $LASTEXITCODE"
+    }
+    Assert-PathExists (Join-Path $PurgeCommandDir "repogrammar.exe") "purge dry-run removed the managed command"
+    Assert-PathExists (Join-Path $PurgeInstallDir "bin\repogrammar.exe") "purge dry-run removed the authority binary"
+    Assert-Contains (Join-Path $PurgeRepo ".repogrammar\sentinel") "keep"
     $PurgeOut = Join-Path $TempRoot "purge.out"
     $SavedPurgeUserProfile = $env:USERPROFILE
     $SavedPurgePath = $env:PATH
@@ -469,6 +534,7 @@ exit /B 1
         $env:PATH = "$PurgeCommandDir;$PurgeExtraDir"
         & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
             -Purge `
+            -Project $PurgeRepo `
             -CommandDir $PurgeCommandDir `
             -InstallDir $PurgeInstallDir `
             -Yes *> $PurgeOut
@@ -480,14 +546,56 @@ exit /B 1
     if ($PurgeStatus -ne 0) {
         throw "purge run failed with exit code $PurgeStatus"
     }
+    Assert-Contains $PurgeOut "status=finalizer_pending"
+    Assert-Contains $PurgeOut "report_path="
+    Assert-Contains $PurgeOut "Repository state is preserved"
+    for ($i = 0; $i -lt 200 -and ((Test-Path $PurgeInstallDir) -or (Test-Path (Join-Path $PurgeCommandDir "repogrammar.exe"))); $i++) {
+        Start-Sleep -Milliseconds 50
+    }
     if (Test-Path $PurgeInstallDir) {
-        throw "purge did not remove the install data directory"
+        throw "delegated product uninstall did not remove the owned install data directory"
     }
     if (Test-Path (Join-Path $PurgeCommandDir "repogrammar.exe")) {
         throw "purge did not remove the command binary"
     }
     if (Test-Path (Join-Path $PurgeExtraDir "repogrammar.exe")) {
-        throw "purge did not remove the extra PATH copy"
+        Assert-Contains (Join-Path $PurgeExtraDir "repogrammar.exe") "extra-copy"
+    } else {
+        throw "purge removed an unmanaged PATH copy"
+    }
+    Assert-Contains (Join-Path $PurgeCargoDir "repogrammar.exe") "cargo-copy"
+    Assert-Contains (Join-Path $PurgeRepo ".repogrammar\sentinel") "keep"
+
+    $DeprecatedOut = Join-Path $TempRoot "deprecated-uninstall-command.out"
+    $SavedDeprecatedEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Installer `
+            -UninstallCommand `
+            -CommandDir $CommandDir `
+            -InstallDir $InstallDir `
+            -Yes *> $DeprecatedOut
+        $DeprecatedStatus = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $SavedDeprecatedEap
+    }
+    if ($DeprecatedStatus -eq 0) {
+        throw "deprecated -UninstallCommand unexpectedly succeeded"
+    }
+    Assert-Contains $DeprecatedOut "-UninstallCommand is deprecated"
+    Assert-Contains $DeprecatedOut "repogrammar uninstall --yes"
+    Assert-PathExists (Join-Path $CommandDir "repogrammar.exe") "deprecated command-only removal deleted the command"
+
+    $InstallerSource = Get-Content -Raw $Installer
+    if (!$InstallerSource.Contains('& $rg disconnect --target $Target --scope $Scope --yes')) {
+        throw "agent-only wrapper action does not delegate to repogrammar disconnect"
+    }
+    if (!$InstallerSource.Contains('& $rg @arguments')) {
+        throw "product wrapper action does not delegate to repogrammar uninstall arguments"
+    }
+    if ($InstallerSource.Contains('Remove-Item -LiteralPath $InstallDir -Recurse') -or
+        $InstallerSource.Contains('& $rg uninit')) {
+        throw "wrapper still directly removes product/repository state"
     }
 
     $FailureCommandDir = Join-Path $TempRoot "failure-bin"

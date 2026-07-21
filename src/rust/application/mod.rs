@@ -6,6 +6,8 @@ pub mod family;
 pub mod indexing;
 pub mod install;
 pub(crate) mod process_liveness;
+pub mod product_installation;
+pub mod product_uninstall;
 pub mod progress;
 pub(crate) mod proof_lattice;
 pub mod providers;

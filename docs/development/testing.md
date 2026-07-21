@@ -24,11 +24,13 @@ allowed.
   directory, inspect its files/metadata, install it into an isolated prefix
   offline, execute its wrapper against local fake release assets, and remove
   the tarball with the temporary directory.
-- Native CI must run the PowerShell source-only installer contract on Windows.
-  That job is platform evidence for the contributor path only and must not
-  upload or imply a Windows release artifact. The wrapper must explicitly
-  return success after asserting an intentionally failing child invocation so
-  the expected child status cannot become the native test process status.
+- Native CI may run the PowerShell source-only installer contract on Windows as
+  a non-blocking diagnostic. Linux and macOS are the only supported install,
+  product-uninstall, and release-gate platforms; Windows results must not block
+  those gates, upload an artifact, or imply Windows product support. The
+  wrapper must explicitly return success after asserting an intentionally
+  failing child invocation so the expected child status cannot become the
+  native test process status.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
 - Process-boundary tests that rely on inherited child pipes must make child
@@ -597,8 +599,9 @@ allowed.
   release-artifact path for `src/install/repogrammar-install.sh`, including
   checksum verification, CLI command installation, bundled worker asset
   installation, delegated
-  `repogrammar install` / `repogrammar uninstall` invocation through a fake
-  binary, source-checkout `--from-source` install/configure dogfood without
+  `repogrammar install` / `repogrammar disconnect` / `repogrammar uninstall`
+  delegation through a fake binary, source-checkout `--from-source`
+  install/configure dogfood without
   network access, actionable no-release failure text, refusal to replace an
   unmanaged command without the `--replace-unmanaged-command` opt-in plus
   backup/replacement with it, a directory command path still failing, missing-worker
@@ -1620,9 +1623,10 @@ verifier-environment correction, not a product or publication change.
   messages to `repogrammar serve --project <tmp-fixture>` and verify that
   `repogrammar_context` is advertised.
 - Installer planner smoke: run `repogrammar install --target all --scope global
-  --dry-run` and `repogrammar uninstall --target all --scope global --dry-run`.
-  These commands are human-plan dry runs today; do not add `--json` unless the
-  installer contract grows JSON output.
+  --dry-run`, `repogrammar disconnect --target all --scope global --dry-run`,
+  and `repogrammar uninstall --dry-run --json`. Assert that product uninstall
+  reports only receipt-backed or conservatively inferred owned paths and the
+  repository/user-data preservation boundary.
 
 Optional security scans are source-tree checks, not substitutes for the normal
 Rust, worker, installer, and repo-guard gates:

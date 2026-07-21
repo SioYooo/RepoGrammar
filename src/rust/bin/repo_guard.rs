@@ -237,6 +237,21 @@ where
                 Err(error) => CommandResult::err(format!("{error}\n")),
             }
         }
+        [command, binary_flag, binary, worker_flag, worker, fixture_flag, fixture, version_flag, expected_version, uninstall_flag]
+            if command == "smoke-packaged-artifact"
+                && binary_flag == "--binary"
+                && worker_flag == "--worker"
+                && fixture_flag == "--fixture"
+                && version_flag == "--expected-version"
+                && uninstall_flag == "--require-product-uninstall" =>
+        {
+            match smoke_packaged_artifact(root, binary, worker, fixture, expected_version, true) {
+                Ok(()) => CommandResult::ok("packaged artifact smoke passed\n"),
+                Err(error) => {
+                    CommandResult::err(format!("packaged artifact smoke failed: {error}\n"))
+                }
+            }
+        }
         [command, binary_flag, binary, worker_flag, worker, fixture_flag, fixture, version_flag, expected_version]
             if command == "smoke-packaged-artifact"
                 && binary_flag == "--binary"
@@ -244,7 +259,7 @@ where
                 && fixture_flag == "--fixture"
                 && version_flag == "--expected-version" =>
         {
-            match smoke_packaged_artifact(root, binary, worker, fixture, expected_version) {
+            match smoke_packaged_artifact(root, binary, worker, fixture, expected_version, false) {
                 Ok(()) => CommandResult::ok("packaged artifact smoke passed\n"),
                 Err(error) => {
                     CommandResult::err(format!("packaged artifact smoke failed: {error}\n"))
@@ -334,7 +349,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -854,6 +869,7 @@ struct PackagedArtifactSmoke {
     project: PathBuf,
     tools: PathBuf,
     binary: PathBuf,
+    worker: PathBuf,
     python: PathBuf,
     autosync_started: bool,
 }
@@ -878,6 +894,10 @@ impl PackagedArtifactSmoke {
             return Err("packaged worker layout is invalid".to_string());
         }
         let root = unique_smoke_root();
+        fs::create_dir(&root)
+            .map_err(|_| "could not create isolated packaged smoke root".to_string())?;
+        let root = fs::canonicalize(&root)
+            .map_err(|_| "could not resolve isolated packaged smoke root".to_string())?;
         let home = root.join("home");
         let project = root.join("project");
         let tools = root.join("tools");
@@ -895,13 +915,21 @@ impl PackagedArtifactSmoke {
             project,
             tools,
             binary,
+            worker,
             python,
             autosync_started: false,
         })
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(&self.binary);
+        self.command_with_binary(&self.binary)
+    }
+
+    fn command_with_binary(&self, binary: &Path) -> Command {
+        let mut command = Command::new(binary);
+        let package_manager_bin = self.root.join("unmanaged-package-manager/bin");
+        let isolated_path = env::join_paths([self.tools.as_path(), package_manager_bin.as_path()])
+            .expect("isolated smoke paths are valid PATH entries");
         command
             .env_clear()
             .current_dir(&self.project)
@@ -911,9 +939,196 @@ impl PackagedArtifactSmoke {
             .env("XDG_DATA_HOME", self.home.join(".local/share"))
             .env("XDG_CACHE_HOME", self.home.join(".cache"))
             .env("CODEX_HOME", self.home.join(".codex"))
-            .env("PATH", &self.tools)
+            .env("PATH", isolated_path)
             .env("REPOGRAMMAR_PYTHON_EXECUTABLE", &self.python);
         command
+    }
+
+    fn managed_data_dir(&self) -> PathBuf {
+        self.root.join("machine/data")
+    }
+
+    fn managed_command_dir(&self) -> PathBuf {
+        self.root.join("machine/commands")
+    }
+
+    fn managed_authority(&self) -> PathBuf {
+        self.managed_data_dir().join("bin/repogrammar")
+    }
+
+    fn managed_command(&self) -> PathBuf {
+        self.managed_command_dir().join("repogrammar")
+    }
+
+    fn managed_command_with_binary(&self, binary: &Path) -> Command {
+        let mut command = self.command_with_binary(binary);
+        command
+            .env("REPOGRAMMAR_INSTALL_DIR", self.managed_data_dir())
+            .env("REPOGRAMMAR_COMMAND_DIR", self.managed_command_dir())
+            .env("REPOGRAMMAR_EXECUTABLE", &self.binary)
+            .env(
+                "REPOGRAMMAR_INSTRUCTION_FILE_CODEX",
+                self.root.join("machine/codex-instructions.md"),
+            );
+        command
+    }
+
+    fn run_managed_text(
+        &self,
+        binary: &Path,
+        stage: &'static str,
+        args: &[&str],
+    ) -> Result<String, String> {
+        let output = self
+            .managed_command_with_binary(binary)
+            .args(args)
+            .output()
+            .map_err(|_| format!("{stage} could not execute"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "{stage} returned a failure status: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|_| format!("{stage} output was not UTF-8"))?;
+        Ok(stdout)
+    }
+
+    fn run_managed_json(
+        &self,
+        binary: &Path,
+        stage: &'static str,
+        args: &[&str],
+    ) -> Result<serde_json::Value, String> {
+        let stdout = self.run_managed_text(binary, stage, args)?;
+        serde_json::from_str(stdout.trim()).map_err(|_| format!("{stage} output was not JSON"))
+    }
+
+    #[cfg(unix)]
+    fn stage_machine_uninstall_fixture(&self) -> Result<MachineUninstallFixture, String> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let data_dir = self.managed_data_dir();
+        let command_dir = self.managed_command_dir();
+        let data_worker = data_dir.join("workers/python/worker.py");
+        let command_worker = command_dir.join("repogrammar-workers/python/worker.py");
+        for worker in [&data_worker, &command_worker] {
+            fs::create_dir_all(
+                worker
+                    .parent()
+                    .ok_or_else(|| "managed worker path had no parent".to_string())?,
+            )
+            .map_err(|_| "could not create managed worker directory".to_string())?;
+            fs::copy(&self.worker, worker)
+                .map_err(|_| "could not stage managed worker".to_string())?;
+        }
+
+        let codex = self.tools.join("codex");
+        let claude = self.tools.join("claude");
+        fs::write(
+            &codex,
+            r#"#!/bin/sh
+state="$HOME/.fake-codex-repogrammar"
+if [ "$1" = "mcp" ] && [ "$2" = "get" ] && [ "$3" = "repogrammar" ]; then
+  if [ ! -s "$state" ]; then
+    printf "Error: No MCP server named 'repogrammar' found.\n" >&2
+    exit 1
+  fi
+  IFS= read -r command_path < "$state"
+  printf '{"name":"repogrammar","enabled":true,"transport":{"type":"stdio","command":"%s","args":["serve"]}}\n' "$command_path"
+  exit 0
+fi
+if [ "$1" = "mcp" ] && [ "$2" = "add" ] && [ "$3" = "repogrammar" ] && [ "$4" = "--" ] && [ "$6" = "serve" ]; then
+  printf '%s\n' "$5" > "$state"
+  exit 0
+fi
+if [ "$1" = "mcp" ] && [ "$2" = "remove" ] && [ "$3" = "repogrammar" ]; then
+  : > "$state"
+  exit 0
+fi
+exit 2
+"#,
+        )
+        .map_err(|_| "could not stage isolated Codex MCP probe".to_string())?;
+        fs::write(
+            &claude,
+            r#"#!/bin/sh
+printf 'No MCP server named "repogrammar". Run `claude mcp add` to add one.\n' >&2
+exit 1
+"#,
+        )
+        .map_err(|_| "could not stage isolated Claude MCP probe".to_string())?;
+        for program in [&codex, &claude] {
+            let mut permissions = fs::metadata(program)
+                .map_err(|_| "could not inspect isolated agent probe".to_string())?
+                .permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(program, permissions)
+                .map_err(|_| "could not protect isolated agent probe".to_string())?;
+        }
+
+        let repository_sentinel = self
+            .root
+            .join("uninstall-repository/.repogrammar/product-uninstall-preserved");
+        fs::create_dir_all(
+            repository_sentinel
+                .parent()
+                .ok_or_else(|| "repository-state sentinel had no parent".to_string())?,
+        )
+        .map_err(|_| "could not create repository-state sentinel directory".to_string())?;
+        fs::write(&repository_sentinel, b"repository-local state\n")
+            .map_err(|_| "could not stage repository-state sentinel".to_string())?;
+        let telemetry = data_dir.join("telemetry/preserved.jsonl");
+        let experiments = data_dir.join("experiments/preserved.json");
+        let unknown = data_dir.join("user-owned-unknown.txt");
+        let agent_instruction = self.root.join("machine/codex-instructions.md");
+        fs::write(
+            &agent_instruction,
+            b"# User instructions\n\nkeep this text\n",
+        )
+        .map_err(|_| "could not stage agent instruction file".to_string())?;
+        for (path, contents) in [
+            (&telemetry, b"telemetry\n".as_slice()),
+            (&experiments, b"experiment\n".as_slice()),
+            (&unknown, b"unknown user data\n".as_slice()),
+        ] {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|_| "could not stage preserved machine data".to_string())?;
+            }
+            fs::write(path, contents)
+                .map_err(|_| "could not stage preserved machine data".to_string())?;
+        }
+        let unmanaged_copy = self.root.join("unmanaged-package-manager/bin/repogrammar");
+        fs::create_dir_all(
+            unmanaged_copy
+                .parent()
+                .ok_or_else(|| "unmanaged PATH copy had no parent".to_string())?,
+        )
+        .map_err(|_| "could not create unmanaged package-manager PATH".to_string())?;
+        fs::write(&unmanaged_copy, b"#!/bin/sh\nexit 99\n")
+            .map_err(|_| "could not stage unmanaged PATH copy".to_string())?;
+        let mut permissions = fs::metadata(&unmanaged_copy)
+            .map_err(|_| "could not inspect unmanaged PATH copy".to_string())?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&unmanaged_copy, permissions)
+            .map_err(|_| "could not protect unmanaged PATH copy".to_string())?;
+
+        Ok(MachineUninstallFixture {
+            data_worker,
+            command_worker,
+            product_receipt: data_dir.join("receipts/product-install.json"),
+            agent_receipt: data_dir.join("install/receipts/codex-global.json"),
+            fake_codex_state: self.home.join(".fake-codex-repogrammar"),
+            agent_instruction,
+            repository_sentinel,
+            telemetry,
+            experiments,
+            unknown,
+            unmanaged_copy,
+        })
     }
 
     fn run_text(&self, stage: &'static str, args: &[&str]) -> Result<String, String> {
@@ -950,6 +1165,39 @@ impl PackagedArtifactSmoke {
     }
 }
 
+#[cfg(unix)]
+struct MachineUninstallFixture {
+    data_worker: PathBuf,
+    command_worker: PathBuf,
+    product_receipt: PathBuf,
+    agent_receipt: PathBuf,
+    fake_codex_state: PathBuf,
+    agent_instruction: PathBuf,
+    repository_sentinel: PathBuf,
+    telemetry: PathBuf,
+    experiments: PathBuf,
+    unknown: PathBuf,
+    unmanaged_copy: PathBuf,
+}
+
+#[cfg(unix)]
+impl MachineUninstallFixture {
+    fn assert_preserved(&self) -> Result<(), String> {
+        for (path, label) in [
+            (&self.repository_sentinel, "repository-local state"),
+            (&self.telemetry, "telemetry data"),
+            (&self.experiments, "experiment data"),
+            (&self.unknown, "unknown user data"),
+            (&self.unmanaged_copy, "unmanaged PATH copy"),
+        ] {
+            if !path.is_file() {
+                return Err(format!("product uninstall did not preserve {label}"));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Drop for PackagedArtifactSmoke {
     fn drop(&mut self) {
         if self.autosync_started {
@@ -974,6 +1222,7 @@ fn smoke_packaged_artifact(
     worker: &str,
     fixture: &str,
     expected_version: &str,
+    require_product_uninstall: bool,
 ) -> Result<(), String> {
     if !is_bounded_version(expected_version) {
         return Err("expected version is invalid".to_string());
@@ -984,6 +1233,9 @@ fn smoke_packaged_artifact(
     let version = smoke.run_text("version", &["version"])?;
     if version.trim() != format!("repogrammar {expected_version}") {
         return Err("version did not match release manifests".to_string());
+    }
+    if require_product_uninstall {
+        smoke_machine_installation_uninstall(&smoke)?;
     }
 
     let instruction_file = smoke.home.join("AGENTS.md");
@@ -1243,6 +1495,310 @@ fn smoke_packaged_artifact(
         return Err("autosync stop left daemon readiness ownership behind".to_string());
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn smoke_machine_installation_uninstall(smoke: &PackagedArtifactSmoke) -> Result<(), String> {
+    let fixture = smoke.stage_machine_uninstall_fixture()?;
+    let authority = smoke.managed_authority();
+    let command = smoke.managed_command();
+
+    let receipt_only = smoke.run_managed_text(
+        &smoke.binary,
+        "receipt-only product install",
+        &[
+            "install",
+            "--target",
+            "none",
+            "--scope",
+            "global",
+            "--yes",
+            "--no-telemetry",
+        ],
+    )?;
+    if !receipt_only.contains("install:") || !receipt_only.contains("configured_targets=none") {
+        return Err("receipt-only product install did not use the no-agent contract".to_string());
+    }
+    for (path, label) in [
+        (&authority, "managed authority"),
+        (&command, "managed command"),
+        (&fixture.data_worker, "data-dir worker"),
+        (&fixture.command_worker, "command-dir worker"),
+        (&fixture.product_receipt, "product receipt"),
+    ] {
+        if fs::symlink_metadata(path).is_err() {
+            return Err(format!("receipt-only install omitted {label}"));
+        }
+    }
+
+    let agent_install = smoke.run_managed_text(
+        &authority,
+        "owned Codex integration install",
+        &[
+            "install",
+            "--target",
+            "codex",
+            "--scope",
+            "global",
+            "--yes",
+            "--no-telemetry",
+        ],
+    )?;
+    if !agent_install.contains("configured_targets=codex")
+        || !fixture.agent_receipt.is_file()
+        || !fixture.fake_codex_state.is_file()
+    {
+        return Err(
+            "owned Codex integration install did not persist native and receipt state".to_string(),
+        );
+    }
+    let instruction_after_install = fs::read_to_string(&fixture.agent_instruction)
+        .map_err(|_| "managed Codex instruction file was unavailable".to_string())?;
+    if !instruction_after_install.contains("BEGIN REPOGRAMMAR MANAGED SECTION")
+        || !instruction_after_install.contains("keep this text")
+    {
+        return Err(
+            "owned Codex integration did not record its managed instruction section".to_string(),
+        );
+    }
+
+    let disconnect_dry_run = smoke.run_managed_json(
+        &authority,
+        "disconnect dry-run",
+        &[
+            "disconnect",
+            "--target",
+            "codex",
+            "--scope",
+            "global",
+            "--dry-run",
+            "--json",
+        ],
+    )?;
+    if disconnect_dry_run["status"] != "dry_run"
+        || !fixture.agent_receipt.is_file()
+        || !fixture.fake_codex_state.is_file()
+    {
+        return Err("disconnect dry-run changed owned agent state".to_string());
+    }
+    let disconnected = smoke.run_managed_json(
+        &authority,
+        "live disconnect",
+        &[
+            "disconnect",
+            "--target",
+            "codex",
+            "--scope",
+            "global",
+            "--yes",
+            "--json",
+        ],
+    )?;
+    if disconnected["status"] != "complete"
+        || fixture.agent_receipt.exists()
+        || fs::read_to_string(&fixture.fake_codex_state).is_ok_and(|value| !value.is_empty())
+        || fs::read_to_string(&fixture.agent_instruction)
+            .map_err(|_| "Codex instruction file disappeared after disconnect".to_string())?
+            != "# User instructions\n\nkeep this text\n"
+        || !authority.is_file()
+        || !fixture.product_receipt.is_file()
+    {
+        return Err(
+            "disconnect did not preserve the product while removing owned agent state".to_string(),
+        );
+    }
+
+    let reconnected = smoke.run_managed_text(
+        &authority,
+        "Codex integration reinstall",
+        &[
+            "install",
+            "--target",
+            "codex",
+            "--scope",
+            "global",
+            "--yes",
+            "--no-telemetry",
+        ],
+    )?;
+    if !reconnected.contains("configured_targets=codex")
+        || !fixture.agent_receipt.is_file()
+        || !fixture.fake_codex_state.is_file()
+    {
+        return Err("Codex integration could not be restored for full uninstall smoke".to_string());
+    }
+
+    let preflight_bytes = [
+        (&authority, "managed authority"),
+        (&fixture.data_worker, "data-dir worker"),
+        (&fixture.command_worker, "command-dir worker"),
+        (&fixture.product_receipt, "product receipt"),
+        (&fixture.agent_receipt, "agent receipt"),
+        (&fixture.agent_instruction, "managed instruction file"),
+    ]
+    .into_iter()
+    .map(|(path, label)| {
+        fs::read(path)
+            .map(|contents| (path.clone(), label, contents))
+            .map_err(|_| format!("could not snapshot {label} before uninstall dry-run"))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    let command_target = fs::read_link(&command)
+        .map_err(|_| "managed command was not an exact authority symlink".to_string())?;
+    let uninstall_dry_run = smoke.run_managed_json(
+        &authority,
+        "product uninstall dry-run",
+        &["uninstall", "--dry-run", "--json"],
+    )?;
+    if uninstall_dry_run["status"] != "dry_run"
+        || uninstall_dry_run["finalizer_pending"] != false
+        || !uninstall_dry_run["report_path"].is_null()
+        || !uninstall_dry_run["owned_agent_targets"]
+            .as_array()
+            .is_some_and(|targets| targets.iter().any(|target| target == "codex"))
+    {
+        return Err(
+            "product uninstall dry-run did not expose the complete ownership plan".to_string(),
+        );
+    }
+    for (path, label, contents) in preflight_bytes {
+        if fs::read(&path).ok().as_deref() != Some(contents.as_slice()) {
+            return Err(format!("product uninstall dry-run changed {label}"));
+        }
+    }
+    if fs::read_link(&command).ok().as_ref() != Some(&command_target) {
+        return Err("product uninstall dry-run changed the managed command".to_string());
+    }
+    fixture.assert_preserved()?;
+
+    let uninstall = smoke.run_managed_json(
+        &authority,
+        "live product uninstall",
+        &["uninstall", "--yes", "--json"],
+    )?;
+    let report_path = uninstall["report_path"]
+        .as_str()
+        .map(PathBuf::from)
+        .ok_or_else(|| "live product uninstall omitted its finalizer report path".to_string())?;
+    if uninstall["status"] != "finalizer_pending"
+        || uninstall["finalizer_pending"] != true
+        || !report_path.is_absolute()
+    {
+        return Err(
+            "live product uninstall did not hand off to the post-exit finalizer".to_string(),
+        );
+    }
+
+    let report = wait_for_product_uninstall_report(&report_path)?;
+    if report["kind"] != "product-uninstall-report"
+        || report["status"] != "complete"
+        || report["failed"]
+            .as_array()
+            .is_none_or(|failures| !failures.is_empty())
+    {
+        return Err("product uninstall finalizer did not report complete cleanup".to_string());
+    }
+    let removed_roles = report["removed"]
+        .as_array()
+        .ok_or_else(|| "product uninstall report omitted removed entries".to_string())?
+        .iter()
+        .filter_map(|item| item["role"].as_str())
+        .collect::<Vec<_>>();
+    for role in ["command", "worker", "product_receipt", "authority"] {
+        if !removed_roles.contains(&role) {
+            return Err(format!(
+                "product uninstall report omitted the {role} ownership class"
+            ));
+        }
+    }
+    if removed_roles
+        .iter()
+        .filter(|role| **role == "worker")
+        .count()
+        != 2
+    {
+        return Err(
+            "product uninstall report did not remove both bundled worker copies".to_string(),
+        );
+    }
+    let unmanaged_copy = fixture.unmanaged_copy.to_string_lossy();
+    if !report["residual_copies"].as_array().is_some_and(|paths| {
+        paths
+            .iter()
+            .any(|path| path.as_str() == Some(unmanaged_copy.as_ref()))
+    }) {
+        return Err(
+            "product uninstall report omitted the preserved unmanaged PATH copy".to_string(),
+        );
+    }
+
+    for (path, label) in [
+        (&command, "managed command"),
+        (&authority, "managed authority"),
+        (&fixture.data_worker, "data-dir worker"),
+        (&fixture.command_worker, "command-dir worker"),
+        (&fixture.product_receipt, "product receipt"),
+        (&fixture.agent_receipt, "agent receipt"),
+    ] {
+        if fs::symlink_metadata(path).is_ok() {
+            return Err(format!("product uninstall retained {label}"));
+        }
+    }
+    if fs::read_to_string(&fixture.fake_codex_state).is_ok_and(|value| !value.is_empty()) {
+        return Err("product uninstall retained the native Codex MCP entry".to_string());
+    }
+    if fs::read_to_string(&fixture.agent_instruction)
+        .map_err(|_| "Codex instruction file disappeared after product uninstall".to_string())?
+        != "# User instructions\n\nkeep this text\n"
+    {
+        return Err(
+            "product uninstall did not remove only the managed instruction section".to_string(),
+        );
+    }
+    fixture.assert_preserved()?;
+
+    if let Some(finalizer_dir) = report_path.parent() {
+        let _ = fs::remove_dir_all(finalizer_dir);
+    }
+    for disposable in [
+        smoke.tools.join("codex"),
+        smoke.tools.join("claude"),
+        fixture.unmanaged_copy,
+    ] {
+        let _ = fs::remove_file(disposable);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn smoke_machine_installation_uninstall(_smoke: &PackagedArtifactSmoke) -> Result<(), String> {
+    Err(
+        "packaged product uninstall smoke supports the declared macOS/Linux release hosts only"
+            .to_string(),
+    )
+}
+
+fn wait_for_product_uninstall_report(path: &Path) -> Result<serde_json::Value, String> {
+    for _attempt in 0..200 {
+        match fs::read(path) {
+            Ok(bytes) => {
+                let report: serde_json::Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| "product uninstall finalizer report was malformed".to_string())?;
+                if report["status"] == "in_progress" {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    continue;
+                }
+                return Ok(report);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(_) => {
+                return Err("product uninstall finalizer report was unreadable".to_string());
+            }
+        }
+    }
+    Err("product uninstall finalizer report was not written before the bounded timeout".to_string())
 }
 
 fn smoke_npm_package(
@@ -6310,10 +6866,12 @@ fn check_github_workflow_actions(
 }
 
 fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolation>) {
+    let ci_path = root.join(".github/workflows/ci.yml");
     let release_path = root.join(".github/workflows/release.yml");
     let reconcile_path = root.join(".github/workflows/npm-tag-reconcile.yml");
     let finalizer_path = root.join(".github/workflows/stable-release-finalize.yml");
-    let (Ok(release), Ok(reconcile), Ok(finalizer)) = (
+    let (Ok(ci), Ok(release), Ok(reconcile), Ok(finalizer)) = (
+        fs::read_to_string(&ci_path),
         fs::read_to_string(&release_path),
         fs::read_to_string(&reconcile_path),
         fs::read_to_string(&finalizer_path),
@@ -6343,10 +6901,24 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
     }
 
     let package_job = workflow_job_section(&release, "package_npm");
+    let build_job = workflow_job_section(&release, "build");
     let preview_job = workflow_job_section(&release, "stage_npm_preview");
     let stable_job = workflow_job_section(&release, "stage_npm_stable");
     let classify_job = workflow_job_section(&release, "classify");
     let prepare_job = workflow_job_section(&release, "prepare_github_release");
+    let explicit_uninstall_gate = "--require-product-uninstall";
+    if ci.matches(explicit_uninstall_gate).count() != 2
+        || build_job.is_none_or(|job| {
+            !job.contains("smoke-packaged-artifact")
+                || job.matches(explicit_uninstall_gate).count() != 1
+        })
+    {
+        violations.push(GuardViolation::new(
+            ".github/workflows/release.yml",
+            "PackagedProductUninstallSmokeContract",
+            "macOS/Linux CI and newly built release candidates must explicitly require the receipt-backed post-exit product uninstall smoke",
+        ));
+    }
     if prepare_job.is_none_or(|job| !release_workflow_has_draft_collision_guard(job)) {
         violations.push(GuardViolation::new(
             ".github/workflows/release.yml",
@@ -7723,6 +8295,33 @@ mod tests {
     }
 
     #[test]
+    fn packaged_product_uninstall_smoke_is_required_in_ci_and_candidate_lanes() {
+        let root = TempRoot::new("packaged-product-uninstall-workflow-gate");
+        write_valid_release_contract(root.path());
+
+        let mut violations = Vec::new();
+        check_release_workflow_contract(root.path(), &mut violations);
+        assert!(violations.is_empty(), "{violations:?}");
+
+        for path in [".github/workflows/ci.yml", ".github/workflows/release.yml"] {
+            write_valid_release_contract(root.path());
+            let workflow_path = root.path().join(path);
+            let invalid = fs::read_to_string(&workflow_path)
+                .expect("read valid workflow")
+                .replace("--require-product-uninstall", "removed-uninstall-gate");
+            write_file(workflow_path, invalid.as_bytes());
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| { violation.rule == "PackagedProductUninstallSmokeContract" }),
+                "{path}: {violations:?}"
+            );
+        }
+    }
+
+    #[test]
     fn stable_release_finalizer_requires_checkout_independent_npx_workdirs() {
         let root = TempRoot::new("stable-finalizer-npx-workdir");
         write_valid_release_contract(root.path());
@@ -7779,6 +8378,9 @@ npm@11.18.0
       git fetch --no-tags origin main:refs/remotes/origin/main
       id: release
       release-source --event-name "${EVENT_NAME}" --ref-name "${PUSH_REF_NAME}"
+  build:
+    smoke-packaged-artifact
+    --require-product-uninstall
   package_npm:
     needs: [classify, verify]
     npm pack --json --ignore-scripts --pack-destination npm-candidate
@@ -7834,6 +8436,18 @@ versions --json
 final_action=
 node-version: 24
 npm@11.18.0
+"#
+        .to_string()
+    }
+
+    fn valid_ci_workflow() -> String {
+        r#"jobs:
+  macos-product-smoke:
+    smoke-packaged-artifact
+    --require-product-uninstall
+  linux-packaged-product-smoke:
+    smoke-packaged-artifact
+    --require-product-uninstall
 "#
         .to_string()
     }
@@ -7894,6 +8508,10 @@ verify-stable-release-evidence --evidence-dir evidence
 
     fn write_valid_release_contract(root: &Path) {
         write_file(
+            root.join(".github/workflows/ci.yml"),
+            valid_ci_workflow().as_bytes(),
+        );
+        write_file(
             root.join(".github/workflows/release.yml"),
             valid_release_workflow().as_bytes(),
         );
@@ -7910,9 +8528,33 @@ verify-stable-release-evidence --evidence-dir evidence
     #[test]
     fn packaged_artifact_smoke_is_a_documented_command() {
         assert!(usage().contains(
-            "smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version>"
+            "smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall]"
         ));
         assert!(usage().contains("smoke-npm-package --tarball <path> --expected-version <version>"));
+    }
+
+    #[test]
+    fn historical_packaged_artifact_smoke_can_omit_the_new_product_uninstall_gate() {
+        let root = TempRoot::new("historical-packaged-smoke-without-uninstall-gate");
+        let result = run(
+            [
+                "smoke-packaged-artifact",
+                "--binary",
+                "missing-repogrammar",
+                "--worker",
+                "missing-worker.py",
+                "--fixture",
+                "missing-fixture.py",
+                "--expected-version",
+                "0.4.0",
+            ],
+            root.path(),
+        );
+        assert_eq!(result.status, 1);
+        assert_eq!(
+            result.stderr,
+            "packaged artifact smoke failed: packaged binary is unavailable\n"
+        );
     }
 
     #[test]
@@ -8374,6 +9016,7 @@ verify-stable-release-evidence --evidence-dir evidence
             "missing-worker.py",
             "missing-fixture.py",
             "0.2.0-preview.0",
+            false,
         )
         .expect_err("missing packaged artifact must fail closed");
 
@@ -8397,6 +9040,7 @@ verify-stable-release-evidence --evidence-dir evidence
             "other/worker.py",
             "fixture.py",
             "0.2.0-preview.0",
+            false,
         )
         .expect_err("worker outside packaged layout must fail closed");
 
@@ -8422,6 +9066,7 @@ verify-stable-release-evidence --evidence-dir evidence
             "missing-worker.py",
             "missing-fixture.py",
             "0.2.0-preview.0",
+            false,
         )
         .expect_err("symlinked packaged binary must fail closed");
 

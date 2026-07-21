@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALLER="${SCRIPT_DIR}/repogrammar-install.sh"
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd -- "$TMP_ROOT" && pwd -P)"
 RELEASE_BINARY_TO_RESTORE=""
 RELEASE_BINARY_BACKUP=""
 RELEASE_BINARY_EXISTED=0
@@ -201,7 +202,8 @@ case "${1:-}" in
   version)
     echo "repogrammar 0.1.0-test"
     ;;
-  install|uninstall)
+  install|disconnect|uninstall)
+    command_name="$1"
     if [ -n "${REPOGRAMMAR_FAKE_LOG:-}" ]; then
       printf '%s' "$1" >> "$REPOGRAMMAR_FAKE_LOG"
       shift
@@ -209,6 +211,13 @@ case "${1:-}" in
         printf ' %s' "$arg" >> "$REPOGRAMMAR_FAKE_LOG"
       done
       printf '\n' >> "$REPOGRAMMAR_FAKE_LOG"
+    fi
+    if [ "$command_name" = "uninstall" ]; then
+      if [ "${REPOGRAMMAR_FAKE_UNINSTALL_FAIL:-0}" = "1" ]; then
+        echo "status=partial report_path=/tmp/fake-partial-report.json" >&2
+        exit 23
+      fi
+      echo "status=finalizer_pending report_path=/tmp/fake-uninstall-report.json"
     fi
     ;;
   *)
@@ -226,6 +235,25 @@ if command -v sha256sum >/dev/null 2>&1; then
   (cd "$RELEASE_DIR" && sha256sum "$ARTIFACT" > "${ARTIFACT}.sha256")
 else
   (cd "$RELEASE_DIR" && shasum -a 256 "$ARTIFACT" > "${ARTIFACT}.sha256")
+fi
+
+CUSTOM_WORKER_ERR="${TMP_ROOT}/custom-worker.err"
+set +e
+REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
+REPOGRAMMAR_COMMAND_DIR="${TMP_ROOT}/custom-worker-bin" \
+REPOGRAMMAR_INSTALL_DIR="${TMP_ROOT}/custom-worker-data" \
+REPOGRAMMAR_WORKER_ROOT="${TMP_ROOT}/custom-workers" \
+"$INSTALLER" --install-cli-only --from-source --yes >"${TMP_ROOT}/custom-worker.out" 2>"$CUSTOM_WORKER_ERR"
+CUSTOM_WORKER_STATUS=$?
+set -e
+if [[ "$CUSTOM_WORKER_STATUS" -eq 0 ]]; then
+  echo "custom worker-root install unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q "custom REPOGRAMMAR_WORKER_ROOT is not supported" "$CUSTOM_WORKER_ERR"
+if [[ -e "${TMP_ROOT}/custom-worker-bin/repogrammar" || -e "${TMP_ROOT}/custom-worker-data/bin/repogrammar" || -e "${TMP_ROOT}/custom-workers" ]]; then
+  echo "rejected custom worker-root install wrote managed files" >&2
+  exit 1
 fi
 
 REPOGRAMMAR_RELEASE_DIR="$RELEASE_DIR" \
@@ -417,16 +445,84 @@ REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
 REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
 "$INSTALLER" --uninstall-agents --yes --target all >/dev/null
 
-grep -q "uninstall --target all --scope global --yes" "$LOG_FILE"
+grep -q "disconnect --target all --scope global --yes" "$LOG_FILE"
 
+UNINSTALL_COMMAND_OUT="${TMP_ROOT}/uninstall-command.out"
+set +e
 REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
-"$INSTALLER" --uninstall-command --yes >/dev/null
-
-if [[ -e "${COMMAND_DIR}/repogrammar" ]]; then
-  echo "repogrammar command was not removed" >&2
+"$INSTALLER" --uninstall-command --yes >"$UNINSTALL_COMMAND_OUT" 2>&1
+UNINSTALL_COMMAND_STATUS=$?
+set -e
+if [[ "$UNINSTALL_COMMAND_STATUS" -eq 0 ]]; then
+  echo "deprecated --uninstall-command unexpectedly succeeded" >&2
   exit 1
 fi
+grep -q -- "--uninstall-command is deprecated" "$UNINSTALL_COMMAND_OUT"
+grep -q "repogrammar uninstall --yes" "$UNINSTALL_COMMAND_OUT"
+
+if [[ ! -e "${COMMAND_DIR}/repogrammar" ]]; then
+  echo "deprecated --uninstall-command removed the command" >&2
+  exit 1
+fi
+
+UNINSTALL_REPO="${TMP_ROOT}/wrapper-uninstall-repo"
+UNINSTALL_EXTRA_DIR="${TMP_ROOT}/wrapper-uninstall-extra"
+mkdir -p "${UNINSTALL_REPO}/.repogrammar" "$UNINSTALL_EXTRA_DIR"
+printf 'keep\n' > "${UNINSTALL_REPO}/.repogrammar/sentinel"
+printf 'unmanaged\n' > "${UNINSTALL_EXTRA_DIR}/repogrammar"
+UNINSTALL_OUT="${TMP_ROOT}/uninstall-all.out"
+(
+  cd "$UNINSTALL_REPO"
+  PATH="${UNINSTALL_EXTRA_DIR}:$PATH" \
+  REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+  REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+  REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
+  "$INSTALLER" --uninstall-all --yes >"$UNINSTALL_OUT"
+)
+grep -q '^uninstall --yes$' "$LOG_FILE"
+grep -q 'status=finalizer_pending' "$UNINSTALL_OUT"
+grep -q 'report_path=' "$UNINSTALL_OUT"
+grep -q 'keep' "${UNINSTALL_REPO}/.repogrammar/sentinel"
+grep -q 'unmanaged' "${UNINSTALL_EXTRA_DIR}/repogrammar"
+
+UNINSTALL_TARGET_OUT="${TMP_ROOT}/uninstall-target.out"
+set +e
+REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+"$INSTALLER" --uninstall-all --target codex --yes >"$UNINSTALL_TARGET_OUT" 2>&1
+UNINSTALL_TARGET_STATUS=$?
+set -e
+if [[ "$UNINSTALL_TARGET_STATUS" -eq 0 ]]; then
+  echo "product wrapper silently accepted --target" >&2
+  exit 1
+fi
+grep -q -- "use --uninstall-agents --target" "$UNINSTALL_TARGET_OUT"
+
+DRY_RUN_OUT="${TMP_ROOT}/uninstall-dry-run.out"
+REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
+"$INSTALLER" --uninstall-all --dry-run --yes >"$DRY_RUN_OUT"
+grep -q '^uninstall --dry-run --yes$' "$LOG_FILE"
+test -x "${COMMAND_DIR}/repogrammar"
+
+FAIL_UNINSTALL_OUT="${TMP_ROOT}/uninstall-failure.out"
+set +e
+REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+REPOGRAMMAR_INSTALL_DIR="$INSTALL_DIR" \
+REPOGRAMMAR_FAKE_LOG="$LOG_FILE" \
+REPOGRAMMAR_FAKE_UNINSTALL_FAIL=1 \
+"$INSTALLER" --uninstall-all --yes >"$FAIL_UNINSTALL_OUT" 2>&1
+FAIL_UNINSTALL_STATUS=$?
+set -e
+if [[ "$FAIL_UNINSTALL_STATUS" -ne 23 ]]; then
+  echo "wrapper swallowed product uninstall failure: ${FAIL_UNINSTALL_STATUS}" >&2
+  exit 1
+fi
+grep -q 'status=partial' "$FAIL_UNINSTALL_OUT"
+grep -q 'report_path=' "$FAIL_UNINSTALL_OUT"
+test -x "${COMMAND_DIR}/repogrammar"
 
 SOURCE_COMMAND_DIR="${TMP_ROOT}/source-bin"
 SOURCE_INSTALL_DIR="${TMP_ROOT}/source-data"
@@ -513,6 +609,7 @@ REPOGRAMMAR_INSTALL_DIR="$PRODUCT_INSTALL_DIR" \
 "$INSTALLER" --install-cli-only --from-source --yes >/dev/null
 
 test -x "${PRODUCT_INSTALL_DIR}/bin/repogrammar"
+test -f "${PRODUCT_INSTALL_DIR}/receipts/product-install.json"
 test -f "${PRODUCT_INSTALL_DIR}/workers/python/worker.py"
 test -f "${PRODUCT_COMMAND_DIR}/repogrammar-workers/python/worker.py"
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" init --state-only >/dev/null)

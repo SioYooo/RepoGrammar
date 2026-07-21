@@ -26,10 +26,20 @@ use repogrammar::application::indexing::{
     IndexingOutcome, IndexingRequest,
 };
 use repogrammar::application::install::{
-    execute_install, execute_uninstall, inspect_agent_integration, AgentIntegrationInspection,
-    AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
+    execute_disconnect, execute_install, execute_prepared_agent_disconnect,
+    inspect_agent_integration, prepare_product_agent_disconnect, rollback_agent_disconnect,
+    AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget, DisconnectExecutionOutcome,
+    InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
     McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator, NativeMcpServerConfig,
     NativeMcpServerState, AGENT_PREFLIGHT_GATE, MCP_SERVER_NAME,
+};
+use repogrammar::application::product_installation::{
+    inspect_product_installation, ProductInstallationPlan, ProductInstallationRequest,
+};
+use repogrammar::application::product_uninstall::{
+    execute_product_uninstall_finalizer, prepare_product_uninstall_finalizer,
+    record_product_uninstall_finalizer_abort, validate_product_uninstall_finalizer_invocation,
+    PreparedProductUninstall, ProductUninstallOutcome, ProductUninstallRequest,
 };
 use repogrammar::application::progress::ProgressEvent;
 use repogrammar::application::providers::optional_provider_report;
@@ -72,13 +82,13 @@ use repogrammar::ports::index_store::{
 #[cfg(windows)]
 use std::ffi::{c_void, OsString};
 use std::fs;
-use std::io::IsTerminal;
-use std::io::Write;
+use std::io::{BufRead, BufReader, IsTerminal, Write};
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -88,10 +98,18 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 const AUTOSYNC_STARTUP_MAX_ATTEMPTS: usize = 100;
 const AUTOSYNC_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const UNINSTALL_HELPER_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const UNINSTALL_PARENT_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
 static AUTOSYNC_STARTUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args
+        .first()
+        .is_some_and(|command| command == "__uninstall-finalize")
+    {
+        std::process::exit(run_hidden_uninstall_finalizer(&args));
+    }
     let runtime = ProductCliRuntime;
     if args.first().is_some_and(|command| command == "serve") {
         let status = run_serve_command(&args[1..], &runtime);
@@ -113,6 +131,226 @@ fn write_std_streams(stdout_text: &str, stderr_text: &str) {
     let mut err = std::io::stderr().lock();
     let _ = err.write_all(stderr_text.as_bytes());
     let _ = err.flush();
+}
+
+fn run_hidden_uninstall_finalizer(args: &[String]) -> i32 {
+    let plan_path = match parse_hidden_uninstall_finalizer_args(args) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    let running_executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("failed to resolve private uninstall helper: {error}");
+            return 1;
+        }
+    };
+    let validated =
+        match validate_product_uninstall_finalizer_invocation(&plan_path, &running_executable) {
+            Ok(validated) => validated,
+            Err(error) => {
+                eprintln!("{error}");
+                return 1;
+            }
+        };
+
+    // READY is an ownership-validation barrier. The parent is forbidden from
+    // touching agent state until this exact line has been received.
+    let mut stdout = std::io::stdout().lock();
+    if stdout
+        .write_all(b"READY\n")
+        .and_then(|()| stdout.flush())
+        .is_err()
+    {
+        return 1;
+    }
+    drop(stdout);
+
+    let commit = match validated.establish_commit_from_eof(&mut std::io::stdin().lock()) {
+        Ok(commit) => commit,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let parent_exit = match validated.wait_for_parent_exit(UNINSTALL_PARENT_EXIT_TIMEOUT) {
+        Ok(parent_exit) => parent_exit,
+        Err(error) => {
+            let report_error = record_product_uninstall_finalizer_abort(
+                &validated,
+                "parent_exit_unproven",
+                &error.to_string(),
+            )
+            .err();
+            eprintln!("{error}");
+            if let Some(report_error) = report_error {
+                eprintln!("failed to publish structured uninstall abort report: {report_error}");
+            }
+            return 1;
+        }
+    };
+    match execute_product_uninstall_finalizer(validated, commit, parent_exit) {
+        Ok(report) if report.is_complete() => 0,
+        Ok(report) => {
+            eprintln!(
+                "RepoGrammar uninstall completed partially; review {} failure(s) in the structured cleanup report",
+                report.failed.len()
+            );
+            1
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+fn parse_hidden_uninstall_finalizer_args(args: &[String]) -> Result<PathBuf, String> {
+    match args {
+        [command, flag, plan] if command == "__uninstall-finalize" && flag == "--plan" => {
+            let path = PathBuf::from(plan);
+            if !path.is_absolute() {
+                Err("hidden uninstall finalizer requires an absolute private plan path".to_string())
+            } else {
+                Ok(path)
+            }
+        }
+        _ => Err(
+            "hidden uninstall finalizer accepts only __uninstall-finalize --plan <private-plan>"
+                .to_string(),
+        ),
+    }
+}
+
+#[derive(Debug)]
+struct ReadyProductFinalizer {
+    child: Child,
+    stdin: Option<ChildStdin>,
+}
+
+fn spawn_ready_product_finalizer(
+    prepared: &PreparedProductUninstall,
+) -> Result<ReadyProductFinalizer, RepoGrammarError> {
+    // Never let a post-exit helper retain a captured stderr pipe. A runner
+    // using `Command::output` may wait for that pipe to close before reaping
+    // this parent, while the helper must wait for the parent PID to be reaped;
+    // inheriting the pipe would therefore deadlock the lifecycle boundary.
+    let helper_stderr = if std::io::stderr().is_terminal() {
+        Stdio::inherit()
+    } else {
+        Stdio::null()
+    };
+    let mut child = Command::new(&prepared.helper_path)
+        .arg("__uninstall-finalize")
+        .arg("--plan")
+        .arg(&prepared.plan_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        // Interactive callers retain a last-resort human-visible channel if
+        // publishing the structured report itself fails after parent exit.
+        .stderr(helper_stderr)
+        .spawn()
+        .map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to spawn private uninstall finalizer: {error}"
+            ))
+        })?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        RepoGrammarError::InvalidInput(
+            "private uninstall finalizer lifecycle channel was unavailable".to_string(),
+        )
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        RepoGrammarError::InvalidInput(
+            "private uninstall finalizer readiness channel was unavailable".to_string(),
+        )
+    })?;
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let result = reader.read_line(&mut line).map(|_| line);
+        let _ = sender.send(result);
+    });
+    let ready = receiver.recv_timeout(UNINSTALL_HELPER_READY_TIMEOUT);
+    match ready {
+        Ok(Ok(line)) => match validate_uninstall_ready_line(&line) {
+            Ok(()) => Ok(ReadyProductFinalizer {
+                child,
+                stdin: Some(stdin),
+            }),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err(error)
+            }
+        },
+        Ok(Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(RepoGrammarError::InvalidInput(format!(
+                "failed to read private uninstall finalizer readiness: {error}"
+            )))
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(RepoGrammarError::InvalidInput(
+                "timed out waiting for private uninstall finalizer readiness".to_string(),
+            ))
+        }
+    }
+}
+
+fn validate_uninstall_ready_line(line: &str) -> Result<(), RepoGrammarError> {
+    if line == "READY\n" {
+        Ok(())
+    } else {
+        Err(RepoGrammarError::InvalidInput(
+            "private uninstall finalizer returned an invalid readiness handshake".to_string(),
+        ))
+    }
+}
+
+fn abort_product_finalizer(finalizer: &mut ReadyProductFinalizer) {
+    if let Some(mut stdin) = finalizer.stdin.take() {
+        let _ = stdin.write_all(b"ABORT\n");
+        let _ = stdin.flush();
+    }
+    let _ = finalizer.child.wait();
+}
+
+fn commit_product_finalizer(
+    finalizer: &mut ReadyProductFinalizer,
+    prepared: &PreparedProductUninstall,
+) -> Result<(), RepoGrammarError> {
+    let mut stdin = finalizer.stdin.take().ok_or_else(|| {
+        RepoGrammarError::InvalidInput(
+            "private uninstall finalizer lifecycle channel was already closed".to_string(),
+        )
+    })?;
+    write_product_finalizer_commit(&mut stdin, &prepared.commit_message())?;
+    // EOF is part of the commit proof. The helper will not delete any product
+    // file while the parent still retains this handle.
+    drop(stdin);
+    Ok(())
+}
+
+fn write_product_finalizer_commit(
+    writer: &mut impl Write,
+    message: &[u8],
+) -> Result<(), RepoGrammarError> {
+    writer
+        .write_all(message)
+        .and_then(|()| writer.flush())
+        .map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to commit private uninstall finalizer: {error}"
+            ))
+        })
 }
 
 struct ProductCliRuntime;
@@ -558,6 +796,118 @@ fn persist_startup_failure(
 }
 
 impl ProductCliRuntime {
+    fn uninstall_product(
+        &self,
+        request: ProductUninstallRequest,
+        context: InstallExecutionContext,
+    ) -> Result<ProductUninstallOutcome, RepoGrammarError> {
+        if !request.dry_run && !request.assume_yes {
+            return Err(RepoGrammarError::InvalidInput(
+                "live product uninstall requires --yes".to_string(),
+            ));
+        }
+
+        let running_executable = std::env::current_exe().map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to resolve the running RepoGrammar executable: {error}"
+            ))
+        })?;
+        let product_request = product_installation_request(&context, &running_executable);
+
+        // Both ownership domains are completely preflighted before either the
+        // helper workspace or native agent configuration is mutated.
+        let installation = inspect_product_installation(&product_request)?;
+        let prepared_agents =
+            prepare_product_agent_disconnect(&context, &ProductNativeAgentConfigurator)?;
+        let agent_targets = prepared_agents.targets();
+        let agent_planned_paths = prepared_agents.planned_paths();
+        let planned_paths = planned_product_paths(&installation);
+        let residual_copies = residual_repogrammar_path_copies(&installation);
+        let preserved = product_uninstall_preserved_boundaries(&residual_copies);
+
+        if request.dry_run {
+            return Ok(ProductUninstallOutcome {
+                command: "uninstall",
+                dry_run: true,
+                ownership_source: installation.source,
+                agent_targets,
+                agent_planned_paths,
+                planned_paths,
+                preserved,
+                residual_copies,
+                finalizer_pending: false,
+                report_path: None,
+                message: "dry-run only; no agent integration or product file was changed"
+                    .to_string(),
+            });
+        }
+
+        let temp_root = fs::canonicalize(std::env::temp_dir()).map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to resolve the secure uninstall temporary directory: {error}"
+            ))
+        })?;
+        let prepared_finalizer = prepare_product_uninstall_finalizer(
+            &installation,
+            &temp_root,
+            residual_copies.clone(),
+        )?;
+        let mut finalizer = match spawn_ready_product_finalizer(&prepared_finalizer) {
+            Ok(finalizer) => finalizer,
+            Err(error) => {
+                discard_uncommitted_finalizer_artifacts(&prepared_finalizer);
+                return Err(error);
+            }
+        };
+
+        let applied_agents = match execute_prepared_agent_disconnect(
+            prepared_agents,
+            &ProductNativeAgentConfigurator,
+        ) {
+            Ok(applied) => applied,
+            Err(error) => {
+                abort_product_finalizer(&mut finalizer);
+                discard_uncommitted_finalizer_artifacts(&prepared_finalizer);
+                return Err(error);
+            }
+        };
+        if let Err(commit_error) = commit_product_finalizer(&mut finalizer, &prepared_finalizer) {
+            // Closing an incomplete lifecycle message is an abort, so binary
+            // cleanup cannot begin. Restore the already-applied agent state.
+            abort_product_finalizer(&mut finalizer);
+            let rollback =
+                rollback_agent_disconnect(&applied_agents, &ProductNativeAgentConfigurator);
+            discard_uncommitted_finalizer_artifacts(&prepared_finalizer);
+            return match rollback {
+                Ok(()) => Err(RepoGrammarError::InvalidInput(format!(
+                    "{commit_error}; agent disconnect was rolled back"
+                ))),
+                Err(rollback_error) => Err(RepoGrammarError::InvalidInput(format!(
+                    "{commit_error}; agent disconnect rollback also failed: {rollback_error}"
+                ))),
+            };
+        }
+
+        // Do not wait here: the helper requires proof that this process has
+        // exited before deleting the command, workers, receipt, or authority.
+        drop(finalizer);
+        Ok(ProductUninstallOutcome {
+            command: "uninstall",
+            dry_run: false,
+            ownership_source: installation.source,
+            agent_targets,
+            agent_planned_paths,
+            planned_paths,
+            preserved,
+            residual_copies,
+            finalizer_pending: true,
+            report_path: Some(prepared_finalizer.report_path.display().to_string()),
+            message:
+                "agent integrations were removed; validated product cleanup is pending parent exit"
+                    .to_string(),
+        })
+    }
+
     fn store_for_status_request(
         &self,
         request: &RepositoryStatusRequest,
@@ -977,6 +1327,124 @@ impl ProductCliRuntime {
             }
         }
     }
+}
+
+fn product_installation_request(
+    context: &InstallExecutionContext,
+    running_executable: &Path,
+) -> ProductInstallationRequest {
+    let binary = if cfg!(windows) {
+        "repogrammar.exe"
+    } else {
+        "repogrammar"
+    };
+    ProductInstallationRequest {
+        data_dir: PathBuf::from(&context.data_dir),
+        executable_path: Path::new(&context.data_dir).join("bin").join(binary),
+        command_path: Path::new(&context.command_dir).join(binary),
+        current_executable_path: Some(running_executable.to_path_buf()),
+    }
+}
+
+fn planned_product_paths(installation: &ProductInstallationPlan) -> Vec<String> {
+    let mut paths = Vec::new();
+    if installation.command.file.path != installation.executable.path {
+        paths.push(installation.command.file.path.display().to_string());
+    }
+    paths.extend(
+        installation
+            .workers
+            .iter()
+            .map(|worker| worker.path.display().to_string()),
+    );
+    if let Some(receipt) = &installation.receipt_path {
+        paths.push(receipt.display().to_string());
+    }
+    // The running authority is always the last managed file removed.
+    paths.push(installation.executable.path.display().to_string());
+    paths
+}
+
+fn residual_repogrammar_path_copies(installation: &ProductInstallationPlan) -> Vec<String> {
+    let Some(path) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let binary = if cfg!(windows) {
+        "repogrammar.exe"
+    } else {
+        "repogrammar"
+    };
+    let managed = [
+        normalized_product_path(&installation.executable.path),
+        normalized_product_path(&installation.command.file.path),
+    ];
+    let mut copies = Vec::new();
+    for directory in std::env::split_paths(&path).filter(|path| path.is_absolute()) {
+        let candidate = directory.join(binary);
+        if managed
+            .iter()
+            .any(|owned| *owned == normalized_product_path(&candidate))
+        {
+            continue;
+        }
+        let is_copy = fs::symlink_metadata(&candidate)
+            .map(|metadata| metadata.is_file() || metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        let rendered = candidate.display().to_string();
+        if is_copy && !copies.iter().any(|existing| existing == &rendered) {
+            copies.push(rendered);
+        }
+    }
+    copies
+}
+
+fn product_uninstall_preserved_boundaries(residual_copies: &[String]) -> Vec<String> {
+    let mut preserved = vec![
+        "all repository-local .repogrammar/ state (remove separately with repogrammar uninit --project ... --yes)".to_string(),
+        "telemetry configuration and records".to_string(),
+        "research traces and experiment records".to_string(),
+        "unknown global files not proven first-party owned".to_string(),
+        "npm, Cargo, and other package-manager installations".to_string(),
+    ];
+    preserved.extend(
+        residual_copies
+            .iter()
+            .map(|path| format!("unmanaged PATH copy: {path}")),
+    );
+    preserved
+}
+
+fn normalized_product_path(path: &Path) -> String {
+    let rendered = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        rendered.to_ascii_lowercase()
+    } else {
+        rendered
+    }
+}
+
+fn discard_uncommitted_finalizer_artifacts(prepared: &PreparedProductUninstall) {
+    let Some(directory) = prepared.plan_path.parent() else {
+        return;
+    };
+    if prepared.helper_path.parent() != Some(directory)
+        || prepared.report_path.parent() != Some(directory)
+    {
+        return;
+    }
+    for path in [
+        &prepared.report_path,
+        &prepared.plan_path,
+        &prepared.helper_path,
+    ] {
+        if fs::symlink_metadata(path)
+            .map(|metadata| metadata.is_file() || metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
+    let _ = fs::remove_dir(directory);
 }
 
 fn new_autosync_startup_nonce() -> String {
@@ -1723,19 +2191,28 @@ impl CliRuntime for ProductCliRuntime {
 
     fn install_agent_integration(
         &self,
-        command: &str,
         request: InstallRequest,
         context: InstallExecutionContext,
     ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
         let configurator = ProductNativeAgentConfigurator;
         let self_tester = ProductMcpSelfTester::new();
-        match command {
-            "install" => execute_install(&request, &context, &configurator, &self_tester),
-            "uninstall" => execute_uninstall(&request, &context, &configurator),
-            _ => Err(RepoGrammarError::InvalidInput(
-                "unknown installer command".to_string(),
-            )),
-        }
+        execute_install(&request, &context, &configurator, &self_tester)
+    }
+
+    fn disconnect_agent_integration(
+        &self,
+        request: AgentDisconnectRequest,
+        context: InstallExecutionContext,
+    ) -> Result<DisconnectExecutionOutcome, RepoGrammarError> {
+        execute_disconnect(&request, &context, &ProductNativeAgentConfigurator)
+    }
+
+    fn uninstall_product(
+        &self,
+        request: ProductUninstallRequest,
+        context: InstallExecutionContext,
+    ) -> Result<ProductUninstallOutcome, RepoGrammarError> {
+        ProductCliRuntime::uninstall_product(self, request, context)
     }
 
     fn inspect_agent_integration(
@@ -2531,6 +3008,144 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time after unix epoch")
             .as_nanos()
+    }
+
+    #[test]
+    fn hidden_uninstall_finalizer_accepts_only_one_private_plan_argument() {
+        let plan = std::env::temp_dir().join("cleanup-plan.json");
+        let valid = vec![
+            "__uninstall-finalize".to_string(),
+            "--plan".to_string(),
+            plan.display().to_string(),
+        ];
+        assert_eq!(
+            parse_hidden_uninstall_finalizer_args(&valid).expect("exact hidden syntax"),
+            plan
+        );
+
+        let arbitrary_delete = vec![
+            "__uninstall-finalize".to_string(),
+            "--delete".to_string(),
+            plan.display().to_string(),
+        ];
+        assert!(parse_hidden_uninstall_finalizer_args(&arbitrary_delete)
+            .unwrap_err()
+            .contains("accepts only"));
+        let extra = vec![
+            "__uninstall-finalize".to_string(),
+            "--plan".to_string(),
+            plan.display().to_string(),
+            "/tmp/arbitrary".to_string(),
+        ];
+        assert!(parse_hidden_uninstall_finalizer_args(&extra).is_err());
+    }
+
+    #[test]
+    fn uninstall_finalizer_ready_handshake_is_exact() {
+        assert!(validate_uninstall_ready_line("READY\n").is_ok());
+        for invalid in ["READY", "ready\n", "READY\nextra\n", ""] {
+            assert!(validate_uninstall_ready_line(invalid).is_err());
+        }
+    }
+
+    struct CommitFailureWriter;
+
+    impl Write for CommitFailureWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected commit failure",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn uninstall_finalizer_commit_failure_is_not_reported_as_success() {
+        let error = write_product_finalizer_commit(
+            &mut CommitFailureWriter,
+            b"REPOGRAMMAR_UNINSTALL_COMMIT token\n",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("failed to commit"));
+        assert!(error.to_string().contains("injected commit failure"));
+    }
+
+    #[test]
+    fn uninstall_finalizer_spawn_failure_preserves_product_files() {
+        use repogrammar::application::product_installation::{
+            ManagedCommandKind, OwnedCommandFile, OwnedProductFile, ProductOwnershipSource,
+        };
+        use sha2::{Digest, Sha256};
+
+        fn hash(bytes: &[u8]) -> String {
+            Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        }
+
+        let workspace = TempWorkspace::new("uninstall-spawn-failure");
+        let root = fs::canonicalize(workspace.path()).expect("canonical fixture root");
+        let data_dir = root.join("data/repogrammar");
+        let authority = data_dir.join("bin").join(if cfg!(windows) {
+            "repogrammar.exe"
+        } else {
+            "repogrammar"
+        });
+        let command = root.join("commands").join(if cfg!(windows) {
+            "repogrammar.exe"
+        } else {
+            "repogrammar"
+        });
+        let worker = data_dir.join("workers/python/worker.py");
+        fs::create_dir_all(authority.parent().unwrap()).expect("authority parent");
+        fs::create_dir_all(command.parent().unwrap()).expect("command parent");
+        fs::create_dir_all(worker.parent().unwrap()).expect("worker parent");
+        fs::write(&authority, b"owned executable").expect("authority");
+        fs::write(&worker, b"owned worker").expect("worker");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&authority, &command).expect("command symlink");
+        #[cfg(not(unix))]
+        fs::copy(&authority, &command).expect("command copy");
+        let executable_hash = hash(b"owned executable");
+        let installation = ProductInstallationPlan {
+            source: ProductOwnershipSource::Legacy,
+            data_dir,
+            executable: OwnedProductFile {
+                path: authority.clone(),
+                sha256: executable_hash.clone(),
+            },
+            command: OwnedCommandFile {
+                file: OwnedProductFile {
+                    path: command,
+                    sha256: executable_hash,
+                },
+                kind: if cfg!(unix) {
+                    ManagedCommandKind::Symlink
+                } else {
+                    ManagedCommandKind::Copy
+                },
+            },
+            workers: vec![OwnedProductFile {
+                path: worker,
+                sha256: hash(b"owned worker"),
+            }],
+            receipt_path: None,
+        };
+        let prepared = prepare_product_uninstall_finalizer(&installation, &root, Vec::new())
+            .expect("prepare helper");
+        fs::remove_file(&prepared.helper_path).expect("inject missing helper");
+        let error = spawn_ready_product_finalizer(&prepared).unwrap_err();
+        assert!(error.to_string().contains("failed to spawn"));
+        assert!(
+            authority.exists(),
+            "spawn failure must not remove authority"
+        );
+        discard_uncommitted_finalizer_artifacts(&prepared);
     }
 
     fn cli_args(command: &str, project: &Path, extra: &[&str]) -> Vec<String> {

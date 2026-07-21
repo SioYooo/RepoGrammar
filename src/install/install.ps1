@@ -8,10 +8,12 @@ param(
     [switch]$FromSource,
     [switch]$InstallCliOnly,
     [switch]$InstallAndConfigure,
+    [switch]$DisconnectAgents,
     [switch]$UninstallCommand,
     [switch]$Verify,
     [switch]$Prune,
     [switch]$Purge,
+    [switch]$DryRun,
     [string]$Project = "",
     [switch]$Yes,
     [switch]$ReplaceUnmanagedCommand,
@@ -19,6 +21,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$TargetWasSpecified = $PSBoundParameters.ContainsKey("Target")
+$ScopeWasSpecified = $PSBoundParameters.ContainsKey("Scope")
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\.."))
 
@@ -30,21 +34,25 @@ Usage:
   powershell -ExecutionPolicy Bypass -File install.ps1 -FromSource
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallCliOnly -FromSource -Yes
   powershell -ExecutionPolicy Bypass -File install.ps1 -InstallAndConfigure -FromSource -Yes -Target all
-  powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -DisconnectAgents -Target all -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -UninstallCommand -Yes # deprecated guidance
   powershell -ExecutionPolicy Bypass -File install.ps1 -Verify
   powershell -ExecutionPolicy Bypass -File install.ps1 -Prune -Yes
-  powershell -ExecutionPolicy Bypass -File install.ps1 -Purge -Project . -Yes
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Purge -Yes
 
 -Verify reports, by SHA256, whether the repogrammar copies on PATH, the
 configured agent MCP servers, and any running serve processes match the managed
 authority binary. -Prune additionally removes PATH copies whose hash differs
 from the authority (add -Yes to skip the confirmation). Install/update actions
 run the same stale PATH cleanup after refreshing the managed command.
--Purge fully removes RepoGrammar: it prints a plan, then stops repogrammar
-processes, runs uninstall (agent MCP entries and receipts), optionally runs
-uninit on -Project (the .repogrammar state), and deletes every repogrammar
-binary, worker asset, and the managed data directory. Add -Yes to skip the
-confirmation prompt.
+-DisconnectAgents delegates receipt-owned coding-agent removal to
+repogrammar disconnect. -Purge delegates complete managed product removal to
+repogrammar uninstall; the Rust CLI owns all path validation and cleanup.
+-DryRun previews -Purge. Repository-local .repogrammar state is always
+preserved. If -Project is supplied, the wrapper prints the separate explicit
+repogrammar uninit --project <path> --yes command but does not run it.
+-UninstallCommand is deprecated because command-only deletion leaves managed
+installation state behind.
 
 RepoGrammar does not publish or support a Windows release artifact.
 Installation is fail-closed unless -FromSource is passed explicitly from a
@@ -57,6 +65,9 @@ If the command directory already holds a repogrammar.exe that RepoGrammar did
 not install, the installer refuses to replace it unless you also pass
 -ReplaceUnmanagedCommand, which backs the existing file up first. -Yes alone
 does not replace an unmanaged command.
+Custom -WorkerRoot/REPOGRAMMAR_WORKER_ROOT locations are rejected for managed
+installs because the product receipt covers only deterministic first-party
+worker paths.
 
 "@
 }
@@ -79,7 +90,8 @@ function Install-WorkerAsset([string]$WorkerSource) {
         throw "source checkout did not contain bundled Python worker at src/workers/python/worker.py"
     }
     $workerRoots = @($WorkerRoot)
-    if (!$env:REPOGRAMMAR_WORKER_ROOT) {
+    $deterministicWorkerRoot = Join-Path $InstallDir "workers"
+    if ([System.IO.Path]::GetFullPath($WorkerRoot) -eq [System.IO.Path]::GetFullPath($deterministicWorkerRoot)) {
         $workerRoots += (Join-Path $CommandDir "repogrammar-workers")
     }
     foreach ($root in ($workerRoots | Select-Object -Unique)) {
@@ -224,7 +236,12 @@ function Assert-WindowsSourceInstallEnabled {
 
 function Install-Cli {
     Assert-WindowsSourceInstallEnabled
+    $deterministicWorkerRoot = [System.IO.Path]::GetFullPath((Join-Path $InstallDir "workers"))
+    if ([System.IO.Path]::GetFullPath($WorkerRoot) -ne $deterministicWorkerRoot) {
+        throw "custom -WorkerRoot/REPOGRAMMAR_WORKER_ROOT is not supported for first-party managed installs; the product ownership receipt only covers $deterministicWorkerRoot and the managed command worker root"
+    }
     Install-CliFromSource
+    Record-CliInstallReceipt
 }
 
 function Test-ManagedCommandPath([string]$CommandPath, [string]$InstalledBinary) {
@@ -255,6 +272,19 @@ function Invoke-WithInstallEnv([scriptblock]$Script) {
     }
 }
 
+function Record-CliInstallReceipt {
+    $command = Join-Path $CommandDir "repogrammar.exe"
+    if (!(Test-Path -LiteralPath $command -PathType Leaf)) {
+        throw "installed repogrammar command is unavailable for receipt creation"
+    }
+    Invoke-WithInstallEnv {
+        & $command install --target none --scope global --yes --no-telemetry
+        if ($LASTEXITCODE -ne 0) {
+            throw "repogrammar product receipt creation failed with exit code $LASTEXITCODE"
+        }
+    }
+}
+
 function Run-AgentInstall {
     $command = Join-Path $CommandDir "repogrammar.exe"
     if (!(Test-Path $command)) {
@@ -272,18 +302,8 @@ function Run-AgentInstall {
     }
 }
 
-function Remove-Command {
-    $command = Join-Path $CommandDir "repogrammar.exe"
-    if (!(Test-Path $command)) {
-        Write-Output "No repogrammar command found at $command"
-        return
-    }
-    if (!(Confirm-DefaultNo "Remove repogrammar command at $command?")) {
-        Write-Output "Cancelled. The repogrammar command was not removed."
-        return
-    }
-    Remove-Item $command -Force
-    Write-Output "Removed $command"
+function Write-DeprecatedUninstallCommandGuidance {
+    throw "-UninstallCommand is deprecated because command-only removal leaves managed installation state behind. Use -Purge (or repogrammar uninstall --yes) for the managed product installation; use -DisconnectAgents (or repogrammar disconnect --target all --yes) for coding-agent integrations only."
 }
 
 function Get-AuthorityBinary {
@@ -533,118 +553,63 @@ function Invoke-VerifyInstall([bool]$DoPrune) {
     }
 }
 
-function Resolve-AnyRepogrammar {
-    $candidates = @((Join-Path $CommandDir "repogrammar.exe"), (Get-AuthorityBinary))
-    $candidates += Get-RepogrammarPathCopies
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-            return $candidate
-        }
+function Resolve-ManagedRepogrammar {
+    $command = Join-Path $CommandDir "repogrammar.exe"
+    $authority = Get-AuthorityBinary
+    if ((Test-Path -LiteralPath $command -PathType Leaf) -and
+        (Test-Path -LiteralPath $authority -PathType Leaf) -and
+        (Test-ManagedCommandPath $command $authority)) {
+        return $command
+    }
+    if (Test-Path -LiteralPath $authority -PathType Leaf) {
+        return $authority
     }
     return $null
 }
 
-function Test-PurgeOwnedPath([string]$Candidate, $FileTargets) {
-    if ([string]::IsNullOrWhiteSpace($Candidate)) {
-        return $false
+function Invoke-AgentDisconnect {
+    $rg = Resolve-ManagedRepogrammar
+    if (!$rg) {
+        throw "managed repogrammar command is unavailable; reinstall once before disconnecting coding-agent integrations"
     }
-    $lower = $Candidate.ToLowerInvariant()
-    foreach ($file in $FileTargets) {
-        if ($lower -eq $file.ToLowerInvariant()) {
-            return $true
+    if (!$Yes -and !(Confirm-DefaultNo "Remove RepoGrammar-owned $Target coding-agent integrations?")) {
+        Write-Output "Cancelled. No coding-agent integrations were removed."
+        return
+    }
+    Invoke-WithInstallEnv {
+        & $rg disconnect --target $Target --scope $Scope --yes
+        if ($LASTEXITCODE -ne 0) {
+            throw "repogrammar disconnect failed with exit code $LASTEXITCODE"
         }
     }
-    foreach ($root in @($InstallDir, $CommandDir)) {
-        if ($root -and $lower.StartsWith($root.ToLowerInvariant().TrimEnd('\') + '\')) {
-            return $true
-        }
-    }
-    return $false
 }
 
 function Invoke-Purge {
-    $commandBin = Join-Path $CommandDir "repogrammar.exe"
-    $commandWorkers = Join-Path $CommandDir "repogrammar-workers"
-    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin\repogrammar.exe"
-    $cargoGuard = Join-Path $env:USERPROFILE ".cargo\bin\repo-guard.exe"
-
-    $fileTargets = @()
-    foreach ($file in (@($commandBin, $cargoBin, $cargoGuard) + (Get-RepogrammarPathCopies))) {
-        if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
-            $fileTargets += (Resolve-Path -LiteralPath $file).Path
-        }
+    if ($TargetWasSpecified -or $ScopeWasSpecified) {
+        throw "-Target/-Scope select coding-agent integrations, not product files. Use -DisconnectAgents -Target <agents> -Scope <scope> -Yes."
     }
-    $fileTargets = @($fileTargets | Select-Object -Unique)
-
-    $dirTargets = @()
-    foreach ($dir in @($InstallDir, $commandWorkers)) {
-        if ($dir -and (Test-Path -LiteralPath $dir)) {
-            $dirTargets += $dir
-        }
+    $rg = Resolve-ManagedRepogrammar
+    if (!$rg) {
+        throw "managed repogrammar command is unavailable; reinstall once to create an ownership receipt before uninstalling"
     }
-    $dirTargets = @($dirTargets | Select-Object -Unique)
-
-    Write-Output "RepoGrammar purge plan:"
-    Write-Output "  - Stop repogrammar processes that run the binaries listed below"
-    Write-Output "  - repogrammar uninstall --target all --scope global (remove agent MCP entries and receipts)"
     if ($Project) {
-        Write-Output "  - repogrammar uninit --project $Project --yes (remove .repogrammar state)"
+        Write-Output "Repository state is preserved: $Project\.repogrammar"
+        Write-Output "Remove it separately only if intended: repogrammar uninit --project `"$Project`" --yes"
     }
-    foreach ($dir in $dirTargets) { Write-Output "  - remove directory $dir" }
-    foreach ($file in $fileTargets) { Write-Output "  - remove file $file" }
-    Write-Output ""
-
-    if (!$Yes -and !(Confirm-DefaultNo "Proceed with purge? This permanently deletes the items above")) {
-        Write-Output "Cancelled. Nothing was removed."
+    if (!$DryRun -and !$Yes -and !(Confirm-DefaultNo "Remove the RepoGrammar-managed product installation? Repository-local .repogrammar state will be preserved")) {
+        Write-Output "Cancelled. The managed RepoGrammar installation was not removed."
         return
     }
-
-    try {
-        $running = Get-CimInstance Win32_Process -Filter "name='repogrammar.exe'" -ErrorAction SilentlyContinue
-    } catch {
-        $running = @()
-    }
-    foreach ($proc in $running) {
-        if (Test-PurgeOwnedPath $proc.ExecutablePath $fileTargets) {
-            try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+    Invoke-WithInstallEnv {
+        $arguments = @("uninstall", "--yes")
+        if ($DryRun) {
+            $arguments += "--dry-run"
+        }
+        & $rg @arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "repogrammar uninstall failed with exit code $LASTEXITCODE"
         }
     }
-
-    $rg = Resolve-AnyRepogrammar
-    if ($rg) {
-        $previousEap = $ErrorActionPreference
-        $ErrorActionPreference = "SilentlyContinue"
-        try {
-            Invoke-WithInstallEnv {
-                & $rg uninstall --target all --scope global --yes 2>&1 | Out-Null
-                if ($Project -and (Test-Path -LiteralPath (Join-Path $Project ".repogrammar"))) {
-                    & $rg uninit --project $Project --yes 2>&1 | Out-Null
-                }
-            }
-        } finally {
-            $ErrorActionPreference = $previousEap
-        }
-    } else {
-        Write-Output "No repogrammar binary found to run uninstall/uninit; removing files only."
-    }
-
-    foreach ($file in $fileTargets) {
-        try {
-            Remove-Item -LiteralPath $file -Force -ErrorAction Stop
-            Write-Output "Removed $file"
-        } catch {
-            Write-Output "Failed to remove ${file}: $($_.Exception.Message)"
-        }
-    }
-    foreach ($dir in $dirTargets) {
-        try {
-            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop
-            Write-Output "Removed $dir"
-        } catch {
-            Write-Output "Failed to remove ${dir}: $($_.Exception.Message)"
-        }
-    }
-    Write-Output "Purge complete. Re-run with -InstallAndConfigure -FromSource -Yes to reinstall."
 }
 
 if ($Help) {
@@ -653,6 +618,9 @@ if ($Help) {
 }
 
 if ($Verify -or $Prune) {
+    if ($DryRun) {
+        throw "-DryRun is only valid with -Purge"
+    }
     Invoke-VerifyInstall ([bool]$Prune)
     exit 0
 }
@@ -660,6 +628,10 @@ if ($Verify -or $Prune) {
 if ($Purge) {
     Invoke-Purge
     exit 0
+}
+
+if ($DryRun) {
+    throw "-DryRun is only valid with -Purge"
 }
 
 if ($InstallCliOnly) {
@@ -675,8 +647,13 @@ if ($InstallAndConfigure) {
     exit 0
 }
 
+if ($DisconnectAgents) {
+    Invoke-AgentDisconnect
+    exit 0
+}
+
 if ($UninstallCommand) {
-    Remove-Command
+    Write-DeprecatedUninstallCommandGuidance
     exit 0
 }
 
@@ -686,7 +663,9 @@ Write-Output ""
 Write-Output "1 = build/install from this source checkout and configure coding agents"
 Write-Output "2 = build/install command from this source checkout only"
 Write-Output "3 = configure coding agents only"
-Write-Output "4 = uninstall repogrammar command only"
+Write-Output "4 = show command-only uninstall migration guidance"
+Write-Output "5 = disconnect RepoGrammar-owned coding-agent integrations"
+Write-Output "6 = uninstall the RepoGrammar-managed product installation"
 Write-Output "q = cancel"
 $choice = Read-Host "Selection [1]"
 switch ($choice) {
@@ -694,7 +673,9 @@ switch ($choice) {
     "1" { Install-Cli; Run-AgentInstall; Invoke-VerifyInstall $true; break }
     "2" { Install-Cli; Invoke-VerifyInstall $true; break }
     "3" { Run-AgentInstall; break }
-    "4" { Remove-Command; break }
+    "4" { Write-DeprecatedUninstallCommandGuidance; break }
+    "5" { Invoke-AgentDisconnect; break }
+    "6" { Invoke-Purge; break }
     "q" { Write-Output "Cancelled. No changes made."; break }
     "Q" { Write-Output "Cancelled. No changes made."; break }
     default { throw "invalid selection: $choice" }

@@ -629,12 +629,16 @@ It must not store raw arguments, targets, paths, repository names, content
 hashes, prompts, source, evidence text, symbols, family ids, member ids,
 code-unit ids, raw tool input/output, raw errors, diffs, or patches.
 Claude Code and Codex integrations both point at this same read-only MCP server;
-agent installation and uninstallation are machine-level configuration workflows
+agent installation and `disconnect` are machine-level configuration workflows
 and must not change MCP tool semantics, initialize a repository, index code,
 touch `.repogrammar/`, upload telemetry, or enable telemetry by themselves.
-Interactive multi-agent install and `--target all --scope global --yes` are
-installer transactions around this same read-only MCP server, not additional
-MCP tools.
+Receipt- or strict-legacy-gated bare `uninstall` additionally disconnects every
+owned native entry before committing post-exit removal of the managed product;
+it remains outside the MCP surface and does not discover or remove
+repository-local state.
+Interactive multi-agent install and `install --target all --scope global --yes`
+are installer transactions around this same read-only MCP server, not
+additional MCP tools.
 
 ## Agent guidance
 

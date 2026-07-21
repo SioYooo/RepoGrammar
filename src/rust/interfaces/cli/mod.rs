@@ -4,15 +4,19 @@ use crate::application::autosync::{AutosyncReport, AutosyncSettings};
 use crate::application::conformance::{AlignmentComputation, ALIGNMENT_DEVIATION_CAP};
 use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
-    binary_name, known_agent_targets, manage_instruction_file, normalize_concrete_targets,
-    normalized_lexical_path, owned_install_receipt_exists, plan_install, resolve_instruction_file,
-    supported_concrete_targets, target_adapter, targets_for_display, AgentIntegrationInspection,
-    AgentTarget, InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
-    ManagedInstructionOperation, ManagedInstructionOutcome, ManagedInstructionRefusal,
-    ManagedInstructionRequest, ManagedInstructionState, MANAGED_INSTRUCTION_VERSION,
+    binary_name, disconnect_targets_for_display, known_agent_targets, manage_instruction_file,
+    normalize_concrete_targets, normalized_lexical_path, owned_install_receipt_exists,
+    plan_install, resolve_instruction_file, supported_concrete_targets, target_adapter,
+    targets_for_display, AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget,
+    DisconnectExecutionOutcome, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
+    InstallScope, ManagedInstructionOperation, ManagedInstructionOutcome,
+    ManagedInstructionRefusal, ManagedInstructionRequest, ManagedInstructionState,
+    MANAGED_INSTRUCTION_VERSION,
 };
 #[cfg(test)]
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
+use crate::application::product_installation::ProductOwnershipSource;
+use crate::application::product_uninstall::{ProductUninstallOutcome, ProductUninstallRequest};
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
     bounded_family_members, build_read_plan, estimate_alignment_potential_token_savings,
@@ -287,11 +291,26 @@ pub trait CliRuntime {
 
     fn install_agent_integration(
         &self,
-        _command: &str,
         _request: InstallRequest,
         _context: InstallExecutionContext,
     ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
         Err(RepoGrammarError::NotImplemented("install"))
+    }
+
+    fn disconnect_agent_integration(
+        &self,
+        _request: AgentDisconnectRequest,
+        _context: InstallExecutionContext,
+    ) -> Result<DisconnectExecutionOutcome, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("disconnect"))
+    }
+
+    fn uninstall_product(
+        &self,
+        _request: ProductUninstallRequest,
+        _context: InstallExecutionContext,
+    ) -> Result<ProductUninstallOutcome, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("uninstall"))
     }
 
     fn inspect_agent_integration(
@@ -557,14 +576,25 @@ where
         [command, rest @ ..] if is_query_command(command) => {
             handle_query(command, rest, current_dir, env_lookup, runtime)
         }
-        [command, rest @ ..] if is_installer_command(command) => handle_installer(
-            command,
-            rest,
-            current_dir,
-            env_lookup,
-            runtime,
-            install_prompt,
-        ),
+        [command, rest @ ..] if command == "serve" => {
+            if let Err(error) = parse_serve_options(rest) {
+                CliOutput::failure(2, format!("{error}\n"))
+            } else {
+                CliOutput::failure(
+                    2,
+                    "repogrammar serve runs through the product stdio runtime; use the repogrammar binary for read-only MCP serving\n",
+                )
+            }
+        }
+        [command, rest @ ..] if command == "install" => {
+            handle_install(rest, current_dir, env_lookup, runtime, install_prompt)
+        }
+        [command, rest @ ..] if command == "disconnect" => {
+            handle_disconnect(rest, current_dir, env_lookup, runtime)
+        }
+        [command, rest @ ..] if command == "uninstall" => {
+            handle_product_uninstall(rest, current_dir, env_lookup, runtime)
+        }
         [command, rest @ ..] if command == "stats" => {
             handle_stats(rest, current_dir, env_lookup, runtime)
         }
@@ -675,8 +705,10 @@ fn full_usage() -> String {
         "      Run the read-only MCP stdio server from the product binary.",
         "  install [--target <agent[,agent]>] [--scope global|project-local] [--dry-run] [--yes] [--print-config [agent]]",
         "      Configure RepoGrammar as a read-only MCP server for agents.",
-        "  uninstall [--target <agent[,agent]>] [--scope global|project-local] --yes",
-        "      Remove only RepoGrammar-owned agent integration receipts.",
+        "  disconnect [--target <agent[,agent]>] [--scope global|project-local] [--dry-run] [--yes] [--print-config [agent]] [--json]",
+        "      Remove only receipt-owned RepoGrammar coding-agent integrations.",
+        "  uninstall [--dry-run] [--yes] [--json]",
+        "      Remove the receipt-owned first-party managed machine installation; preserve repository state and user data.",
         "  instructions <status|sync|remove> --file <path> [--dry-run] [--yes] [--json]",
         "      Inspect or explicitly refresh one marker-fenced agent instruction file.",
         "",
@@ -922,7 +954,8 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --quiet, --verbose                 Accepted serving verbosity flags.",
         ])),
         "install" => Some(install_usage("install", "Configure RepoGrammar as a read-only MCP server for coding agents.")),
-        "uninstall" => Some(install_usage("uninstall", "Remove RepoGrammar-owned agent integration receipts and managed entries.")),
+        "disconnect" => Some(disconnect_usage("disconnect")),
+        "uninstall" => Some(uninstall_usage()),
         "instructions" => Some(help_text(&[
             "Usage: repogrammar instructions <status|sync|remove> --file <path> [--dry-run] [--yes] [--json]",
             "",
@@ -1085,6 +1118,42 @@ fn install_usage(command: &str, summary: &str) -> String {
     ])
 }
 
+fn disconnect_usage(command: &str) -> String {
+    help_text(&[
+        &format!("Usage: repogrammar {command} [--target <target[,target]>] [--scope global|project-local] [--location global|local] [--dry-run] [--yes] [--print-config [target]] [--json]"),
+        "",
+        "Removes only receipt-owned RepoGrammar coding-agent MCP integrations and managed instruction sections.",
+        "Repository-local .repogrammar state and the installed RepoGrammar product are not removed.",
+        "",
+        "Options:",
+        "  --target <target[,target]>         Select owned agent integrations to remove.",
+        "  --scope global|project-local       Select integration scope.",
+        "  --location global|local            Alias for --scope.",
+        "  --dry-run                          Print the selected removal plan without writing; live removal still validates receipt ownership.",
+        "  --yes                              Required for live writes.",
+        "  --print-config [target]             Print MCP config removal context without live writes.",
+        "  --json                              Emit one machine-readable result object.",
+    ])
+}
+
+fn uninstall_usage() -> String {
+    help_text(&[
+        "Usage: repogrammar uninstall [--dry-run] [--yes] [--json]",
+        "",
+        "Removes the receipt-owned first-party managed RepoGrammar machine installation after a complete ownership and agent-integration preflight.",
+        "Repository-local .repogrammar state, telemetry, research traces, experiment records, unknown files, and package-manager or unmanaged copies are preserved.",
+        "Use `repogrammar disconnect` to remove only coding-agent MCP integrations.",
+        "",
+        "Options:",
+        "  --dry-run                          Validate ownership and report the complete cleanup plan without writing.",
+        "  --yes                              Required for live product removal.",
+        "  --json                             Emit one machine-readable result object.",
+        "",
+        "Migration:",
+        "  repogrammar uninstall --target ... is no longer agent removal; use repogrammar disconnect --target ... --yes",
+    ])
+}
+
 fn contains_help_flag(rest: &[String]) -> bool {
     rest.iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
@@ -1129,7 +1198,7 @@ fn is_query_command(command: &str) -> bool {
 }
 
 fn is_installer_command(command: &str) -> bool {
-    matches!(command, "serve" | "install" | "uninstall")
+    matches!(command, "serve" | "install" | "disconnect" | "uninstall")
 }
 
 fn is_forbidden_graph_command(command: &str) -> bool {
@@ -3730,11 +3799,7 @@ where
         targets: &[AgentTarget],
     ) -> Result<SetupAgentMutation, SetupOperationError> {
         self.runtime
-            .install_agent_integration(
-                "install",
-                setup_install_request(targets),
-                self.install_context.clone(),
-            )
+            .install_agent_integration(setup_install_request(targets), self.install_context.clone())
             .map(|outcome| SetupAgentMutation {
                 newly_configured: outcome.configured_targets,
                 reconfigured: outcome.reconfigured_targets,
@@ -3810,9 +3875,8 @@ where
         targets: &[AgentTarget],
     ) -> Result<(), SetupOperationError> {
         self.runtime
-            .install_agent_integration(
-                "uninstall",
-                setup_install_request(targets),
+            .disconnect_agent_integration(
+                setup_disconnect_request(targets),
                 self.install_context.clone(),
             )
             .map(|_| ())
@@ -3921,6 +3985,20 @@ fn setup_install_request(targets: &[AgentTarget]) -> InstallRequest {
         telemetry_explicitly_configured: false,
         selected_targets: targets.to_vec(),
         ..InstallRequest::default()
+    }
+}
+
+fn setup_disconnect_request(targets: &[AgentTarget]) -> AgentDisconnectRequest {
+    AgentDisconnectRequest {
+        target: if targets.len() == supported_concrete_targets().len() {
+            AgentTarget::AllSupported
+        } else {
+            targets.first().copied().unwrap_or(AgentTarget::None)
+        },
+        scope: InstallScope::Global,
+        assume_yes: true,
+        selected_targets: targets.to_vec(),
+        ..AgentDisconnectRequest::default()
     }
 }
 
@@ -4602,8 +4680,7 @@ fn handle_instructions(rest: &[String], current_dir: &Path) -> CliOutput {
     }
 }
 
-fn handle_installer<F>(
-    command: &str,
+fn handle_install<F>(
     rest: &[String],
     current_dir: &Path,
     env_lookup: &F,
@@ -4613,16 +4690,6 @@ fn handle_installer<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    if command == "serve" {
-        if let Err(error) = parse_serve_options(rest) {
-            return CliOutput::failure(2, format!("{error}\n"));
-        }
-        return CliOutput::failure(
-            2,
-            "repogrammar serve runs through the product stdio runtime; use the repogrammar binary for read-only MCP serving\n",
-        );
-    }
-
     let mut request = match parse_install_options(rest) {
         Ok(request) => request,
         Err(error) => return CliOutput::failure(2, format!("{error}\n")),
@@ -4642,7 +4709,7 @@ where
 
     if request.dry_run {
         let mut output = format!(
-            "{command} dry-run: target={}, scope={}, telemetry={}\n",
+            "install dry-run: target={}, scope={}, telemetry={}\n",
             plan.target.as_str(),
             plan.scope.as_str(),
             if plan.telemetry_enabled { "on" } else { "off" }
@@ -4658,15 +4725,13 @@ where
             output.push_str(&line);
             output.push('\n');
         }
-        if command == "install" {
-            for line in install_environment_warnings(
-                &discovered_repogrammar_executables(env_lookup),
-                None,
-                None,
-            ) {
-                output.push_str(&line);
-                output.push('\n');
-            }
+        for line in install_environment_warnings(
+            &discovered_repogrammar_executables(env_lookup),
+            None,
+            None,
+        ) {
+            output.push_str(&line);
+            output.push('\n');
         }
         output.push_str(
             "anonymous telemetry does not run paired token-saving experiments or add model calls\n",
@@ -4674,7 +4739,7 @@ where
         CliOutput::success(output)
     } else {
         let mut wizard_prefix = String::new();
-        if command == "install" && !request.assume_yes && !install_prompt.is_interactive() {
+        if !request.assume_yes && !install_prompt.is_interactive() {
             return CliOutput::failure(
                 2,
                 "interactive install requires a terminal; use --dry-run or --target <agent> --yes\n",
@@ -4684,7 +4749,7 @@ where
             Ok(context) => context,
             Err(error) => return CliOutput::failure(2, format!("{error}\n")),
         };
-        if command == "install" && !request.assume_yes {
+        if !request.assume_yes {
             match run_interactive_install_wizard(
                 &mut request,
                 &context,
@@ -4700,34 +4765,237 @@ where
                 }
                 Err(error) => return CliOutput::failure(2, format!("{error}\n")),
             }
-        } else if !request.assume_yes {
-            return CliOutput::failure(
-                2,
-                format!("{command} live writes require --yes; rerun with --dry-run to inspect the safe integration plan\n"),
-            );
         }
-        match runtime.install_agent_integration(command, request.clone(), context.clone()) {
+        match runtime.install_agent_integration(request.clone(), context.clone()) {
             Ok(outcome) => {
                 let mut output = wizard_prefix;
                 output.push_str(&install_outcome_human(&outcome));
-                if command == "install" {
-                    for line in install_environment_warnings(
-                        &discovered_repogrammar_executables(env_lookup),
-                        outcome.command_path.as_deref(),
-                        outcome.installed_executable_path.as_deref(),
-                    ) {
-                        output.push_str(&line);
-                        output.push('\n');
-                    }
-                    match apply_install_telemetry_preference(&request, &context, env_lookup) {
-                        Ok(status) => output.push_str(&install_telemetry_human(&status)),
-                        Err(error) => return CliOutput::failure(2, format!("{error}\n")),
-                    }
+                for line in install_environment_warnings(
+                    &discovered_repogrammar_executables(env_lookup),
+                    outcome.command_path.as_deref(),
+                    outcome.installed_executable_path.as_deref(),
+                ) {
+                    output.push_str(&line);
+                    output.push('\n');
+                }
+                match apply_install_telemetry_preference(&request, &context, env_lookup) {
+                    Ok(status) => output.push_str(&install_telemetry_human(&status)),
+                    Err(error) => return CliOutput::failure(2, format!("{error}\n")),
                 }
                 CliOutput::success(output)
             }
             Err(error) => CliOutput::failure(2, format!("{error}\n")),
         }
+    }
+}
+
+fn handle_disconnect<F>(
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_disconnect_options(rest) {
+        Ok(options) => options,
+        Err(error) => return installer_parse_failure("disconnect", rest, error),
+    };
+    let request = options.request;
+    if request.print_config && !request.dry_run {
+        return match disconnect_print_config_output(&request) {
+            Ok(output) if options.json => CliOutput::success(json_line(json!({
+                "command": "disconnect",
+                "status": "config_preview",
+                "config": output,
+            }))),
+            Ok(output) => CliOutput::success(output),
+            Err(error) => installer_operation_failure("disconnect", options.json, error),
+        };
+    }
+    if request.dry_run {
+        let native_plan = disconnect_dry_run_native_plan(&request, env_lookup);
+        if options.json {
+            let config = if request.print_config {
+                match disconnect_print_config_output(&request) {
+                    Ok(config) => Some(config),
+                    Err(error) => return installer_operation_failure("disconnect", true, error),
+                }
+            } else {
+                None
+            };
+            return CliOutput::success(json_line(json!({
+                "command": "disconnect",
+                "status": "dry_run",
+                "dry_run": true,
+                "target": request.target.as_str(),
+                "scope": request.scope.as_str(),
+                "requested_agent_targets": disconnect_targets_for_display(&request).iter().map(|target| target.as_str()).collect::<Vec<_>>(),
+                "ownership_validation": "required_for_live_disconnect",
+                "native_plan": native_plan,
+                "config": config,
+                "preserved": {
+                    "repository_state": true,
+                    "product_installation": true,
+                },
+            })));
+        }
+        let mut output = format!(
+            "disconnect dry-run: target={}, scope={}\n",
+            request.target.as_str(),
+            request.scope.as_str()
+        );
+        if request.print_config {
+            match disconnect_print_config_output(&request) {
+                Ok(config) => output.push_str(&config),
+                Err(error) => return CliOutput::failure(2, format!("{error}\n")),
+            }
+        }
+        for line in native_plan {
+            output.push_str(&line);
+            output.push('\n');
+        }
+        return CliOutput::success(output);
+    }
+    if !request.assume_yes {
+        let guidance = "disconnect live writes require --yes; rerun with --dry-run to inspect the safe integration removal plan";
+        return installer_refusal(
+            "disconnect",
+            options.json,
+            "confirmation_required",
+            guidance,
+        );
+    }
+    let context = match install_execution_context(current_dir, env_lookup) {
+        Ok(context) => context,
+        Err(error) => return installer_operation_failure("disconnect", options.json, error),
+    };
+    match runtime.disconnect_agent_integration(request, context) {
+        Ok(outcome) if options.json => CliOutput::success(disconnect_outcome_json(&outcome)),
+        Ok(outcome) => CliOutput::success(disconnect_outcome_human(&outcome)),
+        Err(error) => installer_operation_failure("disconnect", options.json, error),
+    }
+}
+
+fn handle_product_uninstall<F>(
+    rest: &[String],
+    current_dir: &Path,
+    env_lookup: &F,
+    runtime: &impl CliRuntime,
+) -> CliOutput
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let options = match parse_product_uninstall_options(rest) {
+        Ok(options) => options,
+        Err(error) => return installer_parse_failure("uninstall", rest, error),
+    };
+    if !options.dry_run && !options.assume_yes {
+        return installer_refusal(
+            "uninstall",
+            options.json,
+            "confirmation_required",
+            "uninstall live writes require --yes; rerun with --dry-run to inspect the ownership-safe product removal plan",
+        );
+    }
+    let context = match install_execution_context(current_dir, env_lookup) {
+        Ok(context) => context,
+        Err(error) => return installer_operation_failure("uninstall", options.json, error),
+    };
+    let request = ProductUninstallRequest {
+        dry_run: options.dry_run,
+        assume_yes: options.assume_yes,
+    };
+    match runtime.uninstall_product(request, context) {
+        Ok(outcome) if !outcome.dry_run && !outcome.finalizer_pending => {
+            let rendered = if options.json {
+                product_uninstall_outcome_json(&outcome)
+            } else {
+                product_uninstall_outcome_human(&outcome)
+            };
+            CliOutput::failure(1, rendered)
+        }
+        Ok(outcome) if options.json => CliOutput::success(product_uninstall_outcome_json(&outcome)),
+        Ok(outcome) => CliOutput::success(product_uninstall_outcome_human(&outcome)),
+        Err(error) => installer_operation_failure("uninstall", options.json, error),
+    }
+}
+
+fn installer_parse_failure(command: &str, rest: &[String], error: String) -> CliOutput {
+    if rest.iter().any(|argument| argument == "--json") {
+        CliOutput::failure(
+            2,
+            json_line(installer_failure_json(command, "invalid_options", &error)),
+        )
+    } else {
+        CliOutput::failure(2, format!("{error}\n"))
+    }
+}
+
+fn installer_refusal(command: &str, json_output: bool, reason: &str, message: &str) -> CliOutput {
+    if json_output {
+        CliOutput::failure(
+            2,
+            json_line(installer_failure_json(command, reason, message)),
+        )
+    } else {
+        CliOutput::failure(2, format!("{message}\n"))
+    }
+}
+
+fn installer_operation_failure(
+    command: &str,
+    json_output: bool,
+    error: impl std::fmt::Display,
+) -> CliOutput {
+    if json_output {
+        let message = error.to_string();
+        CliOutput::failure(
+            2,
+            json_line(installer_failure_json(
+                command,
+                "preflight_or_operation_failed",
+                &message,
+            )),
+        )
+    } else {
+        CliOutput::failure(2, format!("{error}\n"))
+    }
+}
+
+fn installer_failure_json(command: &str, reason: &str, message: &str) -> Value {
+    if command == "uninstall" {
+        json!({
+            "command": command,
+            "status": "refused",
+            "reason": reason,
+            "message": message,
+            "owned_agent_targets": Vec::<String>::new(),
+            "ownership": {
+                "source": Value::Null,
+                "asset_count": 0,
+            },
+            "report_path": Value::Null,
+            "preserved": {
+                "repository_state": true,
+                "user_data": true,
+            },
+            "residual_copies": Vec::<String>::new(),
+            "manual_recovery": [message],
+        })
+    } else {
+        json!({
+            "command": command,
+            "status": "refused",
+            "reason": reason,
+            "message": message,
+            "owned_agent_targets": Vec::<String>::new(),
+            "preserved": {
+                "repository_state": true,
+                "product_installation": true,
+            },
+        })
     }
 }
 
@@ -5042,6 +5310,33 @@ fn install_print_config_output(request: &InstallRequest) -> Result<String, Strin
     Ok(output)
 }
 
+fn disconnect_render_request(request: &AgentDisconnectRequest) -> InstallRequest {
+    InstallRequest {
+        target: request.target,
+        selected_targets: request.selected_targets.clone(),
+        scope: request.scope,
+        dry_run: request.dry_run,
+        print_config: request.print_config,
+        print_config_target: request.print_config_target,
+        assume_yes: request.assume_yes,
+        ..InstallRequest::default()
+    }
+}
+
+fn disconnect_dry_run_native_plan<F>(
+    request: &AgentDisconnectRequest,
+    env_lookup: &F,
+) -> Vec<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    install_dry_run_native_plan(&disconnect_render_request(request), env_lookup)
+}
+
+fn disconnect_print_config_output(request: &AgentDisconnectRequest) -> Result<String, String> {
+    install_print_config_output(&disconnect_render_request(request))
+}
+
 fn parse_default_no_prompt_response(response: &str) -> Result<bool, String> {
     match response.trim().to_ascii_lowercase().as_str() {
         "" | "n" | "no" => Ok(false),
@@ -5276,6 +5571,126 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
         output.push_str(
             "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
         );
+    }
+    output
+}
+
+fn disconnect_outcome_human(outcome: &DisconnectExecutionOutcome) -> String {
+    let targets = outcome
+        .disconnected_targets
+        .iter()
+        .map(|target| target.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{}: {}\ntarget={}\nscope={}\ndisconnected_targets={}\nreceipts={}\nnext: restart the coding-agent session so already-open MCP child processes stop using RepoGrammar\n",
+        outcome.command,
+        outcome.message,
+        outcome.target.as_str(),
+        outcome.scope.as_str(),
+        if targets.is_empty() { "none" } else { &targets },
+        outcome.receipt_paths.len(),
+    )
+}
+
+fn disconnect_outcome_json(outcome: &DisconnectExecutionOutcome) -> String {
+    json_line(json!({
+        "command": "disconnect",
+        "status": "complete",
+        "target": outcome.target.as_str(),
+        "scope": outcome.scope.as_str(),
+        "owned_agent_targets": outcome.disconnected_targets.iter().map(|target| target.as_str()).collect::<Vec<_>>(),
+        "receipt_count": outcome.receipt_paths.len(),
+        "preserved": {
+            "repository_state": true,
+            "product_installation": true,
+        },
+        "message": outcome.message,
+    }))
+}
+
+fn product_ownership_source(source: ProductOwnershipSource) -> &'static str {
+    match source {
+        ProductOwnershipSource::Receipt => "receipt",
+        ProductOwnershipSource::Legacy => "legacy",
+    }
+}
+
+fn product_uninstall_status(outcome: &ProductUninstallOutcome) -> &'static str {
+    if outcome.dry_run {
+        "dry_run"
+    } else if outcome.finalizer_pending {
+        "finalizer_pending"
+    } else {
+        "partial"
+    }
+}
+
+fn product_uninstall_outcome_json(outcome: &ProductUninstallOutcome) -> String {
+    json_line(json!({
+        "command": "uninstall",
+        "status": product_uninstall_status(outcome),
+        "dry_run": outcome.dry_run,
+        "ownership": {
+            "source": product_ownership_source(outcome.ownership_source),
+            "asset_count": outcome.planned_paths.len(),
+        },
+        "owned_agent_targets": outcome.agent_targets.iter().map(|target| target.as_str()).collect::<Vec<_>>(),
+        "agent_planned_paths": outcome.agent_planned_paths,
+        "planned_paths": outcome.planned_paths,
+        "finalizer_pending": outcome.finalizer_pending,
+        "report_path": outcome.report_path,
+        "preserved": {
+            "repository_state": true,
+            "user_data": true,
+            "details": outcome.preserved,
+        },
+        "residual_copies": outcome.residual_copies,
+        "manual_recovery": if outcome.finalizer_pending || outcome.dry_run {
+            Vec::<String>::new()
+        } else {
+            vec!["read the structured finalizer report and follow its manual_recovery steps".to_string()]
+        },
+        "message": outcome.message,
+    }))
+}
+
+fn product_uninstall_outcome_human(outcome: &ProductUninstallOutcome) -> String {
+    let targets = outcome
+        .agent_targets
+        .iter()
+        .map(|target| target.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut output = format!(
+        "uninstall: {}\nstatus={}\nownership_source={}\nowned_assets={}\nowned_agent_targets={}\nrepository_state=preserved\nuser_data=preserved\n",
+        outcome.message,
+        product_uninstall_status(outcome),
+        product_ownership_source(outcome.ownership_source),
+        outcome.planned_paths.len(),
+        if targets.is_empty() { "none" } else { &targets },
+    );
+    if outcome.dry_run {
+        output.push_str("no changes made; rerun with --yes to authorize product removal\n");
+    } else if outcome.finalizer_pending {
+        output.push_str(
+            "cleanup has been handed to the post-exit finalizer; product files have not been reported as removed synchronously\n",
+        );
+        if let Some(report_path) = &outcome.report_path {
+            output.push_str(&format!("partial_report={report_path}\n"));
+            output.push_str("next: after this process exits, inspect the structured report for complete or partial cleanup\n");
+        }
+    } else {
+        output.push_str("cleanup was not handed off completely; follow manual recovery guidance\n");
+    }
+    for residual in &outcome.residual_copies {
+        output.push_str(&format!("residual_copy={residual}\n"));
+    }
+    for path in &outcome.agent_planned_paths {
+        output.push_str(&format!("agent_owned_path={path}\n"));
+    }
+    for path in &outcome.planned_paths {
+        output.push_str(&format!("product_owned_path={path}\n"));
     }
     output
 }
@@ -8576,6 +8991,99 @@ fn parse_query_options(rest: &[String]) -> Result<QueryOptions, String> {
     Ok(options)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DisconnectCliOptions {
+    request: AgentDisconnectRequest,
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ProductUninstallCliOptions {
+    dry_run: bool,
+    assume_yes: bool,
+    json: bool,
+}
+
+fn parse_product_uninstall_options(rest: &[String]) -> Result<ProductUninstallCliOptions, String> {
+    let mut options = ProductUninstallCliOptions::default();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--dry-run" => options.dry_run = true,
+            "--yes" => options.assume_yes = true,
+            "--json" => options.json = true,
+            "--target" => return Err("use repogrammar disconnect --target ... --yes".to_string()),
+            value if value.starts_with("--target=") => {
+                return Err("use repogrammar disconnect --target ... --yes".to_string())
+            }
+            other => return Err(format!("unknown uninstall option: {other}")),
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn parse_disconnect_options(rest: &[String]) -> Result<DisconnectCliOptions, String> {
+    let mut request = AgentDisconnectRequest::default();
+    let mut json = false;
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--target" => {
+                let value = option_value(rest, index, "--target", "a value")?;
+                apply_disconnect_target_value(&mut request, value)?;
+                index += 2;
+            }
+            "--scope" | "--location" => {
+                let value = option_value(rest, index, rest[index].as_str(), "global or project")?;
+                request.scope = InstallScope::parse(value)?;
+                index += 2;
+            }
+            "--dry-run" => {
+                request.dry_run = true;
+                index += 1;
+            }
+            "--yes" => {
+                request.assume_yes = true;
+                index += 1;
+            }
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--print-config" => {
+                request.print_config = true;
+                if let Some(value) = rest.get(index + 1).filter(|value| !value.starts_with("--")) {
+                    let target = AgentTarget::parse(value)?;
+                    if matches!(target, AgentTarget::AllSupported | AgentTarget::None) {
+                        return Err(
+                            "--print-config requires a concrete target when a value is supplied"
+                                .to_string(),
+                        );
+                    }
+                    request.print_config_target = Some(target);
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+            other => return Err(format!("unknown disconnect option: {other}")),
+        }
+    }
+    Ok(DisconnectCliOptions { request, json })
+}
+
+fn apply_disconnect_target_value(
+    request: &mut AgentDisconnectRequest,
+    value: &str,
+) -> Result<(), String> {
+    let mut install = InstallRequest::default();
+    apply_install_target_value(&mut install, value)?;
+    request.target = install.target;
+    request.selected_targets = install.selected_targets;
+    Ok(())
+}
+
 fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
     let mut request = InstallRequest::default();
     let mut index = 0;
@@ -11805,39 +12313,20 @@ mod tests {
 
         fn install_agent_integration(
             &self,
-            command: &str,
             request: InstallRequest,
             _context: InstallExecutionContext,
         ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-            self.calls.borrow_mut().push(match command {
-                "install" => "install",
-                "uninstall" => "uninstall",
-                _ => {
-                    return Err(RepoGrammarError::InvalidInput(
-                        "invalid setup action".into(),
-                    ))
-                }
-            });
+            self.calls.borrow_mut().push("install");
             assert!(!request.telemetry_enabled);
             assert!(!request.telemetry_explicitly_configured);
-            if command == "uninstall" && self.fail_rollback {
-                return Err(RepoGrammarError::InvalidInput(
-                    "injected rollback failure with /private/secret".to_string(),
-                ));
-            }
-            let (configured_targets, reconfigured_targets) = if command == "install"
-                && self.inspection == AgentIntegrationInspection::OwnedOutdated
-            {
-                (Vec::new(), request.selected_targets)
-            } else {
-                (request.selected_targets, Vec::new())
-            };
-            Ok(InstallExecutionOutcome {
-                command: if command == "install" {
-                    "install"
+            let (configured_targets, reconfigured_targets) =
+                if self.inspection == AgentIntegrationInspection::OwnedOutdated {
+                    (Vec::new(), request.selected_targets)
                 } else {
-                    "uninstall"
-                },
+                    (request.selected_targets, Vec::new())
+                };
+            Ok(InstallExecutionOutcome {
+                command: "install",
                 target: request.target,
                 scope: request.scope,
                 configured_targets,
@@ -11848,6 +12337,28 @@ mod tests {
                 command_path: None,
                 command_on_path: true,
                 message: "fake native integration complete".to_string(),
+            })
+        }
+
+        fn disconnect_agent_integration(
+            &self,
+            request: AgentDisconnectRequest,
+            _context: InstallExecutionContext,
+        ) -> Result<DisconnectExecutionOutcome, RepoGrammarError> {
+            self.calls.borrow_mut().push("disconnect");
+            if self.fail_rollback {
+                return Err(RepoGrammarError::InvalidInput(
+                    "injected rollback failure with /private/secret".to_string(),
+                ));
+            }
+            let disconnected_targets = disconnect_targets_for_display(&request);
+            Ok(DisconnectExecutionOutcome {
+                command: "disconnect",
+                target: request.target,
+                scope: request.scope,
+                disconnected_targets,
+                receipt_paths: Vec::new(),
+                message: "fake native integration disconnected".to_string(),
             })
         }
 
@@ -12415,7 +12926,10 @@ mod tests {
         );
 
         assert_eq!(output.status, 1);
-        assert_eq!(&*runtime.calls.borrow(), &["install", "index", "uninstall"]);
+        assert_eq!(
+            &*runtime.calls.borrow(),
+            &["install", "index", "disconnect"]
+        );
         let value: Value = serde_json::from_str(output.stdout.trim()).expect("setup JSON");
         assert_eq!(value["status"], "failed");
         assert_eq!(value["failure"]["class"], "index_failed");
@@ -18431,7 +18945,6 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                _command: &str,
                 _request: InstallRequest,
                 _context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
@@ -18513,7 +19026,6 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                _command: &str,
                 _request: InstallRequest,
                 _context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
@@ -18597,11 +19109,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 self.requests.borrow_mut().push(request.clone());
                 Ok(InstallExecutionOutcome {
                     command: "install",
@@ -18685,11 +19195,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 self.requests.borrow_mut().push(request.clone());
                 Ok(InstallExecutionOutcome {
                     command: "install",
@@ -18768,11 +19276,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 self.requests.borrow_mut().push(request.clone());
                 Ok(InstallExecutionOutcome {
                     command: "install",
@@ -18864,7 +19370,6 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                _command: &str,
                 _request: InstallRequest,
                 _context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
@@ -18952,7 +19457,6 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                _command: &str,
                 _request: InstallRequest,
                 _context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
@@ -19013,7 +19517,6 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                _command: &str,
                 _request: InstallRequest,
                 _context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
@@ -19194,6 +19697,281 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_options_are_independent_from_install_options() {
+        let request = parse_disconnect_options(&[
+            "--target".to_string(),
+            "all".to_string(),
+            "--scope".to_string(),
+            "global".to_string(),
+            "--dry-run".to_string(),
+            "--yes".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("disconnect options");
+        assert_eq!(request.request.target, AgentTarget::AllSupported);
+        assert_eq!(request.request.scope, InstallScope::Global);
+        assert!(request.request.dry_run);
+        assert!(request.request.assume_yes);
+        assert!(request.json);
+        assert!(parse_disconnect_options(&["--telemetry".to_string()]).is_err());
+        assert!(parse_disconnect_options(&["--no-permissions".to_string()]).is_err());
+    }
+
+    #[test]
+    fn disconnect_help_names_agent_only_ownership_boundary() {
+        let help = command_usage("disconnect").expect("disconnect help");
+        assert!(help.contains("receipt-owned RepoGrammar coding-agent"));
+        assert!(help.contains("installed RepoGrammar product are not removed"));
+        assert!(help.contains("--target <target[,target]"));
+        assert!(help.contains("--json"));
+    }
+
+    #[test]
+    fn disconnect_live_json_keeps_agent_only_contract() {
+        let workspace = TempWorkspace::new("cli-disconnect-json");
+        let runtime = SetupIntegrationRuntime::new(false);
+        let env = product_uninstall_test_env(&workspace);
+        let output = run_with_context_and_runtime(
+            ["disconnect", "--target", "codex", "--yes", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("disconnect JSON");
+        assert_eq!(value["command"], "disconnect");
+        assert_eq!(value["status"], "complete");
+        assert_eq!(value["owned_agent_targets"][0], "codex");
+        assert_eq!(value["preserved"]["repository_state"], true);
+        assert_eq!(value["preserved"]["product_installation"], true);
+        assert_eq!(&*runtime.calls.borrow(), &["disconnect"]);
+    }
+
+    struct ProductUninstallCliRuntime {
+        calls: Cell<usize>,
+        last_request: RefCell<Option<ProductUninstallRequest>>,
+        finalizer_pending: bool,
+    }
+
+    impl ProductUninstallCliRuntime {
+        fn new(finalizer_pending: bool) -> Self {
+            Self {
+                calls: Cell::new(0),
+                last_request: RefCell::new(None),
+                finalizer_pending,
+            }
+        }
+    }
+
+    impl CliRuntime for ProductUninstallCliRuntime {
+        fn index_repository(
+            &self,
+            _command: &str,
+            _request: CliIndexRequest,
+        ) -> Result<IndexingOutcome, RepoGrammarError> {
+            unreachable!("product uninstall CLI test")
+        }
+
+        fn repository_status(
+            &self,
+            _request: RepositoryStatusRequest,
+        ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+            unreachable!("product uninstall CLI test")
+        }
+
+        fn repository_doctor(
+            &self,
+            _request: RepositoryDoctorRequest,
+        ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+            unreachable!("product uninstall CLI test")
+        }
+
+        fn uninstall_product(
+            &self,
+            request: ProductUninstallRequest,
+            _context: InstallExecutionContext,
+        ) -> Result<ProductUninstallOutcome, RepoGrammarError> {
+            self.calls.set(self.calls.get() + 1);
+            *self.last_request.borrow_mut() = Some(request);
+            Ok(ProductUninstallOutcome {
+                command: "uninstall",
+                dry_run: request.dry_run,
+                ownership_source: ProductOwnershipSource::Receipt,
+                agent_targets: vec![AgentTarget::Codex],
+                agent_planned_paths: vec!["/managed/receipts/codex.json".to_string()],
+                planned_paths: vec!["/managed/bin/repogrammar".to_string()],
+                preserved: vec!["repository-local .repogrammar".to_string()],
+                residual_copies: vec!["/unmanaged/bin/repogrammar".to_string()],
+                finalizer_pending: !request.dry_run && self.finalizer_pending,
+                report_path: (!request.dry_run && self.finalizer_pending)
+                    .then(|| "/private/report.json".to_string()),
+                message: if request.dry_run {
+                    "ownership-safe uninstall plan validated".to_string()
+                } else {
+                    "post-exit cleanup handoff accepted".to_string()
+                },
+            })
+        }
+    }
+
+    fn product_uninstall_test_env(workspace: &TempWorkspace) -> impl Fn(&str) -> Option<String> {
+        let data_dir = workspace.path().join("data").display().to_string();
+        let command_dir = workspace.path().join("bin").display().to_string();
+        let executable = workspace.path().join("current").display().to_string();
+        move |key| match key {
+            "REPOGRAMMAR_INSTALL_DIR" => Some(data_dir.clone()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.clone()),
+            "REPOGRAMMAR_EXECUTABLE" => Some(executable.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn product_uninstall_requires_yes_without_calling_runtime() {
+        let workspace = TempWorkspace::new("cli-product-uninstall-requires-yes");
+        let runtime = ProductUninstallCliRuntime::new(true);
+        let env = product_uninstall_test_env(&workspace);
+        let output = run_with_context_and_runtime(["uninstall"], workspace.path(), &env, &runtime);
+
+        assert_eq!(output.status, 2);
+        assert!(output
+            .stderr
+            .contains("uninstall live writes require --yes"));
+        assert_eq!(runtime.calls.get(), 0);
+
+        let json_output =
+            run_with_context_and_runtime(["uninstall", "--json"], workspace.path(), &env, &runtime);
+        assert_eq!(json_output.status, 2);
+        let value: Value = serde_json::from_str(json_output.stderr.trim()).expect("refusal JSON");
+        assert_eq!(value["command"], "uninstall");
+        assert_eq!(value["status"], "refused");
+        assert_eq!(value["reason"], "confirmation_required");
+        assert_eq!(value["ownership"]["source"], Value::Null);
+        assert_eq!(value["ownership"]["asset_count"], 0);
+        assert_eq!(value["report_path"], Value::Null);
+        assert_eq!(value["preserved"]["repository_state"], true);
+        assert_eq!(value["preserved"]["user_data"], true);
+        assert_eq!(runtime.calls.get(), 0);
+    }
+
+    #[test]
+    fn product_uninstall_dry_run_delegates_without_claiming_removal() {
+        let workspace = TempWorkspace::new("cli-product-uninstall-dry-run");
+        let runtime = ProductUninstallCliRuntime::new(true);
+        let env = product_uninstall_test_env(&workspace);
+        let output = run_with_context_and_runtime(
+            ["uninstall", "--dry-run", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        assert_eq!(runtime.calls.get(), 1);
+        let request = (*runtime.last_request.borrow()).expect("request");
+        assert!(request.dry_run);
+        assert!(!request.assume_yes);
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("uninstall JSON");
+        assert_eq!(value["command"], "uninstall");
+        assert_eq!(value["status"], "dry_run");
+        assert_eq!(value["finalizer_pending"], false);
+        assert_eq!(
+            value["agent_planned_paths"],
+            json!(["/managed/receipts/codex.json"])
+        );
+        assert_eq!(value["planned_paths"], json!(["/managed/bin/repogrammar"]));
+        assert_eq!(value["preserved"]["repository_state"], true);
+        assert_eq!(value["preserved"]["user_data"], true);
+        assert!(!output.stdout.contains("removed"));
+    }
+
+    #[test]
+    fn product_uninstall_target_returns_exact_disconnect_migration() {
+        let workspace = TempWorkspace::new("cli-product-uninstall-target-migration");
+        let runtime = ProductUninstallCliRuntime::new(true);
+        let env = product_uninstall_test_env(&workspace);
+        let output = run_with_context_and_runtime(
+            ["uninstall", "--target", "codex"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 2);
+        assert_eq!(
+            output.stderr,
+            "use repogrammar disconnect --target ... --yes\n"
+        );
+        assert_eq!(runtime.calls.get(), 0);
+    }
+
+    #[test]
+    fn product_uninstall_rejects_removed_product_switch() {
+        let options = parse_product_uninstall_options(&["--product".to_string()]);
+        assert_eq!(
+            options.expect_err("old switch must be rejected"),
+            "unknown uninstall option: --product"
+        );
+        for unsupported in ["--scope", "--print-config", "--location"] {
+            assert!(
+                parse_product_uninstall_options(&[unsupported.to_string()]).is_err(),
+                "product uninstall must reject {unsupported}"
+            );
+        }
+    }
+
+    #[test]
+    fn product_uninstall_live_json_reports_only_pending_finalizer() {
+        let workspace = TempWorkspace::new("cli-product-uninstall-finalizer-pending");
+        let runtime = ProductUninstallCliRuntime::new(true);
+        let env = product_uninstall_test_env(&workspace);
+        let output = run_with_context_and_runtime(
+            ["uninstall", "--yes", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 0, "{output:?}");
+        let value: Value = serde_json::from_str(output.stdout.trim()).expect("uninstall JSON");
+        assert_eq!(value["status"], "finalizer_pending");
+        assert_eq!(value["finalizer_pending"], true);
+        assert_eq!(value["report_path"], "/private/report.json");
+        assert!(!output.stdout.contains("removed"));
+    }
+
+    #[test]
+    fn product_uninstall_partial_handoff_is_not_success() {
+        let workspace = TempWorkspace::new("cli-product-uninstall-partial-handoff");
+        let runtime = ProductUninstallCliRuntime::new(false);
+        let env = product_uninstall_test_env(&workspace);
+        let output = run_with_context_and_runtime(
+            ["uninstall", "--yes", "--json"],
+            workspace.path(),
+            &env,
+            &runtime,
+        );
+
+        assert_eq!(output.status, 1);
+        assert!(output.stdout.is_empty());
+        let value: Value = serde_json::from_str(output.stderr.trim()).expect("partial JSON");
+        assert_eq!(value["status"], "partial");
+        assert_eq!(value["finalizer_pending"], false);
+        assert_eq!(value["manual_recovery"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn uninstall_help_names_full_product_preservation_boundary() {
+        let help = command_usage("uninstall").expect("uninstall help");
+        assert!(help.contains("Usage: repogrammar uninstall [--dry-run] [--yes] [--json]"));
+        assert!(help.contains("Repository-local .repogrammar state"));
+        assert!(help.contains("package-manager or unmanaged copies are preserved"));
+        assert!(help.contains("repogrammar disconnect --target ... --yes"));
+        assert!(!help.contains("--product"));
+    }
+
+    #[test]
     fn install_live_writes_delegate_to_runtime_after_yes() {
         struct InstallRuntime;
 
@@ -19222,11 +20000,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 assert_eq!(request.target, AgentTarget::Codex);
                 assert_eq!(request.scope, InstallScope::Global);
                 assert!(context.data_dir.ends_with("repogrammar"));
@@ -19305,11 +20081,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 self.requests.borrow_mut().push(request.clone());
                 Ok(InstallExecutionOutcome {
                     command: "install",
@@ -19388,11 +20162,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 assert!(!request.telemetry_enabled);
                 Ok(InstallExecutionOutcome {
                     command: "install",
@@ -19464,11 +20236,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 Ok(InstallExecutionOutcome {
                     command: "install",
                     target: request.target,
@@ -19571,11 +20341,9 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                command: &str,
                 request: InstallRequest,
                 context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
-                assert_eq!(command, "install");
                 self.seen_telemetry
                     .borrow_mut()
                     .push(request.telemetry_enabled);
@@ -19658,7 +20426,6 @@ mod tests {
 
             fn install_agent_integration(
                 &self,
-                _command: &str,
                 _request: InstallRequest,
                 _context: InstallExecutionContext,
             ) -> Result<InstallExecutionOutcome, RepoGrammarError> {

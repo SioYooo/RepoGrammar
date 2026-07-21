@@ -100,16 +100,33 @@ bash src/install/repogrammar-install.sh \
   --install-cli-only --from-source --yes
 ```
 
-## 5. Cleanup
+## 5. Cleanup on receipt-aware current source
 
 ```bash
-npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar uninit --project /path/to/repo --yes
+repogrammar uninstall --dry-run
+repogrammar uninstall --yes
 ```
 
-`uninit` is the only repository lifecycle command that removes
-`.repogrammar/`. Machine-level agent integration has its own reversible
-`repogrammar uninstall` receipt boundary.
+Bare `uninstall` removes only the first-party managed machine installation and
+its receipt-owned agent integrations. It preserves every repository's
+`.repogrammar/`, telemetry and research data, unknown global files, and
+npm/Cargo or unmanaged PATH copies. To remove one repository index separately:
+
+```bash
+repogrammar uninit --project /path/to/repo --yes
+```
+
+To disconnect coding agents while keeping the installed product:
+
+```bash
+repogrammar disconnect --target all --scope global --dry-run
+repogrammar disconnect --target all --scope global --yes
+```
+
+The immutable public `v0.4.0` artifacts used earlier in this guide predate this
+breaking pre-1.0 rename and full self-uninstall contract. Do not infer current
+`main` behavior from those bytes; use the installed binary's help until the
+patch-forward release is public.
 
 ## Platform and scope boundary
 

@@ -472,7 +472,7 @@ the maintainer restore that exact pre-demo state:
 
 ```bash
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
-  repogrammar uninstall --target codex --scope global --yes
+  repogrammar disconnect --target codex --scope global --yes
 
 npx --yes --package @sioyooo/repogrammar@0.4.0 \
   repogrammar instructions remove \
