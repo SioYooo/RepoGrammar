@@ -60,77 +60,150 @@ tools locate code; RepoGrammar adds a repository-local contract for deciding
 which repeated implementations are compatible, what still needs to be read,
 and when the answer must abstain.
 
-## Quick start
+## Installation
 
-### 1. Download and install
+RepoGrammar supports macOS and glibc-based Linux. Windows and musl Linux are
+not currently supported installation targets.
 
-RepoGrammar provides prebuilt binaries for supported macOS and Linux systems;
-Rust and Cargo are not required.
+### Prerequisites
+
+- Python 3.10 or later;
+- Bash;
+- `curl`, `tar`, and `gzip`; and
+- network access to GitHub Releases during installation.
+
+Verify the required tools before installing:
 
 ```bash
-curl -fsSLo install.sh https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh
-bash install.sh --version v0.4.3 --install-cli-only --yes
+python3 --version
+bash --version
+curl --version
+tar --version
+gzip --version
+```
+
+The Python version must be 3.10 or later. Rust, Cargo, Node.js, Docker, an LLM,
+and API keys are not required for the binary installation path.
+
+### 1. Download and install the CLI
+
+Use a temporary directory so the installer files do not remain in a project:
+
+```bash
+mkdir -p /tmp/repogrammar-install
+cd /tmp/repogrammar-install
+
+curl -fsSLO \
+  https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh
+curl -fsSLO \
+  https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh.sha256
+```
+
+Verify the installer itself on macOS:
+
+```bash
+shasum -a 256 -c install.sh.sha256
+```
+
+On Linux, use `sha256sum -c install.sh.sha256` instead. Then install the CLI:
+
+```bash
+bash install.sh \
+  --version v0.4.3 \
+  --install-cli-only \
+  --yes
+
 export PATH="$HOME/.local/bin:$PATH"
 repogrammar version
 ```
 
-The installer downloads the matching native archive and bundled Python worker,
-verifies the archive checksum, installs the managed command, and records the
-product receipt. It does not configure a coding agent or create repository
+The expected output is `repogrammar 0.4.3`. The installer downloads and
+checksum-verifies the matching native archive and bundled Python worker,
+installs the managed command under `$HOME/.local/bin`, and records the product
+receipt. It does not configure a coding agent or create repository-local
 `.repogrammar/` state.
 
-Already have Node? The same release is published to npm, so you can download and
-run it in one step — no separate install:
+To make the PATH change persistent, add this line once to `~/.zshrc` for Zsh or
+`~/.bashrc` for Bash, then start a new shell:
 
 ```bash
-npx --yes --package @sioyooo/repogrammar repogrammar version
+export PATH="$HOME/.local/bin:$PATH"
 ```
-
-The npm package is a thin launcher: it downloads and verifies the matching
-prebuilt macOS/Linux binary (the same release artifact `install.sh` installs),
-so Rust and Cargo are still not required. See the
-[full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
-for version-pinned `npx` commands and CI usage.
 
 ### 2. Optionally connect a coding agent
 
-Skip this step if you only want the CLI. To connect a detected Codex or Claude
-Code installation to the read-only RepoGrammar MCP server, run:
+Skip this step when only the CLI is needed. To detect an installed Codex or
+Claude Code client and configure the read-only RepoGrammar MCP server globally:
 
 ```bash
-repogrammar install --target auto --scope global --yes --no-telemetry
+repogrammar install \
+  --target auto \
+  --scope global \
+  --yes \
+  --no-telemetry
 ```
+
+Restart an already-running coding-agent session after this command completes.
+Agent installation does not initialize a repository and does not edit global
+instruction files by default.
 
 ### 3. Initialize each repository
 
-Each repository needs its own local index. Run `init` once in every repository
-where you want RepoGrammar available:
+Every repository needs its own local RepoGrammar state and index:
 
 ```bash
 cd /path/to/repository
-repogrammar init --project "$PWD" --yes
-repogrammar status --project "$PWD"
+
+repogrammar init \
+  --project "$PWD" \
+  --yes
+
+repogrammar status \
+  --project "$PWD"
 ```
 
-`init` builds the active index and starts that repository's autosync daemon by
-default. For CI or a deterministic one-shot index, add
-`--no-autosync --progress never`. There is no global repository scanner, so new
-repositories must be initialized once. `repogrammar setup` remains the optional
-combined onboarding shortcut for users who explicitly want agent wiring and
-current-repository initialization in one reviewed plan; it is not required by
-the installation flow above. See the
-[full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
-for advanced installation, CI, manual sync, and cleanup options.
+`init` creates `.repogrammar/`, builds the active index, and starts that
+repository's optional autosync daemon by default. Do not manually edit
+`.repogrammar/`. For CI or a deterministic one-shot index, use:
 
-On receipt-aware current source, `repogrammar uninstall --dry-run` previews a
-full managed-machine removal and `repogrammar uninstall --yes` authorizes it.
-Use `repogrammar disconnect --target all --yes` when you only want to remove
-RepoGrammar-owned coding-agent integrations. Repository indexes are deliberately
-separate; remove one with `repogrammar uninit --project /path/to/repo --yes`.
+```bash
+repogrammar init \
+  --project "$PWD" \
+  --yes \
+  --no-autosync \
+  --progress never
+```
 
-The immutable public `v0.4.1` release introduced the `disconnect` rename and the
-receipted full self-uninstall contract. Follow the help shipped with the
-installed binary for the exact lifecycle commands supported by that version.
+Run `init` once in every additional repository. The CLI and coding-agent
+integration are machine-level installations and do not need to be repeated.
+There is no global repository scanner.
+
+For machine-readable status and recovery guidance:
+
+```bash
+repogrammar status --project "$PWD" --json
+repogrammar doctor --project "$PWD" --json
+```
+
+Follow the reported recovery action instead of manually modifying
+`.repogrammar/`. If the shell reports `repogrammar: command not found`, run
+`export PATH="$HOME/.local/bin:$PATH"` and verify that
+`$HOME/.local/bin/repogrammar` exists.
+
+Already have Node.js? The same immutable version is also available through the
+thin npm launcher:
+
+```bash
+npx --yes --package @sioyooo/repogrammar@0.4.3 repogrammar version
+```
+
+See the [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
+for advanced installation, CI, explicit instruction synchronization, manual
+sync, and cleanup. Use `repogrammar uninstall --dry-run` to preview complete
+managed-machine removal, `repogrammar disconnect --target all --yes` to remove
+only agent integrations, and
+`repogrammar uninit --project /path/to/repository --yes` to remove one
+repository's local index.
 
 ## What you get
 
