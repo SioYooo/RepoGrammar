@@ -109,6 +109,17 @@ also abstains with `INSUFFICIENT_EVIDENCE` and never surfaces a selected family.
   handles instead. Narrow to a smaller directory or a specific pattern family id.
   See `docs/specifications/query-resolution.md` for the full scope-resolution
   semantics.
+- **A bare single-segment directory resolves only as a last-resort fallback, and
+  only when it is a real indexed directory.** A multi-segment token (`backend/app`)
+  is a directory scope directly. A bare bareword (`backend`, `src`) is kept a
+  natural-language target for ranking; it resolves as a directory only through a
+  fallback-time probe that runs **last**, after the exact/role/evidence layers and
+  term retrieval have already abstained, and **only** when a bounded index read
+  finds real files under it. A bareword that names no indexed directory — including
+  every single-word concept or natural-language query — reads to zero files and
+  stays `UNKNOWN`: the natural-language interpretation is never hijacked and no
+  family is ever selected that the directory resolver cannot prove. This is a
+  query-path fallback only; scoped readiness (below) still rejects barewords.
 
 ## Source Text
 
@@ -148,8 +159,10 @@ summary with a stale count is an honest freshness caveat, not an error.
   scope holding more files than the bound reports `coverage: truncated` and the
   file/family counts are lower bounds. The scope must be path-like: a bare
   single-segment token (e.g. `pkg`) that carries no `/` or `.` is rejected by the
-  shared path-safety authority and reads to an empty scope (`not_indexed`), the
-  same way the directory-scope query resolver treats it. Scoped readiness never
+  shared path-safety authority and reads to an empty scope (`not_indexed`). Unlike
+  the query path — whose bare-directory fallback probe resolves a bareword that
+  turns out to be a real indexed directory — scoped readiness does **not** probe
+  barewords; it keeps the strict path-like requirement. Scoped readiness never
   hydrates a family, reads no source content, and is capability-only in exactly the
   same sense as the whole-checkout readiness above.
 
