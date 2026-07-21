@@ -558,6 +558,20 @@ it is not a claim that any particular family, alignment, or token-saving result 
 supported or measured. Assembling it performs bounded stats-scale reads, so like
 `status`/`doctor` it is for readiness triage, not routine per-query agent loops.
 
+The same authority also produces a bounded, source-free SCOPED readiness report
+for one directory/module scope, exposed by `repogrammar doctor --target/--within`
+and the MCP `inspect_readiness` scoped operation. It reuses the shared
+target-resolution vocabulary and the bounded directory-scope read/family-mapping
+ports to report, for that scope only, a resolvability verdict, indexed-file
+coverage and count, languages present, the count of families whose evidence
+occupies the scope (counted WITHOUT hydrating any family), a scope freshness token
+projected from the same repository recovery authority, and one recovery action.
+Its `summary` is projected from the same shared recovery as the whole-checkout
+readiness, so a scope is never more optimistic than the repository. It is
+source-free (it hydrates no family and reads no source content) and records no
+family-query telemetry; every field is a low-cardinality enum, count, or language
+token, with no raw target, path, or symbol in the output.
+
 `UNKNOWN` is a typed result with reason codes and affected claims, not an
 implementation failure by default. Some unknowns block specific semantic,
 security, persistence, or conformance claims while still allowing weaker

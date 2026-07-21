@@ -135,6 +135,24 @@ witness per observed variation dimension (and the anchor-target dimension) when
 the profile is hydrated. See the Representative selection rule and the
 `FamilyConstraintProfile` in `docs/specifications/domain-model.md`.
 
+### Scoped readiness reuse
+
+The bounded directory-scope machinery is also reused, read-only, by SCOPED
+readiness (`repogrammar doctor --target/--within` and the MCP `inspect_readiness`
+scoped operation; see `docs/specifications/mcp-api.md` and
+`docs/specifications/product.md`). Scoped readiness parses the `target`/`within`
+with the same `parse_target`, normalizes and safety-checks the scope prefixes with
+the same `normalize_directory_prefix`, and maps the bounded scoped files to their
+families with the same `list_active_files_in_directory` +
+`find_active_families_by_evidence_path` ports and the same generation-consistency
+discipline. Unlike the query path, it only COUNTS: it never hydrates, selects, or
+projects a family, never reads source content, and records no telemetry. It
+therefore surfaces the scope's indexed-file coverage, languages present, and the
+count of families whose evidence occupies the scope as a bounded queryability
+report, without ever selecting a family. As in the query path, a bare
+single-segment token that carries no `/` or `.` is not a path-like scope and reads
+to an empty scope.
+
 ### Abstention gates and reasons
 
 A term-retrieval query resolves to a family **only** when the top candidate clears

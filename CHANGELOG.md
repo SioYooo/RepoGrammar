@@ -14,6 +14,23 @@
   rejected — never silently ignored — on any other operation/command. See ADR-0029
   (Phase 4 note).
 
+- Added an optional `target`/`within` (a directory/module scope) to the MCP
+  `inspect_readiness` operation and a matching `--target`/`--within` to
+  `repogrammar doctor`, returning a bounded, source-free SCOPED queryability
+  report over just that scope: a `summary` token, a `queryability` verdict
+  (`queryable`/`partial_context`/`degraded`/`not_indexed`/`not_ready`/
+  `cannot_verify`), a `scope` object (safe-prefix count, indexed-file count and
+  coverage bucket, truncation flag, languages present, count of families whose
+  evidence occupies the scope, and freshness), `providers`, and one `recovery`
+  action. It reuses the shared target-resolution vocabulary and the bounded
+  directory-scope read/family-mapping ports, but only COUNTS: it hydrates no
+  family, reads no source content, and records no family-query telemetry. Every
+  field is a low-cardinality enum/count/language token — no raw target, path, or
+  symbol appears. The no-target `inspect_readiness`/`doctor` output is unchanged
+  (the whole-checkout `readiness` object and the scoped `scoped_readiness` object
+  are mutually exclusive and carried under distinct keys), and the response stays
+  on `product-schemas.v1` (see ADR-0029). A bare single-segment token that carries
+  no `/` or `.` is not a path-like scope and reads to an empty scope.
 - Added an additive top-level `resolution` object to `find_analogues` /
   `explain_deviation` (CLI `find`/`explain`) responses that resolve a directory or
   composite scope. It projects the candidate-set cardinality

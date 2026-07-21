@@ -8,13 +8,14 @@ use crate::application::query::{
     estimate_partial_context_potential_token_savings, family_query_route_report,
     family_query_unknown_metric, found_outcome_token_savings, product_readiness_value,
     query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
-    select_family_evidence, validate_query_target, validate_query_token_budget,
-    AlignmentCertificateReport, FamilyDetailReport, FamilyEvidenceMode, FamilyLookupMode,
-    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
-    FamilyQueryUnknown, OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation,
-    QueryPreflightReport, ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, ResolvedQueryTarget,
-    SourceSpanRenderReport, TermRetrievalAbstention, TermRetrievalRoute, Verbosity, VerbosityTier,
-    MAX_QUERY_TARGET_BYTES, MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
+    scoped_readiness_value, select_family_evidence, validate_query_target,
+    validate_query_token_budget, AlignmentCertificateReport, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
+    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, OutcomeTokenSavings,
+    ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
+    ReadPlanLineRangeOmission, ResolvedQueryTarget, ScopedReadinessReport, SourceSpanRenderReport,
+    TermRetrievalAbstention, TermRetrievalRoute, Verbosity, VerbosityTier, MAX_QUERY_TARGET_BYTES,
+    MAX_QUERY_TOKEN_BUDGET, PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -119,6 +120,19 @@ pub trait McpReadOnlyRuntime {
         Err(RepoGrammarError::NotImplemented("readiness"))
     }
 
+    /// Assemble the bounded, source-free SCOPED readiness report for a
+    /// directory/module scope named by `target` and/or `within`. Read-only,
+    /// source-free, and telemetry-free, like `product_readiness`; it never
+    /// hydrates a family or reads source content.
+    fn scoped_readiness(
+        &self,
+        _request: RepositoryStatusRequest,
+        _target: &str,
+        _within: Option<&str>,
+    ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+        Err(RepoGrammarError::NotImplemented("scoped readiness"))
+    }
+
     fn render_source_spans(
         &self,
         _request: RepositoryStatusRequest,
@@ -202,6 +216,10 @@ struct ContextArguments {
     /// schema; only meaningful for `explain_deviation` / `check_conformance`, where
     /// it pins the comparison side to exactly one family.
     against: Option<String>,
+    /// Optional directory/module scope. Consumed only by `inspect_readiness` to
+    /// request a bounded, source-free SCOPED queryability report; ignored by the
+    /// family-query operations, which already scope through `target`.
+    within: Option<String>,
     output_options: FamilyOutputOptions,
     include_source_spans: bool,
 }
@@ -209,7 +227,7 @@ struct ContextArguments {
 pub fn tool_schema() -> Value {
     json!({
         "name": McpToolName::Context.as_str(),
-        "description": "Read-only RepoGrammar pattern-family context. For find_analogues, explain_deviation, and check_conformance, pass the path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use show_family only with an exact family id. Use inspect_readiness (no target) for a bounded, source-free capability report: a summary token, per-dimension states (repository, active index, family evidence freshness, prevalence, retrieval, static alignment, providers, autosync, measurement), the top blocking-unknown mechanisms, and one executable recovery action. Start with compact mode and do not request include_source_spans by default. Use read_plan before editing, and fall back on UNKNOWN/FALLBACK/stale/omitted/insufficient results. Do not run repogrammar stats in normal agent loops. No silent setup; run setup/resync/autosync only when user or project policy permits machine integration and repo-local analysis state.",
+        "description": "Read-only RepoGrammar pattern-family context. For find_analogues, explain_deviation, and check_conformance, pass the path, symbol/member id, framework role, or pattern question you have; RepoGrammar discovers candidate families internally and returns family ids as follow-up handles. Use show_family only with an exact family id. Use inspect_readiness (no target) for a bounded, source-free capability report: a summary token, per-dimension states (repository, active index, family evidence freshness, prevalence, retrieval, static alignment, providers, autosync, measurement), the top blocking-unknown mechanisms, and one executable recovery action. Add an optional target and/or within (a directory/module scope) to inspect_readiness for a bounded, source-free SCOPED queryability report over just that scope: a summary token, a resolvability verdict, scoped indexing coverage and file count, languages/providers present, resolvable family count, freshness, and one recovery action — with no source-span hydration and no family-query telemetry. Start with compact mode and do not request include_source_spans by default. Use read_plan before editing, and fall back on UNKNOWN/FALLBACK/stale/omitted/insufficient results. Do not run repogrammar stats in normal agent loops. No silent setup; run setup/resync/autosync only when user or project policy permits machine integration and repo-local analysis state.",
         "inputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -235,6 +253,12 @@ pub fn tool_schema() -> Value {
                     "minLength": 1,
                     "maxLength": MAX_MCP_TARGET_BYTES,
                     "description": "Optional comparison-family scope for explain_deviation and check_conformance: an exact family: id, framework role, or pattern that pins the single comparison family. Omitted, the comparison family is inferred from the target unit's membership or its (language, kind, role) key. Ambiguous or unmatched against abstains with candidate handles; it never false-selects.",
+                },
+                "within": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_MCP_TARGET_BYTES,
+                    "description": "Optional directory/module scope. Consumed only by inspect_readiness to request a bounded, source-free scoped queryability report over that scope.",
                 },
                 "token_budget": {
                     "type": "integer",
@@ -281,9 +305,27 @@ pub fn handle_context_call(
     };
 
     // `inspect_readiness` is a read-only, source-free capability inspection. It
-    // does not run the query preflight or family lookup; it returns the decomposed
-    // readiness report, or a clean fallback when readiness cannot be assembled.
+    // does not run the query preflight or family lookup, and it records NO
+    // family-query telemetry (it returns before any telemetry sink). It returns
+    // the decomposed readiness report, or a clean fallback when readiness cannot
+    // be assembled.
     if arguments.operation == McpOperation::InspectReadiness {
+        // A `target` and/or `within` requests the bounded, source-free SCOPED
+        // queryability report; the no-target path is byte-identical to before.
+        if arguments.target.is_some() || arguments.within.is_some() {
+            let target = arguments.target.as_deref().unwrap_or("");
+            return Ok(
+                match runtime.scoped_readiness(request, target, arguments.within.as_deref()) {
+                    Ok(scoped) => scoped_inspect_readiness_value(&scoped),
+                    Err(_) => fallback_value(
+                        arguments.operation,
+                        repository_status_unavailable_fallback(
+                            QueryPreflightOperation::PatternFamilyQuery,
+                        ),
+                    ),
+                },
+            );
+        }
         return Ok(match runtime.product_readiness(request) {
             Ok(readiness) => inspect_readiness_value(&readiness),
             Err(_) => fallback_value(
@@ -900,6 +942,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             "operation"
                 | "target"
                 | "against"
+                | "within"
                 | "token_budget"
                 | "mode"
                 | "verbosity"
@@ -961,6 +1004,20 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
             "repogrammar_context against is only valid with explain_deviation or check_conformance",
         ));
     }
+    let within = match object.get("within") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_query_target(value).map_err(|error| {
+                McpProtocolError::invalid_params(format!("repogrammar_context within {error}"))
+            })?;
+            Some(value.clone())
+        }
+        Some(_) => {
+            return Err(McpProtocolError::invalid_params(
+                "repogrammar_context within must be a string when provided",
+            ));
+        }
+    };
     let token_budget = if let Some(token_budget) = object.get("token_budget") {
         let Some(value) = token_budget.as_u64() else {
             return Err(McpProtocolError::invalid_params(
@@ -1040,6 +1097,7 @@ fn parse_context_arguments(arguments: &Value) -> Result<ContextArguments, McpPro
         operation,
         target,
         against,
+        within,
         output_options: FamilyOutputOptions {
             evidence_mode,
             token_budget,
@@ -1078,6 +1136,22 @@ fn inspect_readiness_value(readiness: &ProductReadinessReport) -> Value {
         "status": "ok",
         "implemented": true,
         "readiness": product_readiness_value(readiness),
+    })
+}
+
+/// Bounded, source-free MCP result for a SCOPED `inspect_readiness` (a `target`
+/// and/or `within` was supplied). It carries only typed tokens, counts, language
+/// tokens, and the single recovery action — no source text, raw target, path, or
+/// symbol — under a distinct `scoped_readiness` key so consumers can tell it apart
+/// from the whole-checkout `readiness` report.
+fn scoped_inspect_readiness_value(scoped: &ScopedReadinessReport) -> Value {
+    json!({
+        "operation": McpOperation::InspectReadiness.as_str(),
+        "command": McpOperation::InspectReadiness.cli_command(),
+        "schema_version": PRODUCT_SCHEMA_VERSION,
+        "status": "ok",
+        "implemented": true,
+        "scoped_readiness": scoped_readiness_value(scoped),
     })
 }
 
@@ -2712,6 +2786,112 @@ mod tests {
     }
 
     #[test]
+    fn scoped_inspect_readiness_routes_to_scoped_report_without_family_lookup() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness", "target": "app/api"}),
+        )
+        .expect("scoped readiness response");
+
+        assert_eq!(response["operation"], "inspect_readiness");
+        assert_eq!(response["schema_version"], PRODUCT_SCHEMA_VERSION);
+        assert_eq!(response["status"], "ok");
+        // The scoped report lands under its own key, distinct from the whole-repo
+        // `readiness` key, so consumers can tell them apart.
+        let scoped = &response["scoped_readiness"];
+        assert_eq!(scoped["summary"], "ready");
+        assert_eq!(scoped["queryability"], "queryable");
+        assert_eq!(scoped["scope"]["indexed_file_count"], 3);
+        assert_eq!(scoped["scope"]["resolvable_family_count"], 2);
+        assert_eq!(scoped["scope"]["languages"][0], "python");
+        assert!(scoped["recovery"]["action"].is_string());
+        assert!(response.get("readiness").is_none());
+        // Read-only, source-free capability inspection: no family lookup runs, and
+        // no source-span detail leaks.
+        assert_eq!(runtime.lookup_calls(), 0);
+        assert!(response.get("read_plan").is_none());
+        let serialized = response.to_string();
+        assert!(!serialized.contains("content_hash"));
+        assert!(!serialized.contains("start_byte"));
+    }
+
+    #[test]
+    fn scoped_inspect_readiness_accepts_within_only() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness", "within": "app/api"}),
+        )
+        .expect("scoped readiness response");
+
+        assert_eq!(response["scoped_readiness"]["queryability"], "queryable");
+        assert_eq!(runtime.lookup_calls(), 0);
+    }
+
+    #[test]
+    fn inspect_readiness_no_target_output_is_unchanged() {
+        let runtime = FakeMcpRuntime::ready_unknown();
+
+        let response = handle_context_call(
+            &runtime,
+            &context(),
+            &json!({"operation": "inspect_readiness"}),
+        )
+        .expect("readiness response");
+
+        // The no-target path keeps the whole-checkout `readiness` shape and never
+        // emits the scoped key.
+        assert!(response.get("readiness").is_some());
+        assert!(response.get("scoped_readiness").is_none());
+        assert_eq!(response["readiness"]["summary"], "degraded");
+    }
+
+    #[test]
+    fn scoped_inspect_readiness_records_no_family_query_telemetry() {
+        let workspace = TempWorkspace::new("mcp-scoped-readiness-no-telemetry");
+        let context = context_for_workspace(&workspace);
+        let rollup_path = workspace
+            .path()
+            .join(".repogrammar")
+            .join("telemetry")
+            .join("local-metrics")
+            .join("family_query_metrics.json");
+
+        // The scoped inspect_readiness path emits NO family-query telemetry.
+        let scoped = handle_context_call(
+            &FakeMcpRuntime::ready_unknown(),
+            &context,
+            &json!({"operation": "inspect_readiness", "target": "app/api"}),
+        )
+        .expect("scoped readiness response");
+        assert_eq!(scoped["scoped_readiness"]["queryability"], "queryable");
+        assert!(
+            !rollup_path.exists(),
+            "scoped inspect_readiness must not write family-query telemetry"
+        );
+
+        // Positive control: a family-query fallback on the SAME context DOES write
+        // the rollup, proving the harness would observe telemetry if any were
+        // emitted on the scoped path.
+        let fallback = handle_context_call(
+            &FakeMcpRuntime::initialized_without_generation(),
+            &context,
+            &json!({"operation": "find_analogues", "target": "app/api"}),
+        )
+        .expect("fallback response");
+        assert_eq!(fallback["status"], "FALLBACK_TO_CODE_SEARCH");
+        assert!(
+            rollup_path.exists(),
+            "family-query fallback must write the telemetry rollup"
+        );
+    }
+
+    #[test]
     fn no_active_generation_returns_index_guidance() {
         let runtime = FakeMcpRuntime::initialized_without_generation();
 
@@ -3770,6 +3950,32 @@ mod tests {
                 false,
                 Some(Vec::new()),
             ))
+        }
+
+        fn scoped_readiness(
+            &self,
+            _request: RepositoryStatusRequest,
+            _target: &str,
+            _within: Option<&str>,
+        ) -> Result<ScopedReadinessReport, RepoGrammarError> {
+            // A queryable scope fixture; the scoped path must never enter the family
+            // lookup, so this records nothing on `lookup_calls`.
+            Ok(ScopedReadinessReport {
+                summary: crate::application::query::ReadinessSummary::Ready,
+                queryability: crate::application::query::ScopeQueryability::Queryable,
+                scope_prefix_count: 1,
+                indexed_file_count: 3,
+                index_coverage: crate::application::query::ScopeIndexCoverage::Present,
+                languages_in_scope: vec!["python".to_string()],
+                resolvable_family_count: 2,
+                scope_truncated: false,
+                freshness: crate::application::query::ScopeFreshness::Fresh,
+                providers: Vec::new(),
+                recovery: crate::application::recovery::RecoveryRecommendation {
+                    action: crate::application::recovery::RecoveryAction::None,
+                    reason: crate::application::recovery::RecoveryReason::Ready,
+                },
+            })
         }
 
         fn render_source_spans(

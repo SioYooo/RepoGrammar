@@ -141,6 +141,18 @@ to align against, never that an alignment holds at runtime. The
 `top_blocking_unknowns` are triage buckets, not resolved analysis. A `degraded`
 summary with a stale count is an honest freshness caveat, not an error.
 
+- **Scoped readiness is bounded and path-like.** `repogrammar doctor
+  --target/--within` and the MCP `inspect_readiness` scoped operation report a
+  bounded, source-free queryability report for one directory/module scope. Its
+  counts come from the same bounded directory-scope reads as the query path, so a
+  scope holding more files than the bound reports `coverage: truncated` and the
+  file/family counts are lower bounds. The scope must be path-like: a bare
+  single-segment token (e.g. `pkg`) that carries no `/` or `.` is rejected by the
+  shared path-safety authority and reads to an empty scope (`not_indexed`), the
+  same way the directory-scope query resolver treats it. Scoped readiness never
+  hydrates a family, reads no source content, and is capability-only in exactly the
+  same sense as the whole-checkout readiness above.
+
 ## Token Savings
 
 `estimated_potential_token_savings` is an estimated local read-displacement
