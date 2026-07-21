@@ -120,6 +120,23 @@ failure, or non-JSON query output. The corpus, result schema, and current
 baseline reading are documented in
 `docs/experiments/product-core-baseline.md`.
 
+The committed corpus (`src/fixtures/evaluation/query-corpus-v1.json`,
+`product-eval-corpus.v1`) covers the exact/path/role/natural-language retrieval
+and abstention surface plus, over the nested `directory-scopes` fixture, the
+Phase 1–3 directory and composite scope resolution and hard-constraint conflict
+behavior. A scope query gold may carry an optional
+`expected.resolution_cardinality` (`one`/`many`/`none`/`truncated`) matched
+against the product's additive top-level `resolution.cardinality`. The results
+schema is `product-eval-results.v3` (strictly additive over v2), whose
+`summary.metrics` adds `committed_precision`, `answerable_rate`,
+`partial_context_rate`, `candidate_recall_at_k`, `directory_query_recall`,
+`composite_query_recall`, `conflict_accuracy`, and the `unknown_by_reason`
+histogram alongside the existing retrieval and safety counters. The wave-2 kinds
+(`explain`-two-sided, `check --against`, scoped readiness, truncated cardinality)
+are deferred and enumerated in the corpus `_deferred_wave2_kinds` marker. See
+[Testing](testing.md#directory--composite-scope-and-conflict-cases) for the full
+kind taxonomy and metric definitions.
+
 ## payload-measure
 
 `payload-measure` is the deterministic response-payload byte-measurement harness
