@@ -171,16 +171,26 @@ them only after the exact public finalizer emits `STABLE_RELEASE_READY`.
 
 - Exact version: `0.4.1`
 - Git tag: `v0.4.1`
-- Tag SHA: `<PENDING PUBLICATION EVIDENCE>`
-- Candidate workflow run and attempt: `<PENDING PUBLICATION EVIDENCE>`
-- GitHub Release: `<PENDING PUBLICATION EVIDENCE>`
-- Asset inventory: `<PENDING PUBLICATION EVIDENCE>`
-- npm stage ID: `<PENDING HUMAN-APPROVED STAGE>`
-- npm package and integrity: `<PENDING PUBLICATION EVIDENCE>`
-- npm provenance: `<PENDING PUBLICATION EVIDENCE>`
-- dist-tags: expected `latest=0.4.1`, `preview=0.2.0-preview.0`
-- Public finalizer run: `<PENDING PUBLICATION EVIDENCE>`
-- Finalizer verdict: `<PENDING STABLE_RELEASE_READY>`
+- Release commit: `aa0ca07fcf710b93eaaa03760fc852905e812095`
+- Annotated tag object: `c22c0fd06e8e8d48a441586c3b9b6395b48dc980`
+- Candidate workflow run and attempt:
+  [`29847383172`](https://github.com/SioYooo/RepoGrammar/actions/runs/29847383172),
+  attempt `1`
+- GitHub Release:
+  [immutable `v0.4.1`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.1)
+- Asset inventory: exactly 11 public assets; all checksum and GitHub
+  release/asset attestations verified
+- npm stage ID: `ce59e214-77ec-4824-af0f-9d0457af4813`, approved through the
+  maintainer 2FA boundary
+- npm package and integrity:
+  [`@sioyooo/repogrammar@0.4.1`](https://www.npmjs.com/package/@sioyooo/repogrammar/v/0.4.1),
+  `sha512-Jfq9evfSdI01fT0eJoXDMsLL92IEbOhpF+SwKMKcmtTIWko7b3QeLiNx/9pAVQ5pI7GazTMSleXEsYiQKzT9AA==`
+- npm provenance: verified SLSA provenance bound to the release workflow,
+  `refs/tags/v0.4.1`, the release commit, and candidate run
+- dist-tags: `latest=0.4.1`, `preview=0.2.0-preview.0`
+- Public finalizer run:
+  [`29848866553`](https://github.com/SioYooo/RepoGrammar/actions/runs/29848866553)
+- Finalizer verdict: `STABLE_RELEASE_READY`
 
 ## Claim guardrails
 
