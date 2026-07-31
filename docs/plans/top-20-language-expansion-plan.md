@@ -39,9 +39,18 @@ the shared `unknown` scope unless the model later gains a reviewed peer token.
 Schema v11 persists both consumers with same-generation source evidence. On an
 unrelated incremental source edit, Cargo output is recomputed while unchanged
 static npm declarations copy forward with their evidence unit, retaining one
-fresh record. These are project-model slices, not Rust, JavaScript, or
-TypeScript language completion. Source-free public projection, generic provider
-ports, conflict reporting, lockfile resolution, Python/C++ migration, and other
+fresh record. The Python project-config frontend now emits PyPI
+`manifest_declared` records from PEP 621/build-system/dependency-group arrays
+when the running Python provides `tomllib`, from `setup.cfg` install/build/test/
+extra sections, and from literal `setup.py` dependency fields without executing
+the file. Distribution names use PEP 503 normalization; requirements use a
+bounded ASCII suffix, direct URL/path suffixes are not stored, and dynamic,
+non-authoritative, malformed, or over-budget dependency fields become
+`python_dependency_inventory` typed `UNKNOWN`. Static PyPI rows use the same
+evidence-bound incremental copy-forward as npm. These are project-model slices,
+not Python, Rust, JavaScript, or TypeScript language completion. Source-free
+public projection, generic provider ports, conflict reporting, lockfile
+resolution, Poetry/PDM/uv-specific metadata, C/C++ migration, and other
 ecosystems remain open atomic modules.
 
 ## Goal and non-goal

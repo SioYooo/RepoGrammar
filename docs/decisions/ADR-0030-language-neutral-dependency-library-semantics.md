@@ -65,12 +65,20 @@ The first provider consumer is the existing Cargo metadata adapter. It emits
 generic `manifest_declared` dependency records alongside its legacy project
 facts. `cargo metadata --no-deps` does not provide a resolved transitive graph,
 so those records must not be labeled lockfile- or provider-resolved. The first
-static-manifest consumer is the bounded root `package.json` parser. It records
-valid npm names from `dependencies`, `devDependencies`,
+static-manifest consumers are the bounded root `package.json` parser and the
+Python project-config frontend. The npm path records valid names from
+`dependencies`, `devDependencies`,
 `optionalDependencies`, and `peerDependencies`; peer scope remains `unknown`
 because the shared scope vocabulary does not invent a runtime/build meaning for
-that npm-specific relation. Parser-origin records can never claim
-`provider_resolved`.
+that npm-specific relation. The Python path records normalized PyPI identities
+from PEP 621/build-system/dependency-group metadata when `tomllib` is available,
+from `setup.cfg` requirement sections, and from literal dependency fields on a
+lexically authoritative static `setup.py` call. Dynamic dependency expressions
+remain typed `UNKNOWN`, and URL/path requirement suffixes are omitted so local
+paths or credentials do not enter the record. The accepted suffix is ASCII and
+byte bounded; the revisioned private response is capped at 2 MiB and becomes a
+typed resource-limit outcome instead of crossing the host boundary.
+Parser-origin records can never claim `provider_resolved`.
 
 ## Provider and package-manager policy
 
@@ -143,8 +151,9 @@ permission to infer runtime behavior.
    generation replacement are already fail-closed through derived-record
    dependencies.
 2. Continue migrating bounded existing manifest readers to generic records.
-   Cargo and root npm `package.json` are complete at manifest-declaration level;
-   Python and qualified C/C++ project metadata remain next.
+   Cargo, root npm `package.json`, and the bounded standard Python project
+   formats are complete at manifest-declaration level; qualified C/C++ project
+   metadata and additional Python tool-specific schemas remain next.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
 4. Specify a reviewed library-contract registry, cache invalidation, and

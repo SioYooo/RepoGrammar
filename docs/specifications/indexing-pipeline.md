@@ -905,6 +905,25 @@ unconditional top-level `raise`, emits `MissingProjectConfig`; empty `setup()`
 does not. Exactly one authoritative setup call is required;
 multiple calls yield `ConflictingFacts`, while malformed syntax yields
 `MissingProjectConfig`.
+The project-config response also carries bounded ADR-0030 PyPI dependency
+metadata. With `tomllib`, `pyproject.toml` inventories PEP 621 dependency and
+optional-dependency arrays, build-system requirements, and string-only
+dependency groups. `setup.cfg` inventories literal install/build/test/extra
+requirement lines. The same authoritative static `setup.py` call may inventory
+literal install/build/test arrays and complete literal extras dictionaries;
+dynamic fields become `python_dependency_inventory` typed `UNKNOWN` and are
+never evaluated; dependency-bearing trusted setup calls outside the direct
+unconditional shape abstain the same way. PyPI identity uses PEP 503
+normalization. The requirement suffix is ASCII and byte bounded. URL/path suffixes
+are omitted from the stored requirement so repository paths or credentials do
+not leak; the package declaration remains visible. A runtime without `tomllib`
+returns an explicit unavailable UNKNOWN for TOML inventory. All rows are
+`manifest_declared` evidence tied to the project-config unit, are copied on
+incremental sync only with that unchanged unit, and cannot support a family or
+claim installed/resolved package semantics.
+The private response requires `protocol_version=1` and `contract_revision=1`
+and is capped at 2 MiB. Contract drift fails with a typed mismatch; an oversized
+dependency projection becomes `ResourceLimit` UNKNOWN.
 These records are structural context only, are not provider facts, do not
 participate in family membership support, and stay blocked from claim-input
 readiness. Roots from coexisting Python config formats are deduplicated only as

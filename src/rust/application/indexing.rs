@@ -12206,6 +12206,82 @@ mod tests {
     }
 
     #[test]
+    fn static_setup_py_dependencies_persist_and_copy_forward_without_execution() {
+        let workspace = TempWorkspace::new("indexing-pypi-dependencies");
+        fs::write(
+            workspace.path().join("setup.py"),
+            "from setuptools import setup\n\
+             setup(install_requires=['Requests>=2'])\n\
+             raise RuntimeError('must never execute setup.py')\n",
+        )
+        .expect("write static setup.py");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index static setup.py dependency");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read PyPI dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.ecosystem.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![("pypi", "requests", Some(">=2"))]
+        );
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        assert_eq!(
+            synced.sync_report.expect("sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied PyPI dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "requests");
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+    }
+
+    #[test]
     fn parser_semantic_facts_cannot_claim_semantic_certainty() {
         let workspace = TempWorkspace::new("indexing-parser-semantic-fact");
         fs::write(

@@ -779,18 +779,20 @@ setup(name="second-project", package_dir={"": "second-src"})
             .expect("multiple setup calls become a typed config conflict");
 
         assert_eq!(report.units.len(), 1);
-        assert_eq!(report.semantic_facts.len(), 1);
-        let conflict = &report.semantic_facts[0];
-        assert_eq!(conflict.kind, SemanticFactKind::Unknown);
-        assert_eq!(conflict.certainty, FactCertainty::Unknown);
-        assert_eq!(
-            conflict.target.as_ref().map(SymbolId::as_str),
-            Some("ConflictingFacts")
-        );
-        assert!(conflict
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "affected_claim=python_project_config"));
+        assert_eq!(report.semantic_facts.len(), 2);
+        assert!(report.semantic_facts.iter().all(|conflict| {
+            conflict.kind == SemanticFactKind::Unknown
+                && conflict.certainty == FactCertainty::Unknown
+                && conflict.target.as_ref().map(SymbolId::as_str) == Some("ConflictingFacts")
+        }));
+        for affected_claim in ["python_dependency_inventory", "python_project_config"] {
+            assert!(report.semantic_facts.iter().any(|conflict| {
+                conflict
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == &format!("affected_claim={affected_claim}"))
+            }));
+        }
     }
 
     #[test]

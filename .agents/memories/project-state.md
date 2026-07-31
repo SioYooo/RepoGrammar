@@ -5,11 +5,19 @@
 ADR-0030 introduces the language-neutral dependency evidence ladder and owned
 package, snapshot, external-symbol, and reviewed library-contract types. The
 first provider consumer is bounded Cargo metadata; the first static-manifest
-consumer is the root npm `package.json` parser. Both emit
+consumers are the root npm `package.json` parser and the Python project-config
+frontend. All emit
 `manifest_declared` records and neither claims a resolved graph or language
 completion. The npm parser admits bounded names from production, development,
 optional, and peer sections, preserves bounded requirements, represents peer
-scope as `unknown`, and executes no Node/npm/package code. Schema v11 persists
+scope as `unknown`, and executes no Node/npm/package code. Python inventory
+covers PEP 621/build-system/dependency-group arrays when `tomllib` is available,
+`setup.cfg` install/build/test/extra sections, and literal dependency fields on
+an authoritative static-AST `setup.py` call. It PEP-503-normalizes PyPI names,
+omits URL/path requirement suffixes, never executes `setup.py`, and represents
+dynamic dependency expressions as `python_dependency_inventory` typed
+`UNKNOWN`. Its private response is independently revisioned and capped at 2 MiB;
+invalid TOML packaging shapes and resource overflow abstain. Schema v11 persists
 the records with same-generation code-unit/file evidence, derived-path
 freshness, strict token validation, and deterministic internal
 active-generation readback. Incremental sync recomputes Cargo provider output

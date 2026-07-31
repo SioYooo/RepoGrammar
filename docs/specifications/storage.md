@@ -599,7 +599,8 @@ therefore dirties the record until bounded recomputation rewrites it, and
 generation validation remains fail-closed. `DependencyStore` exposes a
 deterministically ordered internal active-generation read model and revalidates
 every hydrated row. Writers include the safe Cargo metadata stage and bounded
-static-manifest parser output such as root npm `package.json` declarations.
+static-manifest parser output such as root npm `package.json` and Python
+`pyproject.toml`/`setup.cfg`/static-`setup.py` declarations.
 Incremental indexing recomputes provider-owned Cargo rows and copies a static
 row only when its unchanged evidence code unit also copies. There is
 intentionally no public CLI/MCP raw package-name projection in this schema

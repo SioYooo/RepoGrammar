@@ -24,6 +24,7 @@ PYDANTIC_FIXTURE = (
     / "schemas.py"
 )
 PARSE_DOCUMENT_CONTRACT_REVISION = 2
+PROJECT_CONFIG_CONTRACT_REVISION = 1
 
 
 def run_worker_exact(payload):
@@ -48,6 +49,12 @@ def run_worker(payload):
         and "contract_revision" not in payload
     ):
         payload = {**payload, "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION}
+    if (
+        isinstance(payload, dict)
+        and payload.get("mode") == "parse_project_config"
+        and "contract_revision" not in payload
+    ):
+        payload = {**payload, "contract_revision": PROJECT_CONFIG_CONTRACT_REVISION}
     return run_worker_exact(payload)
 
 
@@ -2571,6 +2578,22 @@ assert not any(
 assert "plugins.other" not in json.dumps(import_builtin_messages)
 assert_no_fact_source_payloads(import_builtin_facts)
 
+for stale_revision in [None, PROJECT_CONFIG_CONTRACT_REVISION + 1]:
+    stale_project_config_payload = {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+    }
+    if stale_revision is not None:
+        stale_project_config_payload["contract_revision"] = stale_revision
+    assert run_worker_exact(stale_project_config_payload) == [
+        {
+            "protocol_version": 1,
+            "contract_revision": PROJECT_CONFIG_CONTRACT_REVISION,
+            "mode": "parse_project_config",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+        }
+    ]
+
 config_messages = run_worker(
     {
         "protocol_version": 1,
@@ -2581,6 +2604,13 @@ config_messages = run_worker(
         "text": """
 [project]
 name = "demo-api"
+dependencies = ["FastAPI>=0.116", "private-lib @ https://user:secret@example.invalid/pkg.whl"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "../secret"]
@@ -2602,16 +2632,55 @@ if sys.version_info >= (3, 11):
     assert config_messages[0]["config"]["project_name"] == "demo-api"
     assert config_messages[0]["config"]["source_roots"] == ["src", "src/lib", "tests"]
     assert config_messages[0]["config"]["tool_sections"] == ["pyrefly", "pyright", "pytest"]
+    assert config_messages[0]["config"]["dependencies"] == [
+        {"name": "fastapi", "requirement": ">=0.116", "scope": "runtime", "optional": False},
+        {"name": "private-lib", "requirement": None, "scope": "runtime", "optional": False},
+        {"name": "pytest", "requirement": ">=8", "scope": "unknown", "optional": True},
+        {"name": "setuptools", "requirement": ">=68", "scope": "build", "optional": False},
+    ]
     assert config_messages[0]["unknowns"] == []
 else:
     assert config_messages[0]["config"]["source_roots"] == []
     assert config_messages[0]["unknowns"] == [
-        {"reason": "MissingDependency", "affected_claim": "python_project_config"}
+        {"reason": "MissingDependency", "affected_claim": "python_project_config"},
+        {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"},
     ]
 serialized_config = json.dumps(config_messages)
 assert "../secret" not in serialized_config
 assert "/tmp/secret" not in serialized_config
 assert "C:/secret" not in serialized_config
+assert "user:secret" not in serialized_config
+
+for invalid_dependency_shape in [
+    'project = "not-a-table"\n',
+    '[project]\ndynamic = "dependencies"\n',
+    'build-system = "not-a-table"\n',
+]:
+    invalid_shape_messages = run_worker(
+        {
+            "protocol_version": 1,
+            "mode": "parse_project_config",
+            "path": "pyproject.toml",
+            "content_hash": "sha256:" + "5" * 64,
+            "repository_revision": "UNKNOWN",
+            "text": invalid_dependency_shape,
+        }
+    )
+    if sys.version_info >= (3, 11):
+        assert invalid_shape_messages[0]["unknowns"] == [
+            {
+                "reason": "MissingProjectConfig",
+                "affected_claim": "python_dependency_inventory",
+            }
+        ]
+    else:
+        assert invalid_shape_messages[0]["unknowns"] == [
+            {"reason": "MissingDependency", "affected_claim": "python_project_config"},
+            {
+                "reason": "MissingProjectConfig",
+                "affected_claim": "python_dependency_inventory",
+            },
+        ]
 
 bad_config_messages = run_worker(
     {
@@ -2625,11 +2694,13 @@ bad_config_messages = run_worker(
 )
 if sys.version_info >= (3, 11):
     assert bad_config_messages[0]["unknowns"] == [
-        {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"}
+        {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"},
+        {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"},
     ]
 else:
     assert bad_config_messages[0]["unknowns"] == [
-        {"reason": "MissingDependency", "affected_claim": "python_project_config"}
+        {"reason": "MissingDependency", "affected_claim": "python_project_config"},
+        {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"},
     ]
 assert "[project" not in json.dumps(bad_config_messages)
 
@@ -2648,6 +2719,20 @@ setup_cfg_messages = run_worker(
 [metadata]
 name = demo-setup-cfg
 
+[options]
+install_requires =
+    Requests>=2
+    private-lib @ https://user:secret@example.invalid/pkg.whl
+    path-marker; os_name == '/private/marker-secret'
+setup_requires =
+    setuptools>=68
+tests_require =
+    pytest>=8
+
+[options.extras_require]
+postgres =
+    psycopg[binary]>=3
+
 [options.packages.find]
 where = src ../secret
 
@@ -2663,10 +2748,56 @@ assert setup_cfg_messages[0]["path"] == "setup.cfg"
 assert setup_cfg_messages[0]["config"]["project_name"] == "demo-setup-cfg"
 assert setup_cfg_messages[0]["config"]["source_roots"] == ["src", "tests"]
 assert setup_cfg_messages[0]["config"]["tool_sections"] == ["pytest"]
+assert setup_cfg_messages[0]["config"]["dependencies"] == [
+    {"name": "path-marker", "requirement": None, "scope": "runtime", "optional": False},
+    {"name": "private-lib", "requirement": None, "scope": "runtime", "optional": False},
+    {"name": "psycopg", "requirement": "[binary]>=3", "scope": "unknown", "optional": True},
+    {"name": "pytest", "requirement": ">=8", "scope": "test", "optional": False},
+    {"name": "requests", "requirement": ">=2", "scope": "runtime", "optional": False},
+    {"name": "setuptools", "requirement": ">=68", "scope": "build", "optional": False},
+]
 assert setup_cfg_messages[0]["unknowns"] == []
 serialized_setup_cfg = json.dumps(setup_cfg_messages)
 assert "../secret" not in serialized_setup_cfg
 assert "/tmp/secret" not in serialized_setup_cfg
+assert "user:secret" not in serialized_setup_cfg
+assert "marker-secret" not in serialized_setup_cfg
+
+oversized_setup_cfg_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "setup.cfg",
+        "content_hash": "sha256:" + "9" * 64,
+        "repository_revision": "rev-config",
+        "text": "[options]\ninstall_requires =\n    oversized-package>="
+        + ("1" * 257)
+        + "\n",
+    }
+)
+assert oversized_setup_cfg_messages[0]["config"]["dependencies"] == []
+assert oversized_setup_cfg_messages[0]["unknowns"] == [
+    {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"}
+]
+
+unicode_setup_cfg_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "setup.cfg",
+        "content_hash": "sha256:" + "9" * 64,
+        "repository_revision": "rev-config",
+        "text": "[options]\ninstall_requires =\n"
+        "    unicode-package; python_version == '"
+        + ("é" * 130)
+        + "'\n",
+    }
+)
+assert unicode_setup_cfg_messages[0]["config"]["dependencies"] == []
+assert unicode_setup_cfg_messages[0]["unknowns"] == [
+    {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"}
+]
+assert "é" not in json.dumps(unicode_setup_cfg_messages, ensure_ascii=False)
 
 bad_setup_cfg_messages = run_worker(
     {
@@ -2679,7 +2810,8 @@ bad_setup_cfg_messages = run_worker(
     }
 )
 assert bad_setup_cfg_messages[0]["unknowns"] == [
-    {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"}
+    {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"},
+    {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"},
 ]
 assert "broken" not in json.dumps(bad_setup_cfg_messages)
 
@@ -2704,6 +2836,10 @@ setup(
     name="demo-setup-py",
     package_dir={"": "src", "demo": "src/demo", "bad": "../secret"},
     packages=find_packages(where="src"),
+    install_requires=["requests>=2"],
+    setup_requires=["setuptools>=68"],
+    tests_require=["pytest>=8"],
+    extras_require={"postgres": ["psycopg[binary]>=3"]},
     extra=find_namespace_packages("keyword-decoy"),
     dynamic=find_packages(where=DYNAMIC_ROOT),
 )
@@ -2719,6 +2855,12 @@ assert setup_py_messages[0]["config"]["project_name"] == "demo-setup-py"
 # outside packages= do not contribute roots.
 assert setup_py_messages[0]["config"]["source_roots"] == ["src", "src/demo"]
 assert setup_py_messages[0]["config"]["tool_sections"] == []
+assert setup_py_messages[0]["config"]["dependencies"] == [
+    {"name": "psycopg", "requirement": "[binary]>=3", "scope": "unknown", "optional": True},
+    {"name": "pytest", "requirement": ">=8", "scope": "test", "optional": False},
+    {"name": "requests", "requirement": ">=2", "scope": "runtime", "optional": False},
+    {"name": "setuptools", "requirement": ">=68", "scope": "build", "optional": False},
+]
 assert setup_py_messages[0]["unknowns"] == []
 serialized_setup_py = json.dumps(setup_py_messages)
 assert "../secret" not in serialized_setup_py
@@ -2885,6 +3027,7 @@ build_tools.setup(
         "project_name": None,
         "source_roots": [],
         "tool_sections": [],
+        "dependencies": [],
     }
     assert unbound_setup_py_messages[0]["unknowns"] == []
 
@@ -2981,9 +3124,17 @@ setup(name="dead-config", package_dir={"": "dead-config-root"})
         }
     )
     assert ambiguous_setup_py_messages[0]["config"]["source_roots"] == []
-    assert ambiguous_setup_py_messages[0]["unknowns"] == [
-        {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"}
-    ]
+    assert ambiguous_setup_py_messages[0]["unknowns"][0] == {
+        "reason": "MissingProjectConfig",
+        "affected_claim": "python_project_config",
+    }
+    assert all(
+        unknown == {
+            "reason": "MissingProjectConfig",
+            "affected_claim": "python_dependency_inventory",
+        }
+        for unknown in ambiguous_setup_py_messages[0]["unknowns"][1:]
+    )
 
 empty_setup_py_messages = run_worker(
     {
@@ -2999,6 +3150,7 @@ assert empty_setup_py_messages[0]["config"] == {
     "project_name": None,
     "source_roots": [],
     "tool_sections": [],
+    "dependencies": [],
 }
 assert empty_setup_py_messages[0]["unknowns"] == []
 
@@ -3027,6 +3179,7 @@ assert aliased_setup_py_messages[0]["config"] == {
     "project_name": "aliased-project",
     "source_roots": ["aliased-packages", "aliased-src"],
     "tool_sections": [],
+    "dependencies": [],
 }
 assert aliased_setup_py_messages[0]["unknowns"] == []
 
@@ -3051,9 +3204,11 @@ assert conflicting_setup_py_messages[0]["config"] == {
     "project_name": None,
     "source_roots": [],
     "tool_sections": [],
+    "dependencies": [],
 }
 assert conflicting_setup_py_messages[0]["unknowns"] == [
-    {"reason": "ConflictingFacts", "affected_claim": "python_project_config"}
+    {"reason": "ConflictingFacts", "affected_claim": "python_project_config"},
+    {"reason": "ConflictingFacts", "affected_claim": "python_dependency_inventory"},
 ]
 
 # Binding state is scanned once in source order. A large batch of same-leaf
@@ -3067,15 +3222,39 @@ linear_setup_py_source = (
     + "setup(name='linear-project', package_dir={'': 'linear-src'})\n"
 )
 worker_namespace = runpy.run_path(str(WORKER))
+oversized_response_config = worker_namespace["empty_project_config"]()
+oversized_response_config["dependencies"] = [
+    {
+        "name": f"package-{index}",
+        "requirement": "=" + ("1" * 2_000),
+        "scope": "runtime",
+        "optional": False,
+    }
+    for index in range(2_000)
+]
+bounded_response = worker_namespace["bounded_project_config_response"](
+    "pyproject.toml", oversized_response_config, []
+)
+assert bounded_response["config"]["dependencies"] == []
+assert bounded_response["unknowns"] == [
+    {"reason": "ResourceLimit", "affected_claim": "python_dependency_inventory"}
+]
+assert (
+    len(json.dumps(bounded_response, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    + 1
+    <= worker_namespace["MAX_PROJECT_CONFIG_RESPONSE_BYTES"]
+)
 linear_setup_py_tree = ast.parse(linear_setup_py_source)
 (
     linear_setup_calls,
     scanned_setup_statements,
     terminated_before_setup,
+    non_authoritative_dependency_call,
 ) = worker_namespace["scan_authoritative_setup_py_calls"](linear_setup_py_tree)
 assert scanned_setup_statements == len(linear_setup_py_tree.body)
 assert len(linear_setup_calls) == 1
 assert not terminated_before_setup
+assert not non_authoritative_dependency_call
 linear_setup_py_messages = run_worker(
     {
         "protocol_version": 1,
@@ -3090,8 +3269,26 @@ assert linear_setup_py_messages[0]["config"] == {
     "project_name": "linear-project",
     "source_roots": ["linear-src"],
     "tool_sections": [],
+    "dependencies": [],
 }
 assert linear_setup_py_messages[0]["unknowns"] == []
+
+conditional_dependency_setup_py_messages = run_worker(
+    {
+        "protocol_version": 1,
+        "mode": "parse_project_config",
+        "path": "setup.py",
+        "content_hash": "sha256:" + "8" * 64,
+        "repository_revision": "UNKNOWN",
+        "text": "from setuptools import setup\n"
+        "if __name__ == '__main__':\n"
+        "    setup(install_requires=['requests>=2'])\n",
+    }
+)
+assert conditional_dependency_setup_py_messages[0]["config"]["dependencies"] == []
+assert conditional_dependency_setup_py_messages[0]["unknowns"] == [
+    {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"}
+]
 
 # A setup.py that does not parse yields a typed MissingProjectConfig UNKNOWN
 # rather than any guessed context, and its source never leaks.
@@ -3106,7 +3303,8 @@ bad_setup_py_messages = run_worker(
     }
 )
 assert bad_setup_py_messages[0]["unknowns"] == [
-    {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"}
+    {"reason": "MissingProjectConfig", "affected_claim": "python_project_config"},
+    {"reason": "MissingProjectConfig", "affected_claim": "python_dependency_inventory"},
 ]
 assert "broken_setup_py" not in json.dumps(bad_setup_py_messages)
 

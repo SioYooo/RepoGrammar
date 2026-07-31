@@ -27,6 +27,7 @@ except ModuleNotFoundError:  # Python < 3.11.
 
 PROTOCOL_VERSION = 1
 PARSE_DOCUMENT_CONTRACT_REVISION = 2
+PROJECT_CONFIG_CONTRACT_REVISION = 1
 DEFAULT_REQUEST_ID = "repogrammar-python-semantic-worker"
 MAX_STDIN_BYTES = 1_048_576
 MAX_PROJECT_ROOT_CHARS = 4096
@@ -37,6 +38,9 @@ MAX_FACTS_PER_FILE = 2_000
 MAX_FACT_TARGET_CHARS = 512
 MAX_RUST_PARSE_FACT_TARGET_CHARS = 256
 MAX_CONFIG_TEXT_BYTES = 1_048_576
+MAX_PROJECT_CONFIG_DEPENDENCIES = 2_000
+MAX_DEPENDENCY_REQUIREMENT_CHARS = 256
+MAX_PROJECT_CONFIG_RESPONSE_BYTES = 2 * 1_048_576
 # Aggregate byte budget across all changed-file sources read in one
 # analyze_project pass. Per-file caps (MAX_SOURCE_BYTES x MAX_CHANGED_FILES)
 # still allow ~10 GiB of sources plus their ASTs to be held at once, which can
@@ -291,6 +295,17 @@ def emit_extract_interface_contract_mismatch() -> None:
             "protocol_version": PROTOCOL_VERSION,
             "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "extract_interface",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
+        }
+    )
+
+
+def emit_project_config_contract_mismatch() -> None:
+    message(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "contract_revision": PROJECT_CONFIG_CONTRACT_REVISION,
+            "mode": "parse_project_config",
             "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH",
         }
     )
@@ -5372,6 +5387,129 @@ def safe_project_name(value: Any) -> str | None:
     return None
 
 
+def empty_project_config() -> dict[str, Any]:
+    return {
+        "project_name": None,
+        "source_roots": [],
+        "tool_sections": [],
+        "dependencies": [],
+    }
+
+
+def dependency_inventory_unknown(reason: str = "MissingProjectConfig") -> dict[str, str]:
+    return {
+        "reason": reason,
+        "affected_claim": "python_dependency_inventory",
+    }
+
+
+def static_python_requirement(
+    value: Any, scope: str, optional: bool
+) -> dict[str, Any] | None:
+    """Translate one bounded PEP-508-shaped string without importing packaging.
+
+    The distribution name is normalized with the PEP 503 comparison rule. The
+    stored requirement is only the source-free suffix after that name. Direct
+    URL/path suffixes are intentionally omitted because they can contain local
+    paths or credentials; the package declaration remains inventory-visible.
+    """
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > 1_024
+    ):
+        return None
+    if any(character.isspace() and character not in " \t" for character in value):
+        return None
+    match = re.match(
+        r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]{0,510}[A-Za-z0-9])?)",
+        value,
+    )
+    if match is None:
+        return None
+    raw_name = match.group(1)
+    suffix = value[match.end() :].strip()
+    if suffix and suffix[0] not in "[~<>=!;(@":
+        return None
+    name = re.sub(r"[-_.]+", "-", raw_name).lower()
+    requirement: str | None = suffix or None
+    if requirement is not None:
+        if (
+            not requirement.isascii()
+            or len(requirement.encode("utf-8")) > MAX_DEPENDENCY_REQUIREMENT_CHARS
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for character in requirement
+            )
+        ):
+            return None
+        if (
+            "@" in requirement
+            or "/" in requirement
+            or "\\" in requirement
+            or ":" in requirement
+        ):
+            requirement = None
+    return {
+        "name": name,
+        "requirement": requirement,
+        "scope": scope,
+        "optional": optional,
+    }
+
+
+def add_static_requirements(
+    config: dict[str, Any], value: Any, scope: str, optional: bool
+) -> bool:
+    if not isinstance(value, (list, tuple)):
+        return False
+    records: list[dict[str, Any]] = []
+    for item in value:
+        record = static_python_requirement(item, scope, optional)
+        if record is None:
+            return False
+        records.append(record)
+    config["dependencies"].extend(records)
+    return True
+
+
+def finalize_project_config_dependencies(
+    config: dict[str, Any], unknowns: list[dict[str, str]], incomplete: bool
+) -> None:
+    dependencies = config.get("dependencies")
+    if not isinstance(dependencies, list):
+        config["dependencies"] = []
+        incomplete = True
+        dependencies = []
+    unique: dict[tuple[str, str | None, str, bool], dict[str, Any]] = {}
+    for dependency in dependencies:
+        if not isinstance(dependency, dict):
+            incomplete = True
+            continue
+        key = (
+            dependency.get("name"),
+            dependency.get("requirement"),
+            dependency.get("scope"),
+            dependency.get("optional"),
+        )
+        if not isinstance(key[0], str) or not isinstance(key[2], str) or not isinstance(key[3], bool):
+            incomplete = True
+            continue
+        unique[key] = dependency
+    ordered = [unique[key] for key in sorted(unique, key=lambda key: (key[0], key[2], key[3], key[1] or ""))]
+    if len(ordered) > MAX_PROJECT_CONFIG_DEPENDENCIES:
+        ordered = []
+        incomplete = True
+        unknowns.append(dependency_inventory_unknown("ResourceLimit"))
+    config["dependencies"] = ordered
+    if incomplete and not any(
+        unknown.get("affected_claim") == "python_dependency_inventory"
+        for unknown in unknowns
+    ):
+        unknowns.append(dependency_inventory_unknown())
+
+
 def config_string_list(value: Any) -> list[str]:
     values = value if isinstance(value, list) else [value]
     result: list[str] = []
@@ -5385,19 +5523,25 @@ def is_setup_cfg_path(path: str) -> bool:
     return path == "setup.cfg" or path.endswith("/setup.cfg")
 
 
+def config_requirement_lines(value: str) -> list[str]:
+    return [
+        line.strip()
+        for line in value.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def parse_setup_cfg_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Parse a `setup.cfg` project config (INI) with the standard-library
     `configparser`. Only sanitized, source-tied context is extracted: the safe
     project name from `[metadata]`, and repo-relative source roots from
-    `[tool:pytest]` test paths and `[options.packages.find] where`. This never
-    executes setup.py, resolves dependencies, or proves any family claim."""
+    `[tool:pytest]` test paths and `[options.packages.find] where`. Bounded
+    literal requirement lines from install/build/test/extra sections are
+    inventory only. This never runs packaging code, resolves installed
+    dependencies, or proves any family claim."""
     unknowns: list[dict[str, str]] = []
-    config: dict[str, Any] = {
-        "project_name": None,
-        "source_roots": [],
-        "tool_sections": [],
-    }
-    parser = configparser.ConfigParser()
+    config = empty_project_config()
+    parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read_string(text)
     except (configparser.Error, ValueError, UnicodeDecodeError):
@@ -5407,6 +5551,7 @@ def parse_setup_cfg_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]
                 "affected_claim": "python_project_config",
             }
         )
+        finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
 
     if parser.has_option("metadata", "name"):
@@ -5420,6 +5565,30 @@ def parse_setup_cfg_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]
     if parser.has_option("options.packages.find", "where"):
         roots.update(config_string_list(parser.get("options.packages.find", "where").split()))
     config["source_roots"] = sorted(roots)
+    incomplete_dependencies = False
+    for option, scope in (
+        ("install_requires", "runtime"),
+        ("setup_requires", "build"),
+        ("tests_require", "test"),
+    ):
+        if parser.has_option("options", option):
+            incomplete_dependencies |= not add_static_requirements(
+                config,
+                config_requirement_lines(parser.get("options", option, fallback="")),
+                scope,
+                False,
+            )
+    if parser.has_section("options.extras_require"):
+        for extra in parser.options("options.extras_require"):
+            incomplete_dependencies |= not add_static_requirements(
+                config,
+                config_requirement_lines(
+                    parser.get("options.extras_require", extra, fallback="")
+                ),
+                "unknown",
+                True,
+            )
+    finalize_project_config_dependencies(config, unknowns, incomplete_dependencies)
     return config, unknowns
 
 
@@ -5452,7 +5621,21 @@ SETUPTOOLS_NAMESPACE_MUTATION_METHODS = {
     "setdefault",
     "update",
 }
-SETUPTOOLS_RELEVANT_SETUP_KEYWORDS = {"name", "package_dir", "packages"}
+SETUPTOOLS_RELEVANT_SETUP_KEYWORDS = {
+    "name",
+    "package_dir",
+    "packages",
+    "install_requires",
+    "extras_require",
+    "setup_requires",
+    "tests_require",
+}
+SETUPTOOLS_DEPENDENCY_SETUP_KEYWORDS = {
+    "install_requires",
+    "extras_require",
+    "setup_requires",
+    "tests_require",
+}
 AST_MATCH_NAME_NODE_TYPES = tuple(
     node_type
     for node_name in ("MatchAs", "MatchStar")
@@ -5610,29 +5793,40 @@ def setup_py_call_is_bound_to(
     return canonical_name(raw_target, bindings, {}) == expected_target
 
 
+def setup_py_call_may_declare_dependencies(node: ast.Call) -> bool:
+    return any(
+        keyword.arg is None or keyword.arg in SETUPTOOLS_DEPENDENCY_SETUP_KEYWORDS
+        for keyword in node.keywords
+    )
+
+
 def scan_authoritative_setup_py_calls(
     tree: ast.Module,
-) -> tuple[list[tuple[ast.Call, dict[str, str], set[str]]], int, bool]:
+) -> tuple[list[tuple[ast.Call, dict[str, str], set[str]]], int, bool, bool]:
     """Scan module statements once in source order and stop at two trusted setup
     calls, which is already a conflict. The count is returned for deterministic
     linear-scan regression tests; the final flag records a definite direct
-    top-level termination before any setup call. Neither is serialized."""
+    top-level termination before any setup call. The final flag records a
+    dependency-bearing trusted setup call outside the direct unconditional
+    authority shape. None of these diagnostics is serialized directly."""
 
     bindings: dict[str, str] = {}
     setup_calls: list[tuple[ast.Call, dict[str, str], set[str]]] = []
     scanned_statements = 0
+    non_authoritative_dependency_call = False
     for statement in tree.body:
         scanned_statements += 1
         if isinstance(statement, ast.Raise):
             if not setup_calls:
-                return [], scanned_statements, True
-            return setup_calls, scanned_statements, False
+                return [], scanned_statements, True, non_authoritative_dependency_call
+            return setup_calls, scanned_statements, False, non_authoritative_dependency_call
         if apply_setup_py_import_bindings(statement, bindings):
             continue
         rebound_names, mutated_roots, invalidate_all = setup_py_statement_rebindings(
             statement
         )
         invalidated_roots = rebound_names | mutated_roots
+        authoritative_node: ast.Call | None = None
         if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
             node = statement.value
             if setup_py_call_is_bound_to(
@@ -5641,15 +5835,30 @@ def scan_authoritative_setup_py_calls(
                 node,
                 SETUPTOOLS_SETUP_TARGET,
             ):
+                authoritative_node = node
                 setup_calls.append((node, dict(bindings), invalidated_roots))
                 if len(setup_calls) > 1:
                     break
+        for candidate in ast.walk(statement):
+            if (
+                not isinstance(candidate, ast.Call)
+                or candidate is authoritative_node
+                or not setup_py_call_may_declare_dependencies(candidate)
+            ):
+                continue
+            if setup_py_call_is_bound_to(
+                bindings,
+                invalidated_roots,
+                candidate,
+                SETUPTOOLS_SETUP_TARGET,
+            ):
+                non_authoritative_dependency_call = True
         if invalidate_all:
             bindings.clear()
         else:
             for name in invalidated_roots:
                 bindings.pop(name, None)
-    return setup_calls, scanned_statements, False
+    return setup_calls, scanned_statements, False, non_authoritative_dependency_call
 
 
 def literal_package_finder_root(node: ast.Call) -> tuple[str | None, bool]:
@@ -5731,6 +5940,50 @@ def static_packages_root(
     return None, False
 
 
+def literal_requirement_values(node: ast.AST) -> list[str] | None:
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return None
+    values: list[str] = []
+    for element in node.elts:
+        value = literal_string_value(element)
+        if value is None:
+            return None
+        values.append(value)
+    return values
+
+
+def add_setup_py_requirement_field(
+    config: dict[str, Any], node: ast.AST, scope: str, optional: bool
+) -> bool:
+    values = literal_requirement_values(node)
+    return values is not None and add_static_requirements(
+        config, values, scope, optional
+    )
+
+
+def add_setup_py_extras(config: dict[str, Any], node: ast.AST) -> bool:
+    if not isinstance(node, ast.Dict):
+        return False
+    seen: set[str] = set()
+    complete = True
+    for key_node, value_node in zip(node.keys, node.values):
+        key = literal_string_value(key_node)
+        if (
+            key is None
+            or not key
+            or len(key) > 128
+            or key in seen
+            or any(ord(character) < 32 or ord(character) == 127 for character in key)
+        ):
+            complete = False
+            continue
+        seen.add(key)
+        complete &= add_setup_py_requirement_field(
+            config, value_node, "unknown", True
+        )
+    return complete
+
+
 def missing_python_project_config_unknown() -> dict[str, str]:
     return {
         "reason": "MissingProjectConfig",
@@ -5758,13 +6011,12 @@ def parse_setup_py_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]
     authoritative setup call is required; multiple calls produce
     `ConflictingFacts`, while syntax that does not parse yields
     `MissingProjectConfig`. This never executes `setup.py`, runs a finder,
-    resolves dependencies, or proves any family claim."""
+    resolves installed dependencies, or proves any family claim. Literal
+    install/build/test/extra requirement arrays are returned as bounded
+    manifest declarations; dynamic dependency expressions become a typed
+    dependency-inventory UNKNOWN."""
     unknowns: list[dict[str, str]] = []
-    config: dict[str, Any] = {
-        "project_name": None,
-        "source_roots": [],
-        "tool_sections": [],
-    }
+    config = empty_project_config()
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
@@ -5774,13 +6026,20 @@ def parse_setup_py_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]
                 "affected_claim": "python_project_config",
             }
         )
+        finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
 
-    setup_calls, _scanned_statements, terminated_before_setup = (
+    (
+        setup_calls,
+        _scanned_statements,
+        terminated_before_setup,
+        non_authoritative_dependency_call,
+    ) = (
         scan_authoritative_setup_py_calls(tree)
     )
     if terminated_before_setup:
         unknowns.append(missing_python_project_config_unknown())
+        finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
     if len(setup_calls) > 1:
         unknowns.append(
@@ -5789,8 +6048,11 @@ def parse_setup_py_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]
                 "affected_claim": "python_project_config",
             }
         )
+        unknowns.append(dependency_inventory_unknown("ConflictingFacts"))
         return config, unknowns
     if not setup_calls:
+        if non_authoritative_dependency_call:
+            finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
 
     name: str | None = None
@@ -5799,6 +6061,7 @@ def parse_setup_py_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]
     setup_keywords, complete_setup_shape = setup_py_relevant_keywords(setup_call)
     if not complete_setup_shape:
         unknowns.append(missing_python_project_config_unknown())
+        finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
 
     incomplete_field = False
@@ -5832,8 +6095,23 @@ def parse_setup_py_text(text: str) -> tuple[dict[str, Any], list[dict[str, str]]
 
     if incomplete_field:
         unknowns.append(missing_python_project_config_unknown())
+    incomplete_dependencies = False
+    for field, scope in (
+        ("install_requires", "runtime"),
+        ("setup_requires", "build"),
+        ("tests_require", "test"),
+    ):
+        node = setup_keywords.get(field)
+        if node is not None:
+            incomplete_dependencies |= not add_setup_py_requirement_field(
+                config, node, scope, False
+            )
+    extras_node = setup_keywords.get("extras_require")
+    if extras_node is not None:
+        incomplete_dependencies |= not add_setup_py_extras(config, extras_node)
     config["project_name"] = safe_project_name(name)
     config["source_roots"] = sorted(config_string_list(sorted(roots)))
+    finalize_project_config_dependencies(config, unknowns, incomplete_dependencies)
     return config, unknowns
 
 
@@ -5845,11 +6123,7 @@ def parse_project_config_text(
     if is_setup_py_path(path):
         return parse_setup_py_text(text)
     unknowns: list[dict[str, str]] = []
-    config = {
-        "project_name": None,
-        "source_roots": [],
-        "tool_sections": [],
-    }
+    config = empty_project_config()
     if tomllib is None:
         unknowns.append(
             {
@@ -5857,6 +6131,7 @@ def parse_project_config_text(
                 "affected_claim": "python_project_config",
             }
         )
+        finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
 
     try:
@@ -5868,11 +6143,56 @@ def parse_project_config_text(
                 "affected_claim": "python_project_config",
             }
         )
+        finalize_project_config_dependencies(config, unknowns, True)
         return config, unknowns
 
+    incomplete_dependencies = False
     project = data.get("project") if isinstance(data, dict) else None
+    if isinstance(data, dict) and "project" in data and not isinstance(project, dict):
+        incomplete_dependencies = True
     if isinstance(project, dict):
         config["project_name"] = safe_project_name(project.get("name"))
+        if "dependencies" in project:
+            incomplete_dependencies |= not add_static_requirements(
+                config, project.get("dependencies"), "runtime", False
+            )
+        optional_dependencies = project.get("optional-dependencies")
+        if optional_dependencies is not None:
+            if not isinstance(optional_dependencies, dict):
+                incomplete_dependencies = True
+            else:
+                for group_dependencies in optional_dependencies.values():
+                    incomplete_dependencies |= not add_static_requirements(
+                        config, group_dependencies, "unknown", True
+                    )
+        if "dynamic" in project:
+            dynamic_fields = project.get("dynamic")
+            if not isinstance(dynamic_fields, list) or not all(
+                isinstance(field, str) for field in dynamic_fields
+            ):
+                incomplete_dependencies = True
+            elif any(
+                field in {"dependencies", "optional-dependencies"}
+                for field in dynamic_fields
+            ):
+                incomplete_dependencies = True
+    build_system = data.get("build-system") if isinstance(data, dict) else None
+    if isinstance(data, dict) and "build-system" in data:
+        if not isinstance(build_system, dict):
+            incomplete_dependencies = True
+        elif "requires" in build_system:
+            incomplete_dependencies |= not add_static_requirements(
+                config, build_system.get("requires"), "build", False
+            )
+    dependency_groups = data.get("dependency-groups") if isinstance(data, dict) else None
+    if dependency_groups is not None:
+        if not isinstance(dependency_groups, dict):
+            incomplete_dependencies = True
+        else:
+            for group_dependencies in dependency_groups.values():
+                incomplete_dependencies |= not add_static_requirements(
+                    config, group_dependencies, "development", True
+                )
     tool = data.get("tool") if isinstance(data, dict) else None
     if isinstance(tool, dict):
         config["tool_sections"] = sorted(
@@ -5892,12 +6212,67 @@ def parse_project_config_text(
             roots.update(config_string_list(pyright_config.get("include")))
             roots.update(config_string_list(pyright_config.get("extraPaths")))
         config["source_roots"] = sorted(roots)
+    finalize_project_config_dependencies(config, unknowns, incomplete_dependencies)
     return config, unknowns
 
 
+def bounded_project_config_response(
+    path: str, config: dict[str, Any], unknowns: list[dict[str, str]]
+) -> dict[str, Any]:
+    response = {
+        "protocol_version": PROTOCOL_VERSION,
+        "contract_revision": PROJECT_CONFIG_CONTRACT_REVISION,
+        "mode": "parse_project_config",
+        "path": path,
+        "config": config,
+        "unknowns": unknowns,
+    }
+    encoded_bytes = len(
+        json.dumps(response, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ) + 1
+    if encoded_bytes <= MAX_PROJECT_CONFIG_RESPONSE_BYTES:
+        return response
+
+    bounded_config = {**config, "dependencies": []}
+    bounded_unknowns = [
+        unknown
+        for unknown in unknowns
+        if unknown.get("affected_claim") != "python_dependency_inventory"
+    ]
+    bounded_unknowns.append(dependency_inventory_unknown("ResourceLimit"))
+    bounded_response = {
+        **response,
+        "config": bounded_config,
+        "unknowns": bounded_unknowns,
+    }
+    bounded_bytes = len(
+        json.dumps(bounded_response, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+    ) + 1
+    if bounded_bytes <= MAX_PROJECT_CONFIG_RESPONSE_BYTES:
+        return bounded_response
+    return {
+        **response,
+        "config": empty_project_config(),
+        "unknowns": [
+            {"reason": "ResourceLimit", "affected_claim": "python_project_config"},
+            dependency_inventory_unknown("ResourceLimit"),
+        ],
+    }
+
+
 def parse_project_config(payload: dict[str, Any]) -> int:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("protocol_version") != PROTOCOL_VERSION
+        or payload.get("contract_revision") != PROJECT_CONFIG_CONTRACT_REVISION
+    ):
+        emit_project_config_contract_mismatch()
+        return 0
     if set(payload) != {
         "protocol_version",
+        "contract_revision",
         "mode",
         "path",
         "content_hash",
@@ -5905,7 +6280,7 @@ def parse_project_config(payload: dict[str, Any]) -> int:
         "text",
     }:
         return 2
-    if payload.get("protocol_version") != PROTOCOL_VERSION or payload.get("mode") != "parse_project_config":
+    if payload.get("mode") != "parse_project_config":
         return 2
     if not is_safe_repo_relative_path(payload.get("path")) or not is_strict_content_hash(payload.get("content_hash")):
         return 2
@@ -5913,15 +6288,7 @@ def parse_project_config(payload: dict[str, Any]) -> int:
     if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_CONFIG_TEXT_BYTES:
         return 2
     config, unknowns = parse_project_config_text(text, payload["path"])
-    message(
-        {
-            "protocol_version": PROTOCOL_VERSION,
-            "mode": "parse_project_config",
-            "path": payload["path"],
-            "config": config,
-            "unknowns": unknowns,
-        }
-    )
+    message(bounded_project_config_response(payload["path"], config, unknowns))
     return 0
 
 
@@ -5986,7 +6353,10 @@ def project_source_roots(project_root: Path) -> list[str]:
         return []
     text, _hash = source_result
     config, unknowns = parse_project_config_text(text)
-    if unknowns:
+    if any(
+        unknown.get("affected_claim") == "python_project_config"
+        for unknown in unknowns
+    ):
         return []
     roots = config.get("source_roots")
     if not isinstance(roots, list):

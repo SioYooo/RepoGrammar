@@ -5,8 +5,10 @@
 
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
-    RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, CodeUnitKind, DependencyEcosystem, DependencyEvidenceLevel,
+    DependencyRecord, DependencyScope, DependencySnapshot, DependencyVersion, Evidence,
+    FactCertainty, FactOrigin, Language, PackageIdentity, Provenance, RepositoryRevision,
+    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
@@ -27,6 +29,7 @@ use std::time::{Duration, Instant};
 pub(crate) const PYTHON_ANCHOR_ENGINE: &str = "python";
 const PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION: u64 = 1;
 const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 2;
+const PYTHON_PROJECT_CONFIG_CONTRACT_REVISION: u64 = 1;
 
 // A source file can legitimately produce substantially more metadata than its
 // input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
@@ -98,8 +101,7 @@ impl PythonAstParser {
                 return Err(ParseError::UnsupportedLanguage);
             }
             let response = self.parse_project_config(&document)?;
-            return parse_project_config_response(&document, &response)
-                .map(SourceParseOutput::from_report);
+            return parse_project_config_response(&document, &response);
         }
         if document.language != Language::Python {
             return Err(ParseError::UnsupportedLanguage);
@@ -180,6 +182,15 @@ fn default_python_worker_script() -> PathBuf {
         }
     }
     let source_worker = source_checkout_python_worker_script();
+    // Cargo unit-test binaries link the library without `cfg(test)`, but debug
+    // assertions remain enabled. Prefer the checkout worker for every local
+    // debug/test build so an old packaging-smoke asset under `target/` cannot
+    // silently drift from the Rust-side response contract. Release binaries
+    // continue to resolve their installed bundled worker first.
+    #[cfg(debug_assertions)]
+    if source_worker.is_file() {
+        return source_worker;
+    }
     if let Ok(executable) = std::env::current_exe() {
         for candidate in python_worker_script_candidates(&executable) {
             if candidate.is_file() {
@@ -233,6 +244,7 @@ impl PythonAstParser {
     fn parse_project_config(&self, document: &SourceDocument<'_>) -> Result<String, ParseError> {
         let payload = json!({
             "protocol_version": 1,
+            "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
             "mode": "parse_project_config",
             "path": document.path,
             "content_hash": document.content_hash.as_str(),
@@ -245,7 +257,7 @@ impl PythonAstParser {
                 "python ast frontend request exceeded size limit".to_string(),
             ));
         }
-        self.run_worker_request(&payload, false)
+        self.run_worker_request(&payload, true)
     }
 
     fn parse_document(
@@ -288,7 +300,7 @@ impl PythonAstParser {
     fn run_worker_request(
         &self,
         serialized: &str,
-        parse_document_contract: bool,
+        revisioned_contract: bool,
     ) -> Result<String, ParseError> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
@@ -360,7 +372,7 @@ impl PythonAstParser {
             .map_err(|_| ParseError::Timeout)?
             .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
         if !status.success() {
-            if parse_document_contract
+            if revisioned_contract
                 && status.code() == Some(2)
                 && output.is_empty()
                 && self.worker_script.is_file()
@@ -578,7 +590,7 @@ fn parse_worker_response(
 fn parse_project_config_response(
     document: &SourceDocument<'_>,
     response: &str,
-) -> Result<ParseReport, ParseError> {
+) -> Result<SourceParseOutput, ParseError> {
     if response.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
         return Err(ParseError::Internal(
             "python ast frontend output exceeded size limit".to_string(),
@@ -598,12 +610,45 @@ fn parse_project_config_response(
     let object = value.as_object().ok_or_else(|| {
         ParseError::Internal("python ast frontend response was not an object".into())
     })?;
+    if object.get("error_code").and_then(Value::as_str) == Some("PYTHON_FRONTEND_CONTRACT_MISMATCH")
+    {
+        validate_allowed_keys(
+            object,
+            &[
+                "protocol_version",
+                "contract_revision",
+                "mode",
+                "error_code",
+            ],
+            "python project config contract mismatch response",
+        )?;
+        if object.get("protocol_version").and_then(Value::as_u64)
+            == Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+            && object.get("contract_revision").and_then(Value::as_u64)
+                == Some(PYTHON_PROJECT_CONFIG_CONTRACT_REVISION)
+            && object.get("mode").and_then(Value::as_str) == Some("parse_project_config")
+        {
+            return Err(ParseError::PythonFrontendContractMismatch);
+        }
+        return Err(ParseError::Internal(
+            "python project config mismatch envelope was invalid".to_string(),
+        ));
+    }
     validate_allowed_keys(
         object,
-        &["protocol_version", "mode", "path", "config", "unknowns"],
+        &[
+            "protocol_version",
+            "contract_revision",
+            "mode",
+            "path",
+            "config",
+            "unknowns",
+        ],
         "python ast frontend response",
     )?;
     if object.get("protocol_version").and_then(Value::as_u64) != Some(1)
+        || object.get("contract_revision").and_then(Value::as_u64)
+            != Some(PYTHON_PROJECT_CONFIG_CONTRACT_REVISION)
         || object.get("mode").and_then(Value::as_str) != Some("parse_project_config")
         || object.get("path").and_then(Value::as_str) != Some(document.path)
     {
@@ -615,14 +660,19 @@ fn parse_project_config_response(
     let unit = project_config_unit(document)?;
     let mut semantic_facts = project_config_facts(document, &unit, object)?;
     sort_semantic_facts(&mut semantic_facts);
+    let dependencies = project_config_dependencies(document, &unit, object)?;
     let units = vec![unit];
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    Ok(ParseReport {
-        units,
-        ir_nodes,
-        ir_edges: Vec::new(),
-        semantic_facts,
-        diagnostics: Vec::new(),
+    Ok(SourceParseOutput {
+        report: ParseReport {
+            units,
+            ir_nodes,
+            ir_edges: Vec::new(),
+            semantic_facts,
+            diagnostics: Vec::new(),
+        },
+        python_interface_hash: None,
+        dependencies,
     })
 }
 
@@ -795,7 +845,12 @@ fn project_config_facts(
         .ok_or_else(|| ParseError::Internal("python project config summary was invalid".into()))?;
     validate_allowed_keys(
         config,
-        &["project_name", "source_roots", "tool_sections"],
+        &[
+            "project_name",
+            "source_roots",
+            "tool_sections",
+            "dependencies",
+        ],
         "python project config summary",
     )?;
     let mut facts = Vec::new();
@@ -844,6 +899,120 @@ fn project_config_facts(
         facts.push(project_config_unknown_fact(document, unit, unknown)?);
     }
     Ok(facts)
+}
+
+fn project_config_dependencies(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    object: &Map<String, Value>,
+) -> Result<Vec<DependencyRecord>, ParseError> {
+    let config = object
+        .get("config")
+        .and_then(Value::as_object)
+        .ok_or_else(|| ParseError::Internal("python project config summary was invalid".into()))?;
+    let values = config
+        .get("dependencies")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ParseError::Internal("python project config dependencies were invalid".into())
+        })?;
+    if values.len() > 2_000 {
+        return Err(ParseError::Internal(
+            "python project config returned too many dependencies".to_string(),
+        ));
+    }
+    let mut dependencies = Vec::with_capacity(values.len());
+    for value in values {
+        let entry = value.as_object().ok_or_else(|| {
+            ParseError::Internal("python project config dependency was invalid".into())
+        })?;
+        validate_allowed_keys(
+            entry,
+            &["name", "requirement", "scope", "optional"],
+            "python project config dependency",
+        )?;
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| is_normalized_python_distribution_name(name))
+            .ok_or_else(|| {
+                ParseError::Internal("python project config dependency name was invalid".into())
+            })?;
+        let requirement = match entry.get("requirement") {
+            Some(Value::Null) | None => None,
+            Some(Value::String(requirement)) if is_safe_python_requirement_suffix(requirement) => {
+                Some(DependencyVersion::new(requirement).map_err(ParseError::Internal)?)
+            }
+            _ => {
+                return Err(ParseError::Internal(
+                    "python project config dependency requirement was invalid".to_string(),
+                ));
+            }
+        };
+        let scope = entry
+            .get("scope")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ParseError::Internal("python project config dependency scope was invalid".into())
+            })
+            .and_then(|scope| DependencyScope::parse_str(scope).map_err(ParseError::Internal))?;
+        let optional = entry
+            .get("optional")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                ParseError::Internal(
+                    "python project config dependency optional flag was invalid".into(),
+                )
+            })?;
+        dependencies.push(
+            DependencyRecord::new(
+                PackageIdentity::new(DependencyEcosystem::Pypi, name)
+                    .map_err(ParseError::Internal)?,
+                requirement,
+                None,
+                scope,
+                optional,
+                true,
+                DependencyEvidenceLevel::ManifestDeclared,
+                project_config_evidence(document, unit, "bounded Python dependency declaration")?,
+            )
+            .map_err(ParseError::Internal)?,
+        );
+    }
+    DependencySnapshot::new(dependencies, Vec::new())
+        .map(|snapshot| snapshot.dependencies)
+        .map_err(ParseError::Internal)
+}
+
+fn is_normalized_python_distribution_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && !value.contains("--")
+}
+
+fn is_safe_python_requirement_suffix(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && matches!(
+            value.as_bytes().first(),
+            Some(b'[' | b'~' | b'<' | b'>' | b'=' | b'!' | b';' | b'(')
+        )
+        && !value.contains('@')
+        && !value.contains('/')
+        && !value.contains('\\')
+        && !value.contains(':')
+        && !value.chars().any(char::is_control)
 }
 
 fn optional_project_config_name(value: Option<&Value>) -> Result<Option<&str>, ParseError> {
@@ -939,7 +1108,7 @@ fn project_config_unknown_fact(
         })?;
     if !matches!(
         reason,
-        "MissingProjectConfig" | "MissingDependency" | "ConflictingFacts"
+        "MissingProjectConfig" | "MissingDependency" | "ConflictingFacts" | "ResourceLimit"
     ) {
         return Err(ParseError::Internal(
             "python project config UNKNOWN reason was unsupported".to_string(),
@@ -953,7 +1122,10 @@ fn project_config_unknown_fact(
                 "python project config UNKNOWN affected claim was invalid".to_string(),
             )
         })?;
-    if affected_claim != "python_project_config" {
+    if !matches!(
+        affected_claim,
+        "python_project_config" | "python_dependency_inventory"
+    ) {
         return Err(ParseError::Internal(
             "python project config UNKNOWN affected claim was unsupported".to_string(),
         ));
@@ -975,7 +1147,7 @@ fn project_config_unknown_fact(
         )?,
         assumptions: vec![
             format!("reason_code={reason}"),
-            "affected_claim=python_project_config".to_string(),
+            format!("affected_claim={affected_claim}"),
             format!("parsed_with={parser_method}"),
         ],
     })
@@ -2053,8 +2225,12 @@ mod tests {
     }
 
     fn project_config_document(text: &str) -> SourceDocument<'_> {
+        project_config_document_at("pyproject.toml", text)
+    }
+
+    fn project_config_document_at<'a>(path: &'a str, text: &'a str) -> SourceDocument<'a> {
         SourceDocument {
-            path: "pyproject.toml",
+            path,
             language: Language::PythonConfig,
             content_hash: ContentHash::new(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -4117,6 +4293,7 @@ class User:
         let source = r#"
 [project]
 name = "demo-api"
+dependencies = ["FastAPI>=0.116", "uvicorn[standard]~=0.35"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "../secret"]
@@ -4133,18 +4310,34 @@ project_includes = ["src"]
         let document = project_config_document(source);
         let response = json!({
             "protocol_version": 1,
+            "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
             "mode": "parse_project_config",
             "path": "pyproject.toml",
             "config": {
                 "project_name": "demo-api",
                 "source_roots": ["src", "src/lib", "tests"],
-                "tool_sections": ["pyrefly", "pyright", "pytest"]
+                "tool_sections": ["pyrefly", "pyright", "pytest"],
+                "dependencies": [
+                    {
+                        "name": "fastapi",
+                        "requirement": ">=0.116",
+                        "scope": "runtime",
+                        "optional": false
+                    },
+                    {
+                        "name": "uvicorn",
+                        "requirement": "[standard]~=0.35",
+                        "scope": "runtime",
+                        "optional": false
+                    }
+                ]
             },
             "unknowns": []
         })
         .to_string();
-        let report =
+        let output =
             parse_project_config_response(&document, &response).expect("parse project config");
+        let report = output.report;
 
         assert_eq!(report.units.len(), 1);
         let unit = &report.units[0];
@@ -4185,6 +4378,30 @@ project_includes = ["src"]
                     .iter()
                     .any(|assumption| assumption == "not_family_claim_input")
         }));
+        assert_eq!(
+            output
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.package.name.as_str(),
+                        dependency
+                            .requirement
+                            .as_ref()
+                            .map(DependencyVersion::as_str),
+                        dependency.scope,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("fastapi", Some(">=0.116"), DependencyScope::Runtime),
+                (
+                    "uvicorn",
+                    Some("[standard]~=0.35"),
+                    DependencyScope::Runtime
+                ),
+            ]
+        );
 
         let debug = format!("{:?}", report);
         for forbidden in ["../secret", "/tmp/secret", "C:/secret", "project_includes"] {
@@ -4193,6 +4410,221 @@ project_includes = ["src"]
                 "project config leaked forbidden text {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn bundled_python_project_config_frontend_inventories_static_dependencies() {
+        let parser = PythonAstParser::default();
+        let context = ParserProjectContext::default();
+        let cases = [
+            (
+                "setup.cfg",
+                r#"
+[metadata]
+name = demo
+[options]
+install_requires =
+    Requests>=2
+    private-lib @ https://user:secret@example.invalid/pkg.whl
+    path-marker; os_name == '/private/marker-secret'
+setup_requires =
+    setuptools>=68
+tests_require =
+    pytest>=8
+[options.extras_require]
+postgres =
+    psycopg[binary]>=3
+"#,
+                vec![
+                    ("path-marker", None, DependencyScope::Runtime, false),
+                    ("private-lib", None, DependencyScope::Runtime, false),
+                    (
+                        "psycopg",
+                        Some("[binary]>=3"),
+                        DependencyScope::Unknown,
+                        true,
+                    ),
+                    ("pytest", Some(">=8"), DependencyScope::Test, false),
+                    ("requests", Some(">=2"), DependencyScope::Runtime, false),
+                    ("setuptools", Some(">=68"), DependencyScope::Build, false),
+                ],
+            ),
+            (
+                "setup.py",
+                r#"
+from setuptools import setup
+
+setup(
+    name="demo",
+    install_requires=["requests>=2"],
+    setup_requires=["setuptools>=68"],
+    tests_require=["pytest>=8"],
+    extras_require={"postgres": ["psycopg[binary]>=3"]},
+)
+raise RuntimeError("must never execute setup.py")
+"#,
+                vec![
+                    (
+                        "psycopg",
+                        Some("[binary]>=3"),
+                        DependencyScope::Unknown,
+                        true,
+                    ),
+                    ("pytest", Some(">=8"), DependencyScope::Test, false),
+                    ("requests", Some(">=2"), DependencyScope::Runtime, false),
+                    ("setuptools", Some(">=68"), DependencyScope::Build, false),
+                ],
+            ),
+        ];
+
+        for (path, source, expected) in cases {
+            let output = parser
+                .parse_with_context_output(project_config_document_at(path, source), &context)
+                .unwrap_or_else(|error| panic!("parse {path}: {error:?}"));
+            assert_eq!(
+                output
+                    .dependencies
+                    .iter()
+                    .map(|dependency| {
+                        (
+                            dependency.package.name.as_str(),
+                            dependency
+                                .requirement
+                                .as_ref()
+                                .map(DependencyVersion::as_str),
+                            dependency.scope,
+                            dependency.optional,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                expected,
+                "{path}"
+            );
+            assert!(output.dependencies.iter().all(|dependency| {
+                dependency.package.ecosystem == DependencyEcosystem::Pypi
+                    && dependency.direct
+                    && dependency.evidence_level == DependencyEvidenceLevel::ManifestDeclared
+                    && dependency.evidence.provenance.path == path
+            }));
+            let debug = format!("{output:?}");
+            assert!(!debug.contains("user:secret"));
+            assert!(!debug.contains("marker-secret"));
+            assert!(!debug.contains("must never execute"));
+        }
+    }
+
+    #[test]
+    fn project_config_dependency_response_fails_closed_on_contract_drift_and_invalid_records() {
+        let document = project_config_document("[project]\nname = 'demo'\n");
+        let response_for = |dependencies: Value| {
+            json!({
+                "protocol_version": 1,
+                "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
+                "mode": "parse_project_config",
+                "path": "pyproject.toml",
+                "config": {
+                    "project_name": "demo",
+                    "source_roots": [],
+                    "tool_sections": [],
+                    "dependencies": dependencies
+                },
+                "unknowns": []
+            })
+            .to_string()
+        };
+        let valid = json!({
+            "name": "requests",
+            "requirement": ">=2",
+            "scope": "runtime",
+            "optional": false
+        });
+        for invalid in [
+            json!({"name": "requests", "requirement": ">=2", "scope": "runtime"}),
+            json!({
+                "name": "requests",
+                "requirement": ">=2",
+                "scope": "runtime",
+                "optional": false,
+                "extra": true
+            }),
+            json!({
+                "name": "requests",
+                "requirement": "@/private/secret",
+                "scope": "runtime",
+                "optional": false
+            }),
+            json!({
+                "name": "requests",
+                "requirement": ">=2",
+                "scope": "ambient",
+                "optional": false
+            }),
+            json!({
+                "name": "requests",
+                "requirement": ">=2",
+                "scope": "runtime",
+                "optional": "false"
+            }),
+        ] {
+            assert!(matches!(
+                parse_project_config_response(&document, &response_for(json!([invalid]))),
+                Err(ParseError::Internal(_))
+            ));
+        }
+        assert!(matches!(
+            parse_project_config_response(
+                &document,
+                &response_for(json!([valid.clone(), valid.clone()]))
+            ),
+            Err(ParseError::Internal(_))
+        ));
+        assert!(matches!(
+            parse_project_config_response(
+                &document,
+                &response_for(Value::Array(vec![valid; 2_001]))
+            ),
+            Err(ParseError::Internal(_))
+        ));
+
+        let mismatch = json!({
+            "protocol_version": 1,
+            "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
+            "mode": "parse_project_config",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH"
+        })
+        .to_string();
+        assert_eq!(
+            parse_project_config_response(&document, &mismatch),
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
+    }
+
+    #[test]
+    fn dynamic_setup_py_dependencies_stay_typed_unknown_without_execution() {
+        let source = r#"
+from setuptools import setup
+
+DEPS = ["requests>=2"]
+setup(name="demo", install_requires=DEPS)
+raise RuntimeError("must never execute setup.py")
+"#;
+        let output = PythonAstParser::default()
+            .parse_with_context_output(
+                project_config_document_at("setup.py", source),
+                &ParserProjectContext::default(),
+            )
+            .expect("dynamic setup.py dependency is represented as UNKNOWN");
+
+        assert!(output.dependencies.is_empty());
+        assert!(output.report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.certainty == FactCertainty::Unknown
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_dependency_inventory")
+        }));
+        assert!(!format!("{output:?}").contains("must never execute"));
     }
 
     #[test]
@@ -4972,6 +5404,14 @@ def _api_client():
         let debug = format!("{result:?}");
         assert!(!debug.contains(root.to_string_lossy().as_ref()));
         assert!(!debug.contains("contract_revision"));
+        let project_config_result = parser.parse(project_config_document_at(
+            "setup.cfg",
+            "[metadata]\nname = demo\n",
+        ));
+        assert_eq!(
+            project_config_result,
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
