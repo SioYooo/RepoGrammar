@@ -298,15 +298,19 @@ token-based context invalidation when it adds Go project semantics.
 
 Ruby uses `ruby` for exact `.rb` paths and `ruby-config` for the accepted
 root/nested `Gemfile`, `Gemfile.lock`, `gems.rb`, `gems.locked`,
-`.ruby-version`, and `.gemspec`-suffix paths. Those tokens follow the same
-inventory-only persistence contract: path, strict raw-byte hash, size, and token
-only, with zero source-store/parser dispatch and no unit, IR, fact, `UNKNOWN`, or
-family. Ruby-only active generations are `file_manifest_only`; mixed generations
-remain `syntax_only_code_units`. Ruby inventory deltas remain incremental while
-the tokens are absent from `ParserProjectContext`, and copy-forward filters all
-claim-bearing records for current Ruby inventory paths. The frontend must add
-its Ruby context and restore token-based invalidation before cross-file semantic
-records exist.
+`.ruby-version`, and `.gemspec`-suffix paths. Ruby source and every config
+except exact `Gemfile.lock` persist only path, strict raw-byte hash, size, and
+token, with zero source-store/parser dispatch and no claim-bearing record.
+Exact lock bytes dispatch to a bounded pure Rust parser and store one
+project-config unit plus source-free typed `UNKNOWN`s where required. The
+lock may store strict direct `rubygems` dependency rows from `DEPENDENCIES`;
+scope is unknown, resolved version is absent, directness is direct, and evidence
+is `manifest_declared`. Unsupported-source, malformed, conflict, and resource
+details are not stored in public UNKNOWN text. Exact lock changes parse
+file-locally, while unrelated incremental Ruby/config edits copy forward
+unchanged evidence-bound dependency rows. Deferred Ruby deltas remain
+inventory-only and copy-forward filters their legacy claim-bearing records. No
+Ruby source IR, family, support, or readiness record exists.
 
 PHP uses `php` for exact `.php` paths and `php-config` for exact root/nested
 `composer.json`, `composer.lock`, `phpunit.xml`, and `phpunit.xml.dist`

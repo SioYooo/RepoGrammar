@@ -56,12 +56,16 @@ token's presence is not support evidence. Go-only and empty generations are
 `file_manifest_only`; a mixed generation remains `syntax_only_code_units`
 because its non-Go parser-capable tokens still own code-unit semantics.
 Ruby discovery likewise defines stable `ruby` and `ruby-config` tokens for
-bounded `.rb` and accepted root/nested project/configuration paths. They are
-inventory-only: only repository-relative path, strict hash, byte size, and token
-are persisted; no Ruby `CodeUnit`, IR, semantic fact, typed `UNKNOWN`, or family
-exists. Ruby-only generations are `file_manifest_only`, while a mixed generation
-remains `syntax_only_code_units`. The tokens prove file inventory only and do
-not select a Ruby engine, project root, dependency graph, or support state.
+bounded `.rb` and accepted root/nested project/configuration paths. Ruby
+source and every config except exact `Gemfile.lock` remain inventory-only.
+The exact lock produces a project-config unit and may emit source-free
+`ruby_dependency_inventory` `UNKNOWN`s plus bounded direct `rubygems`
+`DependencyRecord`s from its unique `DEPENDENCIES` section. Those records are
+manifest declarations with unknown scope, directness `direct`, and no resolved
+version. Executable Gemfile/gemspec DSLs are never read by the parser, evaluated,
+or turned into dependency records.
+No Ruby source IR, framework fact, family, engine/root selection, semantic
+support state, or readiness claim exists.
 PHP discovery defines stable `php` and `php-config` tokens for exact `.php`
 paths and exact accepted Composer/PHPUnit configuration basenames. PHP source
 and PHPUnit XML remain inventory-only: only repository-relative path, strict

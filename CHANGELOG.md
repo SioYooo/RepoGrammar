@@ -1129,10 +1129,13 @@ either check fails.
 - ADR-0022 now records the Ruby N1 preflight plus bounded discovery/configuration
   implementation without adding Ruby runtime support or a production
   dependency. Stable `ruby`/`ruby-config` classification, Ruby-specific
-  `.bundle`/`.ruby-lsp` exclusions, source-store/parser bypass, one warning per
-  manifest token, file-manifest/mixed-mode reporting, incremental metadata
-  deltas, legacy-claim purge, and Git-aware discovery versus Git-independent
-  autosync fingerprinting advance Ruby only to `discovered_only`. The exact
+  `.bundle`/`.ruby-lsp` exclusions, source-store/parser bypass for Ruby source,
+  and a bounded pure Rust config parser advance Ruby only to `discovered_only`.
+  Exact `Gemfile.lock` can now persist strict direct `rubygems` manifest
+  declarations; executable DSLs, unsupported sources/variants,
+  malformed/conflicting input, and resource limits emit source-free
+  `ruby_dependency_inventory` `UNKNOWN`s. Unrelated incremental source edits
+  copy dependency rows forward. The exact
   direct `ruby.minitest.test_method` family remains staged behind an immutable
   `ruby-prism` artifact, explicit CRuby
   4.0 syntax profile, future authoritative typed obligations, support >= 3,
@@ -1149,10 +1152,9 @@ either check fails.
   `4.0.6` plus optional LF, and the worker receives only bounded `.rb` bytes plus
   normalized profile metadata. The Minitest anchor requires a lexically earlier
   unconditional program-body require and a source-visibly public method. Ruby
-  discovery persists only path/hash/size/token metadata and stores no source
-  text, code unit, IR, fact, typed `UNKNOWN`, family, project model, or support
-  claim; Ruby remains unsupported and all later qualification gates remain
-  open.
+  source remains inventory-only; config units and dependency UNKNOWNs do not
+  create Ruby source IR, a framework family, or a support/readiness claim. Ruby
+  remains unsupported and all later qualification gates remain open.
 - Fixed aggregate filesystem discovery ceilings now bound accepted supported
   files (100,000), accepted bytes (512 MiB), reported skips (100,000), visited
   entries (250,000), and directory depth (256), with inclusive exact-boundary

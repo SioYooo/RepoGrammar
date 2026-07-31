@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-16
-- Scope: Ruby in ADR-0020 wave N1; decision-only preflight
+- Scope: Ruby in ADR-0020 wave N1; preflight plus bounded dependency-inventory addendum
 - Refines: ADR-0004 and ADR-0020
 - Related: `docs/plans/top-20-language-expansion-plan.md`,
   `docs/specifications/semantic-workers.md`,
@@ -15,8 +15,9 @@
 ADR-0020 requires a bounded discovery/configuration path, an authoritative
 frontend, RepoGrammar-owned IR, typed uncertainty, one exact-anchor family,
 source-free product readiness, atomic delivery, and a final completion audit
-before Ruby can be described as supported. RepoGrammar currently implements
-none of those Ruby modules. This decision does not add them.
+before Ruby can be described as supported. RepoGrammar implements discovery and
+the bounded dependency-inventory exception below, but none of the Ruby semantic
+frontend, family, or readiness gates.
 
 The verified language baseline is CRuby 4.0.6, released on 2026-07-14. Prism is
 the CRuby-associated maintained Ruby parser candidate. It accepts supplied
@@ -42,18 +43,19 @@ must be deliberately narrower than Minitest's complete runtime behavior.
 
 ## Decision
 
-### D1. Ruby remains not started and unsupported
+### D1. Ruby remains discovered-only and unsupported
 
-This ADR is preflight authority only. It adds no Ruby discovery, parser,
-dependency, worker, code unit, IR, fact, `UNKNOWN`, family, fixture, CLI/MCP
-behavior, or readiness state. Ruby remains `not_started` in the Top-20 program.
+Ruby discovery and a configuration-only dependency inventory are implemented,
+but Ruby source parsing, semantic workers, families, and readiness remain
+unimplemented. Ruby remains `discovered_only` in the Top-20 program and must not
+be counted as supported.
 
 The stable future discovery tokens are `ruby` for source and `ruby-config` for
 project/configuration inventory. The latter is a RepoGrammar language token,
 not permission to invoke the `ruby-config` executable. The first future family
 token is `ruby.minitest.test_method`.
 
-### D2. Discovery and configuration stay pure and source-free
+### D2. Discovery and configuration stay pure; only `Gemfile.lock` has a static dependency slice
 
 The discovery/configuration module must use one pure classifier over normalized
 repo-relative paths. Configuration classification precedes source-suffix
@@ -88,13 +90,29 @@ must not be globally excluded. `Rakefile`, `*.rake`, `config.ru`, ERB, gem
 archives, installed bundle trees, and arbitrary custom `BUNDLE_GEMFILE` or
 lockfile paths are deferred from the first discovery slice.
 
-Discovery may hash bounded raw bytes but records only repository-relative path,
-strict content hash, byte size, and the stable language token. Full and
-incremental indexing must treat `ruby` and `ruby-config` as inventory-only
-before any parser-facing source-store read. It must not evaluate or parse
-Gemfiles or gemspecs as Ruby, infer dependency resolution from their text, read
-Bundler configuration, select an ambient Ruby, or turn manifest presence into
-framework or family support.
+Ruby source and every accepted Ruby configuration except exact
+`Gemfile.lock` remain inventory-only before any parser-facing source-store
+read. Exact lock bytes alone enter a bounded deterministic Rust parser:
+
+- exact-basename `Gemfile.lock` may inventory only two-space direct entries in
+  its unique top-level `DEPENDENCIES` section;
+- accepted records use ecosystem `rubygems`, directness `direct`,
+  `optional=false`, scope `unknown`, no resolved version, and
+  `manifest_declared` evidence;
+- gem names and comma-separated requirement clauses use strict bounded ASCII
+  token grammars; duplicate conflicts, malformed sections, unsupported
+  `GIT`/`PATH`/`PLUGIN SOURCE` sources, `!` source dependencies, and resource limits
+  produce claim-scoped `ruby_dependency_inventory` `UNKNOWN`s and omit unsafe
+  records;
+- `Gemfile`, `gems.rb`, `*.gemspec`, `gems.locked`, and `.ruby-version`
+  retain only bounded file metadata and produce no unit, IR, fact, typed
+  `UNKNOWN`, dependency, family, or project model.
+
+The parser must never evaluate configuration as Ruby, join lockfile specs into
+resolved-version claims, read Bundler configuration, select an ambient Ruby, or
+turn manifest/dependency presence into framework or family support. This narrow
+ADR-0030 inventory exception does not authorize Prism or advance Ruby beyond
+`discovered_only`.
 
 ### D3. Prism is a candidate native frontend behind a sandboxed worker
 
@@ -342,8 +360,11 @@ Default and first supported Ruby analysis must not invoke or execute:
   target repository; or
 - network access or artifact acquisition during indexing/query requests.
 
-Gemfiles and gemspecs are Ruby programs. Reading them as inventory is allowed;
-evaluating them is repository-code execution and is forbidden. Any future
+Gemfiles and gemspecs are Ruby programs. The current product does not read
+their bytes through the parser or emit unsupported-DSL facts; evaluating or
+extracting dependency claims from them is forbidden. Static parsing of exact
+`Gemfile.lock` `DEPENDENCIES` under D2 is allowed and does not execute Ruby
+or Bundler. Any future
 trusted execution mode requires a successor ADR with separate consent,
 acquisition, environment, credential, cache, network, subprocess, timeout,
 provenance, and non-claim gates.
@@ -354,17 +375,22 @@ Ruby delivery is staged as independently coherent Conventional Commits:
 
 1. **Preflight:** this ADR, incomplete completion review, and synchronized
    plan/specification/roadmap/changelog/memory references; no code/dependency.
-2. **Discovery/config:** the `ruby`/`ruby-config` tokens, pure path classifier,
-   bounded source-free inventory, exclusions, multiple-root/config cases,
+2. **Discovery/config and bounded dependency inventory:** the
+   `ruby`/`ruby-config` tokens, pure path classifier, source-free Ruby-source
+   inventory, bounded static `Gemfile.lock` direct-dependency parsing, typed
+   malformed/conflict/resource/source `UNKNOWN`s, exclusions,
+   multiple-root/config cases,
    invalid/oversized/symlink/Git/resource tests, deterministic one-per-token
-   path-free warnings, honest Ruby-only `file_manifest_only` and mixed
-   `syntax_only_code_units` output, inventory-only add/modify/remove deltas,
+   path-free warnings, honest configuration-unit generation metadata,
+   inventory-only Ruby-source add/modify/remove deltas and dependency
+   copy-forward across unrelated incremental changes,
    legacy claim-record purge, autosync/fingerprint coverage, status/count
-   behavior, and docs; advance at most to `discovered_only`. While the tokens
-   remain inventory-only and absent from `ParserProjectContext`, their deltas do
-   not force project-context fallback. Before frontend/IR emits any Ruby unit,
-   fact, `UNKNOWN`, or family input, it must add the required Ruby context and
-   restore token-based project-context invalidation.
+   behavior, and docs; advance at most to `discovered_only`. Ruby source and
+   deferred Ruby configs remain inventory-only. Exact `Gemfile.lock` changes
+   parse file-locally; unrelated source/config changes may copy forward its
+   dependency records. Before a semantic frontend emits Ruby
+   source units or family input, it must add the required Ruby context and
+   authoritative claim-impact registry.
 3. **Dependency and sandbox qualification:** documentation and reproducible
    evidence only, with no production dependency or worker artifact admitted;
    complete D3/D6/D7 supply-chain, exact-artifact API, corpus/fuzz/resource,
@@ -488,6 +514,13 @@ The following live primary sources were checked on 2026-07-16:
 - Bundler's official [Gemfile documentation](https://bundler.io/man/gemfile.5.html)
   and [configuration documentation](https://bundler.io/man/bundle-config.1.html),
   including Gemfile/gemspec evaluation and `.bundle/config`;
+- Bundler's official
+  [`Gemfile.lock` guide](https://bundler.io/guides/using_bundler_in_applications.html),
+  which identifies `DEPENDENCIES` as the gems defined in the Gemfile, plus the
+  RubyGems-owned [`SpecificationPolicy`](https://github.com/ruby/rubygems/blob/master/lib/rubygems/specification_policy.rb),
+  [`Gem::Version`](https://github.com/ruby/rubygems/blob/master/lib/rubygems/version.rb),
+  and [`Gem::Requirement`](https://github.com/ruby/rubygems/blob/master/lib/rubygems/requirement.rb)
+  grammar sources checked for the dependency-inventory addendum on 2026-08-01;
 - the official Ruby LSP [VS Code](https://shopify.github.io/ruby-lsp/vscode-extension)
   and [troubleshooting](https://shopify.github.io/ruby-lsp/troubleshooting.html)
   documentation for the generated `.ruby-lsp` composed bundle; and

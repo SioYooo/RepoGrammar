@@ -13,6 +13,7 @@ pub mod csharp;
 pub mod java;
 pub mod php;
 pub mod python;
+pub mod ruby;
 pub mod rust;
 pub mod swift;
 pub mod syntax;
@@ -27,8 +28,34 @@ pub struct RepoGrammarSourceParser {
     csharp: csharp::CSharpSyntaxParser,
     cpp: cpp::CppSyntaxParser,
     php: php::PhpConfigParser,
+    ruby: RubyConfigParser,
     rust: rust::RustSyntaxParser,
     swift: swift::SwiftProjectConfigParser,
+}
+
+#[derive(Debug, Default)]
+struct RubyConfigParser;
+
+impl SourceParser for RubyConfigParser {
+    fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+        ruby::parse(document)
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        ruby::parse(document)
+    }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        ruby::parse_output(document)
+    }
 }
 
 impl SourceParser for RepoGrammarSourceParser {
@@ -50,9 +77,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::GoConfig
             | crate::core::model::Language::Php
             | crate::core::model::Language::Ruby
-            | crate::core::model::Language::RubyConfig
             | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::SwiftConfig => self.swift.parse(document),
+            crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -90,10 +117,12 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::GoConfig
             | crate::core::model::Language::Php
             | crate::core::model::Language::Ruby
-            | crate::core::model::Language::RubyConfig
             | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context(document, context)
+            }
+            crate::core::model::Language::RubyConfig => {
+                self.ruby.parse_with_context(document, context)
             }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
@@ -126,6 +155,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::RubyConfig => {
+                self.ruby.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)
@@ -304,10 +336,15 @@ mod tests {
     }
 
     fn ruby_inventory_document(language: Language) -> SourceDocument<'static> {
+        let text = if language == Language::RubyConfig {
+            "DEPENDENCIES\n  rack\n"
+        } else {
+            "inventory only"
+        };
         SourceDocument {
             path: match language {
                 Language::Ruby => "main.rb",
-                Language::RubyConfig => "Gemfile",
+                Language::RubyConfig => "Gemfile.lock",
                 _ => unreachable!("Ruby inventory helper accepts only Ruby tokens"),
             },
             language,
@@ -316,7 +353,7 @@ mod tests {
             )
             .expect("valid hash"),
             repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
-            text: "inventory only",
+            text,
         }
     }
 
@@ -371,21 +408,23 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_ruby_inventory_tokens() {
+    fn product_parser_rejects_ruby_source_but_qualifies_exact_bundler_lock() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Ruby, Language::RubyConfig] {
-            assert_eq!(
-                parser.parse(ruby_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    ruby_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(ruby_inventory_document(Language::Ruby)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+
+        let output = parser
+            .parse_with_context_output(
+                ruby_inventory_document(Language::RubyConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("exact Gemfile.lock must return bounded dependency evidence");
+        assert_eq!(output.report.units.len(), 1);
+        assert!(output.report.semantic_facts.is_empty());
+        assert_eq!(output.dependencies.len(), 1);
+        assert_eq!(output.dependencies[0].package.name.as_str(), "rack");
     }
 
     #[test]

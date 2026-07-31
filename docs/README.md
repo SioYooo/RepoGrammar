@@ -65,7 +65,8 @@ context lives under `.agents/memories/`.
   semantic runtime behavior is authorized. The exact pause checkpoint and
   paste-ready stage-3 resume goal are in
   `plans/swift-n1-qualification-handoff.md`.
-  Ruby's N1 preflight plus discovery-only implementation record are
+  Ruby's N1 preflight, discovery record, and bounded exact-`Gemfile.lock`
+  dependency inventory contract are
   `decisions/ADR-0022-ruby-prism-minitest-preflight.md`.
 - v0.2 agent adoption and read displacement:
   `decisions/ADR-0013-agent-adoption-read-displacement.md`,

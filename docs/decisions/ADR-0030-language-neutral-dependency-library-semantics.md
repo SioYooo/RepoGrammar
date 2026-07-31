@@ -164,6 +164,19 @@ Composer, plugins, scripts, autoloaders, repository code, or dependency code.
 Composer 2.10.2 lock-content-hash validation and custom `vendor-dir` selection
 remain future project-profile work.
 
+The first RubyGems consumer reads only the unique top-level `DEPENDENCIES`
+section of exact `Gemfile.lock`. Those rows represent direct root declarations,
+so they use `manifest_declared` evidence and directness `direct`; Bundler does
+not retain Gemfile group/scope there, so scope remains `unknown`. Bounded
+requirement clauses are preserved when present, but the reader does not join the
+separate resolved spec graph and therefore emits no resolved version. Duplicate
+conflicts, malformed sections, non-registry `GIT`/`PATH`/`PLUGIN SOURCE` sources,
+`!` source-specific dependencies, and resource overflow affect only
+`ruby_dependency_inventory` uncertainty. Ruby source, executable Gemfile and
+gemspec DSLs, `gems.locked`, and version selectors remain inventory-only. The
+reader invokes no Ruby, Bundler, RubyGems, Rake, repository/dependency code,
+child process, or network operation.
+
 ## Provider and package-manager policy
 
 - Manifest/lockfile parsers consume supplied bounded bytes and do not execute
@@ -210,7 +223,8 @@ permission to infer runtime behavior.
   records are copied only with their unchanged evidence unit. Source-free
   public projections, generic provider ports, and remaining per-ecosystem
   manifest adapters remain follow-up modules. This ADR, persistence slice, and
-  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer consumers do not complete any
+  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer/RubyGems consumers do not
+  complete any
   ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,
   and invalidation tests. They must not become hard-coded benchmark answers.
@@ -238,11 +252,13 @@ permission to infer runtime behavior.
    derived-record dependencies.
 2. Continue migrating bounded existing manifest readers to generic records.
    Cargo, root npm `package.json`, bounded standard Python project formats, and
-   the qualified vcpkg/Conan subsets and bounded Composer manifest subset are
-   complete at manifest-declaration level; SwiftPM schema-2/3 and bounded
-   Composer pins are complete at lockfile-inventory level. Wider C/C++, Swift
-   manifest declarations, Composer project-profile/coherence semantics, and
-   additional Python tool-specific schemas remain open.
+   the qualified vcpkg/Conan subsets, bounded Composer manifest subset, and
+   strict Bundler direct-dependency subset are complete at
+   manifest-declaration level; SwiftPM schema-2/3 and bounded Composer pins are
+   complete at lockfile-inventory level. Wider C/C++, Swift manifest
+   declarations, Composer project-profile/coherence semantics, RubyGems
+   resolved-spec joins/project selection, and additional Python tool-specific
+   schemas remain open.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
 4. Specify a reviewed library-contract registry, cache invalidation, and

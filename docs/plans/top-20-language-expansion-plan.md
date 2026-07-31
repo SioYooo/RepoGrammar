@@ -72,7 +72,13 @@ The bounded unique-member reader discards source URLs, treats platform and
 virtual requirements as uncertainty rather than packages, and never runs PHP,
 Composer, plugins, scripts, autoloaders, or dependency code. Manifest/lock
 coherence and the selected PHP project profile remain unproved, so this does
-not advance PHP beyond `discovered_only`.
+not advance PHP beyond `discovered_only`. Exact `Gemfile.lock` now supplies
+the RubyGems manifest slice: the unique `DEPENDENCIES` section yields strict
+direct declarations with unknown scope and no resolved version. Unsupported
+sources, malformed/conflicting input, and resource overflow remain
+`ruby_dependency_inventory` uncertainty; the reader does not join resolved
+specs or read/execute Ruby DSLs, Ruby, Bundler, RubyGems, project code, child
+processes, or network access. Ruby therefore also remains `discovered_only`.
 
 ## Goal and non-goal
 
@@ -359,13 +365,16 @@ module advances Ruby to `discovered_only`; Ruby remains unsupported. Stable
 `*.gemspec` paths. One pure normalized-path classifier gives configuration
 precedence, uses `language_specific_exclusion` for Ruby candidates below exact
 `.bundle`/`.ruby-lsp` components, and does not globally hide other languages.
-Indexing stores bounded path/hash/size/token metadata with no parser-facing
-source read, unit, IR, fact, `UNKNOWN`, family, or readiness promotion. Ruby-only
-generations are `file_manifest_only`; mixed generations remain syntax-only;
-inventory deltas stay incremental with one path-free warning per token and
-claim-record purge. Autosync preserves its generic Git-independent fingerprint
-behavior. This path does not evaluate project files or invoke Ruby, Bundler,
-RubyGems, Rake, Rails, tests, generators, child processes, or network access.
+Ruby source and every config except exact `Gemfile.lock` store bounded
+path/hash/size/token metadata with no parser-facing source read. A bounded pure
+Rust lock parser creates one project-config unit, source-free
+`ruby_dependency_inventory` `UNKNOWN`s, and strict direct `rubygems`
+manifest declarations from exact `Gemfile.lock` `DEPENDENCIES`. Executable
+Gemfile/gemspec DSLs and unqualified variants are never read or evaluated.
+Exact lock changes parse file-locally; unrelated source/config changes copy
+dependency rows forward. This slice adds no Ruby source IR,
+family, readiness promotion, or invocation of Ruby, Bundler, RubyGems, Rake,
+Rails, tests, generators, child processes, or network access.
 
 The current frontend candidate is `ruby-prism` 1.9.0 using the exact upstream
 commit linked by the release plus the separately checksummed package artifact,

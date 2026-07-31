@@ -532,10 +532,9 @@ owned semantic facts in a new building generation inside
 that generation active while downgrading any previously active row to
 validated. Human and JSON output must report the authoritative generation mode,
 actual `parser_attempted_files`, `indexed_units`, and `semantic_facts` counts,
-`semantic_worker`, and `mining: deferred`. A generation containing only `go`,
-`go-config`, `php`, `php-config`, `ruby`, `ruby-config`, `swift`, and/or
-`swift-config` inventory tokens,
-or no accepted source/configuration tokens, reports
+`semantic_worker`, and `mining: deferred`. A generation containing only
+deferred `go`, `go-config`, `php`, `php-config`, `ruby`, `ruby-config`, `swift`,
+and/or `swift-config` paths, or no accepted source/configuration paths, reports
 `indexing: file_manifest_only` and
 `parser: deferred`. A generation containing any parser-capable language token
 reports `indexing: syntax_only_code_units` and `parser: syntax_only`, including
@@ -572,12 +571,16 @@ dirty/dependency state, and then activates the new generation. If a safe
 precondition is not met, `sync` must
 fall back to the full rebuild path and report `sync_mode:
 full_rebuild_fallback` with a `fallback_reason`.
-Inventory-only `go`, `go-config`, `php`, `php-config`, `ruby`, `ruby-config`,
-`swift`, and `swift-config` deltas are an explicit token-based exception while
-those tokens are absent from
+Inventory-only `go`, deferred `go-config`, `php`, deferred `php-config`, `ruby`,
+deferred `ruby-config`, `swift`, and deferred `swift-config` deltas are an
+explicit token-based exception while those tokens are absent from
 `ParserProjectContext`: only bounded file metadata is added, modified, removed,
-or copied, claim-bearing legacy records for Go, PHP, Ruby, and Swift paths are purged,
-and parser-attempt/reparse counts remain zero. Ruby discovery records the stable
+or copied, claim-bearing legacy records for Go, PHP, Ruby, and Swift paths are
+purged, and parser-attempt/reparse counts remain zero. Exact dependency inputs
+are path-qualified exceptions: `composer.json`, `composer.lock`,
+`Gemfile.lock`, and `Package.resolved` are parsed by their bounded static
+inventory adapters, so their deltas reparse file-locally and unchanged
+evidence-bound dependency rows copy forward. Ruby discovery records the stable
 `language_specific_exclusion` skip token for `.bundle` and `.ruby-lsp` path
 components; PHP uses the same token for exact `.composer` and `.phpunit.cache`
 components. Neither language-specific policy globally hides those directories

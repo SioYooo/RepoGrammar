@@ -177,15 +177,20 @@ allowed.
   remain eligible to other languages. It must cover binary content, exact and
   plus-one size/resource limits, symlink refusal, deterministic path/hash/size/
   token persistence, and Git-aware discovery without source text or paths in
-  warnings. Ruby-only indexing must bypass the source store and parser, emit at
-  most one truthful warning per accepted token, report `file_manifest_only`
-  with a deferred parser, and produce no units, IR, facts, typed `UNKNOWN`s, or
-  families. Mixed repositories retain `syntax_only_code_units`. Incremental
-  tests must prove token-based add/modify/remove metadata deltas and purge
-  seeded legacy Ruby claims while preserving file metadata; autosync
-  fingerprint tests must prove its Git-ignore parity with manual discovery.
-  Ruby project-context invalidation remains a later frontend obligation.
-- Swift discovery and bounded lock-inventory coverage must include stable `swift`/`swift-config`
+  warnings. Ruby source and every Ruby config except exact `Gemfile.lock` must
+  bypass the source store and parser. Exact-lock tests must prove bounded direct
+  `DEPENDENCIES` extraction, strict name/requirement tokens, direct/optional/
+  scope/evidence fields, duplicate deduplication, conflict/malformed/source/
+  resource abstention, and absence of source/package text in public UNKNOWN
+  output. They must also prove persistence, copy-forward, replacement, and
+  removal over incremental edits. Gemfile, gems.rb, gemspec, gems.locked,
+  .ruby-version, Ruby,
+  Bundler, RubyGems, Rake, project code, children, and network must never run.
+  Deferred Ruby/config deltas remain incremental and purge seeded legacy claims;
+  exact `Gemfile.lock` changes parse file-locally.
+  Autosync retains its generic Git-independent conservative fingerprinting.
+- Swift discovery and bounded lock-inventory coverage must include stable
+  `swift`/`swift-config`
   tokens; exact case-sensitive `.swift` including basename `.swift`; exact
   root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and
   complete ASCII `Package@swift-M[.m[.p]].swift` grammar with configuration
@@ -278,9 +283,10 @@ allowed.
   `sync` coverage must include project-context fallback when TS/JS, Python, or
   Rust source inventories change and must assert stale unresolved-import
   UNKNOWNs are not copied forward after a new repo-local import target appears.
-  Go, PHP, and Ruby inventory coverage must instead prove token-based incremental
-  add/modify/remove deltas for their source/configuration tokens, zero
-  source-store/parser calls for those paths, whole-manifest warning retention,
+  Go, PHP, and Ruby inventory coverage must instead prove path-qualified
+  incremental add/modify/remove deltas for their deferred source/configuration
+  paths, zero source-store/parser calls for those paths, whole-manifest warning
+  retention,
   honest `file_manifest_only`/deferred-parser output for inventory-only and
   empty generations, syntax mode for unchanged mixed generations, and purge of
   seeded legacy Go/PHP/Ruby units, IR, facts, derived support, and families while

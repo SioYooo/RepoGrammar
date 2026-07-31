@@ -248,11 +248,15 @@ The paused baseline and exact next qualification goal are recorded in
 `docs/plans/swift-n1-qualification-handoff.md`; qualification evidence and
 production artifact/worker admission must remain separate atomic stages.
 
-Ruby discovery/config classification and bounded inventory persistence are
-implemented without a parser or production dependency. This `discovered_only`
-state causes no parser-facing source-store read and creates no code unit, IR,
-semantic fact, typed `UNKNOWN`, family, or support/readiness claim. ADR-0022
-names `ruby-prism` 1.9.0 only as a candidate and authorizes no dependency. The
+Ruby discovery/config classification and bounded dependency inventory are
+implemented without a production dependency. Ruby source and every config
+except exact `Gemfile.lock` remain source-free inventory. A pure Rust lock
+parser may read only bounded exact-lock bytes, create one project-config unit,
+emit source-free typed `ruby_dependency_inventory` `UNKNOWN`s, and parse
+direct `DEPENDENCIES` declarations. It must not read or evaluate executable
+DSLs or claim resolved versions. This `discovered_only` state creates no Ruby source IR,
+framework family, or support/readiness claim. ADR-0022 names `ruby-prism` 1.9.0
+only as a candidate and authorizes no dependency. The
 wrapper's native C99/FFI, vendored source, bindgen/libclang, compiler,
 static-link, checksum, license,
 platform, fuzz/corpus, range/diagnostic, benchmark, and supply-chain surface

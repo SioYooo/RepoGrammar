@@ -17142,17 +17142,12 @@ mod tests {
     }
 
     #[test]
-    fn ruby_only_index_reports_file_manifest_metadata_without_claims() {
+    fn ruby_source_only_index_reports_file_manifest_metadata_without_claims() {
         let workspace = TempWorkspace::new("cli-index-ruby-file-manifest");
         let env = |_: &str| None;
         let runtime = TestRuntime;
         fs::write(workspace.path().join("main.rb"), [0xff, 0xfe, 0xfd])
             .expect("write binary Ruby source");
-        fs::write(
-            workspace.path().join("Gemfile"),
-            "source 'https://must-not-be-read.invalid'\n",
-        )
-        .expect("write Gemfile");
         assert_eq!(
             run_with_context(["init", "--state-only"], workspace.path(), &env).status,
             0
@@ -17176,10 +17171,7 @@ mod tests {
         assert_eq!(value["semantic_facts"], 0);
         assert_eq!(
             value["warnings"],
-            json!([
-                "parser skipped unsupported language token: ruby",
-                "parser skipped unsupported language token: ruby-config"
-            ])
+            json!(["parser skipped unsupported language token: ruby"])
         );
 
         let files_output =
@@ -17201,7 +17193,7 @@ mod tests {
                     )
                 })
                 .collect::<Vec<_>>(),
-            vec![("Gemfile", "ruby-config"), ("main.rb", "ruby")]
+            vec![("main.rb", "ruby")]
         );
 
         let units_output =

@@ -11623,7 +11623,41 @@ class User(Base):
     }
 
     #[test]
-    fn product_runtime_inventory_reads_file_manifest_only_generation() {
+    fn product_runtime_exact_gemfile_lock_reports_bounded_syntax_inventory() {
+        let workspace = TempWorkspace::new("product-runtime-ruby-lock-index");
+        fs::write(
+            workspace.path().join("Gemfile.lock"),
+            "DEPENDENCIES\n  rack (~> 3.1)\n",
+        )
+        .expect("write exact Gemfile.lock");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 1);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(value["semantic_facts"], 0);
+        assert_eq!(value["warnings"], serde_json::json!([]));
+        assert!(!index.stdout.contains("rack"));
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("units", &units, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["units"].as_array().expect("units array").len(), 1);
+    }
+
+    #[test]
+    fn product_runtime_defers_executable_ruby_config_without_reading_source() {
         let workspace = TempWorkspace::new("product-runtime-ruby-inventory-index");
         fs::write(workspace.path().join("README.txt"), "not a TS/JS source\n")
             .expect("write ignored source");
@@ -11648,7 +11682,11 @@ class User(Base):
         let value: Value = serde_json::from_str(index.stdout.trim()).expect("index JSON");
         assert_eq!(value["generation_id"], "gen-000001");
         assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
+        assert_eq!(value["parser_attempted_files"], 0);
         assert_eq!(value["indexed_units"], 0);
+        assert_eq!(value["semantic_facts"], 0);
         assert_eq!(
             value["warnings"],
             serde_json::json!([

@@ -411,12 +411,16 @@ combining it with production artifact admission.
 Ruby's N1 preflight and bounded discovery/config module are recorded in
 `docs/decisions/ADR-0022-ruby-prism-minitest-preflight.md`; Ruby is now
 `discovered_only` and unsupported. Stable `ruby`/`ruby-config` tokens persist
-bounded source-free file metadata through one pure path classifier, Ruby-only
-`.bundle`/`.ruby-lsp` exclusion, parser/source-store bypass, deterministic
-one-per-token warnings, honest file-manifest/mixed modes, incremental metadata
-deltas, and legacy-claim purge. Autosync retains its generic Git-independent
-fingerprint policy. No unit, IR, fact, `UNKNOWN`, family, readiness promotion,
-dependency, or Ruby/Bundler execution is added. The `ruby-prism` 1.9.0 candidate
+bounded inventory through one pure path classifier and Ruby-only
+`.bundle`/`.ruby-lsp` exclusions. Ruby source and every config except exact
+`Gemfile.lock` remain source-store/parser free. A bounded pure Rust lock
+parser stores one project-config unit, source-free
+`ruby_dependency_inventory` `UNKNOWN`s, and strict direct `rubygems`
+declarations from exact `Gemfile.lock` `DEPENDENCIES`; executable DSLs and
+unqualified config variants remain inventory-only and are never evaluated.
+Dependency rows copy forward across unrelated incremental edits. No Ruby
+source IR, family, readiness promotion,
+or Ruby/Bundler execution is added. The `ruby-prism` 1.9.0 candidate
 remains native C99/FFI and unauthorized until the separate checksum/vendor,
 platform, corpus/fuzz, range/diagnostic, resource, and OS-sandbox gates pass.
 The first target remains the exact direct `ruby.minitest.test_method` slice;
