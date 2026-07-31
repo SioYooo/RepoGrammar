@@ -5073,6 +5073,10 @@ mod tests {
             DiscoveredLanguage::RubyConfig => Language::RubyConfig,
             DiscoveredLanguage::Swift => Language::Swift,
             DiscoveredLanguage::SwiftConfig => Language::SwiftConfig,
+            DiscoveredLanguage::VisualBasic => Language::VisualBasic,
+            DiscoveredLanguage::VisualBasicConfig => Language::VisualBasicConfig,
+            DiscoveredLanguage::ObjectPascal => Language::ObjectPascal,
+            DiscoveredLanguage::DelphiConfig => Language::DelphiConfig,
             DiscoveredLanguage::Rust => Language::Rust,
             DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
@@ -11707,6 +11711,117 @@ class User(Base):
         assert_eq!(
             dependencies.dependencies[0].package_name,
             "private.example:secret-library"
+        );
+    }
+
+    #[test]
+    fn product_runtime_vbproj_reports_syntax_inventory_without_reading_vb_source() {
+        let workspace = TempWorkspace::new("product-runtime-vbnet-inventory-index");
+        let mut source = vec![0xff, 0xfe, 0xfd];
+        source.extend_from_slice(b"vb-source-must-not-be-read");
+        fs::write(workspace.path().join("Program.vb"), source).expect("write binary VB source");
+        fs::write(
+            workspace.path().join("App.vbproj"),
+            r#"<Project><ItemGroup><PackageReference Include="Private.Package" Version="1.0"/></ItemGroup></Project>"#,
+        )
+        .expect("write vbproj");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!(["parser skipped unsupported language token: visual-basic"])
+        );
+        assert!(!index.stdout.contains("vb-source-must-not-be-read"));
+        assert!(!index.stdout.contains("Private.Package"));
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("file path"),
+                    file["language"].as_str().expect("file language")
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.vbproj", "visual-basic-config"),
+                ("Program.vb", "visual-basic")
+            ]
+        );
+    }
+
+    #[test]
+    fn product_runtime_dproj_reports_syntax_inventory_without_reading_pascal_source() {
+        let workspace = TempWorkspace::new("product-runtime-delphi-inventory-index");
+        let mut source = vec![0xff, 0xfe, 0xfd];
+        source.extend_from_slice(b"pascal-source-must-not-be-read");
+        fs::write(workspace.path().join("Unit1.pas"), source)
+            .expect("write binary Object Pascal source");
+        fs::write(
+            workspace.path().join("App.dproj"),
+            r#"<Project><PropertyGroup><DCC_UsePackage>rtl;PrivateRuntime</DCC_UsePackage></PropertyGroup></Project>"#,
+        )
+        .expect("write dproj");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!(["parser skipped unsupported language token: object-pascal"])
+        );
+        assert!(!index.stdout.contains("pascal-source-must-not-be-read"));
+        assert!(!index.stdout.contains("PrivateRuntime"));
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("file path"),
+                    file["language"].as_str().expect("file language")
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.dproj", "delphi-config"),
+                ("Unit1.pas", "object-pascal")
+            ]
         );
     }
 

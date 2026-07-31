@@ -223,6 +223,33 @@ allowed.
   Autosync must track accepted Swift source/config and cross-language files below
   Swift-specific exclusions while ignoring excluded Swift candidates. Project-
   context invalidation remains a later frontend obligation.
+- Visual Basic .NET discovery and bounded project-inventory coverage must include
+  stable `visual-basic`/`visual-basic-config` tokens; exact lowercase `.vb` and
+  `.vbproj`; VB6 `.vbp`/`.frm`/`.bas`/`.cls` rejection; normalized-path
+  refusal; Visual-Basic-only `bin`/`.vs` exclusions; binary source bytes; exact
+  and plus-one discovery/XML/dependency limits; and source-store/parser bypass
+  for `.vb`. Exact project tests must cover direct literal
+  `PackageReference`, attribute/child versions, conditional child-version
+  omission, case-insensitive deduplication/conflict, SDK/import/property/
+  condition/update/remove/override abstention, malformed XML, DTD/entity and
+  invalid XML-character refusal, source-free typed UNKNOWNs, and no package or
+  path leakage. Incremental tests must prove dependency copy-forward,
+  replacement, removal, source-only zero-parse deltas, honest indexing mode,
+  zero families, and absence of MSBuild, NuGet, compiler, child-process, or
+  network execution.
+- Object Pascal/Delphi coverage must include stable `object-pascal` and
+  `delphi-config` tokens; exact lowercase `.pas`/`.dpr`/`.dpk` source and
+  `.dproj` configuration; explicit non-admission of Free Pascal/Lazarus
+  `.pp`/`.lpr`/`.lpi`/`.lpk`; normalized-path refusal; language-specific
+  `__history`/`__recovery` exclusions; binary source; exact and plus-one
+  discovery/XML/dependency limits; and source-store/parser bypass for all
+  source. Exact `.dproj` tests must cover literal semicolon-separated
+  `DCC_UsePackage` rows, runtime scope, unknown directness, case-insensitive
+  deduplication, conditions/imports/property chains, invalid path and compiled-
+  package values, malformed/DTD/entity input, source-free typed UNKNOWNs, and
+  no metadata leakage. Incremental and CLI tests must prove copy-forward,
+  replacement, removal, honest mode, zero families, and no Delphi/FPC/Lazarus/
+  MSBuild/compiler/package-manager execution.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, mutable top-level database creation, active
@@ -293,14 +320,17 @@ allowed.
   `sync` coverage must include project-context fallback when TS/JS, Python, or
   Rust source inventories change and must assert stale unresolved-import
   UNKNOWNs are not copied forward after a new repo-local import target appears.
-  Go, PHP, and Ruby inventory coverage must instead prove path-qualified
+  Go, PHP, Ruby, Visual Basic, and Object Pascal/Delphi inventory coverage must
+  instead prove path-qualified
   incremental add/modify/remove deltas for their deferred source/configuration
   paths, zero source-store/parser calls for those paths, whole-manifest warning
   retention,
   honest `file_manifest_only`/deferred-parser output for inventory-only and
   empty generations, syntax mode for unchanged mixed generations, and purge of
-  seeded legacy Go/PHP/Ruby units, IR, facts, derived support, and families while
-  file metadata survives.
+  seeded legacy inventory-only language units, IR, facts, derived support, and
+  families while file metadata survives. Visual Basic and Delphi project
+  metadata parsers must additionally prove evidence-bound dependency
+  copy-forward/replacement/removal while their source tokens remain unread.
   Swift incremental coverage must separately prove zero-parse deltas for its
   inventory-only paths, bounded parsing for changed `Package.resolved`, exact
   once-only copy-forward of unchanged lock rows on unrelated edits, and purge
@@ -1070,7 +1100,8 @@ default `init` active-index bootstrap, `--state-only` lifecycle repair,
 default auto-sync-after-index sequencing, explicit `--no-autosync`, and
 bootstrap failure preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
-TS/JS, Python, Go, PHP, Ruby, and Swift discovery filtering/hash/path-safety behavior,
+TS/JS, Python, Go, PHP, Ruby, Swift, Visual Basic .NET, and Object Pascal/Delphi
+discovery filtering/hash/path-safety behavior,
 SQLite storage migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware

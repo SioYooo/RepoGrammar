@@ -366,6 +366,27 @@ Exact `.build`/`.swiftpm` exclusions are Swift-only and do not globally prune
 other languages. A later bounded project model must add context invalidation
 before cross-file semantic records exist.
 
+Visual Basic .NET uses `visual-basic` for exact lowercase `.vb` source and
+`visual-basic-config` for exact lowercase `.vbproj` files. Source records store
+only bounded path, strict raw-byte hash, size, and token, with no source-store
+or parser dispatch. Exact project files may store one project-config unit,
+source-free `visual_basic_dependency_inventory` facts, and literal
+`manifest_declared` NuGet rows with direct directness, unknown scope, optional
+literal requirement, and no resolved version. Exact `bin`/`.vs` exclusions are
+Visual-Basic-only; VB6 formats are not admitted. Unchanged project rows copy
+forward once, project modifications replace their rows, and removal cannot
+retain stale dependencies.
+
+Object Pascal uses the dialect-neutral `object-pascal` token for exact
+lowercase `.pas`, `.dpr`, and `.dpk` source. Only exact lowercase `.dproj`
+files use `delphi-config` and may store one project-config unit, scoped
+`delphi_dependency_inventory` facts, and literal Delphi runtime-package rows
+with `manifest_declared` evidence and unknown directness. Source is never read;
+`.pp`/`.lpr`/`.lpi`/`.lpk` do not fall through to Delphi. Exact `__history` and
+`__recovery` exclusions are language-specific. Incremental copy-forward,
+replacement, and removal follow the same evidence-bound project-config rules.
+Neither token can create source IR, a family, or support/readiness state.
+
 Other source-inventory or config changes still fall back to a full rebuild.
 Source snippets and absolute paths are not stored by default syntax-only
 `index`/`sync`/`resync` runs; family rows

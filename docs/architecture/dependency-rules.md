@@ -287,6 +287,31 @@ RubyGems, Rake, Rails, tests, generators, installed gems, repository tooling,
 or network access. Ruby claim impact must enter the authoritative
 cross-language family-`UNKNOWN` classifier.
 
+Visual Basic .NET discovery and bounded NuGet declaration inventory are
+implemented without a source frontend, MSBuild/NuGet execution, or production
+dependency. Exact lowercase `.vb` source remains unread `visual-basic`
+inventory. Exact lowercase `.vbproj` is the sole `visual-basic-config` input:
+`adapters/parsing/visual_basic.rs` reads supplied UTF-8 bytes only through the
+RepoGrammar-owned bounded XML reader, creates one project-config unit, and may
+emit literal direct `PackageReference` rows plus claim-scoped
+`visual_basic_dependency_inventory` uncertainty. It must not evaluate SDK
+imports, explicit imports, properties, conditions, item updates, version
+overrides, targets, restore, analyzers, generators, or project code. VB6
+`.vbp`/`.frm`/`.bas`/`.cls` inputs remain outside this lane. No dependency row
+is family evidence or a support claim.
+
+Object Pascal source discovery and Delphi project inventory are likewise
+source-free and dependency-free. Exact `.pas`/`.dpr`/`.dpk` paths use the
+generic `object-pascal` token because the suffix does not prove a compiler
+dialect. Only exact `.dproj` enters `adapters/parsing/delphi.rs` as
+`delphi-config`; the parser may emit bounded literal `DCC_UsePackage` rows with
+runtime scope and unknown directness. It must not evaluate Delphi MSBuild,
+properties, conditions, imports, targets, `.dpk` source, compiled packages, or
+any compiler/package manager. Free Pascal/Lazarus `.pp`/`.lpr`/`.lpi`/`.lpk`
+formats are not aliases for Delphi metadata and remain deferred. Dynamic,
+malformed, conflicting, or over-limit claims remain scoped
+`delphi_dependency_inventory` `UNKNOWN`s.
+
 Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
 internals, Python AST nodes, and runtime trace payloads must be translated into
 RepoGrammar-owned facts at the adapter boundary before entering `core`. Do not

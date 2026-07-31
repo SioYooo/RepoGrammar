@@ -101,6 +101,23 @@ inheritance, properties, dependency management/BOMs, profiles, reactor modules,
 artifact variants, exclusions, and plugins remain typed UNKNOWN scoped to
 `java_dependency_inventory`. These records prove no classpath, artifact,
 external symbol, framework role, build, installation, or runtime selection.
+Visual Basic discovery defines stable `visual-basic` and
+`visual-basic-config` tokens for exact `.vb` and `.vbproj` paths. The scope is
+VB.NET only; VB6 formats are not aliases. `.vb` source remains unread
+inventory. Exact `.vbproj` files may own a bounded project-config unit, direct
+`nuget` manifest rows from literal direct-root `PackageReference` declarations,
+and `visual_basic_dependency_inventory` UNKNOWN for MSBuild evaluation,
+malformed/conflicting metadata, or resource limits. The rows have unknown
+scope, no resolved version, and prove no restore, installed graph, framework,
+source semantics, family, or support state.
+Object Pascal source discovery uses `object-pascal` for exact `.pas`, `.dpr`,
+and `.dpk`; the generic token does not choose Delphi versus Free Pascal. Exact
+`.dproj` uses the distinct `delphi-config` token. A bounded static project-config
+parser may inventory literal `DCC_UsePackage` values as runtime
+`delphi_package` manifest rows with unknown directness and no version, plus
+`delphi_dependency_inventory` UNKNOWN. `.dpk` source stays unread, and
+`.pp`/`.lpr`/`.lpi`/`.lpk` remain deferred. No compiler, MSBuild, package
+manager, source frontend, family, dialect equivalence, or support state follows.
 The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
 Java classes/interfaces/methods plus Spring MVC route methods, Spring
 components, Spring Boot applications, and Spring Data repositories when exact

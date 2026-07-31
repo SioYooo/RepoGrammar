@@ -60,6 +60,10 @@ pub enum Language {
     RubyConfig,
     Swift,
     SwiftConfig,
+    VisualBasic,
+    VisualBasicConfig,
+    ObjectPascal,
+    DelphiConfig,
     Rust,
     RustConfig,
     Unknown(String),
@@ -87,6 +91,10 @@ impl Language {
             Self::RubyConfig => "ruby-config",
             Self::Swift => "swift",
             Self::SwiftConfig => "swift-config",
+            Self::VisualBasic => "visual-basic",
+            Self::VisualBasicConfig => "visual-basic-config",
+            Self::ObjectPascal => "object-pascal",
+            Self::DelphiConfig => "delphi-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
             Self::Unknown(value) => value.as_str(),
@@ -347,6 +355,10 @@ mod tests {
         assert_eq!(Language::RubyConfig.as_str(), "ruby-config");
         assert_eq!(Language::Swift.as_str(), "swift");
         assert_eq!(Language::SwiftConfig.as_str(), "swift-config");
+        assert_eq!(Language::VisualBasic.as_str(), "visual-basic");
+        assert_eq!(Language::VisualBasicConfig.as_str(), "visual-basic-config");
+        assert_eq!(Language::ObjectPascal.as_str(), "object-pascal");
+        assert_eq!(Language::DelphiConfig.as_str(), "delphi-config");
         assert_eq!(Language::Java.as_str(), "java");
         assert_eq!(Language::JavaConfig.as_str(), "java-config");
         assert_eq!(CodeUnitKind::SpringMvcRoute.as_str(), "spring_mvc_route");

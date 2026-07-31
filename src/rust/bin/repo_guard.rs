@@ -69,12 +69,16 @@ const REQUIRED_DOCUMENTS: &[&str] = &[
     "docs/decisions/ADR-0012-python-selective-analysis-cascade.md",
     "docs/decisions/ADR-0020-top-20-language-expansion-gate.md",
     "docs/decisions/ADR-0030-language-neutral-dependency-library-semantics.md",
+    "docs/decisions/ADR-0031-vbnet-source-free-nuget-inventory.md",
+    "docs/decisions/ADR-0032-delphi-object-pascal-source-free-inventory.md",
     "docs/reports/unknown-resolution-sota-analysis.md",
     "docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md",
     "docs/reports/language-support/go-completion-review.md",
     "docs/reports/language-support/php-completion-review.md",
     "docs/reports/language-support/swift-completion-review.md",
     "docs/reports/language-support/ruby-completion-review.md",
+    "docs/reports/language-support/visual-basic-completion-review.md",
+    "docs/reports/language-support/delphi-object-pascal-completion-review.md",
     "docs/roadmap.md",
     ".agents/memories/README.md",
     ".agents/memories/project-state.md",
@@ -9440,6 +9444,8 @@ verify-stable-release-evidence --evidence-dir evidence
         let missing_documents = [
             "docs/decisions/ADR-0020-top-20-language-expansion-gate.md",
             "docs/decisions/ADR-0030-language-neutral-dependency-library-semantics.md",
+            "docs/decisions/ADR-0031-vbnet-source-free-nuget-inventory.md",
+            "docs/decisions/ADR-0032-delphi-object-pascal-source-free-inventory.md",
             "docs/plans/top-20-language-expansion-plan.md",
             "docs/reports/unknown-resolution-sota-analysis.md",
             "docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md",
@@ -9447,6 +9453,8 @@ verify-stable-release-evidence --evidence-dir evidence
             "docs/reports/language-support/php-completion-review.md",
             "docs/reports/language-support/swift-completion-review.md",
             "docs/reports/language-support/ruby-completion-review.md",
+            "docs/reports/language-support/visual-basic-completion-review.md",
+            "docs/reports/language-support/delphi-object-pascal-completion-review.md",
         ];
         for document in REQUIRED_DOCUMENTS
             .iter()

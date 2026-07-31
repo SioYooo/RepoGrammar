@@ -7,11 +7,17 @@ use crate::adapters::languages::cpp::CppLanguageAdapter;
 use crate::adapters::languages::csharp::CSharpLanguageAdapter;
 use crate::adapters::languages::go::GoLanguageAdapter;
 use crate::adapters::languages::java::JavaLanguageAdapter;
+use crate::adapters::languages::object_pascal::{
+    ObjectPascalLanguageAdapter, ObjectPascalPathClassification,
+};
 use crate::adapters::languages::php::{PhpLanguageAdapter, PhpPathClassification};
 use crate::adapters::languages::python::PythonLanguageAdapter;
 use crate::adapters::languages::ruby::{RubyLanguageAdapter, RubyPathClassification};
 use crate::adapters::languages::rust::RustLanguageAdapter;
 use crate::adapters::languages::swift::{SwiftLanguageAdapter, SwiftPathClassification};
+use crate::adapters::languages::visual_basic::{
+    VisualBasicLanguageAdapter, VisualBasicPathClassification,
+};
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
@@ -418,6 +424,30 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
 }
 
 fn classify_language_path(path: &str) -> LanguagePathClassification {
+    match VisualBasicLanguageAdapter::classify_path(path) {
+        VisualBasicPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::VisualBasic);
+        }
+        VisualBasicPathClassification::Config => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::VisualBasicConfig);
+        }
+        VisualBasicPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        VisualBasicPathClassification::NotVisualBasic => {}
+    }
+    match ObjectPascalLanguageAdapter::classify_path(path) {
+        ObjectPascalPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::ObjectPascal);
+        }
+        ObjectPascalPathClassification::DelphiConfig => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::DelphiConfig);
+        }
+        ObjectPascalPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        ObjectPascalPathClassification::NotObjectPascal => {}
+    }
     match PhpLanguageAdapter::classify_path(path) {
         PhpPathClassification::Source => {
             return LanguagePathClassification::Supported(DiscoveredLanguage::Php);
@@ -700,6 +730,129 @@ mod tests {
                 ("tsconfig.json", DiscoveredLanguage::TsJsConfig),
             ]
         );
+    }
+
+    #[test]
+    fn discovers_vbnet_without_admitting_vb6_or_globalizing_vb_exclusions() {
+        let workspace = TempWorkspace::new("discovery-visual-basic");
+        for directory in ["src", "nested", "bin", ".vs/project"] {
+            fs::create_dir_all(workspace.path().join(directory)).expect("create VB fixture dir");
+        }
+        fs::write(workspace.path().join("src/Program.vb"), [0xff, 0xfe, 0xfd])
+            .expect("write binary VB source");
+        fs::write(workspace.path().join("App.vbproj"), "<Project/>").expect("write VB project");
+        fs::write(workspace.path().join("nested/Library.vbproj"), "<Project/>")
+            .expect("write nested VB project");
+        fs::write(workspace.path().join("legacy.vbp"), "VB6").expect("write deferred VB6 project");
+        fs::write(workspace.path().join("Form1.frm"), "VB6").expect("write deferred VB6 form");
+        fs::write(workspace.path().join("bin/Generated.vb"), "generated")
+            .expect("write generated VB source");
+        fs::write(
+            workspace.path().join(".vs/project/App.vbproj"),
+            "<Project/>",
+        )
+        .expect("write Visual Studio cache project");
+        fs::write(workspace.path().join("bin/keep.py"), "value = 1\n")
+            .expect("write non-VB source under bin");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover VB.NET inventory");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.vbproj", DiscoveredLanguage::VisualBasicConfig),
+                ("bin/keep.py", DiscoveredLanguage::Python),
+                (
+                    "nested/Library.vbproj",
+                    DiscoveredLanguage::VisualBasicConfig
+                ),
+                ("src/Program.vb", DiscoveredLanguage::VisualBasic),
+            ]
+        );
+        for path in ["bin/Generated.vb", ".vs/project/App.vbproj"] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path
+                        && skipped.reason == SkippedReason::LanguageSpecificExclusion
+                }),
+                "missing language-specific skip for {path}: {:?}",
+                report.skipped
+            );
+        }
+        for path in ["legacy.vbp", "Form1.frm"] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+            }));
+        }
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn discovers_object_pascal_but_qualifies_only_exact_delphi_projects() {
+        let workspace = TempWorkspace::new("discovery-object-pascal-delphi");
+        for directory in ["src", "packages", "nested", "__history", "__recovery"] {
+            fs::create_dir_all(workspace.path().join(directory))
+                .expect("create Object Pascal fixture dir");
+        }
+        fs::write(workspace.path().join("src/Unit1.pas"), [0xff, 0xfe, 0xfd])
+            .expect("write binary Object Pascal source");
+        fs::write(workspace.path().join("App.dpr"), "program App;")
+            .expect("write Delphi project source");
+        fs::write(
+            workspace.path().join("packages/Tools.dpk"),
+            "package Tools;",
+        )
+        .expect("write Delphi package source");
+        fs::write(workspace.path().join("nested/App.dproj"), "<Project/>")
+            .expect("write Delphi project metadata");
+        for path in ["unit.pp", "program.lpr", "project.lpi", "package.lpk"] {
+            fs::write(workspace.path().join(path), "Free Pascal")
+                .expect("write deferred Free Pascal candidate");
+        }
+        fs::write(workspace.path().join("__history/Unit1.pas"), "backup")
+            .expect("write Delphi history source");
+        fs::write(workspace.path().join("__recovery/App.dproj"), "<Project/>")
+            .expect("write Delphi recovery metadata");
+        fs::write(workspace.path().join("__history/keep.py"), "value = 1\n")
+            .expect("write non-Pascal history file");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Object Pascal inventory");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.dpr", DiscoveredLanguage::ObjectPascal),
+                ("__history/keep.py", DiscoveredLanguage::Python),
+                ("nested/App.dproj", DiscoveredLanguage::DelphiConfig),
+                ("packages/Tools.dpk", DiscoveredLanguage::ObjectPascal),
+                ("src/Unit1.pas", DiscoveredLanguage::ObjectPascal),
+            ]
+        );
+        for path in ["__history/Unit1.pas", "__recovery/App.dproj"] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::LanguageSpecificExclusion
+            }));
+        }
+        for path in ["unit.pp", "program.lpr", "project.lpi", "package.lpk"] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+            }));
+        }
     }
 
     #[test]
@@ -1691,6 +1844,62 @@ mod tests {
         }));
         assert!(report.skipped.iter().any(|skip| {
             skip.path == "Package@swift-6.3.swift" && skip.reason == SkippedReason::TooLarge
+        }));
+    }
+
+    #[test]
+    fn visual_basic_size_limit_is_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-visual-basic-size-boundary");
+        fs::write(
+            workspace.path().join("exact.vb"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Visual Basic limit file");
+        fs::write(
+            workspace.path().join("too_large.vbproj"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too large Visual Basic project");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Visual Basic size boundary");
+
+        assert!(report.files.iter().any(|file| {
+            file.path == "exact.vb" && file.language == DiscoveredLanguage::VisualBasic
+        }));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "too_large.vbproj" && skip.reason == SkippedReason::TooLarge
+        }));
+    }
+
+    #[test]
+    fn object_pascal_size_limit_is_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-object-pascal-size-boundary");
+        fs::write(
+            workspace.path().join("exact.pas"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Object Pascal limit file");
+        fs::write(
+            workspace.path().join("too_large.dproj"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too large Delphi project");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Object Pascal size boundary");
+
+        assert!(report.files.iter().any(|file| {
+            file.path == "exact.pas" && file.language == DiscoveredLanguage::ObjectPascal
+        }));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "too_large.dproj" && skip.reason == SkippedReason::TooLarge
         }));
     }
 

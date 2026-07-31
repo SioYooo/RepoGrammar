@@ -37,9 +37,11 @@ The check command verifies:
   their durable memory mirrors under `.agents/memories/`, and the accepted
   ADR-0020 Top-20 language expansion gate plus its active implementation plan,
   ADR-0030 dependency/library semantics, the provider/UNKNOWN analysis, the
-  dated strict baseline, and the Go/PHP/Swift/Ruby completion-review records
-  referenced by the plan. Missing review evidence fails the guard; unchecked
-  review gates remain an honest incomplete state and are not treated as support.
+  dated strict baseline, ADR-0031/ADR-0032, and the
+  Go/PHP/Swift/Ruby/Visual-Basic/Delphi-Object-Pascal completion-review records
+  referenced by the language-expansion program. Missing review evidence fails
+  the guard; unchecked review gates remain an honest incomplete state and are
+  not treated as support.
 - required skills exist and have `name` and `description` front matter.
 - nested `AGENTS.md` or `CLAUDE.md` files do not exist.
 - lowercase `agents.md` or `claude.md` duplicates do not exist.
