@@ -7,11 +7,13 @@ use crate::ports::parser::{
 };
 use std::collections::BTreeSet;
 
+pub(crate) mod bounded_json;
 pub mod cpp;
 pub mod csharp;
 pub mod java;
 pub mod python;
 pub mod rust;
+pub mod swift;
 pub mod syntax;
 pub mod tree_sitter;
 pub mod tsjs;
@@ -24,6 +26,7 @@ pub struct RepoGrammarSourceParser {
     csharp: csharp::CSharpSyntaxParser,
     cpp: cpp::CppSyntaxParser,
     rust: rust::RustSyntaxParser,
+    swift: swift::SwiftProjectConfigParser,
 }
 
 impl SourceParser for RepoGrammarSourceParser {
@@ -46,8 +49,8 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::RubyConfig
-            | crate::core::model::Language::Swift
-            | crate::core::model::Language::SwiftConfig => Err(ParseError::UnsupportedLanguage),
+            | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::SwiftConfig => self.swift.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -84,8 +87,10 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::RubyConfig
-            | crate::core::model::Language::Swift
-            | crate::core::model::Language::SwiftConfig => Err(ParseError::UnsupportedLanguage),
+            | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::SwiftConfig => {
+                self.swift.parse_with_context(document, context)
+            }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -111,6 +116,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::SwiftConfig => {
+                self.swift.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)
@@ -392,21 +400,20 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_swift_inventory_tokens() {
+    fn product_parser_rejects_swift_source_and_accepts_bounded_config() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Swift, Language::SwiftConfig] {
-            assert_eq!(
-                parser.parse(swift_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    swift_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(swift_inventory_document(Language::Swift)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+        let report = parser
+            .parse_with_context(
+                swift_inventory_document(Language::SwiftConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("parse bounded Swift project config");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
     }
 
     #[test]

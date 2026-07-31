@@ -7,8 +7,9 @@
 
 ## ADR-0020 gate
 
-- [ ] Discovery/config — bounded Swift/SwiftPM inventory exists; no manifest or
-  target evaluation occurs.
+- [ ] Discovery/config — bounded Swift/SwiftPM inventory exists and
+  `Package.resolved` schema 2/3 pins are decoded without execution; manifest,
+  target, and toolchain selection remain unresolved.
 - [ ] Authoritative frontend — stage-3 qualification is incomplete.
 - [ ] RepoGrammar-owned code units and IR.
 - [ ] Typed `UNKNOWN` registry and provider fallback.
@@ -22,11 +23,18 @@
 ## Current evidence and blocker
 
 Discovery inventories `.swift`, `Package.swift`, `Package.resolved`,
-`.swift-version`, and valid version-specific manifests. The next permitted stage
-is documentation/evidence-only qualification of SwiftSyntax 603.0.2, Swift 6.3.3
-compiler differential behavior, dependency closure, five targets, and native OS
-sandboxes. Current arm64 macOS tools prove only local availability, not the full
-qualification matrix.
+`.swift-version`, and valid version-specific manifests. A bounded static reader
+now admits unique-member schema-2/3 `Package.resolved` JSON, persists exact
+semantic-version pins with `scope=unknown` and `directness=unknown`, and emits
+typed `swift_dependency_inventory` uncertainty for malformed, unsupported,
+conflicting, or over-budget input. It never retains package locations or
+revisions and never invokes SwiftPM. This is dependency infrastructure, not a
+Swift frontend or completion-gate pass.
+
+The next permitted semantic stage is documentation/evidence-only qualification
+of SwiftSyntax 603.0.2, Swift 6.3.3 compiler differential behavior, dependency
+closure, five targets, and native OS sandboxes. Current arm64 macOS tools prove
+only local availability, not the full qualification matrix.
 
 Stage 3 may conclude `QUALIFIED`, `NO_GO`, `BLOCKED`, or `INCONCLUSIVE` but must
 not add a production dependency, worker, parser, IR, UNKNOWN, or family. If exact

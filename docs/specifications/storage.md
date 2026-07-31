@@ -323,13 +323,19 @@ exist.
 
 Swift uses `swift` for exact `.swift` paths and `swift-config` for exact
 root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and complete
-ASCII `Package@swift-M[.m[.p]].swift` basenames. Those tokens persist only
-bounded path, strict raw-byte hash, size, and token, with zero source-store/
-parser dispatch and no unit, IR, fact, `UNKNOWN`, family, or project-model
-record. Swift-only active generations are `file_manifest_only`; mixed
-generations remain `syntax_only_code_units`. Swift inventory deltas remain
-incremental while the tokens are absent from `ParserProjectContext`, and copy-
-forward filters all claim-bearing records for current Swift inventory paths.
+ASCII `Package@swift-M[.m[.p]].swift` basenames. Swift source, executable
+manifests, version manifests, and `.swift-version` persist only bounded path,
+strict raw-byte hash, size, and token, with zero source-store/parser dispatch
+and no unit, IR, fact, `UNKNOWN`, dependency, family, or project-model record.
+Exact `Package.resolved` is the sole static-metadata exception: an admitted
+schema-2/3 file stores a project-config unit, typed inventory facts, and
+SwiftPM lock rows with exact semantic versions and unknown scope/directness.
+Swift-only active generations without an admitted lock remain
+`file_manifest_only`; generations containing a parsed lock own syntax/project-
+config records. Swift deltas remain incremental while these tokens are absent
+from `ParserProjectContext`, and copy-forward filters claim-bearing records for
+inventory-only Swift paths while preserving unchanged lock evidence exactly
+once.
 Exact `.build`/`.swiftpm` exclusions are Swift-only and do not globally prune
 other languages. A later bounded project model must add context invalidation
 before cross-file semantic records exist.
@@ -577,8 +583,8 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `12`. Existing pre-release schema `1`
-through `11` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `13`. Existing pre-release schema `1`
+through `12` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
@@ -599,6 +605,13 @@ identity. Because the repository database is fully derived, an existing schema
 11 database follows the same explicit stale-read/full-resync-rebuild policy as
 all earlier schemas; no user-authored data is migrated or discarded.
 
+Schema `13` replaces the ambiguous dependency `direct` boolean with the closed
+`directness` token: `direct`, `transitive`, or `unknown`. This prevents a
+lockfile that lacks root-manifest relation data from being persisted as falsely
+transitive. Existing manifest producers write `direct`; bounded SwiftPM
+`Package.resolved` schema-2/3 pins write `unknown`. All write, activation, and
+read paths reject values outside the closed vocabulary.
+
 Dependency writes also create an `external_dependency`
 `derived_record_dependencies` row. Replacing or removing the evidence path
 therefore dirties the record until bounded recomputation rewrites it, and
@@ -608,7 +621,9 @@ every hydrated row. Writers include the safe Cargo metadata stage and bounded
 static-manifest parser output such as root npm `package.json` and Python
 `pyproject.toml`/`setup.cfg`/static-`setup.py` declarations, plus bounded root
 `vcpkg.json` names/minimum requirements and exact Conan 2.31.1 `[requires]`
-references.
+references. Exact SwiftPM schema-2/3 `Package.resolved` pins are lockfile rows;
+package location, revision, directness, scope, install state, and runtime
+selection remain unavailable or explicitly unknown.
 Incremental indexing recomputes provider-owned Cargo rows and copies a static
 row only when its unchanged evidence code unit also copies. There is
 intentionally no public CLI/MCP raw package-name projection in this schema

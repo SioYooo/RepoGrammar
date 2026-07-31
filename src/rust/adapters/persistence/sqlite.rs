@@ -4,10 +4,11 @@
 //! adapter. Application code talks to it through storage ports.
 
 use crate::core::model::{
-    ContentHash, DependencyEcosystem, DependencyEvidenceLevel, DependencyScope, FactCertainty,
-    FamilyConstraintProfile, FamilyPrevalence, FamilyPrevalenceClass, FeatureConstraint,
-    FeatureConstraintOrigin, FeatureConstraintSemantics, IrEdgeLabel, IrNodeKind, SemanticFactKind,
-    TypedUnknown, UnknownClass, UnknownObligation, UnknownReasonCode, VariationConstraint,
+    ContentHash, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel,
+    DependencyScope, FactCertainty, FamilyConstraintProfile, FamilyPrevalence,
+    FamilyPrevalenceClass, FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics,
+    IrEdgeLabel, IrNodeKind, SemanticFactKind, TypedUnknown, UnknownClass, UnknownObligation,
+    UnknownReasonCode, VariationConstraint,
 };
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
@@ -2168,7 +2169,7 @@ impl SqliteGenerationWriteSession {
             .execute(
                 "INSERT INTO dependency_records \
                  (generation_id, dependency_id, ecosystem, package_name, requirement, \
-                  resolved_version, scope, optional, direct, evidence_level, code_unit_id, \
+                  resolved_version, scope, optional, directness, evidence_level, code_unit_id, \
                   path, content_hash, start_byte, end_byte, note) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
@@ -2180,7 +2181,7 @@ impl SqliteGenerationWriteSession {
                     dependency.resolved_version.as_deref(),
                     dependency.scope,
                     dependency.optional,
-                    dependency.direct,
+                    dependency.directness,
                     dependency.evidence_level,
                     dependency.code_unit_id,
                     dependency.path,
@@ -4574,7 +4575,7 @@ fn query_dependencies(
             "SELECT dependency_records.dependency_id, dependency_records.ecosystem, \
                     dependency_records.package_name, dependency_records.requirement, \
                     dependency_records.resolved_version, dependency_records.scope, \
-                    dependency_records.optional, dependency_records.direct, \
+                    dependency_records.optional, dependency_records.directness, \
                     dependency_records.evidence_level, dependency_records.code_unit_id, \
                     dependency_records.path, dependency_records.content_hash, \
                     dependency_records.start_byte, dependency_records.end_byte, \
@@ -4606,7 +4607,7 @@ fn query_dependencies(
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, bool>(6)?,
-                row.get::<_, bool>(7)?,
+                row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, String>(9)?,
                 row.get::<_, String>(10)?,
@@ -4633,7 +4634,7 @@ fn query_dependencies(
             resolved_version,
             scope,
             optional,
-            direct,
+            directness,
             evidence_level,
             code_unit_id,
             path,
@@ -4685,7 +4686,7 @@ fn query_dependencies(
             resolved_version,
             scope,
             optional,
-            direct,
+            directness,
             evidence_level,
             code_unit_id,
             path,
@@ -4904,7 +4905,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'dependency_ecosystems_v12', datetime('now'))",
+             VALUES (?1, 'dependency_directness_v13', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -5880,6 +5881,8 @@ fn validate_dependency_record(dependency: &IndexedDependencyRecord) -> Result<()
         .map_err(|_| invalid_record("dependency ecosystem is invalid"))?;
     DependencyScope::parse_str(&dependency.scope)
         .map_err(|_| invalid_record("dependency scope is invalid"))?;
+    DependencyDirectness::parse_str(&dependency.directness)
+        .map_err(|_| invalid_record("dependency directness is invalid"))?;
     let evidence_level = DependencyEvidenceLevel::parse_str(&dependency.evidence_level)
         .map_err(|_| invalid_record("dependency evidence level is invalid"))?;
     for (value, label) in [
@@ -6215,7 +6218,7 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
             "resolved_version",
             "scope",
             "optional",
-            "direct",
+            "directness",
             "evidence_level",
             "code_unit_id",
             "path",
@@ -6412,7 +6415,7 @@ CREATE TABLE IF NOT EXISTS dependency_records (
     resolved_version TEXT,
     scope TEXT NOT NULL CHECK (scope IN ('runtime', 'development', 'test', 'build', 'unknown')),
     optional INTEGER NOT NULL CHECK (optional IN (0, 1)),
-    direct INTEGER NOT NULL CHECK (direct IN (0, 1)),
+    directness TEXT NOT NULL CHECK (directness IN ('direct', 'transitive', 'unknown')),
     evidence_level TEXT NOT NULL CHECK (evidence_level IN ('manifest_declared', 'lockfile_resolved', 'provider_resolved')),
     code_unit_id TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -6622,7 +6625,7 @@ mod tests {
             resolved_version: None,
             scope: "runtime".to_string(),
             optional: false,
-            direct: true,
+            directness: "direct".to_string(),
             evidence_level: "manifest_declared".to_string(),
             code_unit_id: code_unit(path).id,
             path: path.to_string(),
@@ -8885,8 +8888,19 @@ mod tests {
         store
             .record_code_unit(&generation, &code_unit("Cargo.toml"))
             .expect("record code unit");
-        DependencyStore::record_dependency(&store, &generation, &dependency("Cargo.toml"))
+        let direct = dependency("Cargo.toml");
+        let mut transitive = direct.clone();
+        transitive.dependency_id = "dependency:Cargo.toml:tracing".to_string();
+        transitive.package_name = "tracing".to_string();
+        transitive.requirement = None;
+        transitive.resolved_version = Some("0.1.41".to_string());
+        transitive.directness = "transitive".to_string();
+        transitive.evidence_level = "lockfile_resolved".to_string();
+        transitive.note = "bounded lockfile transitive dependency".to_string();
+        DependencyStore::record_dependency(&store, &generation, &direct)
             .expect("record dependency");
+        DependencyStore::record_dependency(&store, &generation, &transitive)
+            .expect("record transitive dependency");
         store
             .activate_generation(&generation)
             .expect("activate generation");
@@ -8896,7 +8910,15 @@ mod tests {
             .expect("list active dependencies");
 
         assert_eq!(report.generation_id, "gen-000001");
-        assert_eq!(report.dependencies, vec![dependency("Cargo.toml")]);
+        assert_eq!(report.dependencies, vec![direct, transitive]);
+        assert_eq!(
+            report
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.directness.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct", "transitive"]
+        );
         let dependency = &report.dependencies[0];
         let workspace_path = workspace.path().to_string_lossy();
         for value in [
@@ -8904,6 +8926,7 @@ mod tests {
             &dependency.ecosystem,
             &dependency.package_name,
             &dependency.scope,
+            &dependency.directness,
             &dependency.evidence_level,
             &dependency.code_unit_id,
             &dependency.path,
@@ -8939,6 +8962,38 @@ mod tests {
                  UPDATE dependency_records SET evidence_level = 'guessed';",
             )
             .expect("tamper dependency");
+
+        assert!(matches!(
+            store.list_active_dependencies(),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn active_dependency_reads_reject_tampered_directness() {
+        let workspace = TempWorkspace::new("sqlite-invalid-dependency-directness");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+        DependencyStore::record_dependency(&store, &generation, &dependency("Cargo.toml"))
+            .expect("record dependency");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON; \
+                 UPDATE dependency_records SET directness = 'guessed';",
+            )
+            .expect("tamper dependency directness");
 
         assert!(matches!(
             store.list_active_dependencies(),

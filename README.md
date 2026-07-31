@@ -302,7 +302,8 @@ for the deeper design.
 | **TypeScript / JavaScript** — Express, Jest/Vitest, Mocha/`node:test`, Next.js, Fastify, Prisma, Drizzle, Zod, NestJS, Hono | Conservative exact-anchor preview; React and React Native remain unsupported |
 | **Rust** — internal patterns plus bounded serde, thiserror, Tokio, clap, and axum anchors | Structural preview; no macro expansion, trait-resolution, or runtime claim |
 | **Java/Spring, C#, C/C++** | Conservative structural preview; no runtime or build-system equivalence claim |
-| **Go, PHP, Ruby, Swift** | File discovery only; not analyzed or supported |
+| **Go, PHP, Ruby** | File discovery only; not analyzed or supported |
+| **Swift** | Discovered only and not semantically supported; exact `Package.resolved` schema 2/3 receives bounded static SwiftPM dependency inventory with unknown directness, without executing Swift or SwiftPM |
 
 RepoGrammar is pre-1.0. Its MCP API and preview analyzers remain experimental,
 and it is not a sound whole-program static analyzer or a runtime-equivalence

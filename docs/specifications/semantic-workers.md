@@ -128,7 +128,7 @@ package name, requirement when supplied by Cargo, scope, optionality, and
 manifest evidence. Because `--no-deps` is used, these records do not claim a
 resolved transitive graph, installed version, source, checksum, or external
 symbol. The indexing application writes the records through the shared
-generation session into schema v12 `dependency_records`; active reads validate
+generation session into schema v13 `dependency_records`; active reads validate
 their closed tokens and same-generation evidence again. This persistence does
 not expose package names on CLI/MCP and does not promote package presence to a
 semantic or family claim. Full builds and incremental sync both run this stage;
@@ -212,8 +212,10 @@ required implementation and final completion audit land.
 ## Swift preflight strategy
 
 ADR-0025 accepts a future Swift worker design. The separate discovery-only
-inventory is implemented but invokes and admits no dependency, toolchain,
-worker, semantic runtime, or support behavior. The production
+inventory and bounded `Package.resolved` schema-2/3 reader are implemented but
+invoke and admit no production dependency, toolchain, worker, semantic runtime,
+or support behavior. Static lock rows are internal project metadata, not worker
+admission or installed-package proof. The production
 syntax candidate is `SwiftParser`/`SwiftSyntax` 603.0.2 in a separately reviewed
 OS-sandboxed worker, differentially qualified against the exact Swift 6.3.3
 compiler. SwiftSyntax output is structural and cannot prove module identity,
@@ -231,9 +233,9 @@ macros/plugins/generators, use ambient caches/credentials/toolchain state,
 spawn descendants, write outside an empty private temporary directory, or use
 network access.
 
-A separate future bounded project-model parser may receive manifest and
-`Package.resolved` bytes, but may accept only the ADR's static allowlist and
-emit a sanitized normalized profile. `.swift-version` is auxiliary toolchain-
+A separate future bounded project-model parser may receive executable manifest
+bytes and may extend the current lockfile inventory only through the ADR's
+static allowlist and a sanitized normalized profile. `.swift-version` is auxiliary toolchain-
 selector inventory, not package dialect evidence. The exact
 `swift.xctest.test_method` family, future claim-impact obligations,
 resource/protocol limits, artifact/platform gates, and eleven atomic stages are

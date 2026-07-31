@@ -5,9 +5,10 @@
 
 use super::{ir_edges_for_units, ir_nodes_for_units, tsjs::TSJS_ANCHOR_ENGINE};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyEcosystem, DependencyEvidenceLevel,
-    DependencyRecord, DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin,
-    Language, PackageIdentity, Provenance, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
+    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencyVersion, Evidence,
+    FactCertainty, FactOrigin, Language, PackageIdentity, Provenance, SemanticFact,
+    SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::ports::parser::{
@@ -304,7 +305,7 @@ fn tsjs_json_dependencies(
                     None,
                     scope,
                     optional_by_field || optional_by_meta,
-                    true,
+                    DependencyDirectness::Direct,
                     DependencyEvidenceLevel::ManifestDeclared,
                     Evidence::new(
                         unit.id.clone(),
@@ -2628,7 +2629,7 @@ describe("users", () => {
         assert_eq!(dependency("@scope/plugin").scope, DependencyScope::Unknown);
         assert!(dependency("@scope/plugin").optional);
         assert!(output.dependencies.iter().all(|dependency| {
-            dependency.direct
+            dependency.directness == DependencyDirectness::Direct
                 && dependency.evidence_level == DependencyEvidenceLevel::ManifestDeclared
                 && dependency.evidence.provenance.path == "package.json"
         }));

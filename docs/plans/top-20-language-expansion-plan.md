@@ -36,8 +36,10 @@ the bounded root npm `package.json` parser, which now emits direct declarations
 for production, development, optional, and peer dependency sections without
 executing Node, npm, package scripts, or dependency code. Peer dependencies use
 the shared `unknown` scope unless the model later gains a reviewed peer token.
-Schema v12 persists these consumers with same-generation source evidence. On an
-unrelated incremental source edit, Cargo output is recomputed while unchanged
+Schema v13 persists these consumers with same-generation source evidence and
+represents dependency directness as the closed `direct`/`transitive`/`unknown`
+set rather than collapsing unresolved lockfile graph position into a boolean.
+On an unrelated incremental source edit, Cargo output is recomputed while unchanged
 static npm declarations copy forward with their evidence unit, retaining one
 fresh record. The Python project-config frontend now emits PyPI
 `manifest_declared` records from PEP 621/build-system/dependency-group arrays
@@ -57,7 +59,11 @@ requirements and exact Conan 2 `name/version` requirements without executing
 either package manager. Scope remains `unknown`; uninterpreted vcpkg fields,
 malformed Conan sections, Conan ranges/revisions/user-channel references,
 conflicts, and overflow abstain. This advances C0 project inventory but does not
-complete C or C++.
+complete C or C++. Exact SwiftPM `Package.resolved` schema-2/3 files are the
+first lockfile consumer of unknown directness: a duplicate-key-rejecting,
+bounded static reader emits exact semantic-version pins while discarding
+locations and revisions. It does not evaluate `Package.swift`, invoke SwiftPM,
+select a toolchain, establish install/build/runtime state, or complete Swift.
 
 ## Goal and non-goal
 
@@ -279,14 +285,23 @@ Swift-only `.build`/`.swiftpm` exclusions without globally hiding other
 languages. Invalid version-manifest lookalikes with an exact `.swift` suffix
 remain ordinary Swift source inventory.
 
-Indexing persists only bounded repo-relative path, raw-byte SHA-256, size, and
-token before any source-store or parser dispatch. Swift-only generations are
-`file_manifest_only`; mixed generations retain their parser-capable mode;
-warnings are path-free and emitted once per accepted token. Swift inventory
-deltas stay incremental, and copy-forward purges legacy Swift claim records.
-No configuration is decoded or evaluated, and no dependency, toolchain,
-worker, project model, parser, unit, IR, fact, typed `UNKNOWN`, family, or
-readiness behavior is added.
+Indexing persists bounded repo-relative path, raw-byte SHA-256, size, and token
+before any source-store or parser dispatch. Swift-only generations without an
+admitted lockfile are `file_manifest_only`; an exact admitted
+`Package.resolved` owns a project-config unit, while mixed generations retain
+their parser-capable mode;
+warnings are path-free and emitted once per accepted inventory-only token.
+Swift inventory deltas stay incremental, and copy-forward purges legacy Swift
+claim records. Swift source, executable manifests, version manifests, and
+`.swift-version` remain inventory-only. Exact `Package.resolved` is the sole
+static-metadata exception: supplied schema-2/3 JSON receives bounded,
+duplicate-key-rejecting decoding and may emit SwiftPM lock rows with exact
+semantic versions, unknown scope/directness, and typed
+`swift_dependency_inventory` uncertainty. Package locations and revisions are
+discarded. No Swift, SwiftPM, Xcode, manifest, plugin, macro, toolchain, child
+process, or network operation executes, and no source parser, family, semantic
+support, readiness, installation, authenticity, buildability, or runtime claim
+is added.
 
 The production syntax candidate is exact SwiftSyntax 603.0.2 `SwiftParser`
 inside a separately reviewed OS-sandboxed worker, differentially qualified

@@ -484,7 +484,7 @@ fn dependency_facts(
                     _ => DependencyScope::Unknown,
                 },
                 optional,
-                true,
+                crate::core::model::DependencyDirectness::Direct,
                 DependencyEvidenceLevel::ManifestDeclared,
                 candidate_evidence(candidate, "Cargo metadata dependency declaration")?,
             )

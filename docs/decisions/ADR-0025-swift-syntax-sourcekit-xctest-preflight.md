@@ -141,9 +141,9 @@ Default analysis must never run `swift`, `swiftc`, `swift-frontend`,
 macros, generators, or repository scripts outside the admitted worker and its
 exact no-execution request contract.
 
-### D4. The implemented discovery module is inventory-only
+### D4. Discovery remains source-inventory-only; lock metadata is bounded
 
-The implemented module defines stable inventory-only tokens:
+The implemented module defines stable discovery tokens:
 
 - `swift` for an exact case-sensitive `.swift` suffix, including basename
   `.swift`; and
@@ -167,13 +167,14 @@ the generic walker to prune unrelated-language files. Global exclusion of
 `DerivedData`, `Carthage`, `Packages`, or other broad names is not authorized by
 this preflight.
 
-Discovery persists only bounded repo-relative path, strict raw-byte hash, size,
-and token. It does not decode or parse inventory bytes, enter the source store,
-invoke a parser, or create a unit, IR, fact, typed `UNKNOWN`, family, project
-model, readiness, or support claim. Full and incremental indexing, warnings,
-generation mode, copy-forward purge, autosync, CLI output, and aggregate
-resource behavior follow the established Go/Ruby/PHP inventory-only policy
-through one authoritative classifier rather than duplicated filename checks.
+Swift source, `Package.swift`, version-specific manifests, and `.swift-version`
+remain inventory-only during indexing: they are never read or evaluated by a
+Swift frontend. `Package.resolved` is the one narrower exception. Its supplied
+bytes enter the bounded static reader described by D5 and may create one
+project-config unit, structural inventory/typed-`UNKNOWN` facts, and internal
+dependency rows. That exception is selected by the exact basename in the same
+authoritative inventory-only classifier; it does not enable Swift source
+parsing, project evaluation, readiness, a family, or language support.
 
 This inventory stage inherits the open ADR-0023 canonicalize-then-reopen
 tree-swap/TOCTOU limitation. Existing symlink and root-containment checks are
@@ -212,14 +213,19 @@ unknown arguments, or ambiguous roots make the affected project scope or test-
 target membership unavailable. The parser must not attempt to emulate general
 Swift execution.
 
-`Package.resolved` may later enter a separate bounded JSON parser as dependency
-resolution inventory. Official SwiftPM documentation says it coordinates
-resolved versions for a top-level leaf package and most SwiftPM commands may
-implicitly resolve dependencies. RepoGrammar must not invoke those commands or
-treat a lockfile as proof that dependencies are present, authentic, buildable,
-or selected. The first XCTest family does not require dependency resolution;
-XCTest identity comes only from the admitted toolchain module and selected test
-target profile.
+`Package.resolved` schema 2 and 3 now enter a separate bounded, duplicate-key-
+rejecting JSON parser as dependency-resolution inventory. It accepts only
+bounded lowercase package identities and exact semantic versions; scope and
+directness remain `unknown`. Unsupported schemas, malformed pins, branch or
+revision-only pins, conflicts, and resource limits emit
+`swift_dependency_inventory` typed `UNKNOWN`. URLs, locations, revisions, and
+origin hashes are not retained. Official SwiftPM documentation says the file
+records resolved versions and SwiftPM commands may resolve dependencies.
+RepoGrammar invokes none of those commands and does not treat a lockfile as
+proof that dependencies are present, authentic, buildable, directly declared,
+or selected at runtime. The first XCTest family does not require dependency
+resolution; XCTest identity comes only from the admitted toolchain module and
+selected test-target profile.
 
 Raw manifest/lock contents, URLs, revisions, paths, credentials, plugin
 configuration, and free-form values must not reach CLI/MCP output. A validated
@@ -314,7 +320,7 @@ reason codes:
 | `swift_dialect_version` | Blocks syntax/identity/family claims when tools version, Swift language mode, deployment target, feature flags, or compiler profile is absent, conflicting, unsupported, or inferred from ambient state. | One complete allowlisted normalized compatibility key proven under the exact toolchain/parser corpus. |
 | `swift_package_project_scope` | Blocks project-derived claims for absent, multiple, nested, dynamic, version-selected, malformed, oversized, or ambiguous manifests/roots. | One bounded static selected root and normalized allowlisted profile. |
 | `swift_package_manifest_execution` | Blocks any fact that would require evaluating arbitrary manifest Swift. | N1 resolves only by proving the required fact is present in the admitted static subset; no execution is a resolution. |
-| `swift_package_resolution` | Blocks dependency identity/buildability claims, but not the toolchain-owned XCTest anchor when no dependency fact is used. | A future bounded authenticated resolution model; `Package.resolved` presence alone never resolves it. |
+| `swift_package_resolution` | Bounded schema-2/3 pins can prove package identity plus an exact recorded version only. Directness, manifest relation, authenticity, availability, buildability, and runtime selection remain unresolved; this does not block the toolchain-owned XCTest anchor when no dependency fact is used. | A future authenticated manifest-plus-lock resolution model; current lock inventory deliberately retains typed uncertainty. |
 | `swift_platform_sdk` | Blocks platform module identity when the exact SDK/toolchain/XCTest module is absent or mismatched. | Immutable admitted toolchain+SDK+XCTest identity and a fresh verifier handshake. |
 | `swift_test_target_membership` | Blocks the affected family anchor when target kind, path, `sources`/`exclude`, overlap, conditional settings, or file membership is unresolved. | One exact static `.testTarget` with the admitted explicit/default path rule, absent `sources`, empty `exclude`, a unique non-overlapping normalized path, and exactly one matching discovered-file prefix. |
 | `swift_module_identity` and `swift_xctest_case_identity` | Block the affected class/method when `XCTest` import or immediate superclass identity is unresolved, shadowed, ambiguous, indirect, or unavailable. | Exact verifier-backed module and immediate-base identity from the admitted profile. |

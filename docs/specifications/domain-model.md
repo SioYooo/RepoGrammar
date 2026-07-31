@@ -11,10 +11,11 @@ library behavior contracts. The language-neutral owned types live in
 `src/rust/core/model/dependency.rs`.
 
 A `DependencyRecord` carries one package identity, optional version requirement
-and resolved version, scope, directness, optionality, the strongest dependency
-evidence level, and repository evidence. `DependencySnapshot` is deterministic
-and rejects duplicate inventory records. `ExternalSymbolId` is always qualified
-by a package identity. `LibraryContract` is explicit, revisioned, and non-empty;
+and resolved version, scope, three-state directness (`direct`, `transitive`, or
+`unknown`), optionality, the strongest dependency evidence level, and
+repository evidence. `DependencySnapshot` is deterministic and rejects
+duplicate inventory records. `ExternalSymbolId` is always qualified by a
+package identity. `LibraryContract` is explicit, revisioned, and non-empty;
 inventory never synthesizes one.
 
 Manifest declarations must not be described as installed, resolved, or
@@ -70,13 +71,14 @@ generations remain `syntax_only_code_units`. The tokens prove file inventory
 only and do not select a PHP profile, Composer project, PHPUnit version,
 dependency graph, custom vendor directory, or support state.
 Swift discovery defines stable `swift` and `swift-config` tokens for exact
-`.swift` paths and exact accepted SwiftPM/toolchain-selector basenames. They are
-inventory-only: only bounded repository-relative path, strict raw-byte hash,
-byte size, and token are persisted; no Swift `CodeUnit`, IR, semantic fact,
-typed `UNKNOWN`, project model, or family exists. Swift-only generations are
-`file_manifest_only`; mixed generations remain `syntax_only_code_units`. The
-tokens prove file inventory only and do not select a manifest, package target,
-toolchain, SDK, XCTest identity, dependency graph, or support state.
+`.swift` paths and exact accepted SwiftPM/toolchain-selector basenames. Swift
+source and executable/toolchain config remain inventory-only. Exact
+`Package.resolved` files additionally receive a bounded static project-config
+unit and may own schema-2/3 SwiftPM lock rows with exact recorded versions,
+unknown scope, and unknown directness. Typed uncertainty covers malformed,
+unsupported, conflicting, and over-budget pins. No Swift source frontend,
+manifest evaluation, family, selected target/toolchain/SDK, installed graph, or
+support state follows from that lock inventory.
 The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
 Java classes/interfaces/methods plus Spring MVC route methods, Spring
 components, Spring Boot applications, and Spring Data repositories when exact

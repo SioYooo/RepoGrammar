@@ -23,15 +23,19 @@ requirements and exact Conan 2 `name/version` manifest declarations.
 Unsupported vcpkg fields, malformed Conan sections, Conan
 ranges/revisions/user-channel references, conflicts, and overflow affect
 `cpp_dependency_inventory` as typed `UNKNOWN`, and neither package manager
-executes. The `bounded_cpp_project_inventory_v2` gate rejects duplicate or
-over-budget vcpkg JSON members before normal decoding. Schema v12 persists
-the records with same-generation code-unit/file evidence, derived-path
+executes. The shared bounded JSON gate rejects duplicate or over-budget vcpkg
+and SwiftPM lock members before normal decoding. Schema v13 persists the
+records with closed three-state dependency directness, same-generation code-unit/file evidence, derived-path
 freshness, strict token validation, and deterministic internal
 active-generation readback. Incremental sync recomputes Cargo provider output
 but copies unchanged static-manifest dependencies only with their unchanged
 evidence unit, so unrelated edits retain one fresh inventory. Parser output is
 rejected if it claims provider resolution. Raw package names are not exposed
-through CLI/MCP. The strict ADR-0020 baseline remains `0/20`, TypeScript extra
+through CLI/MCP. Exact SwiftPM `Package.resolved` schema-2/3 pins are the first
+lockfile rows: exact semantic versions are retained, scope/directness remain
+unknown, locations/revisions are discarded, and malformed or unsupported
+inputs abstain without invoking SwiftPM. The strict ADR-0020 baseline remains
+`0/20`, TypeScript extra
 remains incomplete, Go/PHP/Swift/Ruby remain `discovered_only`, and the other
 nine new lanes remain `not_started`. The current evidence matrix is
 `docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
@@ -876,15 +880,22 @@ lookalikes with exact `.swift` remain ordinary source inventory. Exact
 `language_specific_exclusion` token and must not globally prune unrelated
 language files.
 
-Accepted Swift files persist only bounded repo-relative path, raw-byte SHA-256,
-size, and token. Swift-only generations report `file_manifest_only`; mixed
-parser-capable generations retain `syntax_only_code_units`. Warnings are
-deterministic and aggregated once per accepted token. Incremental Swift deltas
-add, modify, remove, or copy only metadata and purge legacy units, IR, facts,
-evidence, support, and families. Manual discovery honors Git ignore; autosync
-keeps its generic Git-independent conservative charging. Swift paths bypass
-the source store and parser and produce zero code units, IR, facts, typed
-`UNKNOWN`s, families, project records, or readiness/support claims.
+Accepted Swift files persist bounded repo-relative path, raw-byte SHA-256,
+size, and token. Swift source, `Package.swift`, version-specific manifests, and
+`.swift-version` remain inventory-only; those paths bypass the source store and
+parser and produce no code units, IR, facts, typed `UNKNOWN`s, dependencies, or
+families. Exact `Package.resolved` is the sole static-metadata exception. A
+bounded duplicate-key-rejecting reader accepts the qualified schema-2/3 subset
+and persists SwiftPM lock rows with exact semantic versions, unknown scope and
+directness, plus typed `swift_dependency_inventory` uncertainty. It discards
+package locations and revisions and never invokes Swift, SwiftPM, Xcode, a
+toolchain, child process, plugin, macro, manifest, or network operation.
+Swift-only repositories containing an admitted lockfile can therefore contain
+an internal project-config unit and dependency facts while still emitting no
+source semantics, family, readiness, installation, authenticity, buildability,
+or runtime claim. Incremental copy-forward keeps unchanged lock evidence fresh
+and purges legacy Swift claims. Manual discovery honors Git ignore; autosync
+keeps its generic Git-independent conservative charging.
 
 The future syntax candidate is exact SwiftSyntax 603.0.2 `SwiftParser` in a
 separately reviewed OS-sandboxed worker, differentially qualified against the

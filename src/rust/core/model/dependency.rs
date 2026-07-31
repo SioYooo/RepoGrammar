@@ -126,6 +126,36 @@ pub enum DependencyScope {
     Unknown,
 }
 
+/// Whether repository evidence proves a package is direct, transitive, or
+/// leaves that relationship unresolved. Lockfiles commonly enumerate a graph
+/// without identifying which pins were declared by the root manifest, so a
+/// boolean would incorrectly collapse `Unknown` into `Transitive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DependencyDirectness {
+    Direct,
+    Transitive,
+    Unknown,
+}
+
+impl DependencyDirectness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Transitive => "transitive",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse_str(value: &str) -> Result<Self, String> {
+        match value {
+            "direct" => Ok(Self::Direct),
+            "transitive" => Ok(Self::Transitive),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(format!("unsupported dependency directness {value}")),
+        }
+    }
+}
+
 impl DependencyScope {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -183,7 +213,7 @@ pub struct DependencyRecord {
     pub resolved_version: Option<DependencyVersion>,
     pub scope: DependencyScope,
     pub optional: bool,
-    pub direct: bool,
+    pub directness: DependencyDirectness,
     pub evidence_level: DependencyEvidenceLevel,
     pub evidence: Evidence,
 }
@@ -222,7 +252,7 @@ type DependencySortKey<'a> = (
     &'a str,
     DependencyScope,
     bool,
-    bool,
+    DependencyDirectness,
     DependencyEvidenceLevel,
     Option<&'a str>,
     Option<&'a str>,
@@ -235,7 +265,7 @@ fn dependency_sort_key(record: &DependencyRecord) -> DependencySortKey<'_> {
         &record.package.name,
         record.scope,
         record.optional,
-        record.direct,
+        record.directness,
         record.evidence_level,
         record.requirement.as_ref().map(DependencyVersion::as_str),
         record
@@ -287,7 +317,7 @@ impl DependencyRecord {
         resolved_version: Option<DependencyVersion>,
         scope: DependencyScope,
         optional: bool,
-        direct: bool,
+        directness: DependencyDirectness,
         evidence_level: DependencyEvidenceLevel,
         evidence: Evidence,
     ) -> Result<Self, String> {
@@ -301,7 +331,7 @@ impl DependencyRecord {
             resolved_version,
             scope,
             optional,
-            direct,
+            directness,
             evidence_level,
             evidence,
         })
@@ -511,7 +541,7 @@ mod tests {
             None,
             DependencyScope::Runtime,
             false,
-            true,
+            DependencyDirectness::Direct,
             DependencyEvidenceLevel::LockfileResolved,
             evidence(),
         )
@@ -557,7 +587,7 @@ mod tests {
             None,
             DependencyScope::Runtime,
             false,
-            true,
+            DependencyDirectness::Direct,
             DependencyEvidenceLevel::ManifestDeclared,
             evidence(),
         )
@@ -574,6 +604,21 @@ mod tests {
         assert_eq!(snapshot.dependencies[0].package.name, "serde");
         assert_eq!(snapshot.unknowns.len(), 1);
         assert!(DependencySnapshot::new([record.clone(), record], []).is_err());
+    }
+
+    #[test]
+    fn dependency_directness_is_a_closed_three_state_contract() {
+        for directness in [
+            DependencyDirectness::Direct,
+            DependencyDirectness::Transitive,
+            DependencyDirectness::Unknown,
+        ] {
+            assert_eq!(
+                DependencyDirectness::parse_str(directness.as_str()),
+                Ok(directness)
+            );
+        }
+        assert!(DependencyDirectness::parse_str("indirect").is_err());
     }
 
     #[test]

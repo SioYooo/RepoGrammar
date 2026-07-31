@@ -41,7 +41,7 @@ RepoGrammar adopts one language-neutral four-layer model:
    name in a manifest is context, not family support.
 
 The core owns `DependencyEcosystem`, `PackageIdentity`, `DependencyVersion`,
-`DependencyScope`, `DependencyEvidenceLevel`, `DependencyRecord`,
+`DependencyScope`, `DependencyDirectness`, `DependencyEvidenceLevel`, `DependencyRecord`,
 `DependencySnapshot`, `ExternalSymbolId`, `LibraryContractId`,
 `LibraryCapability`, and `LibraryContract`. External SDK, compiler, package
 manager, and wire-protocol types must be translated at adapter boundaries.
@@ -102,8 +102,9 @@ The C/C++ project-config provenance method is
 member scanner rejects duplicate object keys, nesting beyond 128 levels, more
 than 8,192 object members, or decoded keys above 256 bytes. This prevents JSON
 map overwrite from turning ambiguous manifests into apparently complete
-inventory. The normal `serde_json` parse remains the syntax authority after
-that admission gate.
+inventory. The admission scanner is now a shared project-metadata helper used by
+every qualified JSON manifest lane; the normal `serde_json` parse remains the
+syntax authority after that gate.
 
 The qualified format snapshot is fixed for auditability:
 
@@ -119,6 +120,30 @@ The qualified format snapshot is fixed for auditability:
 References: <https://learn.microsoft.com/en-us/vcpkg/reference/vcpkg-json>,
 <https://docs.conan.io/2/reference/conanfile/attributes.html>, and
 <https://docs.conan.io/2/reference/conanfile_txt.html>.
+
+Dependency directness is a closed three-state contract: `direct`, `transitive`,
+or `unknown`. A lockfile that enumerates pins without proving which ones were
+declared by the root manifest must use `unknown`; it must not encode unknown as
+boolean false and thereby mislabel a pin as transitive.
+
+The first consumer of that third state is SwiftPM `Package.resolved` schema 2
+and 3. A bounded unique-member JSON reader accepts only lowercase source-free
+package identities and exact semantic versions, records them as
+`lockfile_resolved`, and leaves scope and directness `unknown`. Malformed pins,
+branch or revision-only state, conflicting identities, unsupported schema, and
+resource overflow emit `swift_dependency_inventory` typed `UNKNOWN`. The reader
+does not retain locations, URLs, revisions, or origin hashes, and it does not
+prove install state, authenticity, buildability, runtime selection, or direct
+root declaration. `Package.swift` and version-specific manifests remain
+executable Swift: indexing never evaluates them.
+
+The qualified behavior is based on Swift Package Manager documentation,
+retrieved 2026-08-01, which describes `Package.resolved` as the recorded result
+of dependency resolution and documents that SwiftPM commands can resolve or
+update dependencies. RepoGrammar consumes only supplied lock bytes and invokes
+none of those commands. References:
+<https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/resolvingdependencyfailures/>
+and <https://docs.swift.org/package-manager/PackageDescription/PackageDescription.html>.
 
 ## Provider and package-manager policy
 
@@ -160,14 +185,14 @@ permission to infer runtime behavior.
 - Exact package/version/symbol semantics remain auditable and conservative.
 - Existing string-only dependency facts can migrate incrementally; they are not
   retroactively promoted to resolved identities.
-- Schema v12 persistence and an internal active-generation read model now
+- Schema v13 persistence and an internal active-generation read model now
   preserve generic dependency records with source evidence. Cargo records are
   recomputed by their provider on incremental sync; unchanged static-manifest
   records are copied only with their unchanged evidence unit. Source-free
   public projections, generic provider ports, and remaining per-ecosystem
   manifest adapters remain follow-up modules. This ADR, persistence slice, and
-  the Cargo/npm/Python/vcpkg/Conan consumers do not complete any ADR-0020
-  language gate.
+  the Cargo/npm/Python/vcpkg/Conan/SwiftPM consumers do not complete any
+  ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,
   and invalidation tests. They must not become hard-coded benchmark answers.
 
@@ -188,14 +213,16 @@ permission to infer runtime behavior.
 
 ## Follow-up work
 
-1. Extend the schema v12 persistence round-trip with explicit cross-provider
+1. Extend the schema v13 persistence round-trip with explicit cross-provider
    conflict reporting when multiple qualified providers disagree; path
    freshness and generation replacement are already fail-closed through
    derived-record dependencies.
 2. Continue migrating bounded existing manifest readers to generic records.
    Cargo, root npm `package.json`, bounded standard Python project formats, and
    the qualified vcpkg/Conan subsets are complete at manifest-declaration level;
-   wider C/C++ and additional Python tool-specific schemas remain open.
+   SwiftPM schema-2/3 pins are complete at bounded lockfile level. Wider C/C++,
+   Swift manifest declarations, and additional Python tool-specific schemas
+   remain open.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
 4. Specify a reviewed library-contract registry, cache invalidation, and

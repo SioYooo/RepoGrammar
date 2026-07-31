@@ -220,6 +220,14 @@ Some unknowns block only specific claims:
   a relevant field is dynamic, partial, duplicate, unpacked, overridable, or
   unreachable after a definite top-level `raise`. No roots are emitted from the
   incomplete field. A complete empty `setup()` call is not an `UNKNOWN`.
+- SwiftPM lock inventory uses the stable affected-claim token
+  `swift_dependency_inventory`. Malformed, duplicate-key, over-budget, or
+  unsupported-schema `Package.resolved` input maps to `MissingProjectConfig`;
+  branch, revision-only, and non-semantic-version pins map to
+  `InsufficientSupport`; conflicting exact versions map to `ConflictingFacts`;
+  and dependency overflow uses the existing internal `ResourceLimit` target.
+  Accepted schema-2/3 pins still carry claim-scoped directness uncertainty: a
+  lockfile pin does not prove whether the root manifest declared it directly.
 - Rust self-dogfood maps unresolved external modules and complex repo-local
   `use crate::...` / `use super::...` / `use self::...` paths to
   `UnresolvedImport`, `#[cfg]` / `#[cfg_attr]`, target-specific Cargo sections,

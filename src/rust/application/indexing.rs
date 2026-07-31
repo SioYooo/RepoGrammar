@@ -24,8 +24,8 @@ use crate::application::family::{
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, ContentHash, DependencyEcosystem, DependencyRecord, Evidence,
-    FactCertainty, FactOrigin, IrEdge, IrNode, Language, Provenance, RepositoryRevision,
+    CodeUnit, CodeUnitId, ContentHash, DependencyDirectness, DependencyEcosystem, DependencyRecord,
+    Evidence, FactCertainty, FactOrigin, IrEdge, IrNode, Language, Provenance, RepositoryRevision,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
@@ -755,7 +755,7 @@ where
     );
     let parser_context = parser_project_context(&request, &report, source_store, parser)?;
     for (index, file) in report.files.iter().enumerate() {
-        if discovered_language_is_inventory_only(file.language) {
+        if discovered_file_is_inventory_only(file) {
             emit_progress(
                 progress,
                 ProgressStage::SyntaxParsing,
@@ -1621,7 +1621,7 @@ where
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
     for (index, file) in changed_files.iter().enumerate() {
-        if discovered_language_is_inventory_only(file.language) {
+        if discovered_file_is_inventory_only(file) {
             emit_progress(
                 progress,
                 ProgressStage::SyntaxParsing,
@@ -2245,13 +2245,13 @@ fn sync_delta_forces_full_context_excluding_python_modules(delta: &SyncDelta) ->
     let added_or_removed = delta
         .added_files
         .iter()
-        .filter(|file| !discovered_language_is_inventory_only(file.language))
+        .filter(|file| !discovered_file_is_inventory_only(file))
         .map(|file| file.path.as_str())
         .chain(
             delta
                 .removed_files
                 .iter()
-                .filter(|file| !indexed_language_is_inventory_only(&file.language))
+                .filter(|file| !indexed_file_is_inventory_only(file))
                 .map(|file| file.path.as_str()),
         )
         .any(sync_path_requires_full_project_context);
@@ -2262,7 +2262,7 @@ fn sync_delta_forces_full_context_excluding_python_modules(delta: &SyncDelta) ->
     let modified = delta
         .modified_files
         .iter()
-        .filter(|file| !discovered_language_is_inventory_only(file.language))
+        .filter(|file| !discovered_file_is_inventory_only(file))
         .any(|file| {
             modified_file_requires_full_project_context(file)
                 && !is_interface_eligible_python_module(file)
@@ -3076,7 +3076,7 @@ type DependencyRecordSortKey<'a> = (
     Option<&'a str>,
     Option<&'a str>,
     bool,
-    bool,
+    DependencyDirectness,
     &'a str,
     usize,
     usize,
@@ -3094,7 +3094,7 @@ fn dependency_record_sort_key(dependency: &DependencyRecord) -> DependencyRecord
             .as_ref()
             .map(|value| value.as_str()),
         dependency.optional,
-        dependency.direct,
+        dependency.directness,
         &dependency.evidence.provenance.path,
         dependency.evidence.range.start_byte,
         dependency.evidence.range.end_byte,
@@ -3123,7 +3123,7 @@ fn record_dependencies(
                     .map(|value| value.as_str().to_string()),
                 scope: dependency.scope.as_str().to_string(),
                 optional: dependency.optional,
-                direct: dependency.direct,
+                directness: dependency.directness.as_str().to_string(),
                 evidence_level: dependency.evidence_level.as_str().to_string(),
                 code_unit_id: dependency.evidence.code_unit_id.as_str().to_string(),
                 path: dependency.evidence.provenance.path.clone(),
@@ -3161,7 +3161,8 @@ fn dependency_record_id(dependency: &DependencyRecord) -> String {
         hasher.update(b"\0");
         hasher.update(value.as_bytes());
     }
-    hasher.update([u8::from(dependency.optional), u8::from(dependency.direct)]);
+    hasher.update([u8::from(dependency.optional)]);
+    hasher.update(dependency.directness.as_str().as_bytes());
     hasher.update(b"\0");
     hasher.update(dependency.evidence.range.start_byte.to_string().as_bytes());
     hasher.update(b":");
@@ -5377,12 +5378,18 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
     }
 }
 
-fn discovered_language_is_inventory_only(language: DiscoveredLanguage) -> bool {
-    language_token_is_inventory_only(language.as_str())
+fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
+    if file.language == DiscoveredLanguage::SwiftConfig {
+        return file.path.rsplit('/').next() != Some("Package.resolved");
+    }
+    language_token_is_inventory_only(file.language.as_str())
 }
 
-fn indexed_language_is_inventory_only(language: &str) -> bool {
-    language_token_is_inventory_only(language)
+fn indexed_file_is_inventory_only(file: &IndexedFileRecord) -> bool {
+    if file.language == DiscoveredLanguage::SwiftConfig.as_str() {
+        return file.path.rsplit('/').next() != Some("Package.resolved");
+    }
+    language_token_is_inventory_only(&file.language)
 }
 
 fn language_token_is_inventory_only(language: &str) -> bool {
@@ -5402,17 +5409,13 @@ fn inventory_only_paths(report: &FileDiscoveryReport) -> BTreeSet<String> {
     report
         .files
         .iter()
-        .filter(|file| discovered_language_is_inventory_only(file.language))
+        .filter(|file| discovered_file_is_inventory_only(file))
         .map(|file| file.path.clone())
         .collect()
 }
 
 fn indexing_generation_mode(report: &FileDiscoveryReport) -> IndexingGenerationMode {
-    if report
-        .files
-        .iter()
-        .all(|file| discovered_language_is_inventory_only(file.language))
-    {
+    if report.files.iter().all(discovered_file_is_inventory_only) {
         IndexingGenerationMode::FileManifestOnly
     } else {
         IndexingGenerationMode::SyntaxOnlyCodeUnits
@@ -5425,7 +5428,7 @@ fn extend_inventory_only_language_warnings(
 ) {
     let mut tokens = BTreeSet::new();
     for file in &report.files {
-        if discovered_language_is_inventory_only(file.language) {
+        if discovered_file_is_inventory_only(file) {
             tokens.insert(file.language.as_str());
         }
     }
@@ -7296,11 +7299,6 @@ mod tests {
         )
         .expect("write Swift package manifest");
         fs::write(
-            workspace.path().join("Package.resolved"),
-            "must-not-be-decoded-or-evaluated",
-        )
-        .expect("write Swift package lock");
-        fs::write(
             workspace.path().join(".swift-version"),
             "must-not-select-a-toolchain",
         )
@@ -7330,7 +7328,7 @@ mod tests {
         )
         .expect("index Swift inventory");
 
-        assert_eq!(outcome.discovered_files, 5);
+        assert_eq!(outcome.discovered_files, 4);
         assert_eq!(
             outcome.indexing_mode,
             IndexingGenerationMode::FileManifestOnly
@@ -7358,7 +7356,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (".swift-version", "swift-config"),
-                ("Package.resolved", "swift-config"),
                 ("Package.swift", "swift-config"),
                 ("Sources/App/main.swift", "swift"),
                 ("nested/Package@swift-6.3.3.swift", "swift-config"),
@@ -8223,8 +8220,6 @@ mod tests {
         fs::write(workspace.path().join("main.swift"), "fatalError()\n").expect("add Swift source");
         fs::write(workspace.path().join("Package.swift"), "not-evaluated\n")
             .expect("add Swift package manifest");
-        fs::write(workspace.path().join("Package.resolved"), "not-decoded\n")
-            .expect("add Swift package lock");
         let added = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync added Swift inventory");
         assert_eq!(
@@ -8241,7 +8236,7 @@ mod tests {
         );
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
-        assert_eq!(added_report.added_files, 3);
+        assert_eq!(added_report.added_files, 2);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
         assert_eq!(added_report.reparsed_files, 0);
@@ -8288,8 +8283,6 @@ mod tests {
         .expect("modify Swift source");
         fs::write(workspace.path().join("Package.swift"), "changed\n")
             .expect("modify Swift package manifest");
-        fs::write(workspace.path().join("Package.resolved"), "changed\n")
-            .expect("modify Swift package lock");
         let modified = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync modified Swift inventory");
         assert_eq!(
@@ -8307,7 +8300,7 @@ mod tests {
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
-        assert_eq!(modified_report.modified_files, 3);
+        assert_eq!(modified_report.modified_files, 2);
         assert_eq!(modified_report.removed_files, 0);
         assert_eq!(modified_report.reparsed_files, 0);
 
@@ -8333,9 +8326,8 @@ mod tests {
         assert_eq!(source_removed_report.removed_files, 1);
         assert_eq!(source_removed_report.reparsed_files, 0);
 
-        for path in ["Package.swift", "Package.resolved"] {
-            fs::remove_file(workspace.path().join(path)).expect("remove Swift config inventory");
-        }
+        fs::remove_file(workspace.path().join("Package.swift"))
+            .expect("remove Swift config inventory");
         let configs_removed =
             sync_with_families(request(), &source_store, &parser, &detector, &store)
                 .expect("sync removed Swift config inventory");
@@ -8350,7 +8342,7 @@ mod tests {
         );
         assert_eq!(configs_removed_report.added_files, 0);
         assert_eq!(configs_removed_report.modified_files, 0);
-        assert_eq!(configs_removed_report.removed_files, 2);
+        assert_eq!(configs_removed_report.removed_files, 1);
         assert_eq!(configs_removed_report.reparsed_files, 0);
         assert_eq!(
             store
@@ -9485,7 +9477,7 @@ mod tests {
                 ),
                 crate::core::model::DependencyScope::Runtime,
                 false,
-                true,
+                DependencyDirectness::Direct,
                 crate::core::model::DependencyEvidenceLevel::ProviderResolved,
                 Evidence::new(
                     unit.id.clone(),
@@ -12356,6 +12348,126 @@ mod tests {
         let dependencies = crate::application::storage::list_active_dependencies(&store)
             .expect("read copied C/C++ dependency inventory");
         assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+    }
+
+    #[test]
+    fn swift_lock_dependencies_persist_with_unknown_directness_and_copy_forward() {
+        let workspace = TempWorkspace::new("indexing-swift-lock-dependencies");
+        fs::write(
+            workspace.path().join("Package.resolved"),
+            r#"{"pins":[{"identity":"swift-argument-parser","kind":"remoteSourceControl","location":"https://example.invalid/private","state":{"revision":"abc","version":"1.5.0"}}],"version":3}"#,
+        )
+        .expect("write SwiftPM lockfile");
+        fs::write(
+            workspace.path().join("Package.swift"),
+            "fatalError(\"must not execute\")\n",
+        )
+        .expect("write executable SwiftPM manifest");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded SwiftPM lockfile dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read SwiftPM dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "swift_package_manager");
+        assert_eq!(dependency.package_name, "swift-argument-parser");
+        assert_eq!(dependency.resolved_version.as_deref(), Some("1.5.0"));
+        assert_eq!(dependency.directness, "unknown");
+        assert_eq!(dependency.evidence_level, "lockfile_resolved");
+        assert!(!format!("{dependency:?}").contains("example.invalid"));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied SwiftPM dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+
+        fs::write(
+            workspace.path().join("Package.resolved"),
+            r#"{"pins":[{"identity":"swift-log","state":{"revision":"def","version":"1.6.2"}}],"version":3}"#,
+        )
+        .expect("replace SwiftPM lockfile pin");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace SwiftPM lockfile dependencies");
+        let replace_report = replaced.sync_report.expect("replace sync report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced SwiftPM dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "swift-log");
+        assert_eq!(
+            dependencies.dependencies[0].resolved_version.as_deref(),
+            Some("1.6.2")
+        );
+
+        fs::remove_file(workspace.path().join("Package.resolved"))
+            .expect("remove SwiftPM lockfile");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove SwiftPM lockfile dependencies");
+        let remove_report = removed.sync_report.expect("remove sync report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependency inventory after lock removal")
+                .dependencies
+                .is_empty()
+        );
         assert!(store
             .list_active_families()
             .expect("list families")

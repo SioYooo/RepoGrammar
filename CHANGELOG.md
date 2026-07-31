@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added language-neutral three-state dependency directness and schema-v13
+  persistence. Exact SwiftPM `Package.resolved` schema 2/3 now receives a
+  bounded duplicate-key-rejecting static read that records exact semantic-
+  version pins with unknown scope/directness while discarding locations and
+  revisions. Swift source and executable/toolchain configuration remain
+  inventory-only; no Swift, SwiftPM, Xcode, plugin, macro, child process, or
+  network operation executes, and no family or language-support claim follows.
+
 ## 0.4.3 — 2026-07-22 stable channel
 
 ### Fixed
@@ -1031,7 +1043,8 @@ either check fails.
   on Windows without publishing a Windows artifact. Preview npm publication
   uses dist-tag `preview`, and local workflow changes alone remain no proof of
   external publication.
-- ADR-0025 now records the Swift N1 architecture/security preflight plus bounded
+- At that historical preflight stage, ADR-0025 recorded the Swift N1
+  architecture/security preflight plus bounded
   discovery/configuration inventory without adding a dependency, toolchain,
   worker, parser, project model, code unit, IR, fact, typed `UNKNOWN`, family,
   or support behavior. Stable `swift`/`swift-config` classification inventories

@@ -2,9 +2,9 @@
 
 use crate::application::recovery::{recovery_guidance, RecoveryAction};
 use crate::core::model::{
-    DependencyEcosystem, DependencyEvidenceLevel, DependencyScope, FactCertainty,
-    FamilyConstraintProfile, FamilyPrevalenceClass, FeatureConstraint, IrEdgeLabel, IrNodeKind,
-    SemanticFactKind, VariationConstraint,
+    DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyScope,
+    FactCertainty, FamilyConstraintProfile, FamilyPrevalenceClass, FeatureConstraint, IrEdgeLabel,
+    IrNodeKind, SemanticFactKind, VariationConstraint,
 };
 use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
@@ -438,6 +438,7 @@ fn validate_dependency(dependency: &IndexedDependencyRecord) -> Result<(), RepoG
         ("dependency ecosystem", dependency.ecosystem.as_str()),
         ("dependency package name", dependency.package_name.as_str()),
         ("dependency scope", dependency.scope.as_str()),
+        ("dependency directness", dependency.directness.as_str()),
         (
             "dependency evidence level",
             dependency.evidence_level.as_str(),
@@ -455,6 +456,8 @@ fn validate_dependency(dependency: &IndexedDependencyRecord) -> Result<(), RepoG
     DependencyEcosystem::parse_str(&dependency.ecosystem)
         .map_err(RepoGrammarError::InvalidInput)?;
     DependencyScope::parse_str(&dependency.scope).map_err(RepoGrammarError::InvalidInput)?;
+    DependencyDirectness::parse_str(&dependency.directness)
+        .map_err(RepoGrammarError::InvalidInput)?;
     let evidence_level = DependencyEvidenceLevel::parse_str(&dependency.evidence_level)
         .map_err(RepoGrammarError::InvalidInput)?;
     for (field_name, value) in [

@@ -707,26 +707,26 @@ remains ordinary source inventory. Exact `.build` and `.swiftpm` components
 receive `language_specific_exclusion` only for Swift candidates and do not
 globally prune other languages.
 
-Full and incremental indexing treat `swift` and `swift-config` as inventory-
-only before parser-facing source-store access. They persist only bounded repo-
-relative path, strict raw-byte SHA-256, size, and token, including non-UTF-8
-bytes, and emit at most one deterministic path-free unsupported warning per
-accepted token. Swift-only generations are `file_manifest_only`; mixed
-generations retain `syntax_only_code_units`. While the tokens are absent from
-`ParserProjectContext`, add/modify/remove deltas stay incremental and copy-
-forward purges legacy Swift units, IR, facts, support, evidence, and families
-while retaining file metadata. Discovery and autosync fingerprinting both honor
-Git ignore over the same accepted manifest. This stage decodes/parses
-no source or configuration and creates no Swift unit, IR, fact, `UNKNOWN`,
-family, project model, or readiness/support claim.
+Full and incremental indexing keep `swift` source, `Package.swift`, version-
+specific manifests, and `.swift-version` inventory-only before parser-facing
+source-store access. Exact `Package.resolved` is the sole static-metadata
+exception: supplied UTF-8 bytes enter a bounded unique-member JSON reader for
+schema 2/3 pins. It emits a project-config unit, exact semantic-version SwiftPM
+lock rows with unknown scope/directness, and claim-scoped typed `UNKNOWN` for
+malformed, unsupported, conflicting, or over-budget pins. URLs, locations,
+revisions, and origin hashes are discarded. The reader invokes no Swift or
+SwiftPM process and creates no source unit, family, readiness, installed-graph,
+or support claim. Other Swift inventory continues to support non-UTF-8 bytes,
+path-free warnings, incremental metadata deltas, and legacy claim purging.
 
 ADR-0025's frontend/project-model contract remains future work. SwiftSyntax
 603.0.2 may enter only through a separately reviewed OS-sandboxed worker after
 artifact, differential, dependency, five-target, and native-sandbox gates pass.
 Exact Swift 6.3.3 SourceKit/compiler is only a separately qualified semantic
-identity candidate. A future bounded project model may parse supplied SwiftPM
-data but must never evaluate manifests or run Swift, SwiftPM, Xcode, builds,
-tests, macros, plugins, generators, dependencies, children, or network access.
+identity candidate. A future bounded manifest project model may parse supplied
+SwiftPM data but must never evaluate manifests or run Swift, SwiftPM, Xcode,
+builds, tests, macros, plugins, generators, dependencies, children, or network
+access.
 No Swift path may support `swift.xctest.test_method` before the ADR-0025
 obligation registry, project model, fixtures, product wiring, reviews, and
 completion audit land.
@@ -973,7 +973,7 @@ records, records provider `UNKNOWN`s when Cargo or project
 configuration is unavailable, and does not execute build scripts or procedural
 macros. These facts are context only: package metadata, targets, features, and
 dependencies do not directly prove family membership. The generic records are
-persisted in schema v12 as generation-scoped, evidence-bound dependency rows.
+persisted in schema v13 as generation-scoped, evidence-bound dependency rows.
 The application storage boundary can read the deterministically ordered active
 generation back through `DependencyStore`; raw package names remain internal,
 and a source-free public CLI/MCP projection is a separate follow-up module.
@@ -1245,8 +1245,9 @@ interface-hash gate below). Adding or removing any project-context source file,
 editing any `.py` module whose interface changed or could not be verified,
 editing any `conftest.py`, and adding, editing, or removing any project-config
 file fall back to a full rebuild (see the gate table below). Current
-inventory-only Go, PHP, Ruby, and Swift source/config tokens are the explicit
-exceptions described above. When safe, incremental `sync`
+inventory-only Go, PHP, Ruby, Swift source, and executable/toolchain Swift
+config tokens are the explicit exceptions described above; exact
+`Package.resolved` is parsed as static metadata. When safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
 validation. Derived-support facts (including
@@ -1261,7 +1262,7 @@ copy forward only when their path and evidence code unit also copy forward,
 while Cargo rows never copy because the Cargo provider recomputes them later in
 the same generation. Changed or removed manifests therefore cannot retain stale
 dependency records, and an unrelated TS/JS source edit preserves exactly one
-copy of each unchanged npm, PyPI, vcpkg, or Conan declaration.
+copy of each unchanged npm, PyPI, vcpkg, Conan, or SwiftPM lock row.
 
 The project-context gate distinguishes *content-only modifications* from
 *path-set changes*. A modified non-inventory file is one whose repo-relative path

@@ -173,7 +173,7 @@ allowed.
   seeded legacy Ruby claims while preserving file metadata; autosync
   fingerprint tests must prove its Git-ignore parity with manual discovery.
   Ruby project-context invalidation remains a later frontend obligation.
-- Swift discovery-only coverage must include stable `swift`/`swift-config`
+- Swift discovery and bounded lock-inventory coverage must include stable `swift`/`swift-config`
   tokens; exact case-sensitive `.swift` including basename `.swift`; exact
   root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and
   complete ASCII `Package@swift-M[.m[.p]].swift` grammar with configuration
@@ -182,10 +182,15 @@ allowed.
   exclusions without globally pruning other languages. It must cover binary
   bytes, exact/plus-one file and aggregate resource limits, source/config
   symlink refusal, deterministic path/raw-byte-hash/size/token persistence, and
-  Git-aware discovery without source/config leakage. Swift-only indexing must
-  bypass the source store and parser, emit at most one warning per token, report
-  `file_manifest_only`, and produce no units, IR, facts, typed `UNKNOWN`s,
-  project records, or families. Mixed repositories retain syntax mode;
+  Git-aware discovery without source/config leakage. Swift source,
+  `Package.swift`, version manifests, and `.swift-version` must bypass the
+  source store and parser, emit at most one warning per inventory-only token,
+  and produce no units, IR, facts, typed `UNKNOWN`s, project records, or
+  families. Exact `Package.resolved` must prove schema-2/3 admission,
+  decoded-duplicate-key rejection, inclusive depth/member/key/dependency
+  limits, exact semantic-version lock rows, unknown scope/directness, location
+  and revision non-retention, typed malformed/unsupported/conflict/resource
+  abstention, and zero family output. Mixed repositories retain syntax mode;
   incremental tests must prove add/modify/remove and unchanged metadata deltas,
   whole-manifest warning retention, and seeded legacy source/config claim purge.
   Autosync must track accepted Swift source/config and cross-language files below
@@ -261,13 +266,17 @@ allowed.
   `sync` coverage must include project-context fallback when TS/JS, Python, or
   Rust source inventories change and must assert stale unresolved-import
   UNKNOWNs are not copied forward after a new repo-local import target appears.
-  Go, PHP, Ruby, and Swift inventory coverage must instead prove token-based incremental
+  Go, PHP, and Ruby inventory coverage must instead prove token-based incremental
   add/modify/remove deltas for their source/configuration tokens, zero
   source-store/parser calls for those paths, whole-manifest warning retention,
   honest `file_manifest_only`/deferred-parser output for inventory-only and
   empty generations, syntax mode for unchanged mixed generations, and purge of
-  seeded legacy Go/PHP/Ruby/Swift units, IR, facts, derived support, and families while
+  seeded legacy Go/PHP/Ruby units, IR, facts, derived support, and families while
   file metadata survives.
+  Swift incremental coverage must separately prove zero-parse deltas for its
+  inventory-only paths, bounded parsing for changed `Package.resolved`, exact
+  once-only copy-forward of unchanged lock rows on unrelated edits, and purge
+  of seeded legacy Swift source claims while metadata survives.
   Progress renderer tests must also cover exact integer percentages and
   interactive TTY progress as single-line carriage-return updates with one
   final newline rather than one terminal line per event.

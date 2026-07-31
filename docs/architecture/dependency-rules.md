@@ -204,13 +204,19 @@ advisory, sandbox, protocol, resource, five-target, and native-runtime gates
 must pass before any dependency or worker is added.
 
 Swift discovery/config classification and bounded inventory persistence are
-implemented without a parser, toolchain, or production dependency. This
-`discovered_only` state causes no parser-facing source-store read and creates no
-code unit, IR, semantic fact, typed `UNKNOWN`, family, project-model record, or
-support/readiness claim. Exact `.build`/`.swiftpm` components are Swift-only
-exclusions and do not globally prune other languages. The future project-model
-boundary must restore token-based context invalidation before cross-file Swift
-semantics are admitted.
+implemented without a source frontend, toolchain, or production dependency.
+Swift source, executable manifests, version-specific manifests, and
+`.swift-version` cause no parser-facing source-store read and create no code
+unit, IR, semantic fact, typed `UNKNOWN`, dependency, family, project model, or
+support/readiness claim. Exact `Package.resolved` is the sole static-metadata
+exception: `adapters/parsing/swift.rs` may decode supplied schema-2/3 JSON only
+after the shared `adapters/parsing/bounded_json.rs` gate proves bounded depth,
+object-member count, decoded-key size, and unique decoded member names. It may
+emit only RepoGrammar-owned SwiftPM lock rows and typed project-inventory
+uncertainty. Package locations and revisions are discarded. Exact
+`.build`/`.swiftpm` components are Swift-only exclusions and do not globally
+prune other languages. The future source/project-model boundary must restore
+token-based context invalidation before cross-file Swift semantics are admitted.
 
 ADR-0025 names SwiftSyntax 603.0.2 `SwiftParser`
 only as the syntax-frontend candidate in a separately reviewed OS-sandboxed
@@ -222,9 +228,10 @@ candidate. It must consume synthesized supplied inputs without opening the
 repository, evaluating `Package.swift`, building/indexing modules, resolving
 dependencies, loading macros/plugins, or using ambient SDK/toolchain state.
 
-The future project-model boundary may parse only a bounded static SwiftPM
-manifest subset and bounded lockfile data. It may never execute Swift, SwiftPM,
-Xcode, manifests, plugins, macros, generators, target code, tests, child
+The current lockfile boundary parses only the ADR-0025 bounded
+`Package.resolved` schema-2/3 subset; a future project-model boundary may add a
+separately reviewed bounded static SwiftPM manifest subset. Neither may execute
+Swift, SwiftPM, Xcode, manifests, plugins, macros, generators, target code, tests, child
 processes, or network requests. Exact archive/installer hashes and signatures,
 toolchain/source mapping, transitive packages, licenses, advisories, build
 scripts/C/C++ shims/generated code, SBOM/reproducibility, five-target compile

@@ -12,9 +12,9 @@ pub mod semantic;
 
 pub use code_unit::{CodeUnit, CodeUnitId, CodeUnitKind, Language, SourceRange};
 pub use dependency::{
-    DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord, DependencyScope,
-    DependencySnapshot, DependencyVersion, ExternalSymbolId, LibraryCapability, LibraryContract,
-    LibraryContractId, PackageIdentity,
+    DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencySnapshot, DependencyVersion, ExternalSymbolId, LibraryCapability,
+    LibraryContract, LibraryContractId, PackageIdentity,
 };
 pub use evidence::Evidence;
 pub use family::{

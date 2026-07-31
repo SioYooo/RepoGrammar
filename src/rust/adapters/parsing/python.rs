@@ -5,10 +5,10 @@
 
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyEcosystem, DependencyEvidenceLevel,
-    DependencyRecord, DependencyScope, DependencySnapshot, DependencyVersion, Evidence,
-    FactCertainty, FactOrigin, Language, PackageIdentity, Provenance, RepositoryRevision,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
+    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
+    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
+    RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
@@ -972,7 +972,7 @@ fn project_config_dependencies(
                 None,
                 scope,
                 optional,
-                true,
+                DependencyDirectness::Direct,
                 DependencyEvidenceLevel::ManifestDeclared,
                 project_config_evidence(document, unit, "bounded Python dependency declaration")?,
             )
@@ -4502,7 +4502,7 @@ raise RuntimeError("must never execute setup.py")
             );
             assert!(output.dependencies.iter().all(|dependency| {
                 dependency.package.ecosystem == DependencyEcosystem::Pypi
-                    && dependency.direct
+                    && dependency.directness == DependencyDirectness::Direct
                     && dependency.evidence_level == DependencyEvidenceLevel::ManifestDeclared
                     && dependency.evidence.provenance.path == path
             }));
