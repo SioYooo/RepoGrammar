@@ -476,6 +476,22 @@ Some unknowns block only specific claims:
   never block Ruby support. These mechanisms must become typed `UNKNOWN` after
   the registry lands; until then they are unavailable and no Ruby semantic
   capability, reason codes, facts, families, or public support exists.
+- Visual Basic is `discovered_only` and remains unsupported after ADR-0031.
+  Only VB.NET `.vb`/`.vbproj` inventory is admitted; VB6 formats are excluded.
+  The bounded `.vbproj` reader may emit source-free UNKNOWN with
+  `affected_claim=visual_basic_dependency_inventory` for malformed or
+  unsupported package entries, conflicting case-insensitive identities,
+  MSBuild SDK/import/property/condition/update/override behavior that was not
+  evaluated, and XML/dependency resource limits. Independently safe literal
+  `PackageReference` rows may remain; UNKNOWN never becomes family evidence.
+- The Delphi/Object Pascal lane is `discovered_only` and unsupported after
+  ADR-0032. Generic `object-pascal` source does not select Delphi versus Free
+  Pascal, and only exact `.dproj` is `delphi-config`. Static parsing may emit
+  source-free UNKNOWN with `affected_claim=delphi_dependency_inventory` for
+  malformed XML, imports/properties/conditions, invalid package entries,
+  resource limits, and unresolved authored-direct versus automatically added
+  package relationships. `.lpi`/`.lpk` and `.dpk` requirements are not silently
+  used as equivalent package evidence.
 - Python bounded preview analysis (Django, Flask, stdlib unittest, click/typer,
   Celery; ADR-0019 wave E1) reuses the FastAPI/SQLAlchemy exact-import gate. A
   base or decorator receiver that matches a known framework simple name but does

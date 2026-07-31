@@ -8,8 +8,10 @@ use crate::ports::parser::{
 use std::collections::BTreeSet;
 
 pub(crate) mod bounded_json;
+pub(crate) mod bounded_xml;
 pub mod cpp;
 pub mod csharp;
+pub mod delphi;
 pub mod go;
 pub mod java;
 pub mod php;
@@ -20,6 +22,7 @@ pub mod swift;
 pub mod syntax;
 pub mod tree_sitter;
 pub mod tsjs;
+pub mod visual_basic;
 
 #[derive(Debug, Default)]
 pub struct RepoGrammarSourceParser {
@@ -27,12 +30,14 @@ pub struct RepoGrammarSourceParser {
     python: python::PythonAstParser,
     java: java::JavaSyntaxParser,
     csharp: csharp::CSharpSyntaxParser,
+    delphi: delphi::DelphiProjectConfigParser,
     cpp: cpp::CppSyntaxParser,
     go: go::GoProjectConfigParser,
     php: php::PhpConfigParser,
     ruby: RubyConfigParser,
     rust: rust::RustSyntaxParser,
     swift: swift::SwiftProjectConfigParser,
+    visual_basic: visual_basic::VisualBasicProjectConfigParser,
 }
 
 #[derive(Debug, Default)]
@@ -81,6 +86,10 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::SwiftConfig => self.swift.parse(document),
+            crate::core::model::Language::VisualBasicConfig => self.visual_basic.parse(document),
+            crate::core::model::Language::VisualBasic
+            | crate::core::model::Language::ObjectPascal => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::DelphiConfig => self.delphi.parse(document),
             crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
@@ -123,6 +132,14 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context(document, context)
             }
+            crate::core::model::Language::VisualBasicConfig => {
+                self.visual_basic.parse_with_context(document, context)
+            }
+            crate::core::model::Language::VisualBasic
+            | crate::core::model::Language::ObjectPascal => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::DelphiConfig => {
+                self.delphi.parse_with_context(document, context)
+            }
             crate::core::model::Language::RubyConfig => {
                 self.ruby.parse_with_context(document, context)
             }
@@ -160,6 +177,12 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::VisualBasicConfig => self
+                .visual_basic
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::DelphiConfig => {
+                self.delphi.parse_with_context_output(document, context)
             }
             crate::core::model::Language::RubyConfig => {
                 self.ruby.parse_with_context_output(document, context)

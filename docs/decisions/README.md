@@ -40,3 +40,5 @@ Current accepted ADRs:
 - ADR-0028: Ownership-aware product uninstall and agent disconnect.
 - ADR-0029: Additive candidate-set resolution cardinality.
 - ADR-0030: Language-neutral dependency inventory and reviewed library semantics.
+- ADR-0031: VB.NET source-free discovery and NuGet inventory.
+- ADR-0032: Delphi-qualified Object Pascal discovery and package inventory.

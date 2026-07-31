@@ -5373,6 +5373,10 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::RubyConfig => Language::RubyConfig,
         DiscoveredLanguage::Swift => Language::Swift,
         DiscoveredLanguage::SwiftConfig => Language::SwiftConfig,
+        DiscoveredLanguage::VisualBasic => Language::VisualBasic,
+        DiscoveredLanguage::VisualBasicConfig => Language::VisualBasicConfig,
+        DiscoveredLanguage::ObjectPascal => Language::ObjectPascal,
+        DiscoveredLanguage::DelphiConfig => Language::DelphiConfig,
         DiscoveredLanguage::Rust => Language::Rust,
         DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
@@ -5418,7 +5422,14 @@ fn is_ruby_dependency_config_path(path: &str) -> bool {
 fn language_token_is_inventory_only(language: &str) -> bool {
     matches!(
         language,
-        "go" | "php" | "php-config" | "ruby" | "ruby-config" | "swift" | "swift-config"
+        "go" | "php"
+            | "php-config"
+            | "ruby"
+            | "ruby-config"
+            | "swift"
+            | "swift-config"
+            | "visual-basic"
+            | "object-pascal"
     )
 }
 
@@ -13026,6 +13037,268 @@ mod tests {
             .expect("list families after lock removal")
             .families
             .is_empty());
+    }
+
+    #[test]
+    fn vbproj_dependencies_persist_incrementally_while_vb_source_stays_unread() {
+        let workspace = TempWorkspace::new("indexing-vbproj-dependencies");
+        fs::write(
+            workspace.path().join("App.vbproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="[13.0.3]"/></ItemGroup></Project>"#,
+        )
+        .expect("write vbproj");
+        fs::write(workspace.path().join("Program.vb"), [0xff, 0xfe, 0xfd])
+            .expect("write deferred binary VB source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded vbproj dependency inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(source_store.paths(), vec!["App.vbproj".to_string()]);
+        assert_eq!(
+            outcome.warnings,
+            vec!["parser skipped unsupported language token: visual-basic".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read NuGet dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "nuget");
+        assert_eq!(dependency.package_name, "Newtonsoft.Json");
+        assert_eq!(dependency.requirement.as_deref(), Some("[13.0.3]"));
+        assert_eq!(dependency.resolved_version, None);
+        assert_eq!(dependency.scope, "unknown");
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert!(store
+            .list_active_families()
+            .expect("list VB families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("Program.vb"), [0xff, 0xfe, 0xfc])
+            .expect("edit deferred VB source");
+        let source_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync VB source metadata edit");
+        let source_report = source_edit.sync_report.expect("VB source sync report");
+        assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(source_report.modified_files, 1);
+        assert_eq!(source_report.reparsed_files, 0);
+        assert_eq!(source_store.paths(), vec!["App.vbproj".to_string()]);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied NuGet dependency")
+                .dependencies[0]
+                .package_name,
+            "Newtonsoft.Json"
+        );
+
+        fs::write(
+            workspace.path().join("App.vbproj"),
+            r#"<Project><ItemGroup><PackageReference Include="xunit"><Version>2.9.3</Version></PackageReference></ItemGroup></Project>"#,
+        )
+        .expect("replace vbproj dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace NuGet dependency inventory");
+        let replace_report = replaced.sync_report.expect("vbproj replacement report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced NuGet dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "xunit");
+
+        fs::remove_file(workspace.path().join("App.vbproj")).expect("remove vbproj");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove NuGet dependency inventory");
+        let remove_report = removed.sync_report.expect("vbproj removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after vbproj removal")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dproj_runtime_packages_persist_incrementally_while_pascal_source_stays_unread() {
+        let workspace = TempWorkspace::new("indexing-dproj-dependencies");
+        fs::write(
+            workspace.path().join("App.dproj"),
+            r#"<Project><PropertyGroup><DCC_UsePackage>rtl;vcl</DCC_UsePackage></PropertyGroup></Project>"#,
+        )
+        .expect("write dproj");
+        fs::write(workspace.path().join("Unit1.pas"), [0xff, 0xfe, 0xfd])
+            .expect("write deferred binary Object Pascal source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded dproj package inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(source_store.paths(), vec!["App.dproj".to_string()]);
+        assert_eq!(
+            outcome.warnings,
+            vec!["parser skipped unsupported language token: object-pascal".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Delphi package inventory");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(dependencies.dependencies.iter().all(|dependency| {
+            dependency.ecosystem == "delphi_package"
+                && dependency.scope == "runtime"
+                && dependency.directness == "unknown"
+                && dependency.evidence_level == "manifest_declared"
+                && dependency.requirement.is_none()
+                && dependency.resolved_version.is_none()
+        }));
+        assert!(store
+            .list_active_families()
+            .expect("list Delphi families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("Unit1.pas"), [0xff, 0xfe, 0xfc])
+            .expect("edit deferred Object Pascal source");
+        let source_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync Object Pascal source metadata edit");
+        let source_report = source_edit
+            .sync_report
+            .expect("Object Pascal source sync report");
+        assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(source_report.modified_files, 1);
+        assert_eq!(source_report.reparsed_files, 0);
+        assert_eq!(source_store.paths(), vec!["App.dproj".to_string()]);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Delphi package inventory")
+                .dependencies
+                .len(),
+            2
+        );
+
+        fs::write(
+            workspace.path().join("App.dproj"),
+            r#"<Project><PropertyGroup><DCC_UsePackage>rtl;Example.Runtime</DCC_UsePackage></PropertyGroup></Project>"#,
+        )
+        .expect("replace dproj packages");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace Delphi package inventory");
+        let replace_report = replaced.sync_report.expect("dproj replacement report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Delphi package inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Example.Runtime", "rtl"]
+        );
+
+        fs::remove_file(workspace.path().join("App.dproj")).expect("remove dproj");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove Delphi package inventory");
+        let remove_report = removed.sync_report.expect("dproj removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after dproj removal")
+                .dependencies
+                .is_empty()
+        );
     }
 
     #[test]

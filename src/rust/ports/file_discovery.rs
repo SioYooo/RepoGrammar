@@ -36,6 +36,10 @@ pub enum DiscoveredLanguage {
     RubyConfig,
     Swift,
     SwiftConfig,
+    VisualBasic,
+    VisualBasicConfig,
+    ObjectPascal,
+    DelphiConfig,
     Rust,
     RustConfig,
 }
@@ -63,6 +67,10 @@ impl DiscoveredLanguage {
             Self::RubyConfig => "ruby-config",
             Self::Swift => "swift",
             Self::SwiftConfig => "swift-config",
+            Self::VisualBasic => "visual-basic",
+            Self::VisualBasicConfig => "visual-basic-config",
+            Self::ObjectPascal => "object-pascal",
+            Self::DelphiConfig => "delphi-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
         }
@@ -269,6 +277,29 @@ mod tests {
         assert_eq!(
             SkippedReason::LanguageSpecificExclusion.as_str(),
             "language_specific_exclusion"
+        );
+    }
+
+    #[test]
+    fn visual_basic_discovery_and_exclusion_tokens_are_stable() {
+        assert_eq!(DiscoveredLanguage::VisualBasic.as_str(), "visual-basic");
+        assert_eq!(
+            DiscoveredLanguage::VisualBasicConfig.as_str(),
+            "visual-basic-config"
+        );
+        assert_ne!(
+            DiscoveredLanguage::VisualBasic,
+            DiscoveredLanguage::VisualBasicConfig
+        );
+    }
+
+    #[test]
+    fn object_pascal_and_delphi_config_tokens_are_stable_and_distinct() {
+        assert_eq!(DiscoveredLanguage::ObjectPascal.as_str(), "object-pascal");
+        assert_eq!(DiscoveredLanguage::DelphiConfig.as_str(), "delphi-config");
+        assert_ne!(
+            DiscoveredLanguage::ObjectPascal,
+            DiscoveredLanguage::DelphiConfig
         );
     }
 

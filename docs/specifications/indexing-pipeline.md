@@ -808,6 +808,33 @@ become family support without the authoritative Ruby claim-impact classifier,
 exact direct Minitest slice, support >= 3, source-free product wiring, review,
 and completion audit required by ADR-0022.
 
+Visual Basic .NET is `discovered_only` and unsupported under ADR-0031. One pure
+normalized-path classifier accepts exact lowercase `.vb` as `visual-basic` and
+`.vbproj` as `visual-basic-config`, excludes only VB candidates below exact
+`bin`/`.vs`, and does not admit VB6 `.vbp`/`.frm`/`.bas`/`.cls`. `.vb` source is
+hashed and persisted without a source-store or parser request. Exact `.vbproj`
+bytes enter a bounded non-validating XML reader that rejects DTD/external or
+custom entities and never evaluates MSBuild. Literal direct-root
+`PackageReference Include` declarations may create project-config units and
+direct `nuget` manifest rows; SDK/import/property/condition/update/override,
+conflict, malformed, and resource cases produce scoped
+`visual_basic_dependency_inventory` UNKNOWN. Config rows update file-locally
+and copy forward when unchanged. Source-only generations are
+`file_manifest_only`; an admitted `.vbproj` makes the generation
+`syntax_only_code_units`. No VB source fact, role, family, or support follows.
+
+The Delphi-qualified Object Pascal lane is likewise `discovered_only` and
+unsupported under ADR-0032. Exact `.pas`/`.dpr`/`.dpk` persist as generic
+`object-pascal` inventory because source suffixes do not prove Delphi versus
+Free Pascal; exact `.dproj` alone is `delphi-config`. `.pp`/`.lpr`/`.lpi`/`.lpk`
+are not admitted. All source, including package source, bypasses source reads.
+The same bounded XML reader may create one project-config unit and runtime
+`delphi_package` manifest rows from literal direct-root `DCC_UsePackage`
+entries. Directness stays unknown; imports, properties, conditions, invalid
+values, and limits emit scoped `delphi_dependency_inventory` UNKNOWN. No
+Delphi/FPC tool, MSBuild, package loader, project code, source parser, family,
+or dialect-equivalence claim is involved.
+
 The existing Rust-side TypeScript process adapter can validate NDJSON worker
 output and translate facts into RepoGrammar-owned semantic facts. The
 syntax-only `index` and `sync` path does not launch that worker by default. With
