@@ -7,7 +7,7 @@
 
 ## ADR-0020 gate
 
-- [ ] Discovery/config — bounded Ruby/Bundler inventory exists; project files
+- [x] Discovery/config — bounded Ruby/Bundler inventory exists; project files
   are not executed.
 - [ ] Authoritative frontend — stage-3 dependency and sandbox qualification is
   incomplete.
@@ -23,7 +23,16 @@
 ## Current evidence and blocker
 
 Discovery inventories `.rb`, Bundler manifests/locks, `.ruby-version`, and
-gemspec paths without running Ruby or Bundler. The next permitted stage is
+gemspec paths without running Ruby or Bundler. A pure Rust parser inventories
+only strict direct entries from exact `Gemfile.lock` `DEPENDENCIES` as
+`rubygems` manifest declarations. Executable Gemfile/gemspec DSLs, unsupported
+lock sources and variants, malformed/conflicting input, and resource exhaustion
+fail closed as `ruby_dependency_inventory` `UNKNOWN`; no resolved-version,
+framework, family, or support claim follows. Dependency rows persist across an
+unrelated incremental source edit, while Ruby source remains unread and
+inventory-only.
+
+The next permitted semantic stage is
 documentation/reproducibility qualification of `ruby-prism` 1.9.0, its exact
 artifact/upstream source, native dependency closure, CRuby 4.0.6 differential
 behavior, malformed/resource corpora, five targets, and native OS sandboxes.

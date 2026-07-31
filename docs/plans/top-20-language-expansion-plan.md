@@ -325,13 +325,15 @@ module advances Ruby to `discovered_only`; Ruby remains unsupported. Stable
 `*.gemspec` paths. One pure normalized-path classifier gives configuration
 precedence, uses `language_specific_exclusion` for Ruby candidates below exact
 `.bundle`/`.ruby-lsp` components, and does not globally hide other languages.
-Indexing stores bounded path/hash/size/token metadata with no parser-facing
-source read, unit, IR, fact, `UNKNOWN`, family, or readiness promotion. Ruby-only
-generations are `file_manifest_only`; mixed generations remain syntax-only;
-inventory deltas stay incremental with one path-free warning per token and
-claim-record purge. Autosync preserves its generic Git-independent fingerprint
-behavior. This path does not evaluate project files or invoke Ruby, Bundler,
-RubyGems, Rake, Rails, tests, generators, child processes, or network access.
+Ruby source stores bounded path/hash/size/token metadata with no parser-facing
+source read. A bounded pure Rust `ruby-config` parser creates project-config
+units, source-free `ruby_dependency_inventory` `UNKNOWN`s, and strict direct
+`rubygems` manifest declarations from exact `Gemfile.lock` `DEPENDENCIES`.
+Executable Gemfile/gemspec DSLs and unsupported sources/variants are never
+evaluated. Config changes conservatively rebuild project context; unrelated
+source changes copy dependency rows forward. This slice adds no Ruby source IR,
+family, readiness promotion, or invocation of Ruby, Bundler, RubyGems, Rake,
+Rails, tests, generators, child processes, or network access.
 
 The current frontend candidate is `ruby-prism` 1.9.0 using the exact upstream
 commit linked by the release plus the separately checksummed package artifact,

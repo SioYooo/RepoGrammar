@@ -5388,13 +5388,7 @@ fn indexed_language_is_inventory_only(language: &str) -> bool {
 fn language_token_is_inventory_only(language: &str) -> bool {
     matches!(
         language,
-        "go" | "go-config"
-            | "php"
-            | "php-config"
-            | "ruby"
-            | "ruby-config"
-            | "swift"
-            | "swift-config"
+        "go" | "go-config" | "php" | "php-config" | "ruby" | "swift" | "swift-config"
     )
 }
 
@@ -7095,7 +7089,7 @@ mod tests {
     }
 
     #[test]
-    fn default_index_persists_source_free_ruby_inventory_without_claim_inputs() {
+    fn default_index_persists_source_free_ruby_config_unknowns_without_claim_inputs() {
         let workspace = TempWorkspace::new("indexing-ruby-discovery-only");
         fs::create_dir_all(workspace.path().join("gems")).expect("create Ruby config dir");
         fs::create_dir_all(workspace.path().join("lib")).expect("create Ruby source dir");
@@ -7119,12 +7113,11 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
 
         let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
             &FilesystemFileDiscovery,
-            &source_store,
+            &FilesystemSourceStore,
             &RepoGrammarSourceParser::default(),
             &SyntaxFrameworkRoleDetector,
             &store,
@@ -7134,18 +7127,14 @@ mod tests {
         assert_eq!(outcome.discovered_files, 4);
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(outcome.indexed_units, 0);
-        assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 3);
+        assert_eq!(outcome.indexed_units, 3);
+        assert_eq!(outcome.semantic_facts, 3);
         assert_eq!(
             outcome.warnings,
-            vec![
-                "parser skipped unsupported language token: ruby".to_string(),
-                "parser skipped unsupported language token: ruby-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: ruby".to_string()]
         );
 
         let files = store
@@ -7164,21 +7153,30 @@ mod tests {
                 ("lib/main.rb", "ruby"),
             ]
         );
-        assert!(store
-            .list_active_code_units()
-            .expect("read Ruby units")
-            .units
-            .is_empty());
-        assert!(store
-            .list_active_ir_graph()
-            .expect("read Ruby IR")
-            .nodes
-            .is_empty());
-        assert!(store
-            .list_active_semantic_facts()
-            .expect("read Ruby facts")
-            .facts
-            .is_empty());
+        assert_eq!(
+            store
+                .list_active_code_units()
+                .expect("read Ruby units")
+                .units
+                .len(),
+            3
+        );
+        assert_eq!(
+            store
+                .list_active_ir_graph()
+                .expect("read Ruby IR")
+                .nodes
+                .len(),
+            3
+        );
+        assert_eq!(
+            store
+                .list_active_semantic_facts()
+                .expect("read Ruby facts")
+                .facts
+                .len(),
+            3
+        );
         assert!(store
             .list_active_families()
             .expect("read Ruby families")
@@ -7456,7 +7454,7 @@ mod tests {
     }
 
     #[test]
-    fn ruby_only_first_sync_reports_file_manifest_and_zero_reparsed_files() {
+    fn ruby_only_first_sync_parses_config_but_not_ruby_source() {
         let workspace = TempWorkspace::new("indexing-ruby-first-sync");
         fs::write(workspace.path().join("main.rb"), "puts :inventory\n")
             .expect("write Ruby source");
@@ -7465,12 +7463,11 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
 
         let outcome = sync_repository_with_discovery_parser_frameworks_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
             &FilesystemFileDiscovery,
-            &source_store,
+            &FilesystemSourceStore,
             &RepoGrammarSourceParser::default(),
             &SyntaxFrameworkRoleDetector,
             &store,
@@ -7479,10 +7476,10 @@ mod tests {
 
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
         let report = outcome.sync_report.expect("sync fallback report");
         assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
         assert_eq!(
@@ -7490,7 +7487,7 @@ mod tests {
             Some("missing_active_generation")
         );
         assert_eq!(report.added_files, 2);
-        assert_eq!(report.reparsed_files, 0);
+        assert_eq!(report.reparsed_files, 1);
     }
 
     #[test]
@@ -7822,8 +7819,8 @@ mod tests {
     }
 
     #[test]
-    fn mixed_repo_ruby_inventory_deltas_stay_incremental_and_preserve_non_ruby_claims() {
-        let workspace = TempWorkspace::new("indexing-ruby-incremental-inventory");
+    fn mixed_repo_ruby_source_inventory_deltas_stay_incremental() {
+        let workspace = TempWorkspace::new("indexing-ruby-source-incremental-inventory");
         fs::write(
             workspace.path().join("server.ts"),
             "import express from 'express';\n\
@@ -7866,10 +7863,8 @@ mod tests {
         assert_eq!(expected_families.len(), 1);
 
         fs::write(workspace.path().join("main.rb"), "puts :inventory\n").expect("add Ruby source");
-        fs::write(workspace.path().join("Gemfile"), "source 'unused'\n").expect("add Gemfile");
-        fs::write(workspace.path().join("gems.rb"), "source 'unused'\n").expect("add gems.rb");
         let added = sync_with_families(request(), &source_store, &parser, &detector, &store)
-            .expect("sync added Ruby inventory");
+            .expect("sync added Ruby source inventory");
         assert_eq!(
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
@@ -7877,16 +7872,13 @@ mod tests {
         assert_eq!(added.parser_attempted_files, 0);
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
-        assert_eq!(added_report.added_files, 3);
+        assert_eq!(added_report.added_files, 1);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
         assert_eq!(added_report.reparsed_files, 0);
         assert_eq!(
             added.warnings,
-            vec![
-                "parser skipped unsupported language token: ruby".to_string(),
-                "parser skipped unsupported language token: ruby-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: ruby".to_string()]
         );
         assert_eq!(
             store
@@ -7914,15 +7906,13 @@ mod tests {
         assert_eq!(unchanged_report.reparsed_files, 0);
 
         fs::write(workspace.path().join("main.rb"), "puts :changed\n").expect("modify Ruby source");
-        fs::write(workspace.path().join("Gemfile"), "source 'changed'\n").expect("modify Gemfile");
-        fs::write(workspace.path().join("gems.rb"), "source 'changed'\n").expect("modify gems.rb");
         let modified = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync modified Ruby inventory");
         assert_eq!(modified.parser_attempted_files, 0);
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
-        assert_eq!(modified_report.modified_files, 3);
+        assert_eq!(modified_report.modified_files, 1);
         assert_eq!(modified_report.removed_files, 0);
         assert_eq!(modified_report.reparsed_files, 0);
 
@@ -7931,10 +7921,7 @@ mod tests {
             sync_with_families(request(), &source_store, &parser, &detector, &store)
                 .expect("sync removed Ruby source inventory");
         assert_eq!(source_removed.parser_attempted_files, 0);
-        assert_eq!(
-            source_removed.warnings,
-            vec!["parser skipped unsupported language token: ruby-config".to_string()]
-        );
+        assert!(source_removed.warnings.is_empty());
         let source_removed_report = source_removed
             .sync_report
             .expect("source removal sync report");
@@ -7954,32 +7941,12 @@ mod tests {
                 .iter()
                 .map(|file| file.path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Gemfile", "gems.rb", "server.ts"]
+            vec!["server.ts"]
         );
-
-        for path in ["Gemfile", "gems.rb"] {
-            fs::remove_file(workspace.path().join(path)).expect("remove Ruby config inventory");
-        }
-        let configs_removed =
-            sync_with_families(request(), &source_store, &parser, &detector, &store)
-                .expect("sync removed Ruby config inventory");
-        assert_eq!(configs_removed.parser_attempted_files, 0);
-        assert!(configs_removed.warnings.is_empty());
-        let configs_removed_report = configs_removed
-            .sync_report
-            .expect("config removal sync report");
-        assert_eq!(
-            configs_removed_report.sync_mode,
-            IndexingSyncMode::Incremental
-        );
-        assert_eq!(configs_removed_report.added_files, 0);
-        assert_eq!(configs_removed_report.modified_files, 0);
-        assert_eq!(configs_removed_report.removed_files, 2);
-        assert_eq!(configs_removed_report.reparsed_files, 0);
         assert_eq!(
             store
                 .list_active_families()
-                .expect("list families after Ruby removal")
+                .expect("list families after Ruby source removal")
                 .families,
             expected_families
         );
@@ -12361,6 +12328,96 @@ mod tests {
             .expect("list families")
             .families
             .is_empty());
+    }
+
+    #[test]
+    fn gemfile_lock_dependencies_persist_and_copy_forward_without_execution_or_source_leakage() {
+        let workspace = TempWorkspace::new("indexing-rubygems-dependencies");
+        fs::write(
+            workspace.path().join("Gemfile.lock"),
+            concat!(
+                "GIT\n",
+                "  remote: https://user:secret@example.invalid/private.git\n",
+                "  revision: deadbeef\n",
+                "  specs:\n",
+                "    private (1.0.0)\n",
+                "GEM\n",
+                "  remote: https://rubygems.org/\n",
+                "  specs:\n",
+                "    rack (3.1.8)\n",
+                "PLATFORMS\n",
+                "  ruby\n",
+                "DEPENDENCIES\n",
+                "  private!\n",
+                "  rack (~> 3.1)\n",
+                "BUNDLED WITH\n",
+                "   2.6.2\n",
+            ),
+        )
+        .expect("write Gemfile.lock");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write unrelated TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded Gemfile.lock dependency inventory");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read RubyGems dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "rubygems");
+        assert_eq!(dependency.package_name, "rack");
+        assert_eq!(dependency.requirement.as_deref(), Some("~> 3.1"));
+        assert_eq!(dependency.resolved_version, None);
+        assert_eq!(dependency.scope, "unknown");
+        assert!(!dependency.optional);
+        assert!(dependency.direct);
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        let public_debug = format!("{outcome:?}");
+        assert!(!public_debug.contains("secret"));
+        assert!(!public_debug.contains("private"));
+        assert!(!public_debug.contains("rack"));
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied RubyGems dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "rack");
     }
 
     #[test]

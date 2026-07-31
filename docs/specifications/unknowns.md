@@ -429,9 +429,12 @@ Some unknowns block only specific claims:
   compiler, or SourceKit result may silently discharge those obligations or
   form a Swift family before the authoritative claim-impact registry lands.
 - Ruby is `discovered_only` and remains unsupported after ADR-0022. Discovery
-  persists only bounded file metadata for `ruby` and `ruby-config` tokens; it
-  emits no Ruby facts, typed `UNKNOWN`s, code units, IR, or families, and its
-  inventory-only warning is not semantic evidence. The future exact Minitest
+  persists bounded file metadata for `ruby` and `ruby-config` tokens. Ruby
+  source remains inventory-only. Config parsing may emit only source-free
+  `ruby_dependency_inventory` UNKNOWNs for executable DSL, unqualified lock
+  variants, malformed/conflicting entries, unsupported lock sources, and
+  resource limits; those UNKNOWNs govern dependency inventory only and are not
+  Ruby semantic or family evidence. The future exact Minitest
   slice must route `ruby_parse_degraded`, `ruby_syntax_version`,
   `ruby_minitest_require_identity`, `ruby_constant_identity`,
   `ruby_minitest_test_definition`, `ruby_runtime_mutation`, and

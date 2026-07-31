@@ -11,6 +11,7 @@ pub mod cpp;
 pub mod csharp;
 pub mod java;
 pub mod python;
+pub mod ruby;
 pub mod rust;
 pub mod syntax;
 pub mod tree_sitter;
@@ -23,7 +24,33 @@ pub struct RepoGrammarSourceParser {
     java: java::JavaSyntaxParser,
     csharp: csharp::CSharpSyntaxParser,
     cpp: cpp::CppSyntaxParser,
+    ruby: RubyConfigParser,
     rust: rust::RustSyntaxParser,
+}
+
+#[derive(Debug, Default)]
+struct RubyConfigParser;
+
+impl SourceParser for RubyConfigParser {
+    fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+        ruby::parse(document)
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        ruby::parse(document)
+    }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        ruby::parse_output(document)
+    }
 }
 
 impl SourceParser for RepoGrammarSourceParser {
@@ -45,9 +72,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Php
             | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
-            | crate::core::model::Language::RubyConfig
             | crate::core::model::Language::Swift
             | crate::core::model::Language::SwiftConfig => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -83,9 +110,11 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Php
             | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
-            | crate::core::model::Language::RubyConfig
             | crate::core::model::Language::Swift
             | crate::core::model::Language::SwiftConfig => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::RubyConfig => {
+                self.ruby.parse_with_context(document, context)
+            }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -111,6 +140,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::RubyConfig => {
+                self.ruby.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)
@@ -356,21 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_ruby_inventory_tokens() {
+    fn product_parser_rejects_ruby_source_but_qualifies_ruby_config() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Ruby, Language::RubyConfig] {
-            assert_eq!(
-                parser.parse(ruby_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    ruby_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(ruby_inventory_document(Language::Ruby)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+
+        let report = parser
+            .parse_with_context(
+                ruby_inventory_document(Language::RubyConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("Ruby config parser must return typed conservative evidence");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.semantic_facts.len(), 1);
     }
 
     #[test]

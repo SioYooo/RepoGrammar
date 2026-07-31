@@ -157,7 +157,7 @@ allowed.
   remove deltas and legacy-claim purge while preserving metadata. Autosync
   retains its intentional Git-independent charging. Custom `vendor-dir`,
   project-profile invalidation, and semantic admission remain later-stage tests.
-- Ruby discovery-only coverage must include stable `ruby`/`ruby-config` tokens;
+- Ruby discovered-only coverage must include stable `ruby`/`ruby-config` tokens;
   configuration-before-source precedence for `gems.rb`; literal `.rb` and
   `.gemspec` basename handling; normalized-path and invalid-input rejection;
   Ruby-only `.bundle`/`.ruby-lsp` exclusions with the stable
@@ -165,14 +165,17 @@ allowed.
   remain eligible to other languages. It must cover binary content, exact and
   plus-one size/resource limits, symlink refusal, deterministic path/hash/size/
   token persistence, and Git-aware discovery without source text or paths in
-  warnings. Ruby-only indexing must bypass the source store and parser, emit at
-  most one truthful warning per accepted token, report `file_manifest_only`
-  with a deferred parser, and produce no units, IR, facts, typed `UNKNOWN`s, or
-  families. Mixed repositories retain `syntax_only_code_units`. Incremental
-  tests must prove token-based add/modify/remove metadata deltas and purge
-  seeded legacy Ruby claims while preserving file metadata; autosync
-  fingerprint tests must prove its Git-ignore parity with manual discovery.
-  Ruby project-context invalidation remains a later frontend obligation.
+  warnings. Ruby source indexing must bypass the source store and parser.
+  Ruby-config tests must prove bounded direct exact-`Gemfile.lock`
+  `DEPENDENCIES` extraction, strict name/requirement tokens, direct/optional/
+  scope/evidence fields, duplicate deduplication, conflict/malformed/source/
+  executable-DSL/resource abstention, and absence of source/package text in
+  public UNKNOWN output. They must also prove persistence and copy-forward over
+  an unrelated incremental source edit. Gemfile, gems.rb, gemspec, Ruby,
+  Bundler, RubyGems, Rake, project code, children, and network must never run.
+  Ruby source deltas remain incremental and purge seeded legacy claims;
+  ruby-config changes take the conservative project-context rebuild path.
+  Autosync retains its generic Git-independent conservative fingerprinting.
 - Swift discovery-only coverage must include stable `swift`/`swift-config`
   tokens; exact case-sensitive `.swift` including basename `.swift`; exact
   root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and

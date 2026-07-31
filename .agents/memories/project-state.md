@@ -924,17 +924,22 @@ classification precedes source classification, so `gems.rb` is always
 `ruby-config`; literal `.rb` and `.gemspec` basenames are eligible.
 `.bundle`/`.ruby-lsp` are Ruby-only exclusions with the stable
 `language_specific_exclusion` skip token and must not globally prune another
-language's files. Accepted Ruby files persist only repo-relative path, content
-hash, size, and token. Ruby-only/empty generations report `file_manifest_only`
-with parsing deferred; mixed generations with parser-capable languages remain
-`syntax_only_code_units`. Warnings are deterministic and aggregated once per
-accepted token. Incremental Ruby deltas add, modify, remove, or copy only file
-metadata and purge seeded legacy Ruby units, IR, facts, support, and families.
+language's files. Ruby source persists only repo-relative path, content hash,
+size, and token and remains parser/source-store free. Accepted `ruby-config`
+paths dispatch to a bounded pure Rust parser that creates project-config units.
+Exact `Gemfile.lock` may persist only strict direct `DEPENDENCIES` entries as
+`rubygems` manifest declarations with unknown scope and no resolved version.
+Executable Gemfile/gemspec DSLs, unqualified variants, unsupported sources,
+malformed/conflicting input, and resource limits emit source-free
+`ruby_dependency_inventory` `UNKNOWN`s and no unsafe dependency rows. Config
+changes follow project-context rebuilds; unrelated source edits copy dependency
+rows forward. Ruby source deltas remain inventory-only and purge seeded legacy
+Ruby units, IR, facts, support, and families.
 Manual discovery honors Git ignore; autosync fingerprinting intentionally keeps
-its generic Git-independent conservative charging. Ruby paths bypass the source
-store and parser and produce zero code units, IR, facts, typed `UNKNOWN`s,
-families, project-model records, or readiness/support claims. Restore Ruby
-project-context invalidation before any future frontend admits these tokens.
+its generic Git-independent conservative charging. No Ruby source IR, framework
+fact, family, semantic support, or readiness claim exists. The config units and
+dependency-inventory UNKNOWNs do not advance support. Add authoritative Ruby
+semantic project context before any future source frontend admits family input.
 
 The native `ruby-prism` candidate is not an authorized dependency and must not
 be linked into the primary process for untrusted input. ADR-0022 requires a

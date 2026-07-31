@@ -739,20 +739,25 @@ are accepted. Candidates below exact `.bundle` or `.ruby-lsp` components receive
 `language_specific_exclusion`, but those directories are not globally pruned and
 other languages retain their own policy.
 
-Full and incremental indexing treat `ruby` and `ruby-config` as inventory-only
-before parser-facing source-store access. They persist only repository-relative
-path, strict raw-byte hash, size, and token, including for bounded non-UTF-8
-content, and emit at most one deterministic path-free unsupported warning per
-token from the whole accepted manifest. Ruby-only generations are
-`file_manifest_only`; mixed generations remain `syntax_only_code_units` even
-when an incremental round dispatches no parser. While the tokens are absent from
-`ParserProjectContext`, add/modify/remove deltas remain incremental and
-generation copy-forward purges any legacy Ruby unit, IR, fact, derived support,
-or family while retaining file metadata. Discovery and the autosync fingerprint
-both honor Git ignore over the same accepted manifest. This stage creates no
-Ruby unit, IR, fact, `UNKNOWN`,
-family, project model, or support and never evaluates project files or selects an
-ambient engine.
+Full and incremental indexing treat `ruby` source as inventory-only before
+parser-facing source-store access. `ruby-config` is read through a bounded pure
+Rust configuration parser. Every accepted config path produces only a
+project-config unit; exact `Gemfile.lock` may additionally emit strict direct
+`rubygems` manifest declarations from its unique top-level `DEPENDENCIES`
+section. Requirements are bounded ASCII clauses, scope is `unknown`, direct is
+true, optional is false, and resolved version is absent. Executable
+`Gemfile`/`gems.rb`/gemspec DSLs, unqualified `gems.locked`, malformed or
+conflicting entries, unsupported `GIT`/`PATH`/`PLUGIN` or `!` sources, and
+resource limits fail closed with source-free claim-scoped
+`ruby_dependency_inventory` `UNKNOWN`s. No configuration is evaluated and no
+package/source text is exposed by those UNKNOWNs.
+
+Ruby-config changes conservatively follow the project-config full-rebuild gate;
+unrelated incremental source changes copy forward unchanged dependency rows.
+Ruby source deltas remain inventory-only and incremental. Generation
+copy-forward purges legacy claim-bearing records for Ruby source paths. This
+slice creates no Ruby source unit/IR, framework fact, family, engine/root
+selection, semantic support, or readiness claim.
 
 The later dependency-and-sandbox qualification stage is documentation/evidence
 only. Production dependency/artifact admission and the sandboxed worker must
@@ -1245,8 +1250,9 @@ interface-hash gate below). Adding or removing any project-context source file,
 editing any `.py` module whose interface changed or could not be verified,
 editing any `conftest.py`, and adding, editing, or removing any project-config
 file fall back to a full rebuild (see the gate table below). Current
-inventory-only Go, PHP, Ruby, and Swift source/config tokens are the explicit
-exceptions described above. When safe, incremental `sync`
+inventory-only Go, PHP, and Swift source/config tokens, plus Ruby source tokens,
+are the explicit exceptions described above. Ruby-config follows the
+project-config gate. When safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
 validation. Derived-support facts (including
