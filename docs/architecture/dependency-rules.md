@@ -180,28 +180,34 @@ language family-`UNKNOWN` classifier; language callers may not infer blocking
 behavior from raw build/module/generated assumptions.
 
 PHP discovery/configuration classification and bounded inventory persistence
-are implemented without a parser or production dependency. This
-`discovered_only` state causes no parser-facing source-store read and creates no
-code unit, IR, semantic fact, typed `UNKNOWN`, family, project-model record, or
-support/readiness claim. Exact `.composer`/`.phpunit.cache` components are
-PHP-only exclusions; exact `vendor` retains the existing global policy. The
-future project-model boundary, not discovery or a caller, must own custom
-`vendor-dir`/cache selection before semantic admission.
+are implemented without a source frontend or production dependency. PHP source
+and PHPUnit XML cause no parser-facing source-store read and create no code
+unit, IR, fact, typed `UNKNOWN`, dependency, or family. Exact `composer.json`
+and `composer.lock` are the static-metadata exception: `php.rs` reads supplied
+UTF-8 JSON only after the shared bounded unique-member gate, then emits
+RepoGrammar-owned Composer rows and claim-scoped inventory uncertainty. Lock
+rows retain unknown directness and unverified manifest coherence; source URLs,
+installation, autoload, build, and runtime state are not inferred. Exact
+`.composer`/`.phpunit.cache` components are PHP-only exclusions; exact `vendor`
+retains the existing global policy. A future selected project-model boundary,
+not discovery or a caller, must own custom `vendor-dir`/cache selection before
+semantic admission.
 
 ADR-0024 names `mago-syntax` 1.43.0 only as the production frontend candidate
 in a separately reviewed OS-sandboxed worker and authorizes no dependency or
 runtime behavior. Official PHP 8.5.8 `php -n -l` may participate only as the
 isolated syntax-validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/
 location differential and separately qualification-gated fallback. Tree-sitter
-PHP 0.24.2 is a syntax-candidate fallback, never the semantic oracle. Composer
-JSON/lock and PHPUnit XML may enter only a separate future bounded non-executing
-project-model parser, which pins Composer 2.10.2 lock-content-hash semantics and
-emits an allowlisted normalized profile. A frontend worker receives only one PHP
-source plus that bounded profile, never raw configuration. No worker or project-
-model path may execute Composer, PHPUnit, autoloaders, plugins, scripts,
-repository PHP, or target dependencies. The exact artifact, transitive/
-advisory, sandbox, protocol, resource, five-target, and native-runtime gates
-must pass before any dependency or worker is added.
+PHP 0.24.2 is a syntax-candidate fallback, never the semantic oracle. The
+current Composer inventory does not implement a selected project profile or
+lock-content-hash coherence. A future bounded non-executing stage may add that
+profile and pin Composer 2.10.2 coherence semantics; PHPUnit XML remains future
+input. A frontend worker receives only one PHP source plus the future bounded
+profile, never raw configuration. No worker or project-model path may execute
+Composer, PHPUnit, autoloaders, plugins, scripts, repository PHP, or target
+dependencies. The exact artifact, transitive/advisory, sandbox, protocol,
+resource, five-target, and native-runtime gates must pass before any dependency
+or worker is added.
 
 Swift discovery/config classification and bounded inventory persistence are
 implemented without a source frontend, toolchain, or production dependency.

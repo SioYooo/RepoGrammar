@@ -26,7 +26,8 @@ dispatch, runtime effects, or package selection.
 | C/C++ | no semantic provider | bounded Tree-sitter and project-config candidates | TU/header identity, Clang symbols/types/templates/macros/build variants |
 | Java | no semantic provider | bounded Tree-sitter exact-import candidates | classpath/JAR symbol identity, compiler/processor/generated/runtime framework behavior |
 | C#/VB.NET | no semantic provider | C# Tree-sitter exact-using candidates only | Roslyn symbol identity, references, partial/generated/dynamic/MSBuild behavior |
-| Go/PHP/Ruby | discovery-only | source/config inventory | every parser, IR, symbol, family, and semantic claim |
+| Go/Ruby | discovery-only | source/config inventory | every parser, IR, symbol, family, and semantic claim |
+| PHP | discovery-only plus bounded Composer inventory | direct scoped manifest requirements and runtime/development-scoped lock versions with unknown directness | every source parser, IR, symbol, family, semantic, manifest/lock-coherence, install, and runtime claim |
 | Swift | discovery-only plus bounded lock inventory | schema-2/3 SwiftPM identity/exact-version rows with unknown scope/directness | every source parser, IR, symbol, family, semantic, install/build/runtime, and direct-declaration claim |
 | N2–N4 new languages | not started | none | dialect/frontend/project/dependency/family obligations pending individual preflight |
 

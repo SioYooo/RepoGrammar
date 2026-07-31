@@ -668,18 +668,40 @@ the existing global exclusion. Deferred `.inc`, `.phtml`, `.phpt`, `.php.dist`,
 extensionless `artisan`, `composer.phar`, and `auth.json` shapes are not N1
 inventory.
 
-Full and incremental indexing treat `php` and `php-config` as inventory-only
+Full and incremental indexing keep `php` source and PHPUnit XML inventory-only
 before parser-facing source-store access. They persist only repo-relative path,
 strict raw-byte SHA-256, size, and token, including bounded non-UTF-8 bytes, and
-emit at most one deterministic path-free unsupported warning per accepted token.
-PHP-only generations are `file_manifest_only`; mixed generations remain
-`syntax_only_code_units`. While the tokens are absent from
-`ParserProjectContext`, add/modify/remove deltas stay incremental and generation
-copy-forward purges legacy PHP unit, IR, fact, support, evidence, and family
-records while retaining file metadata. Discovery and autosync fingerprinting
-both honor Git ignore over the same accepted manifest. This
-stage decodes/parses no source or configuration and creates no PHP unit, IR,
-fact, `UNKNOWN`, family, project model, or readiness/support claim.
+emit at most one deterministic path-free unsupported warning per accepted
+deferred token. Exact `composer.json` and `composer.lock` basenames are the sole
+configuration exception: supplied UTF-8 bytes enter a bounded unique-member
+JSON parser and may create `PROJECT_CONFIG` units/IR, ADR-0030 `composer`
+dependency records, and `php_dependency_inventory` typed `UNKNOWN`. The parser
+never executes PHP, Composer, PHPUnit, autoloaders, plugins, scripts, repository
+code, dependencies, or network resolution.
+
+Manifest records cover only bounded lowercase `vendor/package` string members
+of `require` and `require-dev`, preserve bounded opaque Composer requirement
+text, directness, and runtime/development scope, and use
+`manifest_declared` evidence. Lock records cover only unique package/version
+objects under `packages` and `packages-dev`; they preserve bounded opaque
+Composer version text, have unknown directness and `lockfile_resolved`
+evidence, and never prove Composer-validity, installation, runtime selection,
+or manifest coherence. Safe `dev-*` branch tokens may contain slash-separated
+segments; URL, absolute-path, and relative-path shapes are rejected. Duplicate
+JSON keys, malformed/unsupported shapes, invalid names or unsafe/over-budget
+version text, cross-scope conflicts, platform packages, virtual relations, and
+resource overflow fail closed through claim-scoped UNKNOWN. Raw source and
+package text remain absent from ordinary index/status/files/units output.
+
+PHP-only generations with Composer evidence are `syntax_only_code_units`;
+those containing only deferred PHP/PHPUnit inputs are `file_manifest_only`.
+While all PHP tokens remain absent from `ParserProjectContext`, deltas stay
+incremental: added/modified Composer documents parse file-locally, removed
+documents drop their evidence, and unchanged Composer units/facts/dependencies
+copy forward. Generation copy-forward still purges legacy PHP semantic/support/
+family records while retaining deferred file metadata. Discovery and autosync
+fingerprinting both honor Git ignore over the same accepted manifest. No PHP
+family, selected project model, or readiness/support claim is created.
 
 ADR-0024's frontend/project-model contract remains future work. The candidate
 `mago-syntax` 1.43.0 frontend may enter only through a separately reviewed OS-
@@ -687,9 +709,10 @@ sandboxed worker after its dependency and artifact gates pass. Official PHP
 8.5.8 `php -n -l` is the isolated syntax-validity oracle;
 `nikic/PHP-Parser` 5.8.0 is the isolated AST/location differential and
 separately qualification-gated fallback. Tree-sitter PHP 0.24.2 may generate
-syntax candidates only. A future bounded project model may treat Composer JSON/
-lock and PHPUnit XML as non-executing supplied data, but must never run Composer,
-PHPUnit, autoloaders, plugins, scripts, repository PHP, or target dependencies.
+syntax candidates only. A future selected project-model stage may extend the
+implemented static Composer dependency inventory and treat PHPUnit XML as
+non-executing supplied data, but must never run Composer, PHPUnit, autoloaders,
+plugins, scripts, repository PHP, or target dependencies.
 No PHP source-store read, frontend request, or claim may occur until that model
 applies project selection and validated custom vendor/cache prefix exclusions
 over already discovered paths. Profile changes must reclassify affected paths

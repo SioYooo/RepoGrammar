@@ -140,23 +140,35 @@ allowed.
   source store is never called, warnings are aggregated by language token
   without paths, and no units, facts, IR, or families are produced. Marker
   scanning and Go project-context invalidation remain frontend/IR obligations.
-- PHP discovery-only coverage must include stable `php`/`php-config` tokens;
+- PHP source-free inventory coverage must include stable `php`/`php-config` tokens;
   exact case-sensitive `.php` and literal `.php` handling; exact root/nested
   `composer.json`, `composer.lock`, `phpunit.xml`, and `phpunit.xml.dist`
   basenames with configuration precedence; normalized-path rejection; deferred
   `.inc`/`.phtml`/`.phpt`/`.php.dist`/`artisan`/`composer.phar`/`auth.json`
   shapes; and PHP-only `.composer`/`.phpunit.cache` exclusions without globally
   pruning other languages. Exact `vendor` must remain globally excluded.
-  Coverage must include binary bytes, exact/plus-one size/resource limits,
-  symlink refusal, deterministic path/raw-byte-hash/size/token persistence, and
-  Git-aware discovery without source text or paths in warnings. PHP-only
-  indexing must bypass the source store and parser, emit at most one truthful
-  warning per accepted token, report `file_manifest_only`, and produce no unit,
-  IR, fact, typed `UNKNOWN`, family, or project model. Mixed repositories retain
-  `syntax_only_code_units`; incremental tests must prove token-based add/modify/
-  remove deltas and legacy-claim purge while preserving metadata. Autosync
-  retains its intentional Git-independent charging. Custom `vendor-dir`,
-  project-profile invalidation, and semantic admission remain later-stage tests.
+  Coverage must include binary bytes for PHP source and PHPUnit XML,
+  exact/plus-one size/resource limits, symlink refusal, deterministic
+  path/raw-byte-hash/size/token persistence, and Git-aware discovery without
+  source text or paths in warnings. PHP source and PHPUnit XML must bypass the
+  source store and parser and create no code unit, IR, semantic fact, typed
+  `UNKNOWN`, dependency, family, or project model. Exact `composer.json` and
+  `composer.lock` instead enter the bounded duplicate-key-rejecting JSON
+  metadata parser: tests must cover direct manifest scopes, lock rows with
+  unknown directness, bounded `dev-*` branch names containing slashes,
+  malformed/duplicate/over-budget input, platform and virtual package handling,
+  conflicting requirements, rejection of URL/path shapes, omission of source
+  URLs from dependency rows, and typed `php_dependency_inventory` abstention
+  without family evidence.
+  PHP-only indexing with only deferred source/PHPUnit inputs reports
+  `file_manifest_only`; any admitted Composer document owns project-config
+  units and reports `syntax_only_code_units`. Mixed repositories retain
+  `syntax_only_code_units`. Incremental tests must prove token-based add/modify/
+  remove deltas, dependency copy-forward/replacement/removal, and legacy-claim
+  purge while preserving metadata. Autosync retains its intentional
+  Git-independent charging. Custom `vendor-dir`, selected project profiles,
+  manifest/lock coherence, project-profile invalidation, and semantic admission
+  remain later-stage tests.
 - Ruby discovery-only coverage must include stable `ruby`/`ruby-config` tokens;
   configuration-before-source precedence for `gems.rb`; literal `.rb` and
   `.gemspec` basename handling; normalized-path and invalid-input rejection;

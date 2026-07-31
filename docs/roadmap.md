@@ -358,11 +358,19 @@ exact `.php` and the four accepted Composer/PHPUnit config basenames. One pure
 classifier gives config precedence, applies PHP-only `.composer`/
 `.phpunit.cache` exclusions without globally hiding other languages, and leaves
 exact `vendor` under the existing global exclusion. Indexing stores only path/
-raw-byte hash/size/token metadata, bypasses source-store/parser work, emits one
-path-free warning per token, reports honest file-manifest/mixed modes, keeps
-inventory deltas incremental, and purges legacy PHP claim records. No config is
-decoded or parsed; custom `vendor-dir`, project profile, dependency, worker,
-parser, unit, IR, fact, `UNKNOWN`, family, and readiness remain unimplemented.
+raw-byte hash/size/token metadata for PHP source and PHPUnit XML, bypasses their
+source-store/parser work, emits one path-free warning per inventory-only token,
+reports honest file-manifest/mixed modes, keeps inventory deltas incremental,
+and purges legacy PHP claim records. Exact `composer.json` and
+`composer.lock` are the bounded static-metadata exception: supplied UTF-8 JSON
+passes the shared unique-member/resource gate and emits only Composer dependency
+rows plus claim-scoped `php_dependency_inventory` uncertainty. Manifest rows
+are direct scoped declarations; lock rows preserve their package-section scope
+and exact version while directness and manifest coherence remain unknown.
+Source URLs are discarded, no code executes, and no family/readiness/support
+claim follows. Custom `vendor-dir`, selected project profile, Composer
+content-hash coherence, worker, source parser, semantic IR/facts, and family
+remain unimplemented.
 The candidate production frontend remains `mago-syntax` 1.43.0 only in a
 separately reviewed OS-sandboxed worker. Official PHP 8.5.8 `php -n -l` is the
 isolated syntax-validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/

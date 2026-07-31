@@ -11,6 +11,7 @@ pub(crate) mod bounded_json;
 pub mod cpp;
 pub mod csharp;
 pub mod java;
+pub mod php;
 pub mod python;
 pub mod rust;
 pub mod swift;
@@ -25,6 +26,7 @@ pub struct RepoGrammarSourceParser {
     java: java::JavaSyntaxParser,
     csharp: csharp::CSharpSyntaxParser,
     cpp: cpp::CppSyntaxParser,
+    php: php::PhpConfigParser,
     rust: rust::RustSyntaxParser,
     swift: swift::SwiftProjectConfigParser,
 }
@@ -43,10 +45,10 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => self.cpp.parse(document),
+            crate::core::model::Language::PhpConfig => self.php.parse(document),
             crate::core::model::Language::Go
             | crate::core::model::Language::GoConfig
             | crate::core::model::Language::Php
-            | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::RubyConfig
             | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
@@ -81,10 +83,12 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context(document, context)
             }
+            crate::core::model::Language::PhpConfig => {
+                self.php.parse_with_context(document, context)
+            }
             crate::core::model::Language::Go
             | crate::core::model::Language::GoConfig
             | crate::core::model::Language::Php
-            | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::RubyConfig
             | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
@@ -116,6 +120,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::PhpConfig => {
+                self.php.parse_with_context_output(document, context)
             }
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context_output(document, context)
@@ -382,21 +389,24 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_php_inventory_tokens() {
+    fn product_parser_rejects_php_source_but_accepts_composer_config() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Php, Language::PhpConfig] {
-            assert_eq!(
-                parser.parse(php_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    php_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(php_inventory_document(Language::Php)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+        let report = parser
+            .parse_with_context(
+                php_inventory_document(Language::PhpConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("Composer config has a bounded static parser");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert!(report
+            .semantic_facts
+            .iter()
+            .all(|fact| fact.kind == SemanticFactKind::Unknown));
     }
 
     #[test]

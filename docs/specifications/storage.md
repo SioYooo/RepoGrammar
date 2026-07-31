@@ -310,16 +310,22 @@ records exist.
 
 PHP uses `php` for exact `.php` paths and `php-config` for exact root/nested
 `composer.json`, `composer.lock`, `phpunit.xml`, and `phpunit.xml.dist`
-basenames. Those tokens persist only path, strict raw-byte hash, size, and token,
-with zero source-store/parser dispatch and no unit, IR, fact, `UNKNOWN`, family,
-or project-model record. PHP-only active generations are `file_manifest_only`;
-mixed generations remain `syntax_only_code_units`. PHP inventory deltas remain
-incremental while the tokens are absent from `ParserProjectContext`, and copy-
-forward filters claim-bearing records for current PHP inventory paths. Exact
-`.composer`/`.phpunit.cache` exclusions are PHP-only; exact `vendor` remains
-globally excluded. A later bounded project model must add context invalidation
-and apply validated custom vendor/cache exclusions before semantic records
-exist.
+basenames. PHP source and PHPUnit XML persist only path, strict raw-byte hash,
+size, and token, with zero source-store/parser dispatch and no claim-bearing
+records. Exact `composer.json` and `composer.lock` instead produce bounded
+`PROJECT_CONFIG` units, inventory-only typed `UNKNOWN`, and schema-v13
+`composer` dependency rows. Manifest rows are direct `manifest_declared`
+runtime/development requirements; lock rows have `unknown` directness and
+`lockfile_resolved` entries and do not prove installation, runtime selection,
+or manifest coherence. PHP-only active generations with a Composer document
+are `syntax_only_code_units`; those containing only deferred PHP/PHPUnit inputs
+are `file_manifest_only`. PHP deltas remain incremental while the tokens are
+absent from `ParserProjectContext`; unchanged Composer units, UNKNOWN evidence,
+and dependency rows copy forward, while claim-bearing records for deferred PHP
+paths remain filtered. Exact `.composer`/`.phpunit.cache` exclusions are
+PHP-only; exact `vendor` remains globally excluded. A later selected project
+model must add context invalidation and apply validated custom vendor/cache
+exclusions before PHP semantic records exist.
 
 Swift uses `swift` for exact `.swift` paths and `swift-config` for exact
 root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and complete

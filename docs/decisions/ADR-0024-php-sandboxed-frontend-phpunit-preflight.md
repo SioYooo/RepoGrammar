@@ -14,8 +14,9 @@
 ADR-0020 requires discovery/configuration, an authoritative frontend,
 RepoGrammar-owned IR, typed uncertainty, an exact-anchor family, source-free
 product readiness, independent review, and a linked completion audit before a
-new language is supported. PHP now has only the bounded discovery/configuration
-module described below; every semantic and support gate remains open.
+new language is supported. PHP now has the bounded discovery/configuration
+module and the static Composer dependency-inventory slice described below;
+every PHP-source semantic and support gate remains open.
 
 PHP requires a deliberately split authority. The official PHP implementation
 is the syntax oracle, but running even `php -l` executes a native interpreter.
@@ -56,16 +57,21 @@ worker image, binary, or checksum is admitted to RepoGrammar by this ADR.
 ### D1. PHP is discovered only and unsupported
 
 The bounded discovery/configuration module adds stable `php` and `php-config`
-inventory tokens plus PHP-specific path exclusions. Full and incremental
-indexing persist only bounded source-free file metadata and expose ordinary
-repository-level inventory reporting. This advances PHP only to
-`discovered_only`; extension or manifest recognition is not language support.
+inventory tokens plus PHP-specific path exclusions. A file-name-gated,
+nonexecuting configuration parser now reads discovered `composer.json` and,
+when unique-member bounded JSON supplies exact package/version evidence,
+`composer.lock`. It emits only `PROJECT_CONFIG` units/IR, ADR-0030 `composer`
+dependency records, and claim-scoped `php_dependency_inventory` typed
+`UNKNOWN`; it emits no PHP-source unit or family-support fact. This advances
+PHP only to `discovered_only`; extension, manifest, or lock recognition is not
+language support, and `lockfile_resolved` means only a static lock entry, not an
+installed or runtime-selected package.
 
-There is still no PHP parser, worker, production dependency, project model,
-code unit, IR, semantic fact, typed `UNKNOWN`, PHPUnit family, PHP-specific
-readiness promotion, or support behavior. The candidate frontends and runtime
-identities in this ADR remain research inputs, not admitted dependencies or
-executed product paths.
+There is still no PHP source parser, semantic worker, new production
+dependency, selected Composer/PHPUnit project profile, PHPUnit family,
+PHP-specific readiness promotion, or support behavior. The candidate
+frontends and runtime identities in this ADR remain research inputs, not
+admitted dependencies or executed product paths.
 
 ### D2. Frontend authority is qualification-first and fail-closed
 
@@ -149,21 +155,47 @@ PHP-only `language_specific_exclusion`; those directories must not be globally
 pruned for unrelated languages.
 
 Discovery stores only bounded repo-relative path, strict raw-byte hash, size,
-and token. It does not decode or parse inventory-only bytes. Full and
-incremental indexing classify both tokens as inventory-only before any parser-
-facing source-store read, emit at most one deterministic path-free unsupported
-warning per accepted token, and create no unit, IR, fact, typed `UNKNOWN`,
-family, project-model record, or readiness/support claim. PHP-only generations
-are `file_manifest_only`; mixed generations retain
-`syntax_only_code_units`. Inventory add/modify/remove and unchanged rounds stay
-incremental while PHP is absent from `ParserProjectContext`, and generation
-copy-forward purges legacy claim-bearing PHP records while preserving file
-metadata. Autosync fingerprinting uses the same classifier and retains its
-generic Git-independent conservative charging.
+and token and does not itself decode configuration. Full and incremental
+indexing continue to classify PHP source and PHPUnit XML as inventory-only
+before any source-store read, emit at most one deterministic path-free
+unsupported warning per accepted deferred token, and create no claim input for
+those files. Exact `composer.json` and `composer.lock` basenames are the sole
+exception: their supplied UTF-8 bytes enter the bounded static dependency
+parser. A PHP-only repository with an accepted Composer document is therefore
+`syntax_only_code_units`; a PHP/PHPUnit-only repository without one remains
+`file_manifest_only`. An unrelated inventory-only source edit copies unchanged
+Composer dependency units, UNKNOWN evidence, and dependency rows forward
+without rereading Composer files. An added or changed Composer document is
+parsed file-locally and a removed document drops its evidence in the next
+incremental generation. PHP remains absent from
+`ParserProjectContext`, and autosync fingerprinting retains its generic
+Git-independent conservative charging.
 
-A later separate,
-non-executing bounded project-model parser may receive raw configuration bytes
-and emit only an allowlisted normalized profile summary:
+The implemented Composer dependency slice is deliberately smaller than the
+selected project profile below:
+
+- `composer.json` accepts unique `require` and `require-dev` object members
+  whose lowercase `vendor/package` name and bounded opaque requirement text
+  pass source-free admission; safe `dev-*` branch tokens retain slash-separated
+  names while URL and path shapes are rejected. It records direct `runtime`
+  and `development`
+  `manifest_declared` dependencies;
+- `composer.lock` accepts unique entries under `packages` and `packages-dev`
+  with a bounded package name and bounded opaque Composer version field,
+  including safe slash-separated `dev-*` branch names; it records
+  `lockfile_resolved` dependencies with unknown directness but does not prove
+  Composer validity, manifest coherence, installation, or runtime selection;
+- duplicate JSON keys (including escaped-equivalent keys), malformed or
+  unsupported schemas, conflicting package scopes/entries, invalid names or
+  versions, platform packages, virtual-package relations, and resource-limit
+  overflow fail closed for the affected evidence and emit typed
+  `php_dependency_inventory` UNKNOWN; and
+- PHP, Composer, PHPUnit, autoloaders, plugins, scripts, repository/dependency
+  code, and network resolution are never executed. No package name or source
+  body is projected into ordinary index/status/files/units output.
+
+A later separate selected-profile stage may extend this non-executing bounded
+configuration parser and emit only an allowlisted normalized profile summary:
 
 - from `composer.json`: PHP constraint, PHPUnit dev constraint,
   `config.platform.php`, literal `config.vendor-dir`, and the presence—not
@@ -253,18 +285,21 @@ The evidence order is:
 2. **Claim-supporting derived fact:** a RepoGrammar-owned exact PHPUnit anchor
    created only after namespace, ancestry, method, project-profile, freshness,
    and claim-impact gates pass.
-3. **Auxiliary:** extension/config inventory, Composer-declared constraints,
-   PHPUnit XML, Tree-sitter recovery output, and unselected project roots.
+3. **Auxiliary:** extension/config inventory, ADR-0030 Composer dependency
+   records, Composer-declared constraints, PHPUnit XML, Tree-sitter recovery
+   output, and unselected project roots.
 4. **Forbidden:** regex/text-only matching, extension-only recognition,
    unpinned parser output, partial/recovered AST anchors, target execution,
    runtime test results, or structural similarity without exact identity.
 
 The first PHP registry must define these initial claim impacts and exact
-resolution evidence. These are normative future mechanisms, not implemented
-public reason codes:
+resolution evidence. Except for the inventory-only `php_dependency_inventory`
+row, these are normative future mechanisms, not implemented public reason
+codes:
 
 | Mechanism | Initial claim impact | Exact resolution evidence |
 |---|---|---|
+| `php_dependency_inventory` | Implemented inventory-only UNKNOWN. Invalid/partial input uses `MissingProjectConfig`, platform or virtual semantics and unverified lock coherence use `InsufficientSupport`, conflicts use `ConflictingFacts`, and bounded overflow uses `ResourceLimit`. It blocks only a claim that the static Composer dependency inventory is complete; it cannot block or support a PHP family because no PHP family is admitted. | A fresh, unique-member, within-limit static parse of the exact `composer.json` or `composer.lock` evidence. Lock evidence resolves only the recorded lock entry and never installation, runtime selection, or manifest coherence. |
 | `php_frontend_availability` | Blocks every semantic claim for the affected request/profile when the qualified artifact, target, sandbox, or handshake is unavailable. | One fresh successful request from the exact qualified artifact/target/sandbox identity. |
 | `php_resource_protocol` | Blocks every claim from a request after limit exhaustion, truncation, timeout, crash, panic/signal, invalid range/hash, malformed frame, version mismatch, or extra output; never becomes `no_family`. | A new within-limit complete request/response with exact hash, ranges, protocol version, and no discarded output. |
 | `php_syntax_profile` | Blocks all anchors in the affected file for absent/conflicting/unsupported profile, any parse diagnostic/recovery, invalid range, or frontend/oracle disagreement. | One selected PHP 8.5 profile plus clean qualified output and passing official differential evidence for the relevant syntax shape. |
@@ -349,13 +384,16 @@ stages:
 10. independent cross-module four-part review and any scoped atomic fix commits.
 
 Stages 1 and 2 are now complete. Stage 2 implements the exact D4 token,
-precedence, exclusion, bounded raw-byte inventory, source-store/parser bypass,
-warning, generation-mode, incremental, legacy-claim purge, CLI, and autosync
-contracts with tests and synchronized documentation. It does not implement the
-later project-model parser or custom `vendor-dir`/PHPUnit cache-directory
-reclassification: exact global `vendor`, PHP-only `.composer`, and PHP-only
-`.phpunit.cache` are the only active exclusion rules in this stage. Stages 3
-through 10 and the separate completion audit remain open.
+precedence, exclusion, bounded raw-byte inventory, source-store/parser bypass
+for PHP source and PHPUnit XML, warning, generation-mode, incremental,
+legacy-claim purge, CLI, and autosync contracts with tests and synchronized
+documentation. A narrow inventory-only prerequisite of stage 5 now adds the
+static Composer dependency records described above; it does not complete or
+reorder stage 5 because project selection, content-hash coherence, constraint
+semantics, custom `vendor-dir`, PHPUnit XML, and profile normalization remain
+absent. Exact global `vendor`, PHP-only `.composer`, and PHP-only
+`.phpunit.cache` are still the only active exclusion rules. Stages 3 through 10
+and the separate completion audit remain open.
 
 After stage 10, a separate final completion-audit commit links every
 prerequisite and fix SHA. That audit is a terminal gate, not an eleventh
@@ -377,12 +415,13 @@ limits are bypassable; or support, freshness, compatibility, authoritative
 ## Consequences
 
 This decision selects a conservative qualification direction without claiming
-that Mago, PHP-Parser, PHP CLI, Tree-sitter PHP, Composer, or PHPUnit has been
-integrated. PHP now has bounded discovery-only inventory, but no semantic
-capability. The decision narrows the first future PHP value slice to auditable
-direct PHPUnit declarations and explicitly closes Laravel runtime routes,
-indirect ancestry, provider/dependency behavior, dynamic loading, generated
-proxies, and runtime execution for N1.
+that Mago, PHP-Parser, PHP CLI, Tree-sitter PHP, the Composer runtime/tool, or
+PHPUnit has been integrated. PHP now has bounded discovery plus static Composer
+dependency inventory, but no PHP-source semantic or family capability. The
+decision narrows the first future PHP value slice to auditable direct PHPUnit
+declarations and explicitly closes Laravel runtime routes, indirect ancestry,
+provider/dependency behavior, dynamic loading, generated proxies, and runtime
+execution for N1.
 
 Primary research authorities include the official [PHP 8.5.8 release
 metadata](https://www.php.net/releases/index.php?json&version=8.5.8), [PHP

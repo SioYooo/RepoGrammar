@@ -64,6 +64,15 @@ first lockfile consumer of unknown directness: a duplicate-key-rejecting,
 bounded static reader emits exact semantic-version pins while discarding
 locations and revisions. It does not evaluate `Package.swift`, invoke SwiftPM,
 select a toolchain, establish install/build/runtime state, or complete Swift.
+Exact Composer manifests and lockfiles now provide the corresponding PHP
+static-metadata slice. `composer.json` emits direct scoped requirements;
+`composer.lock` emits exact locked versions with runtime/development scope
+from its package section and directness unknown.
+The bounded unique-member reader discards source URLs, treats platform and
+virtual requirements as uncertainty rather than packages, and never runs PHP,
+Composer, plugins, scripts, autoloaders, or dependency code. Manifest/lock
+coherence and the selected PHP project profile remain unproved, so this does
+not advance PHP beyond `discovered_only`.
 
 ## Goal and non-goal
 
@@ -246,15 +255,24 @@ classifier gives configuration precedence, applies PHP-only `.composer` and
 `.phpunit.cache` exclusions with `language_specific_exclusion`, and does not
 globally hide other languages; exact `vendor` remains globally excluded.
 
-Indexing persists only bounded repo-relative path, raw-byte SHA-256, size, and
-token before any source-store or parser dispatch. PHP-only generations are
-`file_manifest_only`; mixed generations remain syntax-only; warnings are
-path-free and emitted once per accepted token. PHP inventory deltas stay
-incremental, and copy-forward purges legacy PHP claim records while retaining
-metadata. No configuration is decoded or parsed, and no unit, IR, fact,
-`UNKNOWN`, family, project model, readiness, PHP/Composer/PHPUnit execution, or
-support behavior is added. Custom `vendor-dir` and PHPUnit cache-directory
-selection remain unresolved until the bounded project-model stage.
+Indexing persists bounded repo-relative path, raw-byte SHA-256, size, and token
+for every accepted PHP path. PHP source and PHPUnit XML stop there: they bypass
+the source store and parser and emit no unit, IR, fact, typed `UNKNOWN`,
+dependency, family, or project model. Exact `composer.json` and
+`composer.lock` are the sole static-metadata exception. Supplied UTF-8 bytes
+pass the shared bounded unique-member JSON gate before a non-executing parser
+emits only Composer dependency records and claim-scoped
+`php_dependency_inventory` uncertainty. Manifest declarations are direct and
+scoped; lock rows retain unknown directness and do not prove manifest coherence,
+installation, build, or runtime selection. Source URLs are discarded.
+PHP-only generations with only deferred source/PHPUnit inputs remain
+`file_manifest_only`; an admitted Composer document owns project-config units
+and makes the generation `syntax_only_code_units`. Mixed generations remain
+syntax-only; warnings are path-free and emitted once per inventory-only token.
+Dependency and file-metadata deltas stay incremental, and copy-forward purges
+legacy PHP semantic claims. No family, readiness, frontend, or support behavior
+is added. Custom `vendor-dir`, selected project profiles, Composer content-hash
+coherence, and PHPUnit cache-directory selection remain unresolved.
 
 `mago-syntax` 1.43.0 remains the production candidate only behind a separately
 reviewed OS-sandboxed worker and the full dependency, artifact, malformed-input,
@@ -264,11 +282,12 @@ Official PHP 8.5.8 `php -n -l` is the isolated syntax-validity oracle;
 separately qualification-gated fallback. Tree-sitter PHP 0.24.2 may generate
 syntax candidates only.
 
-The future exact first family is `php.phpunit.test_method`. Composer JSON/lock
-and PHPUnit XML remain bounded data inputs only; the safe path must not execute
-Composer, PHPUnit, autoloaders, plugins, scripts, repository PHP, or target
-dependencies. The normative obligation registry, resource/protocol contract,
-atomic module sequence, and all unchecked evidence live in ADR-0024 and
+The future exact first family is `php.phpunit.test_method`. Current Composer
+JSON/lock inventory and future PHPUnit XML/profile handling remain bounded data
+inputs only; the safe path must not execute Composer, PHPUnit, autoloaders,
+plugins, scripts, repository PHP, or target dependencies. The normative
+obligation registry, resource/protocol contract, atomic module sequence, and
+all unchecked evidence live in ADR-0024 and
 `docs/reports/language-support/php-completion-review.md`. No completion
 percentage or supported-language count may include PHP before its final audit.
 

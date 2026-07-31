@@ -228,6 +228,17 @@ Some unknowns block only specific claims:
   and dependency overflow uses the existing internal `ResourceLimit` target.
   Accepted schema-2/3 pins still carry claim-scoped directness uncertainty: a
   lockfile pin does not prove whether the root manifest declared it directly.
+- Composer inventory uses the stable affected-claim token
+  `php_dependency_inventory`. Malformed, duplicate-key, unsupported-schema,
+  invalid-name/requirement/version, or partial object/array shapes map to
+  `MissingProjectConfig`; platform packages, virtual relations, unverified
+  manifest/lock coherence, and lockfile root directness map to
+  `InsufficientSupport`; conflicting duplicate package declarations map to
+  `ConflictingFacts`; and dependency-record overflow uses the existing
+  internal `ResourceLimit` target. Valid bounded rows remain inventoried when
+  only a separate subclaim is unresolved. The parser retains neither source
+  URLs nor installation/runtime claims and never executes PHP, Composer,
+  plugins, scripts, autoloaders, repository code, or dependency code.
 - Rust self-dogfood maps unresolved external modules and complex repo-local
   `use crate::...` / `use super::...` / `use self::...` paths to
   `UnresolvedImport`, `#[cfg]` / `#[cfg_attr]`, target-specific Cargo sections,

@@ -11,6 +11,12 @@
   revisions. Swift source and executable/toolchain configuration remain
   inventory-only; no Swift, SwiftPM, Xcode, plugin, macro, child process, or
   network operation executes, and no family or language-support claim follows.
+- Added bounded unique-member parsing for exact Composer JSON/lock inputs.
+  Manifest `require` and `require-dev` entries become direct scoped declarations;
+  lock package entries retain unknown directness and explicit coherence/install/
+  runtime uncertainty. PHP source and PHPUnit XML remain inventory-only, and no
+  PHP, Composer, autoloader, plugin, script, dependency, child process, or
+  network operation executes.
 
 ## 0.4.3 — 2026-07-22 stable channel
 

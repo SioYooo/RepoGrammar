@@ -4,9 +4,10 @@
 
 ADR-0030 introduces the language-neutral dependency evidence ladder and owned
 package, snapshot, external-symbol, and reviewed library-contract types. The
-first provider consumer is bounded Cargo metadata; the first static-manifest
-consumers are the root npm `package.json` parser and the Python project-config
-frontend. All emit
+first provider consumer is bounded Cargo metadata; static-metadata consumers
+now include the root npm `package.json` parser, the Python project-config
+frontend, the C/C++ vcpkg/Conan lane, SwiftPM lockfiles, and Composer
+manifests/lockfiles. All emit
 `manifest_declared` records and neither claims a resolved graph or language
 completion. The npm parser admits bounded names from production, development,
 optional, and peer sections, preserves bounded requirements, represents peer
@@ -23,8 +24,8 @@ requirements and exact Conan 2 `name/version` manifest declarations.
 Unsupported vcpkg fields, malformed Conan sections, Conan
 ranges/revisions/user-channel references, conflicts, and overflow affect
 `cpp_dependency_inventory` as typed `UNKNOWN`, and neither package manager
-executes. The shared bounded JSON gate rejects duplicate or over-budget vcpkg
-and SwiftPM lock members before normal decoding. Schema v13 persists the
+executes. The shared bounded JSON gate rejects duplicate or over-budget vcpkg,
+SwiftPM, and Composer members before normal decoding. Schema v13 persists the
 records with closed three-state dependency directness, same-generation code-unit/file evidence, derived-path
 freshness, strict token validation, and deterministic internal
 active-generation readback. Incremental sync recomputes Cargo provider output
@@ -34,7 +35,13 @@ rejected if it claims provider resolution. Raw package names are not exposed
 through CLI/MCP. Exact SwiftPM `Package.resolved` schema-2/3 pins are the first
 lockfile rows: exact semantic versions are retained, scope/directness remain
 unknown, locations/revisions are discarded, and malformed or unsupported
-inputs abstain without invoking SwiftPM. The strict ADR-0020 baseline remains
+inputs abstain without invoking SwiftPM. Exact Composer manifests emit direct
+scoped declarations; exact Composer lockfiles emit exact versions with
+runtime/development scope from their package section and unknown directness.
+Platform/virtual requirements and unverified
+manifest-lock coherence remain `php_dependency_inventory` uncertainty, source
+URLs are discarded, and no PHP/Composer/dependency code executes. The strict
+ADR-0020 baseline remains
 `0/20`, TypeScript extra
 remains incomplete, Go/PHP/Swift/Ruby remain `discovered_only`, and the other
 nine new lanes remain `not_started`. The current evidence matrix is
@@ -845,27 +852,40 @@ classification precedes source suffix matching; literal `.php` is eligible.
 Exact `.composer`/`.phpunit.cache` are PHP-only exclusions with the stable
 `language_specific_exclusion` token and must not globally prune unrelated
 languages; exact `vendor` remains globally excluded. Accepted PHP files persist
-only repo-relative path, raw-byte SHA-256, size, and token. PHP-only generations
-report `file_manifest_only`; mixed parser-capable generations remain
-`syntax_only_code_units`. Warnings are deterministic and aggregated once per
-accepted token. Incremental PHP deltas add, modify, remove, or copy only file
-metadata and purge legacy PHP units, IR, facts, evidence, support, and families.
-Manual discovery honors Git ignore; autosync keeps its generic Git-independent
-conservative charging. PHP paths bypass the source store and parser and produce
-zero code units, IR, facts, typed `UNKNOWN`s, families, project-model records,
-or readiness/support claims.
+repo-relative path, raw-byte SHA-256, size, and token. PHP source and PHPUnit
+XML bypass the source store and parser and produce zero code units, IR, facts,
+typed `UNKNOWN`s, dependencies, families, or project-model records. Exact
+`composer.json` and `composer.lock` instead enter the shared bounded
+duplicate-key-rejecting JSON gate and a non-executing static parser. Manifest
+requirements become direct scoped Composer declarations; lock rows retain exact
+versions with runtime/development scope from their package section and unknown
+directness. Platform or virtual requirements,
+malformed/unsupported input, conflicts, resource overflow, and unverified
+manifest/lock coherence become claim-scoped `php_dependency_inventory`
+uncertainty. Source URLs are not retained and no PHP, Composer, PHPUnit,
+autoloader, plugin, script, repository, or dependency code runs. PHP-only
+generations with only deferred source/PHPUnit inputs report
+`file_manifest_only`; an admitted Composer document owns project-config units
+and reports `syntax_only_code_units`. Mixed parser-capable generations remain
+`syntax_only_code_units`. Warnings are deterministic and aggregated
+once per accepted token. Incremental PHP deltas copy, replace, or remove file
+metadata and evidence-bound dependency rows while purging legacy semantic
+claims. Manual discovery honors Git ignore; autosync keeps its generic
+Git-independent conservative charging. PHP remains `discovered_only` and
+gains no family, frontend, readiness, or support claim.
 
 The production candidate is `mago-syntax` 1.43.0 only in a separately reviewed
 OS-sandboxed worker. Official PHP 8.5.8 `php -n -l` is the isolated syntax-
 validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/location
 differential and separately qualification-gated fallback. Tree-sitter PHP
 0.24.2 is syntax fallback only. The future first exact family is
-`php.phpunit.test_method`, and Composer JSON/lock plus PHPUnit XML remain
-bounded non-executing data for a separate project-model parser pinned to
-Composer 2.10.2 lock-content-hash semantics. No PHP source may enter a frontend
-before that model applies project selection and custom exclusions. Custom
-`vendor-dir`, PHPUnit cache-directory selection, PHP project-context
-invalidation, and every parser/family gate remain unimplemented. All
+`php.phpunit.test_method`. The current Composer reader does not establish a
+selected project profile or validate Composer 2.10.2 lock-content-hash
+coherence; PHPUnit XML remains future bounded project-model input. No PHP
+source may enter a frontend before that future model applies project selection
+and custom exclusions. Custom `vendor-dir`, PHPUnit cache-directory selection,
+PHP project-context invalidation, and every frontend/family gate remain
+unimplemented. All
 dependency, sandbox, protocol, resource, target, `UNKNOWN`, family, product,
 and completion-review gates remain open.
 

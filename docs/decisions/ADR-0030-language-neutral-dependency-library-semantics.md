@@ -145,6 +145,25 @@ none of those commands. References:
 <https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/resolvingdependencyfailures/>
 and <https://docs.swift.org/package-manager/PackageDescription/PackageDescription.html>.
 
+The first Composer consumer uses the same bounded unique-member JSON gate for
+exact `composer.json` and `composer.lock` basenames. Manifest requirements in
+`require` and `require-dev` become direct `manifest_declared` rows with
+bounded Composer identities and bounded opaque requirement text. Lock packages
+become `lockfile_resolved` rows with their exact bounded version field. Safe
+`dev-*` branch tokens retain slash-separated names, while URL and path shapes
+are rejected. Scope follows the
+`packages` or `packages-dev` section, but directness remains `unknown`: a
+lock entry alone does not prove a direct root declaration, selected profile,
+installation, or runtime use. Platform requirements such as `php` and
+`ext-*`, virtual
+packages, unsupported shapes, conflicting records, unverified manifest/lock
+coherence, and resource overflow affect only
+`php_dependency_inventory` uncertainty. Locations and source URLs are not
+stored. The reader consumes supplied bytes only and never invokes PHP,
+Composer, plugins, scripts, autoloaders, repository code, or dependency code.
+Composer 2.10.2 lock-content-hash validation and custom `vendor-dir` selection
+remain future project-profile work.
+
 ## Provider and package-manager policy
 
 - Manifest/lockfile parsers consume supplied bounded bytes and do not execute
@@ -191,7 +210,7 @@ permission to infer runtime behavior.
   records are copied only with their unchanged evidence unit. Source-free
   public projections, generic provider ports, and remaining per-ecosystem
   manifest adapters remain follow-up modules. This ADR, persistence slice, and
-  the Cargo/npm/Python/vcpkg/Conan/SwiftPM consumers do not complete any
+  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer consumers do not complete any
   ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,
   and invalidation tests. They must not become hard-coded benchmark answers.
@@ -219,10 +238,11 @@ permission to infer runtime behavior.
    derived-record dependencies.
 2. Continue migrating bounded existing manifest readers to generic records.
    Cargo, root npm `package.json`, bounded standard Python project formats, and
-   the qualified vcpkg/Conan subsets are complete at manifest-declaration level;
-   SwiftPM schema-2/3 pins are complete at bounded lockfile level. Wider C/C++,
-   Swift manifest declarations, and additional Python tool-specific schemas
-   remain open.
+   the qualified vcpkg/Conan subsets and bounded Composer manifest subset are
+   complete at manifest-declaration level; SwiftPM schema-2/3 and bounded
+   Composer pins are complete at lockfile-inventory level. Wider C/C++, Swift
+   manifest declarations, Composer project-profile/coherence semantics, and
+   additional Python tool-specific schemas remain open.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
 4. Specify a reviewed library-contract registry, cache invalidation, and

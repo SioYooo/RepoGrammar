@@ -5382,6 +5382,9 @@ fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
     if file.language == DiscoveredLanguage::SwiftConfig {
         return file.path.rsplit('/').next() != Some("Package.resolved");
     }
+    if file.language == DiscoveredLanguage::PhpConfig {
+        return !is_composer_dependency_config_path(&file.path);
+    }
     language_token_is_inventory_only(file.language.as_str())
 }
 
@@ -5389,7 +5392,17 @@ fn indexed_file_is_inventory_only(file: &IndexedFileRecord) -> bool {
     if file.language == DiscoveredLanguage::SwiftConfig.as_str() {
         return file.path.rsplit('/').next() != Some("Package.resolved");
     }
+    if file.language == DiscoveredLanguage::PhpConfig.as_str() {
+        return !is_composer_dependency_config_path(&file.path);
+    }
     language_token_is_inventory_only(&file.language)
+}
+
+fn is_composer_dependency_config_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "composer.json" | "composer.lock"
+    )
 }
 
 fn language_token_is_inventory_only(language: &str) -> bool {
@@ -7194,17 +7207,17 @@ mod tests {
     }
 
     #[test]
-    fn default_index_persists_source_free_php_inventory_without_claim_inputs() {
+    fn default_index_persists_source_free_php_composer_dependencies_without_family_claims() {
         let workspace = TempWorkspace::new("indexing-php-discovery-only");
         fs::create_dir_all(workspace.path().join("src")).expect("create PHP source dir");
         fs::write(
             workspace.path().join("composer.json"),
-            "must-not-be-decoded-or-evaluated",
+            r#"{"description":"UNIQUE_SOURCE_SENTINEL","require":{"acme/runtime":"^1.2"},"require-dev":{"phpunit/phpunit":"^11"}}"#,
         )
         .expect("write Composer manifest");
         fs::write(
             workspace.path().join("composer.lock"),
-            "must-not-be-decoded-or-evaluated",
+            r#"{"packages":[{"name":"acme/runtime","version":"1.2.3","source":{"url":"UNIQUE_SOURCE_SENTINEL"}}],"packages-dev":[{"name":"phpunit/phpunit","version":"11.5.0"}]}"#,
         )
         .expect("write Composer lock");
         fs::write(
@@ -7217,7 +7230,7 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
 
         let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -7232,12 +7245,15 @@ mod tests {
         assert_eq!(outcome.discovered_files, 4);
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(outcome.indexed_units, 0);
-        assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 2);
+        assert_eq!(outcome.indexed_units, 2);
+        assert_eq!(outcome.semantic_facts, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec!["composer.json".to_string(), "composer.lock".to_string()]
+        );
         assert_eq!(
             outcome.warnings,
             vec![
@@ -7262,29 +7278,140 @@ mod tests {
                 ("src/main.php", "php"),
             ]
         );
-        assert!(store
-            .list_active_code_units()
-            .expect("read PHP units")
-            .units
-            .is_empty());
-        assert!(store
-            .list_active_ir_graph()
-            .expect("read PHP IR")
-            .nodes
-            .is_empty());
-        assert!(store
-            .list_active_semantic_facts()
-            .expect("read PHP facts")
-            .facts
-            .is_empty());
+        assert_eq!(
+            store
+                .list_active_code_units()
+                .expect("read PHP units")
+                .units
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .list_active_ir_graph()
+                .expect("read PHP IR")
+                .nodes
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .list_active_semantic_facts()
+                .expect("read PHP facts")
+                .facts
+                .len(),
+            1
+        );
         assert!(store
             .list_active_families()
             .expect("read PHP families")
             .families
             .is_empty());
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Composer dependencies");
+        assert_eq!(dependencies.dependencies.len(), 4);
+        assert!(dependencies
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.ecosystem == "composer"));
+        let dependency_debug = format!("{dependencies:?}");
+        assert!(!dependency_debug.contains("UNIQUE_SOURCE_SENTINEL"));
+        assert!(!dependency_debug.contains("example.invalid"));
         let debug = format!("{outcome:?}{files:?}");
-        assert!(!debug.contains("must-not-be-decoded-or-evaluated"));
+        assert!(!debug.contains("UNIQUE_SOURCE_SENTINEL"));
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+
+        fs::write(
+            workspace.path().join("src/main.php"),
+            b"<?php // unrelated inventory-only edit\n",
+        )
+        .expect("edit deferred PHP source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally copy Composer dependency inventory");
+        let sync_report = synced.sync_report.expect("incremental sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.modified_files, 1);
+        assert_eq!(sync_report.reparsed_files, 0);
+        assert_eq!(
+            source_store.paths(),
+            vec!["composer.json".to_string(), "composer.lock".to_string()]
+        );
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Composer dependencies")
+                .dependencies
+                .len(),
+            4
+        );
+
+        fs::write(
+            workspace.path().join("composer.json"),
+            r#"{"require":{"acme/replaced":"^2"},"require-dev":{"phpunit/phpunit":"^11"}}"#,
+        )
+        .expect("replace Composer manifest requirement");
+        let reparsed = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace Composer dependency inventory");
+        let reparse_report = reparsed.sync_report.expect("Composer reparse report");
+        assert_eq!(reparse_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(reparse_report.modified_files, 1);
+        assert_eq!(reparse_report.reparsed_files, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "composer.json".to_string(),
+                "composer.lock".to_string(),
+                "composer.json".to_string(),
+            ]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Composer dependencies");
+        assert!(dependencies.dependencies.iter().any(|dependency| {
+            dependency.path == "composer.json" && dependency.package_name == "acme/replaced"
+        }));
+        assert!(!dependencies.dependencies.iter().any(|dependency| {
+            dependency.path == "composer.json" && dependency.package_name == "acme/runtime"
+        }));
+
+        fs::remove_file(workspace.path().join("composer.lock")).expect("remove Composer lockfile");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove Composer lockfile dependencies");
+        let remove_report = removed.sync_report.expect("Composer removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Composer dependencies after lock removal");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(dependencies
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.path == "composer.json"));
+        assert!(store
+            .list_active_families()
+            .expect("read PHP families after lock removal")
+            .families
+            .is_empty());
     }
 
     #[test]
@@ -7494,7 +7621,8 @@ mod tests {
     fn php_only_first_sync_reports_file_manifest_and_zero_reparsed_files() {
         let workspace = TempWorkspace::new("indexing-php-first-sync");
         fs::write(workspace.path().join("main.php"), "<?php\n").expect("write PHP source");
-        fs::write(workspace.path().join("composer.json"), "not-json\n").expect("write PHP config");
+        fs::write(workspace.path().join("phpunit.xml"), "not-xml\n")
+            .expect("write deferred PHPUnit config");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
@@ -8029,8 +8157,8 @@ mod tests {
         assert_eq!(expected_families.len(), 1);
 
         fs::write(workspace.path().join("main.php"), "<?php\n").expect("add PHP source");
-        fs::write(workspace.path().join("composer.json"), "not-json\n")
-            .expect("add Composer config");
+        fs::write(workspace.path().join("phpunit.xml.dist"), "not-xml\n")
+            .expect("add deferred PHPUnit dist config");
         fs::write(workspace.path().join("phpunit.xml"), "not-xml\n").expect("add PHPUnit config");
         let added = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync added PHP inventory");
@@ -8090,8 +8218,8 @@ mod tests {
 
         fs::write(workspace.path().join("main.php"), "<?php // changed\n")
             .expect("modify PHP source");
-        fs::write(workspace.path().join("composer.json"), "changed\n")
-            .expect("modify Composer config");
+        fs::write(workspace.path().join("phpunit.xml.dist"), "changed\n")
+            .expect("modify deferred PHPUnit dist config");
         fs::write(workspace.path().join("phpunit.xml"), "changed\n")
             .expect("modify PHPUnit config");
         let modified = sync_with_families(request(), &source_store, &parser, &detector, &store)
@@ -8136,7 +8264,7 @@ mod tests {
         assert_eq!(source_removed_report.removed_files, 1);
         assert_eq!(source_removed_report.reparsed_files, 0);
 
-        for path in ["composer.json", "phpunit.xml"] {
+        for path in ["phpunit.xml.dist", "phpunit.xml"] {
             fs::remove_file(workspace.path().join(path)).expect("remove PHP config inventory");
         }
         let configs_removed =
@@ -8712,8 +8840,8 @@ mod tests {
     fn incremental_sync_purges_legacy_claim_records_for_inventory_only_php_paths() {
         let workspace = TempWorkspace::new("indexing-php-purge-legacy-claims");
         fs::write(workspace.path().join("main.php"), "<?php\n").expect("write PHP inventory");
-        fs::write(workspace.path().join("composer.json"), "not-json\n")
-            .expect("write PHP config inventory");
+        fs::write(workspace.path().join("phpunit.xml"), "not-xml\n")
+            .expect("write deferred PHPUnit config inventory");
         fs::write(workspace.path().join("Stable.java"), "class Stable {}\n")
             .expect("write unrelated Java source");
         let state = workspace.path().join(".repogrammar");
@@ -8745,7 +8873,7 @@ mod tests {
         let php_config = active
             .files
             .iter()
-            .find(|file| file.path == "composer.json")
+            .find(|file| file.path == "phpunit.xml")
             .expect("PHP config metadata");
         let connection =
             Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
@@ -8791,7 +8919,7 @@ mod tests {
             .execute(
                 "INSERT INTO code_units \
                  (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
-                 VALUES (?1, 'unit:composer.json#module:0-1:legacy', 'composer.json', \
+                 VALUES (?1, 'unit:phpunit.xml#module:0-1:legacy', 'phpunit.xml', \
                          'php-config', 'module', 0, 1, ?2)",
                 params![active.generation_id, php_config.content_hash.as_str()],
             )
@@ -8801,7 +8929,7 @@ mod tests {
                 "INSERT INTO evidence \
                  (generation_id, evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
                  VALUES (?1, 'evidence:legacy-php-config', \
-                         'unit:composer.json#module:0-1:legacy', 'composer.json', ?2, 0, 1, \
+                         'unit:phpunit.xml#module:0-1:legacy', 'phpunit.xml', ?2, 0, 1, \
                          'legacy tampered PHP config evidence')",
                 params![active.generation_id, php_config.content_hash.as_str()],
             )
@@ -8812,7 +8940,7 @@ mod tests {
                  (generation_id, fact_id, kind, subject, target, certainty, origin_engine, \
                   origin_engine_version, origin_method, assumptions_json, evidence_id) \
                  VALUES (?1, 'semantic-fact:legacy-php-config', 'PROJECT_CONFIG', \
-                         'unit:composer.json#module:0-1:legacy', \
+                         'unit:phpunit.xml#module:0-1:legacy', \
                          'php.composer.project_scope', 'STRUCTURAL', 'legacy-php-config', '0', \
                          'tampered', '[]', 'evidence:legacy-php-config')",
                 params![active.generation_id],
@@ -8873,13 +9001,13 @@ mod tests {
         assert!(active_after_purge
             .files
             .iter()
-            .any(|file| file.path == "composer.json" && file.language == "php-config"));
+            .any(|file| file.path == "phpunit.xml" && file.language == "php-config"));
         assert!(!store
             .list_active_code_units()
             .expect("read units after purge")
             .units
             .iter()
-            .any(|unit| matches!(unit.path.as_str(), "main.php" | "composer.json")));
+            .any(|unit| matches!(unit.path.as_str(), "main.php" | "phpunit.xml")));
         assert!(!store
             .list_active_ir_graph()
             .expect("read IR after purge")
@@ -8891,7 +9019,7 @@ mod tests {
             .expect("read facts after purge")
             .facts
             .iter()
-            .any(|fact| matches!(fact.path.as_str(), "main.php" | "composer.json")));
+            .any(|fact| matches!(fact.path.as_str(), "main.php" | "phpunit.xml")));
         assert!(!store
             .list_active_families()
             .expect("read families after purge")
@@ -8904,7 +9032,7 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM evidence \
                  WHERE generation_id = ?1 \
-                   AND (path IN ('main.php', 'composer.json') \
+                   AND (path IN ('main.php', 'phpunit.xml') \
                         OR evidence_id IN ('evidence:legacy-php', \
                                            'evidence:legacy-php-config', \
                                            'evidence:legacy-php-family'))",
@@ -8916,11 +9044,11 @@ mod tests {
         assert!(source_store
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.php" | "composer.json")));
+            .all(|path| !matches!(path.as_str(), "main.php" | "phpunit.xml")));
         assert!(parser
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.php" | "composer.json")));
+            .all(|path| !matches!(path.as_str(), "main.php" | "phpunit.xml")));
     }
 
     #[test]

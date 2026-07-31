@@ -63,13 +63,16 @@ exists. Ruby-only generations are `file_manifest_only`, while a mixed generation
 remains `syntax_only_code_units`. The tokens prove file inventory only and do
 not select a Ruby engine, project root, dependency graph, or support state.
 PHP discovery defines stable `php` and `php-config` tokens for exact `.php`
-paths and exact accepted Composer/PHPUnit configuration basenames. They are
-inventory-only: only repository-relative path, strict raw-byte hash, byte size,
-and token are persisted; no PHP `CodeUnit`, IR, semantic fact, typed `UNKNOWN`,
-or family exists. PHP-only generations are `file_manifest_only`; mixed
-generations remain `syntax_only_code_units`. The tokens prove file inventory
-only and do not select a PHP profile, Composer project, PHPUnit version,
-dependency graph, custom vendor directory, or support state.
+paths and exact accepted Composer/PHPUnit configuration basenames. PHP source
+and PHPUnit XML remain inventory-only: only repository-relative path, strict
+raw-byte hash, byte size, and token are persisted. Exact `composer.json` and
+`composer.lock` may additionally create bounded `ProjectConfig` units/IR,
+ADR-0030 `composer` dependency records, and `php_dependency_inventory` typed
+`UNKNOWN`. Those records describe static declarations or lock entries only;
+they do not select a PHP profile, Composer project, PHPUnit version, installed
+or runtime dependency graph, custom vendor directory, family, or support state.
+PHP-only generations with Composer evidence are `syntax_only_code_units`;
+those with only deferred PHP/PHPUnit inventory remain `file_manifest_only`.
 Swift discovery defines stable `swift` and `swift-config` tokens for exact
 `.swift` paths and exact accepted SwiftPM/toolchain-selector basenames. Swift
 source and executable/toolchain config remain inventory-only. Exact
