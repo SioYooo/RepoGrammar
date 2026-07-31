@@ -474,8 +474,10 @@ use targeted active-generation queries and expose only repo-relative metadata,
 code-unit rows, or validated fact metadata needed by that command. They must
 not load the full active claim-input snapshot merely to count files, list code
 units, or list fact inventory. The internal claim-input snapshot uses the same
-active generation and validation rules, but remains reserved for family and
-freshness gates and unavailable through CLI/MCP.
+active generation and validation rules and also hydrates dependency rows so
+incremental indexing can copy unchanged static-manifest evidence. It remains
+reserved for family, freshness, and generation-lifecycle gates and unavailable
+through CLI/MCP.
 
 Schema migrations are versioned by `schema_migrations`. Before writing a new
 generation, the adapter must refuse to open a database whose stored maximum
@@ -596,9 +598,12 @@ Dependency writes also create an `external_dependency`
 therefore dirties the record until bounded recomputation rewrites it, and
 generation validation remains fail-closed. `DependencyStore` exposes a
 deterministically ordered internal active-generation read model and revalidates
-every hydrated row. The first production writer is the safe Cargo metadata
-stage. There is intentionally no public CLI/MCP raw package-name projection in
-this schema slice; such a surface requires its own source-free product contract.
+every hydrated row. Writers include the safe Cargo metadata stage and bounded
+static-manifest parser output such as root npm `package.json` declarations.
+Incremental indexing recomputes provider-owned Cargo rows and copies a static
+row only when its unchanged evidence code unit also copies. There is
+intentionally no public CLI/MCP raw package-name projection in this schema
+slice; such a surface requires its own source-free product contract.
 
 Schema `10` adds the `python_module_interfaces` table, which persists one Python
 module interface hash per indexed `.py` module for the incremental-sync

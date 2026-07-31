@@ -137,6 +137,7 @@ pub struct ActiveClaimInputSnapshot {
     pub ir_nodes: Vec<IndexedIrNodeRecord>,
     pub ir_edges: Vec<IndexedIrEdgeRecord>,
     pub semantic_facts: Vec<IndexedSemanticFactRecord>,
+    pub dependencies: Vec<IndexedDependencyRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

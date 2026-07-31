@@ -24,9 +24,9 @@ use crate::application::family::{
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, ContentHash, DependencyRecord, Evidence, FactCertainty, FactOrigin,
-    IrEdge, IrNode, Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind,
-    SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, ContentHash, DependencyEcosystem, DependencyRecord, Evidence,
+    FactCertainty, FactOrigin, IrEdge, IrNode, Language, Provenance, RepositoryRevision,
+    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
@@ -776,6 +776,7 @@ where
         let SourceParseOutput {
             report: parse_report,
             python_interface_hash,
+            dependencies,
         } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
@@ -821,6 +822,7 @@ where
             file,
             &source.text,
             parse_report,
+            dependencies,
             options.framework_roles,
             &mut warnings,
         )?;
@@ -1543,6 +1545,21 @@ where
         indexed_code_units.push(unit.clone());
     }
 
+    // Static manifest dependencies belong to the unchanged code units that
+    // supplied their evidence and must survive an unrelated source edit.
+    // Cargo metadata is provider-resolved and is intentionally recomputed later
+    // in this generation, so copying it here would duplicate provider output.
+    for dependency in &snapshot.dependencies {
+        if dependency.ecosystem == DependencyEcosystem::Cargo.as_str()
+            || !unchanged_paths.contains(&dependency.path)
+            || inventory_only_paths.contains(&dependency.path)
+            || !copied_unit_ids.contains(&dependency.code_unit_id)
+        {
+            continue;
+        }
+        crate::application::storage::record_dependency(session.as_mut(), dependency)?;
+    }
+
     let mut copied_node_ids = BTreeSet::new();
     for node in &snapshot.ir_nodes {
         if !copied_unit_ids.contains(&node.code_unit_id) {
@@ -1625,6 +1642,7 @@ where
         let SourceParseOutput {
             report: parse_report,
             python_interface_hash,
+            dependencies,
         } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
@@ -1670,6 +1688,7 @@ where
             file,
             &source.text,
             parse_report,
+            dependencies,
             options.framework_roles,
             &mut warnings,
         )?;
@@ -2851,6 +2870,7 @@ fn record_parse_report(
     file: &DiscoveredFile,
     text: &str,
     mut parse_report: ParseReport,
+    mut dependencies: Vec<DependencyRecord>,
     framework_roles: Option<&dyn FrameworkRoleDetector>,
     warnings: &mut Vec<String>,
 ) -> Result<ParseStorageOutcome, RepoGrammarError> {
@@ -2891,6 +2911,12 @@ fn record_parse_report(
     sort_semantic_facts(&mut parse_report.semantic_facts);
     for fact in &parse_report.semantic_facts {
         validate_parser_semantic_fact(file, text, &parse_report.units, fact)?;
+    }
+    dependencies.sort_by(|left, right| {
+        dependency_record_sort_key(left).cmp(&dependency_record_sort_key(right))
+    });
+    for dependency in &dependencies {
+        validate_parser_dependency(file, text, &parse_report.units, dependency)?;
     }
     let framework_role_facts = match framework_roles {
         Some(detector) => detector
@@ -2936,6 +2962,7 @@ fn record_parse_report(
             },
         )?;
     }
+    record_dependencies(session, &dependencies)?;
     Ok(ParseStorageOutcome {
         indexed_units: count,
         code_units,
@@ -5199,6 +5226,51 @@ fn validate_parser_semantic_fact(
         return Err(RepoGrammarError::InvalidInput(
             "parser returned a semantic fact that does not match its code unit evidence"
                 .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_parser_dependency(
+    file: &DiscoveredFile,
+    text: &str,
+    units: &[CodeUnit],
+    dependency: &DependencyRecord,
+) -> Result<(), RepoGrammarError> {
+    if dependency.evidence_level == crate::core::model::DependencyEvidenceLevel::ProviderResolved {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser dependency records cannot claim provider resolution".to_string(),
+        ));
+    }
+    if dependency.evidence.provenance.path != file.path {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency for a different path".to_string(),
+        ));
+    }
+    if dependency.evidence.provenance.content_hash != file.content_hash {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency with mismatched content hash".to_string(),
+        ));
+    }
+    if dependency.evidence.range.end_byte > text.len() {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency range outside source bounds".to_string(),
+        ));
+    }
+    let Some(unit) = units
+        .iter()
+        .find(|unit| unit.id.as_str() == dependency.evidence.code_unit_id.as_str())
+    else {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency for an unknown code unit".to_string(),
+        ));
+    };
+    if dependency.evidence.range.start_byte < unit.range.start_byte
+        || dependency.evidence.range.end_byte > unit.range.end_byte
+        || dependency.evidence.provenance != unit.provenance
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency that does not match its code unit evidence".to_string(),
         ));
     }
     Ok(())
@@ -9374,6 +9446,64 @@ mod tests {
         }
     }
 
+    struct ParserResolvedDependencyParser;
+
+    impl SourceParser for ParserResolvedDependencyParser {
+        fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            let unit = parser_unit(
+                &document,
+                "unit:a.ts#module:0-all",
+                document.path,
+                document.content_hash.clone(),
+                0,
+                document.text.len(),
+            );
+            let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+            Ok(ParseReport {
+                units: vec![unit],
+                ir_nodes: vec![ir_node],
+                ir_edges: Vec::new(),
+                semantic_facts: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+
+        fn parse_with_context_output(
+            &self,
+            document: SourceDocument<'_>,
+            _context: &ParserProjectContext,
+        ) -> Result<SourceParseOutput, ParseError> {
+            let report = self.parse(document)?;
+            let unit = &report.units[0];
+            let dependency = DependencyRecord::new(
+                crate::core::model::PackageIdentity::new(DependencyEcosystem::Npm, "express")
+                    .map_err(ParseError::Internal)?,
+                None,
+                Some(
+                    crate::core::model::DependencyVersion::new("4.21.2")
+                        .map_err(ParseError::Internal)?,
+                ),
+                crate::core::model::DependencyScope::Runtime,
+                false,
+                true,
+                crate::core::model::DependencyEvidenceLevel::ProviderResolved,
+                Evidence::new(
+                    unit.id.clone(),
+                    unit.range.clone(),
+                    unit.provenance.clone(),
+                    "parser must not claim provider resolution",
+                )
+                .map_err(ParseError::Internal)?,
+            )
+            .map_err(ParseError::Internal)?;
+            Ok(SourceParseOutput {
+                report,
+                python_interface_hash: None,
+                dependencies: vec![dependency],
+            })
+        }
+    }
+
     struct ExpressRouteParser;
 
     impl SourceParser for ExpressRouteParser {
@@ -11989,6 +12119,93 @@ mod tests {
     }
 
     #[test]
+    fn package_json_dependencies_are_persisted_without_family_claims() {
+        let workspace = TempWorkspace::new("indexing-npm-dependencies");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"express":"^4"},"devDependencies":{"vitest":"^3"}}"#,
+        )
+        .expect("write package manifest");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index package dependencies");
+
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read npm dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.ecosystem.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                        dependency.scope.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("npm", "express", Some("^4"), "runtime"),
+                ("npm", "vitest", Some("^3"), "development"),
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("incremental sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.modified_files, 1);
+        assert_eq!(sync_report.unchanged_files, 1);
+        assert_eq!(sync_report.reparsed_files, 1);
+
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied npm dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["express", "vitest"]
+        );
+    }
+
+    #[test]
     fn parser_semantic_facts_cannot_claim_semantic_certainty() {
         let workspace = TempWorkspace::new("indexing-parser-semantic-fact");
         fs::write(
@@ -12013,6 +12230,32 @@ mod tests {
             error
                 .to_string()
                 .contains("parser semantic facts must stay structural or unknown"),
+            "unexpected error: {error}"
+        );
+        assert!(!state.join("current-generation").exists());
+    }
+
+    #[test]
+    fn parser_dependencies_cannot_claim_provider_resolution() {
+        let workspace = TempWorkspace::new("indexing-parser-resolved-dependency");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let error = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &ParserResolvedDependencyParser,
+            &store,
+        )
+        .expect_err("parser-origin provider resolution must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("parser dependency records cannot claim provider resolution"),
             "unexpected error: {error}"
         );
         assert!(!state.join("current-generation").exists());

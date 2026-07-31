@@ -121,6 +121,7 @@ impl PythonAstParser {
         Ok(SourceParseOutput {
             report,
             python_interface_hash: Some(interface_hash),
+            dependencies: Vec::new(),
         })
     }
 }

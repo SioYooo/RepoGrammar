@@ -860,6 +860,7 @@ mod tests {
                 ir_nodes: Vec::new(),
                 ir_edges: Vec::new(),
                 semantic_facts: Vec::new(),
+                dependencies: Vec::new(),
             })
         }
 

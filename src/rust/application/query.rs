@@ -8860,6 +8860,7 @@ mod tests {
                 ir_nodes: Vec::new(),
                 ir_edges: Vec::new(),
                 semantic_facts: self.facts.clone(),
+                dependencies: Vec::new(),
             })
         }
 

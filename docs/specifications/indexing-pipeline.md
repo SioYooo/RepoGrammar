@@ -956,6 +956,20 @@ units. This recomputes both facts and dependency rows, so an unchanged manifest
 survives an unrelated source edit without duplicating facts or preserving stale
 package inventory.
 
+The normalized parser port also carries indexing-only dependency metadata
+beside `ParseReport`. The bounded root `package.json` parser uses that channel
+to emit npm `manifest_declared` records for valid package names in
+`dependencies`, `devDependencies`, `optionalDependencies`, and
+`peerDependencies`. Runtime and development scopes follow their exact manifest
+sections; optional dependencies remain runtime plus `optional=true`; peer
+dependencies use `scope=unknown`, with optionality taken only from bounded
+`peerDependenciesMeta`. A bounded string requirement is retained when valid.
+The parser neither resolves a lockfile nor runs Node, npm, lifecycle scripts, or
+dependency code, and the application rejects any parser dependency that claims
+`provider_resolved`, escapes source bounds, or disagrees with its code-unit
+provenance. Package presence remains context only and cannot produce family
+support. Raw package text remains internal to the generation store.
+
 ## Optional providers
 
 Optional providers such as a future CodeGraph provider may enrich candidate
@@ -1214,7 +1228,13 @@ the recomputation includes the provider-resolved support derived from the
 copied-forward worker facts, so a worker-less incremental `sync` preserves the
 base generation's provider-resolved family support for unchanged files instead
 of silently dropping it and diverging from a full rebuild. Lazy query-time
-recomputation remains future work.
+recomputation remains future work. Dependency records follow the same evidence
+lifecycle rather than a single blanket policy: unchanged static-manifest rows
+copy forward only when their path and evidence code unit also copy forward,
+while Cargo rows never copy because the Cargo provider recomputes them later in
+the same generation. Changed or removed manifests therefore cannot retain stale
+dependency records, and an unrelated TS/JS source edit preserves exactly one
+copy of each unchanged npm declaration.
 
 The project-context gate distinguishes *content-only modifications* from
 *path-set changes*. A modified non-inventory file is one whose repo-relative path

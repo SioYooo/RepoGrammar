@@ -30,12 +30,19 @@ presence alone never supports a family. The current strict baseline remains
 `0/20`, with TypeScript extra also incomplete; see
 `docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
 
-The first implementation consumer is Cargo metadata, which emits generic
-`manifest_declared` dependency records. It remains a Rust project-model slice,
-not Rust language completion. Schema v11 now persists those records with
-same-generation source evidence and provides an internal active-generation read
-model. Source-free public projection, generic provider ports, conflict
-reporting, and other ecosystems remain open atomic modules.
+The first provider consumer is Cargo metadata, which emits generic
+`manifest_declared` dependency records. The first static-manifest consumer is
+the bounded root npm `package.json` parser, which now emits direct declarations
+for production, development, optional, and peer dependency sections without
+executing Node, npm, package scripts, or dependency code. Peer dependencies use
+the shared `unknown` scope unless the model later gains a reviewed peer token.
+Schema v11 persists both consumers with same-generation source evidence. On an
+unrelated incremental source edit, Cargo output is recomputed while unchanged
+static npm declarations copy forward with their evidence unit, retaining one
+fresh record. These are project-model slices, not Rust, JavaScript, or
+TypeScript language completion. Source-free public projection, generic provider
+ports, conflict reporting, lockfile resolution, Python/C++ migration, and other
+ecosystems remain open atomic modules.
 
 ## Goal and non-goal
 

@@ -837,6 +837,7 @@ impl IndexStore for SqliteIndexStore {
         let units = query_code_units(&connection, &generation_id)?;
         let (ir_nodes, ir_edges) = query_ir_graph(&connection, &generation_id)?;
         let semantic_facts = query_semantic_facts(&connection, &generation_id)?;
+        let dependencies = query_dependencies(&connection, &generation_id)?;
 
         Ok(ActiveClaimInputSnapshot {
             generation_id,
@@ -845,6 +846,7 @@ impl IndexStore for SqliteIndexStore {
             ir_nodes,
             ir_edges,
             semantic_facts,
+            dependencies,
         })
     }
 
@@ -9021,6 +9023,10 @@ mod tests {
         store
             .record_semantic_fact(&generation, &fact)
             .expect("record semantic fact");
+        let mut dependency = dependency("src/a.ts");
+        dependency.code_unit_id = module.id.clone();
+        DependencyStore::record_dependency(&store, &generation, &dependency)
+            .expect("record dependency");
         store
             .activate_generation(&generation)
             .expect("activate generation");
@@ -9062,6 +9068,7 @@ mod tests {
             vec![ir_edge(&module_node, &function_node)]
         );
         assert_eq!(snapshot.semantic_facts, vec![fact]);
+        assert_eq!(snapshot.dependencies, vec![dependency]);
 
         let debug = format!("{snapshot:?}");
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
@@ -9099,6 +9106,7 @@ mod tests {
         assert!(snapshot.ir_nodes.is_empty());
         assert!(snapshot.ir_edges.is_empty());
         assert!(snapshot.semantic_facts.is_empty());
+        assert!(snapshot.dependencies.is_empty());
     }
 
     #[test]

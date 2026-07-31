@@ -4,17 +4,21 @@
 
 ADR-0030 introduces the language-neutral dependency evidence ladder and owned
 package, snapshot, external-symbol, and reviewed library-contract types. The
-first consumer is bounded Cargo metadata, which emits `manifest_declared`
-dependency records in addition to legacy project facts; it does not claim a
-resolved graph or Rust semantic completion. Schema v11 persists those records
-with same-generation code-unit/file evidence, derived-path freshness, strict
-token validation, and deterministic internal active-generation readback.
-Incremental sync recomputes, rather than copies, Cargo provider facts and
-dependencies so unrelated edits retain exactly one fresh inventory. Raw package
-names are not exposed through CLI/MCP. The strict ADR-0020 baseline remains
-`0/20`, TypeScript extra remains incomplete, Go/PHP/Swift/Ruby remain
-`discovered_only`, and the other nine new lanes remain `not_started`. The
-current evidence matrix is
+first provider consumer is bounded Cargo metadata; the first static-manifest
+consumer is the root npm `package.json` parser. Both emit
+`manifest_declared` records and neither claims a resolved graph or language
+completion. The npm parser admits bounded names from production, development,
+optional, and peer sections, preserves bounded requirements, represents peer
+scope as `unknown`, and executes no Node/npm/package code. Schema v11 persists
+the records with same-generation code-unit/file evidence, derived-path
+freshness, strict token validation, and deterministic internal
+active-generation readback. Incremental sync recomputes Cargo provider output
+but copies unchanged static-manifest dependencies only with their unchanged
+evidence unit, so unrelated edits retain one fresh inventory. Parser output is
+rejected if it claims provider resolution. Raw package names are not exposed
+through CLI/MCP. The strict ADR-0020 baseline remains `0/20`, TypeScript extra
+remains incomplete, Go/PHP/Swift/Ruby remain `discovered_only`, and the other
+nine new lanes remain `not_started`. The current evidence matrix is
 `docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
 
 ## Build Week stable-release line

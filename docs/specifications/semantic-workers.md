@@ -301,6 +301,18 @@ decorator rewrites, ambient globals without project context, and bundler-only
 aliases remain typed `UNKNOWN` unless a configured provider proves a narrower
 claim.
 
+Dependency inventory is intentionally separate from this worker. The bounded
+root `package.json` parser can emit ADR-0030 npm `manifest_declared` records
+through `SourceParseOutput` without executing Node, npm, package scripts, or
+dependency code. It accepts the four exact npm dependency sections, retains
+bounded requirements, represents peer scope as `unknown`, and ties every row to
+the manifest code unit and content hash. Parser output cannot claim provider
+resolution or external-symbol identity. Unchanged static records copy forward
+only with unchanged evidence during incremental sync; a changed manifest goes
+through the existing project-context full-rebuild gate. This inventory does not
+upgrade the transitional TS/JS lane or prove library behavior or family
+membership.
+
 Version policy:
 
 - TypeScript 6 public compiler API can be used by a version-pinned adapter.

@@ -61,10 +61,16 @@ recorded in telemetry. Public source-free surfaces may expose bounded package
 counts and low-cardinality ecosystem/evidence tokens; raw package/symbol text
 requires an explicitly reviewed product contract.
 
-The first production consumer is the existing Cargo metadata adapter. It emits
+The first provider consumer is the existing Cargo metadata adapter. It emits
 generic `manifest_declared` dependency records alongside its legacy project
 facts. `cargo metadata --no-deps` does not provide a resolved transitive graph,
-so those records must not be labeled lockfile- or provider-resolved.
+so those records must not be labeled lockfile- or provider-resolved. The first
+static-manifest consumer is the bounded root `package.json` parser. It records
+valid npm names from `dependencies`, `devDependencies`,
+`optionalDependencies`, and `peerDependencies`; peer scope remains `unknown`
+because the shared scope vocabulary does not invent a runtime/build meaning for
+that npm-specific relation. Parser-origin records can never claim
+`provider_resolved`.
 
 ## Provider and package-manager policy
 
@@ -106,10 +112,12 @@ permission to infer runtime behavior.
 - Existing string-only dependency facts can migrate incrementally; they are not
   retroactively promoted to resolved identities.
 - Schema v11 persistence and an internal active-generation read model now
-  preserve generic dependency records with source evidence. Source-free public
-  projections, generic provider ports, and per-ecosystem manifest adapters
-  remain follow-up modules. This ADR, persistence slice, and first Cargo
-  consumer do not complete any ADR-0020 language gate.
+  preserve generic dependency records with source evidence. Cargo records are
+  recomputed by their provider on incremental sync; unchanged static-manifest
+  records are copied only with their unchanged evidence unit. Source-free
+  public projections, generic provider ports, and remaining per-ecosystem
+  manifest adapters remain follow-up modules. This ADR, persistence slice, and
+  the Cargo/npm consumers do not complete any ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,
   and invalidation tests. They must not become hard-coded benchmark answers.
 
@@ -134,8 +142,9 @@ permission to infer runtime behavior.
    reporting when multiple qualified providers disagree; path freshness and
    generation replacement are already fail-closed through derived-record
    dependencies.
-2. Migrate bounded existing manifest readers to generic records, beginning with
-   Cargo and then npm/Python/C++ project metadata.
+2. Continue migrating bounded existing manifest readers to generic records.
+   Cargo and root npm `package.json` are complete at manifest-declaration level;
+   Python and qualified C/C++ project metadata remain next.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
 4. Specify a reviewed library-contract registry, cache invalidation, and

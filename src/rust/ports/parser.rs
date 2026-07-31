@@ -2,7 +2,8 @@
 //! RepoGrammar types before returning.
 
 use crate::core::model::{
-    CodeUnit, ContentHash, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact, SourceRange,
+    CodeUnit, ContentHash, DependencyRecord, IrEdge, IrNode, Language, RepositoryRevision,
+    SemanticFact, SourceRange,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,13 +52,15 @@ pub struct ParseReport {
 }
 
 /// Parser output that carries indexing-only metadata alongside the normalized
-/// report. Most frontends return no Python interface hash; the Python frontend
-/// supplies the exact hash already computed by its `parse_document` request so
-/// indexing can persist it without launching a second worker process.
+/// report. Most frontends return no Python interface hash or dependency rows;
+/// the Python frontend supplies the exact interface hash already computed by
+/// its `parse_document` request, while bounded non-executing manifest frontends
+/// may supply language-neutral dependency records for persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceParseOutput {
     pub report: ParseReport,
     pub python_interface_hash: Option<String>,
+    pub dependencies: Vec<DependencyRecord>,
 }
 
 impl SourceParseOutput {
@@ -65,6 +68,7 @@ impl SourceParseOutput {
         Self {
             report,
             python_interface_hash: None,
+            dependencies: Vec::new(),
         }
     }
 }
