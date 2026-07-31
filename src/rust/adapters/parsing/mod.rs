@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 
 pub mod cpp;
 pub mod csharp;
+pub mod go;
 pub mod java;
 pub mod python;
 pub mod rust;
@@ -23,6 +24,7 @@ pub struct RepoGrammarSourceParser {
     java: java::JavaSyntaxParser,
     csharp: csharp::CSharpSyntaxParser,
     cpp: cpp::CppSyntaxParser,
+    go: go::GoProjectConfigParser,
     rust: rust::RustSyntaxParser,
 }
 
@@ -40,9 +42,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => self.cpp.parse(document),
-            crate::core::model::Language::Go
-            | crate::core::model::Language::GoConfig
-            | crate::core::model::Language::Php
+            crate::core::model::Language::Go => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::GoConfig => self.go.parse(document),
+            crate::core::model::Language::Php
             | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::RubyConfig
@@ -78,9 +80,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context(document, context)
             }
-            crate::core::model::Language::Go
-            | crate::core::model::Language::GoConfig
-            | crate::core::model::Language::Php
+            crate::core::model::Language::Go => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::GoConfig => self.go.parse_with_context(document, context),
+            crate::core::model::Language::Php
             | crate::core::model::Language::PhpConfig
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::RubyConfig
@@ -111,6 +113,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::GoConfig => {
+                self.go.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)
@@ -340,19 +345,23 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_go_inventory_tokens() {
+    fn product_parser_rejects_go_source_but_statically_parses_go_mod() {
         let parser = RepoGrammarSourceParser::default();
         assert_eq!(
             parser.parse(go_inventory_document(Language::Go)),
             Err(ParseError::UnsupportedLanguage)
         );
-        assert_eq!(
-            parser.parse_with_context(
-                go_inventory_document(Language::GoConfig),
+        let report = parser
+            .parse_with_context(
+                SourceDocument {
+                    text: "module example.test/app\nrequire example.test/lib v1.0.0\n",
+                    ..go_inventory_document(Language::GoConfig)
+                },
                 &ParserProjectContext::default(),
-            ),
-            Err(ParseError::UnsupportedLanguage)
-        );
+            )
+            .expect("statically parse go.mod project config");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
     }
 
     #[test]

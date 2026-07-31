@@ -163,9 +163,11 @@ The evidence order for the first slice is:
    synthesized only after the primary fact matches the canonical test identity
    and the relevant `UNKNOWN` gates.
 3. **Auxiliary:** version-pinned Tree-sitter Go syntax, extension/file-name
-   discovery, unselected build-constraint expressions, `go.mod`/`go.work`
-   inventory, and multi-configuration candidates. These may prioritize work or
-   explain uncertainty but do not support a family by themselves.
+   discovery, unselected build-constraint expressions, bounded non-executing
+   `go.mod` requirement inventory, `go.work` inventory, and
+   multi-configuration candidates. Manifest declarations may populate the
+   language-neutral dependency inventory but do not prove selected or installed
+   versions, library semantics, framework roles, or a family.
 4. **Forbidden for the claim:** extension-only recognition, text or regex
    matching, unpinned grammar output, `go/packages`/gopls output obtained without
    the separate trusted execution contract, executed test results, generated
@@ -233,16 +235,31 @@ retain bounded `.go` candidates, but files or directories beginning with `.` or
 a complete selected environment, and other Go-tool-excluded shapes cannot
 support the first family.
 
-Discovery-stage amendment (2026-07-16): while `go` and `go-config` are
-inventory-only and absent from `ParserProjectContext`, their add/modify/remove
-deltas may use incremental file-manifest persistence. The application must make
-that decision from the authoritative discovery language token, perform zero Go
-source-store/parser calls, purge any legacy or tampered claim-bearing records
-for current inventory-only paths, and preserve only file metadata. This is not
-an incremental semantic-context proof. The frontend/IR module must add Go
-inputs to `ParserProjectContext` and restore project-context invalidation by
-language token before it emits any Go unit, IR, fact, derived support, or family.
-Future Go configuration inputs follow the same rule.
+Discovery-stage amendment (2026-07-16, narrowed 2026-08-01): `go` source remains
+inventory-only and must receive zero source-store/parser calls. `go-config` is a
+separate bounded static project-model lane: root or nested `go.mod` and
+`go.work` bytes may be read, each produces only a `project_config` unit/IR node,
+and valid `require` entries may become `manifest_declared` `go_modules`
+dependency records with exact direct/indirect state. The lane must not execute
+Go, select a workspace/toolchain/build environment, resolve a module graph,
+interpret `go.sum` as a lockfile, or produce framework/family support.
+
+Malformed declarations, duplicate/conflicting requirements, resource ceilings,
+workspace selection, `replace` (especially local paths), `exclude`, `retract`,
+`toolchain`, `tool`, `godebug`, `ignore`, and unknown directives emit bounded,
+source-free typed `UNKNOWN` facts scoped to
+`affected_claim=go_dependency_inventory`. Manifest-level malformed or
+resource-exceeded input fails closed with no dependency rows; duplicate or
+conflicting module names are omitted. Valid requirements unaffected by a
+well-formed graph-changing directive remain declaration evidence only. Because
+this parser consumes no cross-file context, config add/modify/remove and
+unchanged-row copy-forward may
+remain incremental; changed or removed manifests must not retain stale records.
+The application must still purge any legacy claim-bearing records for current
+inventory-only `.go` paths. A future Go source frontend must add its actual
+cross-file inputs to `ParserProjectContext` and restore the required
+project-context invalidation before emitting source units, facts, derived
+support, or families.
 
 One authoritative Go obligation classifier must feed the existing cross-
 language family-`UNKNOWN` classifier. `go_file_selection`,
@@ -300,10 +317,13 @@ claim Go completion early:
 
 1. **Preflight decision:** this ADR, the preflight review, and synchronized
    plan/index/roadmap/changelog/memory references. No code or dependency.
-2. **Discovery/config:** safe `.go` and configuration inventory, exclusions,
-   invalid/oversized/symlink cases, path-shape classification, deterministic
-   source-free counts, inventory-only incremental deltas, claim-record purge
-   tests, and docs. Source-backed marker extraction is outside this module.
+2. **Discovery/config:** safe `.go` inventory plus bounded static `go.mod`
+   requirement inventory and `go.work` abstention, exclusions,
+   invalid/oversized/symlink cases, strict module-path/version boundaries,
+   direct/indirect state, conflict/resource/unsupported-directive UNKNOWNs,
+   deterministic source-free records, incremental persistence, claim-record
+   purge tests, and docs. Source-backed `.go` marker extraction is outside this
+   module.
 3. **Frontend/IR:** the separately authorized and pinned Tree-sitter fallback,
    the opt-in sandboxed standard-library worker, RepoGrammar-owned code units/
    IR, parser-backed generated/build-constraint/cgo/`go:generate` markers,
@@ -392,6 +412,19 @@ The following live primary sources were checked on 2026-07-15:
   and
 - maintained [Tree-sitter Go grammar](https://github.com/tree-sitter/tree-sitter-go)
   project page.
+
+The static module-inventory amendment was rechecked on 2026-08-01 against:
+
+- the official [Go Modules Reference](https://go.dev/ref/mod), including lexical
+  elements, canonical requirement versions, module-path suffixes, and the
+  declaration-only meaning of `require`;
+- the current vendored `x/mod`
+  [`modfile` rules](https://go.dev/src/cmd/vendor/golang.org/x/mod/modfile/rule.go),
+  including canonical-version and `// indirect` parsing; and
+- the current official `x/mod`
+  [`module` path/version rules](https://go.googlesource.com/mod/+/145421be2b2ebc85b8b2ec9594e5c4f61631500c/module/module.go),
+  including path validation, gopkg.in compatibility, major-version matching,
+  and the historical `.v1` pseudo-version exception.
 
 These sources constrain the decision; they do not prove RepoGrammar has
 implemented any Go support.

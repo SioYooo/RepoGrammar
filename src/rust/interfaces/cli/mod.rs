@@ -17098,7 +17098,7 @@ mod tests {
     }
 
     #[test]
-    fn go_only_index_reports_file_manifest_mode_and_deferred_parser() {
+    fn go_config_enters_parser_lane_but_go_source_stays_deferred() {
         let workspace = TempWorkspace::new("cli-index-go-file-manifest");
         let env = |_: &str| None;
         let runtime = TestRuntime;
@@ -17122,9 +17122,9 @@ mod tests {
         assert_eq!(json_output.status, 0);
         assert!(json_output.stderr.is_empty());
         let value: Value = serde_json::from_str(json_output.stdout.trim()).expect("Go index JSON");
-        assert_eq!(value["indexing"], "file_manifest_only");
-        assert_eq!(value["parser"], "deferred");
-        assert_eq!(value["parser_attempted_files"], 0);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
         assert_eq!(value["indexed_units"], 0);
         assert_eq!(value["semantic_facts"], 0);
 
@@ -17132,13 +17132,14 @@ mod tests {
             run_with_context_and_runtime(["resync"], workspace.path(), &env, &runtime);
         assert_eq!(human_output.status, 0);
         assert!(human_output.stderr.is_empty());
-        assert!(human_output.stdout.contains("resync: file manifest stored"));
-        assert!(human_output.stdout.contains("indexing: file_manifest_only"));
-        assert!(human_output.stdout.contains("parser: deferred"));
-        assert!(human_output.stdout.contains("parser_attempted_files: 0"));
-        assert!(!human_output
+        assert!(human_output
             .stdout
-            .contains("syntax-only code units stored"));
+            .contains("resync: syntax-only code units stored"));
+        assert!(human_output
+            .stdout
+            .contains("indexing: syntax_only_code_units"));
+        assert!(human_output.stdout.contains("parser: syntax_only"));
+        assert!(human_output.stdout.contains("parser_attempted_files: 1"));
     }
 
     #[test]

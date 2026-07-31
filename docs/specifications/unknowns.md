@@ -390,10 +390,17 @@ Some unknowns block only specific claims:
   escaped/raw/prefixed Catch2 tag strings remain `UNKNOWN`. C/C++ support must
   not be guessed from macro names, base-type names, directory names, or fact
   text substrings.
-- Go is `discovered_only` and remains unsupported after ADR-0021 plus the
-  source-free discovery/config module. Inventory emits no Go semantic facts or
-  `UNKNOWN` reason codes; the unsupported-parser notice is a bounded path-free
-  warning per language token, not a claim fact. A future
+- Go is `discovered_only` and remains unsupported after ADR-0021. `.go` source
+  inventory emits no Go semantic facts or `UNKNOWN` reason codes; its
+  unsupported-parser notice is a bounded path-free warning, not a claim fact.
+  The bounded static `go-config` lane may emit existing reason codes
+  (`MissingProjectConfig`, `ConflictingFacts`, `InsufficientSupport`, or
+  `BuildVariantAmbiguity`) only with
+  `affected_claim=go_dependency_inventory` for malformed, conflicting,
+  resource-bounded, workspace, replace/exclude/retract/toolchain/tool, or other
+  unsupported manifest semantics. Those UNKNOWNs govern completeness of the
+  language-neutral declaration inventory and cannot support or block a Go
+  source family. A future
   Go test-function slice must route `go_file_selection`,
   `go_test_declaration_identity`, and `go_generated_origin` through the same
   authoritative family-`UNKNOWN` classifier used by other languages; those
