@@ -272,7 +272,8 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, `.jsx`, `.py`, `.java`, `.cs`, `.c`/`.h`, `.cc`/`.cpp`/`.cxx`/`.hh`/
-`.hpp`/`.hxx`, `.go`, `.php`, `.rb`, and `.rs` files (C# discovery skips the MSBuild
+`.hpp`/`.hxx`, `.go`, `.php`, `.rb`, `.ads`/`.adb`, accepted lowercase Fortran,
+and `.rs` files (C# discovery skips the MSBuild
 `obj/` output directory and stores the `csharp` language token; C/C++ discovery
 skips the CLion `cmake-build-debug`/`cmake-build-release` directories and stores
 the `c`, `cpp`, and `cpp-config` language tokens; no schema change is required for a new
@@ -354,6 +355,19 @@ once.
 Exact `.build`/`.swiftpm` exclusions are Swift-only and do not globally prune
 other languages. A later bounded project model must add context invalidation
 before cross-file semantic records exist.
+
+Ada uses `ada` for exact lowercase `.ads`/`.adb` and `ada-config` for exact
+lowercase `.gpr`, `alire.toml`, and `alire.lock` basenames. Source and GPR paths
+persist only metadata and bypass SourceStore/parser dispatch. Exact Alire
+manifest/lock paths store project-config units and typed inventory facts;
+unconditional direct manifest strings may additionally store schema-v13
+`alire` rows. Lock rows are never inferred from the internal Alire format.
+Fortran uses `fortran` for the frozen lowercase non-preprocessed fixed/free form
+suffixes and `fortran-config` for exact `fpm.toml`. Source paths remain metadata-
+only; the manifest may store one project-config unit, typed inventory facts,
+and schema-v13 scoped direct `fpm` rows. Both languages remain absent from
+`ParserProjectContext`, so deferred deltas are incremental, claim-bearing legacy
+records are filtered, and unchanged static-manifest evidence copies exactly once.
 
 Other source-inventory or config changes still fall back to a full rebuild.
 Source snippets and absolute paths are not stored by default syntax-only
@@ -587,7 +601,8 @@ classifications are evidence-backed), and validation before activation.
 The lifecycle report's `dirty_records_cleared` count covers persisted dirty
 marker rows actually cleared in the building generation. Incremental
 generation-by-replacement omission of claim-bearing records is a copy-forward
-filter, not dirty-marker cleanup, so purging legacy Go, PHP, Ruby, or Swift
+filter, not dirty-marker cleanup, so purging legacy Go, PHP, Ruby, Swift, Ada,
+or Fortran
 claims from inventory-only paths leaves that count at zero.
 Path replacement in a building generation is transactional and fail-closed:
 unchanged file metadata is treated as an idempotent no-op, while changed file
@@ -639,6 +654,10 @@ static-manifest parser output such as root npm `package.json` and Python
 references. Exact SwiftPM schema-2/3 `Package.resolved` pins are lockfile rows;
 package location, revision, directness, scope, install state, and runtime
 selection remain unavailable or explicitly unknown.
+Bounded Alire `[[depends-on]]` and root fpm dependency strings use the existing
+closed `alire` and `fpm` ecosystem tokens; both are direct
+`manifest_declared` rows and neither proves selected, installed, resolved, or
+runtime-used packages. Alire lockfiles emit no rows.
 Incremental indexing recomputes provider-owned Cargo rows and copies a static
 row only when its unchanged evidence code unit also copies. There is
 intentionally no public CLI/MCP raw package-name projection in this schema

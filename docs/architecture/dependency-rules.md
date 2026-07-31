@@ -82,6 +82,16 @@ cross-file inputs and token-based context invalidation before introducing Go
 source semantics. The dated suffix list is discovery metadata, not a core
 support authority.
 
+Ada and Fortran discovery policy belongs in `adapters/languages/ada.rs` and
+`adapters/languages/fortran.rs`. Their source and deferred configuration paths
+must be rejected before SourceStore dispatch. The bounded parser may read only
+supplied exact `alire.toml`/`alire.lock` and `fpm.toml` bytes and return owned
+project-config units, scoped UNKNOWNs, and generic manifest-declared dependency
+records. It must not evaluate GPR, interpret Alire's internal lock schema, run
+GNAT/gprbuild/alr/fpm/compiler/preprocessor commands, execute repository or
+dependency code, or resolve a graph. Libadalang and Flang remain qualification
+subjects, not accepted production dependencies.
+
 ## Tree-sitter boundary
 
 Tree-sitter is the intended universal syntax technology, but parser AST nodes

@@ -7,9 +7,11 @@ use crate::ports::parser::{
 };
 use std::collections::BTreeSet;
 
+pub mod ada;
 pub(crate) mod bounded_json;
 pub mod cpp;
 pub mod csharp;
+pub mod fortran;
 pub mod go;
 pub mod java;
 pub mod php;
@@ -33,6 +35,8 @@ pub struct RepoGrammarSourceParser {
     ruby: RubyConfigParser,
     rust: rust::RustSyntaxParser,
     swift: swift::SwiftProjectConfigParser,
+    ada: ada::AdaProjectConfigParser,
+    fortran: fortran::FortranProjectConfigParser,
 }
 
 #[derive(Debug, Default)]
@@ -81,6 +85,10 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Ruby
             | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::SwiftConfig => self.swift.parse(document),
+            crate::core::model::Language::Ada => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::AdaConfig => self.ada.parse(document),
+            crate::core::model::Language::Fortran => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::FortranConfig => self.fortran.parse(document),
             crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
@@ -123,6 +131,14 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context(document, context)
             }
+            crate::core::model::Language::Ada => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::AdaConfig => {
+                self.ada.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Fortran => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::FortranConfig => {
+                self.fortran.parse_with_context(document, context)
+            }
             crate::core::model::Language::RubyConfig => {
                 self.ruby.parse_with_context(document, context)
             }
@@ -160,6 +176,12 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::AdaConfig => {
+                self.ada.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::FortranConfig => {
+                self.fortran.parse_with_context_output(document, context)
             }
             crate::core::model::Language::RubyConfig => {
                 self.ruby.parse_with_context_output(document, context)

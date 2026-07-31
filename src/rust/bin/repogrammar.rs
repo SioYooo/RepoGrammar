@@ -5072,6 +5072,10 @@ mod tests {
             DiscoveredLanguage::RubyConfig => Language::RubyConfig,
             DiscoveredLanguage::Swift => Language::Swift,
             DiscoveredLanguage::SwiftConfig => Language::SwiftConfig,
+            DiscoveredLanguage::Ada => Language::Ada,
+            DiscoveredLanguage::AdaConfig => Language::AdaConfig,
+            DiscoveredLanguage::Fortran => Language::Fortran,
+            DiscoveredLanguage::FortranConfig => Language::FortranConfig,
             DiscoveredLanguage::Rust => Language::Rust,
             DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
@@ -11620,6 +11624,112 @@ class User(Base):
             let value = parse_machine_output(command, &output, &workspace);
             assert_unknown_query_json(command, &value);
         }
+    }
+
+    #[test]
+    fn product_runtime_ada_fortran_sources_and_gpr_are_file_manifest_only() {
+        let workspace = TempWorkspace::new("product-runtime-ada-fortran-inventory");
+        let mut ada_source = vec![0xff, 0xfe, 0xfd];
+        ada_source.extend_from_slice(b"ADA_SOURCE_MUST_NOT_BE_READ");
+        fs::write(workspace.path().join("main.adb"), ada_source).expect("write Ada source");
+        let mut fortran_source = vec![0xff, 0xfe, 0xfd];
+        fortran_source.extend_from_slice(b"FORTRAN_SOURCE_MUST_NOT_BE_READ");
+        fs::write(workspace.path().join("main.f90"), fortran_source).expect("write Fortran source");
+        let mut gpr = vec![0xff, 0xfe, 0xfd];
+        gpr.extend_from_slice(b"GPR_SOURCE_MUST_NOT_BE_READ");
+        fs::write(workspace.path().join("demo.gpr"), gpr).expect("write GPR inventory");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 3);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
+        assert_eq!(value["parser_attempted_files"], 0);
+        assert_eq!(value["indexed_units"], 0);
+        assert_eq!(value["semantic_facts"], 0);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!([
+                "parser skipped unsupported language token: ada",
+                "parser skipped unsupported language token: ada-config",
+                "parser skipped unsupported language token: fortran"
+            ])
+        );
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| {
+                    (
+                        file["path"].as_str().expect("path"),
+                        file["language"].as_str().expect("language"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("demo.gpr", "ada-config"),
+                ("main.adb", "ada"),
+                ("main.f90", "fortran"),
+            ]
+        );
+        for secret in [
+            "ADA_SOURCE_MUST_NOT_BE_READ",
+            "FORTRAN_SOURCE_MUST_NOT_BE_READ",
+            "GPR_SOURCE_MUST_NOT_BE_READ",
+        ] {
+            assert!(!index.stdout.contains(secret));
+            assert!(!files.stdout.contains(secret));
+        }
+    }
+
+    #[test]
+    fn product_runtime_alire_and_fpm_manifests_report_bounded_syntax_inventory() {
+        let workspace = TempWorkspace::new("product-runtime-alire-fpm-index");
+        fs::write(
+            workspace.path().join("alire.toml"),
+            "[[depends-on]]\nsecret_ada_crate = \"^1\"\n",
+        )
+        .expect("write Alire manifest");
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            "[dependencies]\nsecret-fortran-package = \"*\"\n",
+        )
+        .expect("write fpm manifest");
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 2);
+        assert_eq!(value["indexed_units"], 2);
+        assert_eq!(value["semantic_facts"], 2);
+        assert_eq!(value["warnings"], serde_json::json!([]));
+        assert!(!index.stdout.contains("secret_ada_crate"));
+        assert!(!index.stdout.contains("secret-fortran-package"));
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("units", &units, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["units"].as_array().expect("units array").len(), 2);
+        assert!(!units.stdout.contains("secret_ada_crate"));
+        assert!(!units.stdout.contains("secret-fortran-package"));
     }
 
     #[test]

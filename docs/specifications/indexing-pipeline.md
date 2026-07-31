@@ -808,6 +808,57 @@ become family support without the authoritative Ruby claim-impact classifier,
 exact direct Minitest slice, support >= 3, source-free product wiring, review,
 and completion audit required by ADR-0022.
 
+Ada is `discovered_only` and unsupported. A pure normalized path classifier
+admits only lowercase GNAT-default `.ads` specifications and `.adb` bodies as
+`ada`; GPR-configured alternative names such as `.ada` remain deferred. Exact
+lowercase `.gpr`, `alire.toml`, and `alire.lock` basenames are `ada-config`.
+Ada source and GPR bytes are inventory-only before SourceStore access, so binary
+content is still safely hashed and no source/config code unit, IR, fact, or
+family is created for those paths.
+
+Exact `alire.toml` and `alire.lock` bytes enter a bounded file-local parser.
+Only ASCII string assignments under exact unconditional `[[depends-on]]`
+sections become direct runtime `manifest_declared` `alire` records. Conditional
+case tables are omitted with build-variant UNKNOWN; pins remain unresolved;
+conflicts omit the affected identity; malformed or resource-bounded manifests
+fail closed. Alire's documented internal lock schema is never interpreted and
+produces no dependency row. Every uncertainty is source-free and scoped to
+`ada_dependency_inventory`. Exact config changes reparse file-locally;
+unchanged evidence rows copy forward; changed/removed paths cannot retain stale
+rows; deferred source/GPR deltas remain zero-read and purge legacy claims.
+
+The Libadalang qualification result is documentation-only. Its parser/semantic
+API, recovery behavior, incomplete legality coverage, GNAT toolchain coupling,
+and project-provider file access do not satisfy the current source-free default
+boundary. No Libadalang, GNAT, gprbuild, alr, repository/dependency code,
+child process, or network action is added by this slice. No Ada path may become
+family support before a separate provider/project-model/obligation decision,
+fixtures, source-free readiness review, and completion audit land.
+
+Fortran is `discovered_only` and unsupported. The pure path classifier freezes
+the documented GNU non-preprocessed lowercase forms: fixed `.f`, `.for`, and
+`.ftn`; free `.f90`, `.f95`, `.f03`, and `.f08`. Uppercase forms and `.fpp`
+remain deferred because they invoke preprocessing by documented default; `.fi`,
+`.fii`, and other suffixes are likewise unproven. Source bytes are inventory-
+only before SourceStore access. Exact root/nested `fpm.toml` is
+`fortran-config` and enters one bounded file-local parser.
+
+The fpm reader admits only direct ASCII string requirements in exact root
+`[dependencies]` and `[dev-dependencies]` tables, mapping them respectively to
+runtime and development `manifest_declared` `fpm` records. Dotted namespace,
+inline git/path, target-specific, non-string, conflicting, malformed, and
+resource-bounded shapes are omitted or fail closed with source-free
+`fortran_dependency_inventory` UNKNOWN. It neither preprocesses nor resolves a
+dependency graph. Config edits reparse file-locally and unchanged evidence rows
+copy forward; source deltas stay zero-read and incremental.
+
+The Flang qualification result is documentation-only. Its prescanner expands
+includes and runs preprocessing before parsing, and its driver/compiler phases
+do not meet this source-free non-execution lane. No Flang/f18, fpm, compiler,
+preprocessor, repository/dependency code, child process, or network action is
+introduced. No Fortran family, support, readiness, or semantic claim may follow
+without a separately qualified frontend and completion gate.
+
 The existing Rust-side TypeScript process adapter can validate NDJSON worker
 output and translate facts into RepoGrammar-owned semantic facts. The
 syntax-only `index` and `sync` path does not launch that worker by default. With
@@ -1283,9 +1334,10 @@ interface-hash gate below). Adding or removing any project-context source file,
 editing any `.py` module whose interface changed or could not be verified,
 editing any `conftest.py`, and changing any project config consumed as cross-file
 parser context fall back to a full rebuild (see the gate table below). Current
-inventory-only `.go` source plus deferred PHP/Ruby/Swift source/config paths are
-explicit exceptions. Bounded file-local `go.mod`/`go.work`, Composer JSON/lock,
-`Gemfile.lock`, and `Package.resolved` parsing follows the static-manifest
+inventory-only `.go`, Ada, or Fortran source plus deferred PHP/Ruby/Swift/Ada
+source/config paths are explicit exceptions. Bounded file-local
+`go.mod`/`go.work`, Composer JSON/lock, `Gemfile.lock`, `Package.resolved`,
+`alire.toml`/`alire.lock`, and `fpm.toml` parsing follows the static-manifest
 evidence lifecycle. When safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
@@ -1302,7 +1354,7 @@ while Cargo rows never copy because the Cargo provider recomputes them later in
 the same generation. Changed or removed manifests therefore cannot retain stale
 dependency records, and an unrelated TS/JS source edit preserves exactly one
 copy of each unchanged npm, PyPI, vcpkg, Conan, Go Modules, Composer,
-RubyGems, or SwiftPM declaration/lock row.
+RubyGems, SwiftPM, Alire, or fpm declaration/lock row.
 
 The project-context gate distinguishes *content-only modifications* from
 *path-set changes*. A modified non-inventory file is one whose repo-relative path
@@ -1318,7 +1370,7 @@ appears in both the base and the current manifest with a changed content hash
 | Content-only modify | `.py` module, whole-project context payload near/over the worker request cap on either manifest | full-rebuild fallback (`python_context_budget`) |
 | Content-only modify | `conftest.py` | full-rebuild fallback (`project_context_changed`) |
 | Content-only modify | context-bearing discovered project config | full-rebuild fallback (`project_context_changed`) |
-| Add/modify/remove | file-local static `go.mod`/`go.work`, vcpkg, or Conan config | incremental — parse changed files and evidence-copy unchanged files |
+| Add/modify/remove | file-local static `go.mod`/`go.work`, Composer/Bundler/SwiftPM/Alire/fpm, vcpkg, or Conan config | incremental — parse changed files and evidence-copy unchanged files |
 | Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or context-bearing project config | full-rebuild fallback (`project_context_changed`) |
 | Add/modify/remove | Java/C#/C/C++ and inventory-only source | incremental — parsers ignore project context |
 

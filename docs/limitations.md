@@ -46,6 +46,16 @@ production-readiness claim.
   semantics, framework role, family, or readiness claim is produced. Static
   config updates are incremental; this auxiliary inventory does not imply Go
   language support.
+- Ada is discovered-only and unsupported. Only default `.ads`/`.adb` source
+  names are inventoried; alternative GPR naming is unresolved. GPR and source
+  bytes are never read. Bounded `alire.toml` declarations may produce auxiliary
+  `alire` dependency rows, while conditional/pinned/lock semantics remain typed
+  UNKNOWN. This does not imply Ada, library, family, or readiness support.
+- Fortran is discovered-only and unsupported. Only the frozen lowercase,
+  non-preprocessed fixed/free-form suffix set is inventoried. A bounded
+  `fpm.toml` subset may produce auxiliary `fpm` dependency rows; preprocessing,
+  dotted/inline/target dependency shapes, compiler semantics, families, and
+  readiness remain unresolved.
 
 ## UNKNOWN Is Expected
 
