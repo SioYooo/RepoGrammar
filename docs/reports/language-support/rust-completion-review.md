@@ -64,8 +64,9 @@ for incremental generations rather than copying stale rows.
 
 Third-party source semantics remain incomplete. There is no isolated
 rust-analyzer/rustc/rustdoc adapter, package-qualified external item identity,
-reviewed library-contract registry, or controlled connection between Cargo
-inventory and family support. A `serde` name in `Cargo.toml`, for example, is
+production reviewed contract pack, or controlled connection between Cargo
+inventory and family support. The exact-version registry infrastructure exists,
+but contains no production contracts. A `serde` name in `Cargo.toml`, for example, is
 not proof that a derive resolves to the intended crate or that generated trait
 implementations exist. Current families use exact source-visible use/FQN anchors
 and preserve macro/trait behavior as `UNKNOWN`.
@@ -152,7 +153,7 @@ measurements. Performance closure therefore fails.
 | 5. Family-first exact anchor | Pass as substrate | Self-dogfood and general exact-anchor families meet support >= 3 and compatibility gates; they remain structural. |
 | 6. Fixture proof | Partial | Positive, lookalike, low-support, macro/cfg/build, module/serde unresolved-resolved, and build-script sentinel fixtures exist. A dedicated parse-degraded/provider stale-conflict completion matrix is missing. |
 | 7. Source-free readiness | Partial | Rust counts, unknowns, CLI/MCP family paths, and leakage behavior have tests, but no final Rust-specific provider/readiness audit links all surfaces. |
-| 8. Four-part review | Fail | This review records unresolved source correctness, provider security, completeness, and representative performance evidence. |
+| 8. Four-part review | Satisfied by this snapshot | This review records source correctness, provider security, completeness, and performance findings. Unresolved evidence remains blocking and the record does not replace tests. |
 | 9. Atomic delivery/audit | Fail | The principal Rust support landed as one aggregate commit, not independently complete D2 modules, and no final linked audit reran all required gates. |
 
 Result: **not 9/9; Rust must not increment the ADR-0020 completed-language

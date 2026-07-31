@@ -64,8 +64,9 @@ Third-party behavior remains incomplete. `python_type_provider` is registered
 but `not_integrated`; `src/rust/ports/python_provider.rs` and the application
 planner define future Pyrefly/Pyright/RightTyper requests and cache/provenance
 types but execute no provider. Therefore arbitrary import spellings are not
-package-qualified external symbols, no provider-backed dependency graph exists,
-and no reviewed versioned library-contract registry can establish behavior.
+package-qualified external symbols and no provider-backed dependency graph
+exists. The exact-version contract registry from `4e4d0de` has zero production
+contract packs, so it cannot establish behavior.
 Under ADR-0030, package presence and framework-name text are context only and
 must never support a family by themselves.
 
@@ -156,7 +157,7 @@ performance limits therefore remain an open gate, not an inferred success.
 | 5. Family-first exact anchor | Pass as substrate | Multiple exact families meet support >= 3 and compatibility rules; this is reusable evidence, not completion without the other gates. |
 | 6. Fixture proof | Partial | Positive, lookalike/dynamic, low-support, stale, conflict, and selected unresolved/resolved fixtures exist. The plan explicitly requires a complete parse-degraded and provider-state matrix before closure. |
 | 7. Source-free readiness | Partial | CLI/MCP/query/readiness and leakage controls exist, but the language's final provider/readiness matrix has not been audited and linked as a completion submodule. |
-| 8. Four-part review | Fail | This report identifies open correctness, security, completeness, and performance gaps; an incomplete review cannot pass itself. |
+| 8. Four-part review | Satisfied by this snapshot | This report records correctness, security, completeness, and performance findings. Open findings remain blockers or risks and are not converted into test or implementation evidence. |
 | 9. Atomic delivery/audit | Fail | The main Python landing was an aggregate commit and no final audit links independently complete discovery, frontend/IR, provider/UNKNOWN, family/fixtures, and review commits with full gates. |
 
 Result: **not 9/9; Python must not increment the ADR-0020 completed-language

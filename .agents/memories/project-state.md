@@ -1,5 +1,28 @@
 # Project State
 
+## Top-20 final audited checkpoint — 2026-08-01
+
+The isolated `feat/top-20-language-library-support` campaign is consolidated in
+`docs/reports/language-support/top-20-final-program-audit.md` and
+`docs/reports/language-support/top-20-program-summary.json`. Its accepted label
+is `PARTIAL_AUDITED_PROGRESS`: strict completion is `0/20`, TypeScript extra is
+incomplete, and arbitrary third-party-library behavior analysis is incomplete.
+All 20 ranked languages plus TypeScript extra have source-free completion
+reviews. Seventeen of twenty `DependencyEcosystem` tokens have at least one
+bounded inventory consumer; `sql_extension`, `scratch_extension`, and
+`native_system` have none. The exact-version reviewed-contract registry is
+implemented with duplicate/overlap rejection, but ships zero production packs.
+
+Never infer language support from discovery, a parser, lexical candidates,
+manifest or lockfile inventory, provider availability, or a contract lookup.
+The unresolved common join is: authoritative project graph -> package-qualified
+external symbol -> compatible exact-version reviewed contract -> exact source
+anchor -> fresh family evidence with no blocking `UNKNOWN`. The highest-EV next
+step is to close that entire vertical for one narrow Python family before
+copying it to more languages. The campaign branch must not be merged to `main`
+without an explicit later maintainer instruction; no push, PR, tag, release, or
+publication was authorized by this checkpoint.
+
 ## Top-20 dependency/library execution line — 2026-08-01
 
 ADR-0030 introduces the language-neutral dependency evidence ladder and owned
@@ -61,12 +84,13 @@ plugins, malformed XML, conflicts, and resource limits remain
 annotation processor, artifact/classpath resolver, project/dependency code,
 child process, cache, repository, or network path executes. This adds only a
 Java project-config inventory slice and does not change the Java completion
-state. The strict ADR-0020
-baseline remains
-`0/20`, TypeScript extra
-remains incomplete, Go/PHP/Swift/Ruby remain `discovered_only`, and the other
-nine new lanes remain `not_started`. The current evidence matrix is
-`docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
+state. The strict ADR-0020 baseline remains `0/20` and TypeScript extra remains
+incomplete. Go/PHP/Swift/Ruby, VB.NET/Delphi, Ada/Fortran, SQL/R, and MATLAB are
+`discovered_only`; Assembly has a bounded structural substrate; Scratch product
+integration remains `NO_GO`/`not_started`. The initial evidence matrix is
+`docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`; the
+later consolidated checkpoint is
+`docs/reports/language-support/top-20-final-program-audit.md`.
 
 ## Build Week stable-release line
 

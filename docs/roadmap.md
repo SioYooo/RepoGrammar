@@ -463,6 +463,15 @@ ADR-0039 and `docs/reports/language-support/scratch-completion-review.md` requir
 a binary-document port and maintained ZIP/deflate qualification before product
 discovery may change.
 
+The 2026-08-01 five-round checkpoint is audited as
+`PARTIAL_AUDITED_PROGRESS`: strict completion remains `0/20`, TypeScript extra
+is incomplete, 17 of 20 dependency-ecosystem tokens have bounded consumers,
+and the exact-version reviewed-contract registry has zero production packs.
+`docs/reports/language-support/top-20-final-program-audit.md` and
+`docs/reports/language-support/top-20-program-summary.json` are the consolidated
+human- and machine-readable snapshots. These additions do not change the
+Python-first v0.1 scope or authorize a public support claim.
+
 Existing structural paths are starting evidence, not grandfathered completion.
 Per language, completion requires discovery/configuration, an authoritative
 frontend or format parser, RepoGrammar code units/IR, typed recoverable and

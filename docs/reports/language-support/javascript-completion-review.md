@@ -64,10 +64,11 @@ This inventory does not establish install state, lock resolution, export maps,
 conditional exports, module format, selected runtime, package-qualified
 external symbols, or library behavior. The optional TypeScript worker can
 resolve a narrow operation only after path/hash/range/config validation; its
-dependency-free fallback is structural and cannot support a family alone. No
-versioned reviewed library-contract registry exists. Full third-party analysis
-therefore needs a pinned JavaScript project profile, isolated provider queries,
-lock/config coherence, package-qualified symbol identity, and reviewed
+dependency-free fallback is structural and cannot support a family alone. The
+exact-version reviewed-contract registry exists, but production contract packs
+and eligible package-qualified symbol evidence are both zero. Full third-party
+analysis therefore needs a pinned JavaScript project profile, isolated provider
+queries, lock/config coherence, package-qualified symbol identity, and reviewed
 capability contracts above inventory.
 
 ### Exact families and typed `UNKNOWN`
@@ -153,7 +154,7 @@ evidence, not implied success.
 | 5. Family-first exact anchor | Pass as substrate | JavaScript Express and runner fixtures can satisfy support >= 3 via exact anchors; shared families remain bounded and do not waive other gates. |
 | 6. Fixture proof | Partial | Positive JavaScript, TS/JS negatives/lookalikes, low-support, dynamic, stale, and selected unresolved/resolved pairs exist. A dedicated JS parse-degraded and provider-state completion matrix is missing. |
 | 7. Source-free readiness | Partial | CLI/MCP/stats/readiness paths and leakage tests exist, including JavaScript counts through shared language surfaces, but no linked JavaScript final readiness audit exists. |
-| 8. Four-part review | Fail | This first strict review records unresolved correctness, security, completeness, and performance items; they are not closed. |
+| 8. Four-part review | Satisfied by this snapshot | This strict review records correctness, security, completeness, and performance findings. Unresolved items remain blockers or risks and are not closed by the review itself. |
 | 9. Atomic delivery/audit | Fail | The principal TS/JS capability landed as an aggregate commit, not a linked D2 submodule chain, and no final JavaScript audit reran and linked all required gates. |
 
 Result: **not 9/9; JavaScript must not increment the ADR-0020 completed-language

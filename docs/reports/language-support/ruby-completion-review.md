@@ -2,7 +2,7 @@
 
 - Status: Incomplete — `discovered_only`
 - Authority: ADR-0020 and ADR-0022
-- Reviewed baseline: `86dba38ada7fe5646b5ab8770e2ad4183e8d22d7`
+- Dependency prerequisite: `6a6f88538090ef386a8420c7424a380d97fa1f74`
 - Last updated: 2026-08-01
 
 ## ADR-0020 gate
@@ -17,7 +17,8 @@
 - [ ] Positive, lookalike, low-support, parse-degraded, variant, and
   unresolved/resolved fixtures.
 - [ ] Source-free readiness and leakage review.
-- [ ] Correctness, security, completeness, and performance review.
+- [x] Four-part review record — this report records correctness, security,
+  completeness, and performance findings; open findings remain blockers.
 - [ ] Linked atomic prerequisite commits and final completion audit.
 
 ## Current evidence and blocker
@@ -47,3 +48,39 @@ execute Gemfile, gemspec, Ruby, Bundler, RubyGems, Rake, Rails, or tests is
 
 Not complete. No completion percentage or supported-language count may include
 Ruby until every checkbox is linked to current-branch evidence.
+
+## Final program audit fields
+
+| Required field | Audited result |
+|---|---|
+| Language / rank | Ruby / 20 |
+| Dialect/version | No selected engine or project profile. CRuby 4.0.6 is a future differential target; ambient Ruby 2.6.10 is not evidence. |
+| Provider/frontend/version | None integrated. `ruby-prism` 1.9.0 is a qualification candidate only. |
+| Discovery/config | `.rb`, Bundler manifests/locks, gemspecs, and `.ruby-version` inventory with Ruby-specific exclusions. |
+| Manifest/lockfile | Direct root rows from exact `Gemfile.lock` `DEPENDENCIES`; no resolved-spec join, group/scope, or executable Gemfile/gemspec evaluation. |
+| Owned source IR | Absent. |
+| External symbols | Absent; require/load/autoload, constants, refinements, metaprogramming, and gem ownership are unresolved. |
+| Library Contracts | Registry infrastructure exists, production packs = 0; no Ruby contract can match manifest-only dependency rows. |
+| Exact-anchor family | Absent; proposed Minitest family is not implemented. |
+| Fixtures | Strong Bundler inventory/no-execution/resource/incremental tests; no qualified Prism source/family matrix. |
+| Primary UNKNOWN cases | Engine/version/root selection, executable DSLs, non-registry sources, resolved specs, require graph, dynamic definitions, native extensions, provider and sandbox availability. |
+| Source-free result | Pass for inventory; full Ruby readiness is absent. |
+| Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
+
+## Four-part review
+
+- Correctness: the direct `DEPENDENCIES` subset is intentionally not a resolved
+  gem graph and cannot prove source ownership, loading, or Minitest semantics.
+- Security: Ruby, Bundler, RubyGems, gemspec/Gemfile DSLs, Rake, Rails, tests,
+  native extensions, children, and network never run. Native Prism isolation
+  and malformed-input qualification are not complete.
+- Completeness: discovery plus one static subset exists; source frontend/IR,
+  provider obligations, exact family, completion fixtures, and audit do not.
+- Performance: bounded text/record parsing is covered; no Prism, native parser,
+  large gem graph, metaprogramming, or incremental-source benchmark exists.
+
+Evidence paths are `src/rust/adapters/languages/ruby.rs`,
+`src/rust/adapters/parsing/ruby.rs`, ADR-0022, product/incremental tests, and
+prerequisite `6a6f88538090ef386a8420c7424a380d97fa1f74`. Exact non-claim:
+Bundler declaration inventory is not installed/resolved gem evidence, Ruby
+source semantics, Minitest identity, or behavior support.

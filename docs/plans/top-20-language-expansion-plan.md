@@ -1,6 +1,6 @@
 # Top-20 Language Expansion Plan
 
-- Status: Active implementation plan
+- Status: Active implementation plan; 2026-08-01 audited checkpoint incomplete
 - Last updated: 2026-08-01
 - Scope: Execute ADR-0020 against the frozen TIOBE July 2026 Top-20 snapshot,
   with TypeScript tracked as an extra language.
@@ -543,3 +543,19 @@ At the end of each wave, publish a source-free summary of completed languages,
 provider availability, recoverable and irreducible `UNKNOWN` mechanisms,
 validation results, commit SHAs, and remaining risks. Keep the seven current
 Top-20 languages, TypeScript extra, and thirteen additions in separate totals.
+
+## 2026-08-01 audited program checkpoint
+
+The bounded five-round campaign is consolidated in
+`docs/reports/language-support/top-20-final-program-audit.md` and
+`docs/reports/language-support/top-20-program-summary.json`. It produced 20
+ranked completion reviews plus the TypeScript-extra review, bounded dependency
+inventory across 17 of 20 ecosystem tokens, schema-v13 persistence, and an
+exact-version reviewed-contract registry. The registry intentionally ships no
+production contract packs.
+
+The strict result is `0/20`, TypeScript extra is incomplete, and the
+third-party-library platform is incomplete. No lane may skip directly from
+this checkpoint to a support claim. Resume with the unfinished gate sequence
+in the corresponding completion review; the highest-EV shared path is one
+complete Python provider/external-symbol/reviewed-contract/family vertical.

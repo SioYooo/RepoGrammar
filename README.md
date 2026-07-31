@@ -298,14 +298,33 @@ for the deeper design.
 
 | Language | Current evidence boundary |
 | --- | --- |
-| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Official Python-first scope with bounded framework-family context |
-| **TypeScript / JavaScript** — Express, Jest/Vitest, Mocha/`node:test`, Next.js, Fastify, Prisma, Drizzle, Zod, NestJS, Hono | Conservative exact-anchor preview; React and React Native remain unsupported |
-| **Rust** — internal patterns plus bounded serde, thiserror, Tokio, clap, and axum anchors | Structural preview; no macro expansion, trait-resolution, or runtime claim |
-| **Java/Spring, C#, C/C++** | Conservative structural preview; no runtime or build-system equivalence claim |
-| **Go** | Discovered only and not semantically supported; exact root/nested `go.mod` files receive bounded static `require` inventory with direct/indirect state, while `go.work` abstains and no Go command executes |
-| **PHP** | Discovered only and not semantically supported; exact `composer.json`/`composer.lock` receive bounded static dependency inventory with lock directness unknown, without executing PHP or Composer |
-| **Swift** | Discovered only and not semantically supported; exact `Package.resolved` schema 2/3 receives bounded static SwiftPM dependency inventory with unknown directness, without executing Swift or SwiftPM |
-| **Ruby** | Discovery plus bounded static direct `Gemfile.lock` dependency inventory; no Ruby semantic analysis or support |
+| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Official Python-first structural substrate; strict Top-20 completion remains open |
+| **C** | Structural substrate plus shared bounded vcpkg/Conan declarations; no translation-unit or external-symbol authority |
+| **C++** | Structural substrate plus bounded vcpkg/Conan declarations; no complete template/include/ABI semantics |
+| **Java** | Structural substrate plus literal direct Maven declarations; no effective model, classpath, or javac/JDT authority |
+| **C#** | Structural substrate; no C# project/NuGet inventory or Roslyn/MSBuild authority |
+| **JavaScript** | Conservative exact-anchor structural substrate plus root npm manifest declarations; package/runtime semantics remain incomplete |
+| **Visual Basic .NET** | Discovery plus literal `.vbproj` NuGet declarations; no Roslyn/MSBuild source semantics |
+| **SQL** | Discovery/config metadata only; dialect, migration, catalog, and extension semantics remain unknown |
+| **R** | Discovery plus bounded CRAN/Bioconductor/renv metadata; source, project, NSE, and dispatch semantics remain open |
+| **Rust** | Structural self-dogfood plus Cargo manifest/project metadata; no complete module, macro, trait, or external-symbol semantics |
+| **Delphi/Object Pascal** | Discovery plus literal Delphi package declarations; no authoritative compiler/project/source model |
+| **Scratch** | Product integration is `NO_GO` pending a binary-document port and vetted ZIP/deflate boundary; `.sb3` remains unsupported |
+| **Go** | Discovery plus bounded `go.mod` declarations; source stays parser-free and no Go command executes |
+| **PHP** | Discovery plus bounded Composer manifest/lock inventory; no PHP/Composer execution or source semantics |
+| **Swift** | Discovery plus bounded SwiftPM schema-2/3 lock pins; no Swift/SwiftPM/Xcode execution or source semantics |
+| **Ada** | Discovery plus unconditional literal Alire declarations; no Libadalang/GNAT project/source authority |
+| **Assembly** | Bounded x86-64 GNU-as-profile lexical candidates only; target, macro, include, link, and symbol semantics remain unknown |
+| **MATLAB** | Discovery plus bounded R2024b+ add-on declarations; no MATLAB/Octave/Simulink execution or source semantics |
+| **Fortran** | Discovery plus literal root fpm declarations; no compiler/project/module/ABI authority |
+| **Ruby** | Discovery plus bounded direct `Gemfile.lock` declarations; no Ruby/Bundler execution or source semantics |
+| **TypeScript (extra; not Top-20 denominator)** | Conservative exact-anchor structural substrate plus root npm declarations; full pinned Program/TypeChecker project semantics remain incomplete |
+
+The frozen July 2026 Top-20 program is currently **0/20 complete** under its
+nine-gate evidence contract. See the
+[final program audit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/reports/language-support/top-20-final-program-audit.md);
+inventory and structural evidence must not be read as full language or
+arbitrary third-party-library support.
 
 RepoGrammar is pre-1.0. Its MCP API and preview analyzers remain experimental,
 and it is not a sound whole-program static analyzer or a runtime-equivalence

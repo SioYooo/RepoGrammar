@@ -53,6 +53,12 @@ context lives under `.agents/memories/`.
   `plans/top-20-language-expansion-plan.md`. The ADR freezes the TIOBE July
   2026 planning snapshot and defines the evidence required before a language
   can be described as supported; TypeScript is tracked separately as an extra.
+  The 2026-08-01 campaign remains strict `0/20` and is consolidated in
+  `reports/language-support/top-20-final-program-audit.md` and the machine-
+  readable `reports/language-support/top-20-program-summary.json`. Ecosystem,
+  manifest/lockfile, provider/version/license, `UNKNOWN` resolution, and
+  source-free security/performance evidence live in the adjacent language-
+  support matrices. This is `PARTIAL_AUDITED_PROGRESS`, not a support claim.
   Go's N1 preflight, source-free `.go` discovery, and bounded static
   `go.mod`/`go.work` dependency-inventory contract are
   `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`; Go

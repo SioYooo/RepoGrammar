@@ -2,24 +2,26 @@
 
 - Status: Incomplete — `discovered_only`
 - Authority: ADR-0020 and ADR-0036
-- Integration baseline: `abda602fe38db8549e4f318bd4638ddb94df7282`
+- Dependency prerequisite: `82ced893f81a954b64e20546dfc4ad81043b28e5`
 - Last updated: 2026-08-01
 
 ## ADR-0020 gate
 
 - [x] Discovery/configuration — exact `.R`, `DESCRIPTION`, `NAMESPACE`, and
-  `renv.lock` classification with R-specific generated-library exclusions.
-- [x] Bounded dependency inventory — official DESCRIPTION/NAMESPACE fields are
-  classified conservatively; only explicit CRAN/Bioconductor renv identities
-  and versions enter the shared model.
-- [x] Typed inventory UNKNOWN, exact/+1 resources, source-read boundaries,
-  leakage checks, CLI mode, persistence, copy-forward, replacement, and removal.
+  `renv.lock`, R-specific exclusions, bounded dependency metadata, typed
+  inventory uncertainty, persistence, and incremental behavior are covered.
 - [ ] Authoritative sandboxed R source frontend and selected project/profile.
 - [ ] RepoGrammar-owned R source code units and IR.
-- [ ] Source-semantic obligation registry and provider fallback.
+- [ ] Complete source-semantic obligation registry and provider fallback;
+  inventory-only uncertainty is insufficient.
 - [ ] Exact family with support at least three.
-- [ ] Source-free readiness plus independent correctness/security/performance review.
-- [ ] Linked final completion audit.
+- [ ] Positive, lookalike, low-support, parse-degraded, NSE/dispatch, and
+  unresolved/resolved family fixtures.
+- [ ] Complete source-free readiness and leakage matrix across required public
+  surfaces.
+- [x] Four-part review record — this report records correctness, security,
+  completeness, and performance findings; open findings remain blockers.
+- [ ] Linked atomic prerequisites and final completion audit.
 
 ## Current evidence and blocker
 
@@ -34,3 +36,29 @@ network action runs.
 
 Not complete. The project-model inventory is auxiliary evidence, not R language
 support. No R family, provider, support, or readiness exists.
+
+## Final program audit fields
+
+| Required field | Audited result |
+|---|---|
+| Language / rank | R / 9 |
+| Dialect/version | Exact `.R` is inventory-only; no R release, platform, project, library path, profile, renv activation, native-code, or repository selection. |
+| Provider/frontend/version | None; no R parser, languageserver, compiler/runtime, or provider version. |
+| Discovery/config | `.R`, `DESCRIPTION`, `NAMESPACE`, and `renv.lock` with managed-library/IDE exclusions. |
+| Manifest/lockfile | Bounded DESCRIPTION/NAMESPACE declarations plus exact explicit CRAN/Bioconductor `renv.lock` versions; ambiguous registries and remote/custom/local sources are omitted. |
+| Owned source IR / external symbols | Both absent; package imports, S3/S4/R6 dispatch, native symbols, NSE, and generated code are unresolved. |
+| Library Contracts | Registry exists, production packs = 0; inventory never creates a behavior contract. |
+| Exact family / fixtures | No family. Strong DCF/JSON/resource/remote-source/leakage/incremental tests; no R source-family corpus. |
+| Primary UNKNOWN cases | Repository identity, selected lock/project/profile, remote sources, package directness/scope, NSE/metaprogramming, dispatch, native code, and provider availability. |
+| Source-free / security | Metadata results are source-free; `.R` is zero-read; no R, renv, package/profile script, native code, child, repository code, or network runs. |
+| Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
+
+Four-part review: correctness preserves only explicit registry evidence and
+never defaults ambiguous packages to CRAN; security discards remote/path values
+and executes nothing; completeness lacks source/provider/family layers;
+performance is bounded for DCF/JSON inventory with no R-runtime or large-lock
+benchmark. Evidence: `src/rust/adapters/languages/r.rs`,
+`src/rust/adapters/parsing/r.rs`, ADR-0036, product/incremental tests, and
+`82ced893f81a954b64e20546dfc4ad81043b28e5`. Exact non-claim: package
+metadata does not prove installation, loading, namespace binding, dispatch,
+native compatibility, or R support.

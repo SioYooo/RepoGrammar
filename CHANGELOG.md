@@ -4,6 +4,14 @@
 
 ### Added
 
+- Added the isolated Top-20 language and third-party-library campaign audit:
+  20 ranked completion reviews plus a TypeScript-extra review, a 21-record JSON
+  summary, ecosystem/provider/version/license/manifest/lockfile/`UNKNOWN`
+  matrices, and a source-free correctness/security/completeness/performance
+  review. The strict result is `PARTIAL_AUDITED_PROGRESS` with `0/20` languages
+  complete and zero production reviewed-contract packs; inventory and
+  structural evidence do not claim full language or arbitrary-library support.
+
 - Added an exact-version-scoped `LibraryContractRegistry` domain boundary. It
   deterministically rejects duplicate or overlapping contract claims, refuses
   manifest-only/versionless lookup, and never treats a contract match as family

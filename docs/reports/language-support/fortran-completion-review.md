@@ -2,7 +2,7 @@
 
 - Status: Incomplete — `discovered_only`
 - Authority: ADR-0020, ADR-0030, and ADR-0034
-- Reviewed integration baseline: `abda602fe38db8549e4f318bd4638ddb94df7282`
+- Dependency prerequisite: `5e8fda053122fb0cfd093b28767b9479bd7ddc80`
 - Last updated: 2026-08-01
 
 ## ADR-0020 gate
@@ -18,7 +18,8 @@
 - [ ] Positive, lookalike, low-support, parse-degraded, preprocessed, include,
   module/submodule, interface, generic, and resolved/unresolved fixtures.
 - [ ] Source-free readiness and leakage review for claim-bearing analysis.
-- [ ] Correctness, security, completeness, and performance review.
+- [x] Four-part review record — this report records correctness, security,
+  completeness, and performance findings; open findings remain blockers.
 - [ ] Linked atomic prerequisite commits and final completion audit.
 
 ## Current evidence and blocker
@@ -49,3 +50,28 @@ Not complete. Fortran remains `discovered_only`; dependency presence is not
 source, library, framework, family, or readiness support. No supported-language
 count or completion percentage may include Fortran until every open checkbox
 has linked current-branch evidence.
+
+## Final program audit fields
+
+| Required field | Audited result |
+|---|---|
+| Language / rank | Fortran / 19 |
+| Dialect/version | Frozen lowercase non-preprocessed GNU-style suffix inventory; no standard edition, compiler, fixed/free override, preprocessing, include, target, or build profile. |
+| Provider/frontend/version | None. Flang/f18 is `NO_GO` for this zero-execution lane; no provider version is active. |
+| Manifest/lockfile | Bounded root `[dependencies]`/`[dev-dependencies]` literal strings from `fpm.toml`; no graph, lock, git/path, target table, or resolved version. |
+| Owned source IR / external symbols | Both absent; module/submodule/interface/generic identities are unresolved. |
+| Library Contracts | Registry exists, production packs = 0; manifest rows cannot establish behavior. |
+| Exact family / fixtures | No family. Strong static manifest/resource/leakage/incremental tests; no source-family matrix. |
+| Primary UNKNOWN cases | Source form/standard/compiler, preprocessing/includes, module graph, conditional targets, generics/interfaces, ABI, native/system dependencies, and provider availability. |
+| Source-free / security | Source is zero-read and metadata bounded; no Flang, fpm, compiler, preprocessor, child, repository/dependency code, or network runs. |
+| Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
+
+Four-part review: correctness retains only literal root-table declarations;
+security avoids preprocessing/compiler execution; completeness lacks source
+frontend/IR/obligations/family; performance is bounded for metadata but has no
+frontend or large scientific-project benchmark. Evidence:
+`src/rust/adapters/languages/fortran.rs`,
+`src/rust/adapters/parsing/fortran.rs`, ADR-0034, product/incremental tests, and
+`5e8fda053122fb0cfd093b28767b9479bd7ddc80`. Exact non-claim: fpm
+inventory does not prove compilation, module linkage, numerical semantics,
+dependency resolution, or Fortran support.

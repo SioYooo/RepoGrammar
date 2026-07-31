@@ -67,7 +67,8 @@ The worker can establish narrow repo-local module/export facts when compiler API
 evidence, config/package hashes, source ranges, and operation scope validate. It
 does not yet produce the general package-qualified external-symbol identities
 required by ADR-0030, resolve a lockfile graph, prove installed versions, or
-apply versioned reviewed library contracts. Loading the target repository's own
+match the exact-version registry because production contract packs are absent.
+Loading the target repository's own
 TypeScript package is disabled by default because doing so executes dependency
 code; the explicit trust opt-in is not acceptable for untrusted-default
 completion. Arbitrary third-party TypeScript-library behavior therefore remains
@@ -157,7 +158,7 @@ evidence for the absent authoritative provider.
 | 5. Family-first exact anchor | Pass as substrate | Multiple exact TypeScript families can meet support >= 3 and compatibility rules; structural or fallback evidence alone cannot support them. |
 | 6. Fixture proof | Partial | Positive, lookalike, low-support, dynamic, stale, and selected unresolved/resolved fixtures exist. Dedicated parse-degraded and full provider absent/present/stale/conflicting X0 fixtures are missing. |
 | 7. Source-free readiness | Partial | CLI/MCP/stats/readiness, provider availability, and leakage tests exist, but no linked TypeScript-only final readiness audit covers the completed provider contract. |
-| 8. Four-part review | Fail | Open correctness, provider security, completeness, and representative performance gaps remain. |
+| 8. Four-part review | Satisfied by this snapshot | The four required dimensions are recorded. Open correctness, provider security, completeness, and representative performance gaps remain blockers. |
 | 9. Atomic delivery/audit | Fail | The main TS/JS capability landed as an aggregate commit and no TypeScript-extra final audit links independently complete D2 modules and full gates. |
 
 Result: **not 9/9; TypeScript remains an incomplete extra and never contributes

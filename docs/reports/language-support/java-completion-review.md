@@ -31,8 +31,8 @@ close Java's ADR-0020 completion gate.
 
 Under ADR-0030, direct POM rows remain `manifest_declared`. A declared artifact
 must not be described as resolved, installed, selected on the classpath, or
-semantically linked to source. Reviewed library contracts are a separate,
-currently absent evidence type.
+semantically linked to source. Reviewed library contracts are a separate
+evidence layer: registry infrastructure exists, but production packs = 0.
 
 ## Four-part review record
 
