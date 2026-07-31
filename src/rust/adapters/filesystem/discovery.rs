@@ -460,6 +460,9 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
     if path == "Cargo.toml" || path.ends_with("/Cargo.toml") {
         return LanguagePathClassification::Supported(DiscoveredLanguage::RustConfig);
     }
+    if JavaLanguageAdapter::is_project_config_path(path) {
+        return LanguagePathClassification::Supported(DiscoveredLanguage::JavaConfig);
+    }
     if path == "compile_commands.json" || path == "vcpkg.json" || path == "conanfile.txt" {
         return LanguagePathClassification::Supported(DiscoveredLanguage::CppConfig);
     }
@@ -1194,6 +1197,7 @@ mod tests {
         let workspace = TempWorkspace::new("discovery-java");
         fs::create_dir_all(workspace.path().join("src/main/java/com/example"))
             .expect("create java source dir");
+        fs::create_dir_all(workspace.path().join("modules/api")).expect("create module dir");
         fs::create_dir_all(workspace.path().join("build/classes")).expect("create build dir");
         fs::create_dir_all(workspace.path().join("out/classes")).expect("create out dir");
         fs::write(
@@ -1215,6 +1219,14 @@ mod tests {
         .expect("write out java");
         fs::write(workspace.path().join("Demo.class"), b"bytecode").expect("write class");
         fs::write(workspace.path().join("build.gradle"), "plugins {}\n").expect("write gradle");
+        fs::write(workspace.path().join("pom.xml"), "<project/>\n").expect("write root pom");
+        fs::write(workspace.path().join("modules/api/pom.xml"), "<project/>\n")
+            .expect("write nested pom");
+        fs::write(
+            workspace.path().join("modules/api/pom.xml.bak"),
+            "<project/>\n",
+        )
+        .expect("write pom lookalike");
 
         let report = FilesystemFileDiscovery
             .discover(FileDiscoveryRequest::new(
@@ -1228,10 +1240,14 @@ mod tests {
                 .iter()
                 .map(|file| (file.path.as_str(), file.language))
                 .collect::<Vec<_>>(),
-            vec![(
-                "src/main/java/com/example/DemoController.java",
-                DiscoveredLanguage::Java
-            )]
+            vec![
+                ("modules/api/pom.xml", DiscoveredLanguage::JavaConfig),
+                ("pom.xml", DiscoveredLanguage::JavaConfig),
+                (
+                    "src/main/java/com/example/DemoController.java",
+                    DiscoveredLanguage::Java
+                ),
+            ]
         );
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "build" && skipped.reason == SkippedReason::DefaultExcludedDirectory
@@ -1244,6 +1260,10 @@ mod tests {
         }));
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "build.gradle" && skipped.reason == SkippedReason::UnsupportedExtension
+        }));
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "modules/api/pom.xml.bak"
+                && skipped.reason == SkippedReason::UnsupportedExtension
         }));
     }
 

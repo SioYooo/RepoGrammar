@@ -439,6 +439,21 @@ allowed.
   safe-origin promotion, support>=3 family gates, and rejection of structural
   parser anchors, substring targets, and wrong-origin facts as direct family
   support.
+- Java Maven inventory tests must separately cover exact root/nested `pom.xml`
+  discovery and `java-config` token stability; default-namespace attributes;
+  direct runtime/test declarations, literal range/version retention,
+  optionality, exact evidence ranges, deterministic ordering, persistence, and
+  incremental copy-forward/replacement/removal. Negative coverage must include
+  root/nested lookalikes, malformed/mismatched XML, duplicate attributes and
+  fields, duplicate dependency identities (including three or more repeats),
+  DTD/entity and element-prefix rejection, missing/dynamic coordinates,
+  inherited/interpolated versions, parent/dependency-management/BOM/profile/
+  reactor/plugin/artifact-variant/exclusion obligations, ambiguous scopes, and
+  exact/plus-one input-byte, XML depth/token/name/field, and dependency
+  ceilings. Tests must prove no effective
+  model, classpath, resolved graph, external symbol, family, or support claim
+  and must invoke no Maven, Gradle, javac/JDT, plugin, annotation processor,
+  project/dependency code, child process, cache, repository, or network path.
 - Java framework-deepening (Wave J1) tests must additionally cover exact
   imported/FQN JUnit 5/4 and TestNG test methods, JPA/Jakarta Persistence
   entities under dual `jakarta`/`javax` roots with jakarta-vs-javax

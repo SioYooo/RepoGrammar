@@ -47,6 +47,7 @@ pub enum Language {
     PythonConfig,
     TsJsConfig,
     Java,
+    JavaConfig,
     CSharp,
     C,
     Cpp,
@@ -73,6 +74,7 @@ impl Language {
             Self::PythonConfig => "python-config",
             Self::TsJsConfig => "tsjs-config",
             Self::Java => "java",
+            Self::JavaConfig => "java-config",
             Self::CSharp => "csharp",
             Self::C => "c",
             Self::Cpp => "cpp",
@@ -346,6 +348,7 @@ mod tests {
         assert_eq!(Language::Swift.as_str(), "swift");
         assert_eq!(Language::SwiftConfig.as_str(), "swift-config");
         assert_eq!(Language::Java.as_str(), "java");
+        assert_eq!(Language::JavaConfig.as_str(), "java-config");
         assert_eq!(CodeUnitKind::SpringMvcRoute.as_str(), "spring_mvc_route");
         assert_eq!(CodeUnitKind::SpringComponent.as_str(), "spring_component");
         assert_eq!(

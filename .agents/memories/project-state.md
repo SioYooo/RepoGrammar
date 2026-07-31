@@ -7,7 +7,7 @@ package, snapshot, external-symbol, and reviewed library-contract types. The
 first provider consumer is bounded Cargo metadata; static-metadata consumers
 now include the root npm `package.json` parser, the Python project-config
 frontend, the C/C++ vcpkg/Conan lane, SwiftPM lockfiles, Composer
-manifests/lockfiles, Bundler lockfiles, and Go module manifests. They emit only
+manifests/lockfiles, Bundler lockfiles, Go module manifests, and Maven POMs. They emit only
 the qualified `manifest_declared` or `lockfile_resolved` level and none claims a
 resolved graph or language completion. The npm parser admits bounded names from
 production, development,
@@ -52,7 +52,16 @@ and direct/transitive state; scope and resolved version remain unknown.
 Malformed/conflicting/graph-changing/resource-bounded cases remain
 `go_dependency_inventory` uncertainty, `go.work` emits no dependency rows, and
 no Go command, resolver, dependency code, child process, or network operation
-executes. The strict ADR-0020
+executes. Exact root/nested `pom.xml` inputs add bounded literal direct Maven
+declarations as `groupId:artifactId`, preserving only source-proved requirements,
+scope, and optionality. Parent/effective-model inheritance, properties,
+dependency management/BOMs, profiles, reactor modules, variants, exclusions,
+plugins, malformed XML, conflicts, and resource limits remain
+`java_dependency_inventory` uncertainty. No Maven, Gradle, javac/JDT, plugin,
+annotation processor, artifact/classpath resolver, project/dependency code,
+child process, cache, repository, or network path executes. This adds only a
+Java project-config inventory slice and does not change the Java completion
+state. The strict ADR-0020
 baseline remains
 `0/20`, TypeScript extra
 remains incomplete, Go/PHP/Swift/Ruby remain `discovered_only`, and the other

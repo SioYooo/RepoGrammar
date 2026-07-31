@@ -26,6 +26,7 @@ pub struct RepoGrammarSourceParser {
     syntax: syntax::SyntaxCodeUnitParser,
     python: python::PythonAstParser,
     java: java::JavaSyntaxParser,
+    java_config: java::maven::JavaMavenConfigParser,
     csharp: csharp::CSharpSyntaxParser,
     cpp: cpp::CppSyntaxParser,
     go: go::GoProjectConfigParser,
@@ -70,6 +71,7 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.python.parse(document)
             }
             crate::core::model::Language::Java => self.java.parse(document),
+            crate::core::model::Language::JavaConfig => self.java_config.parse(document),
             crate::core::model::Language::CSharp => self.csharp.parse(document),
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
@@ -104,6 +106,9 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.python.parse_with_context(document, context)
             }
             crate::core::model::Language::Java => self.java.parse_with_context(document, context),
+            crate::core::model::Language::JavaConfig => {
+                self.java_config.parse_with_context(document, context)
+            }
             crate::core::model::Language::CSharp => {
                 self.csharp.parse_with_context(document, context)
             }
@@ -147,6 +152,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context_output(document, context)
             }
+            crate::core::model::Language::JavaConfig => self
+                .java_config
+                .parse_with_context_output(document, context),
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {

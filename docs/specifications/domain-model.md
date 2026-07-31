@@ -90,6 +90,17 @@ unknown scope, and unknown directness. Typed uncertainty covers malformed,
 unsupported, conflicting, and over-budget pins. No Swift source frontend,
 manifest evaluation, family, selected target/toolchain/SDK, installed graph, or
 support state follows from that lock inventory.
+Java discovery defines a separate `java-config` token for exact root/nested
+`pom.xml` inputs. Each admitted file may create one `project_config` unit and
+bounded `maven` `DependencyRecord`s only for literal direct
+`project/dependencies/dependency` declarations. Package identity is
+`groupId:artifactId`; literal versions are requirements, resolved version is
+absent, directness is `direct`, and optionality/scope are retained only where
+the static declaration proves them. Effective-model concerns such as parent
+inheritance, properties, dependency management/BOMs, profiles, reactor modules,
+artifact variants, exclusions, and plugins remain typed UNKNOWN scoped to
+`java_dependency_inventory`. These records prove no classpath, artifact,
+external symbol, framework role, build, installation, or runtime selection.
 The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
 Java classes/interfaces/methods plus Spring MVC route methods, Spring
 components, Spring Boot applications, and Spring Data repositories when exact
@@ -194,9 +205,10 @@ and typed `UNKNOWN` facts for unresolved imports, nonliteral route paths,
 controller/repository identity uncertainty, and runtime framework behavior.
 Only application-layer `repogrammar-java-derived` `DATAFLOW_DERIVED` facts with
 exact whitelisted targets and `derived_from=tree_sitter_java_structural_anchors`
-can support Java/Spring families. This does not prove Maven/Gradle, javac,
-annotation-processor, classpath, component-scan, dependency-injection, proxy, or
-repository-factory semantics.
+can support Java/Spring families. The separate static POM inventory does not
+change those family gates. Current Java output still does not prove a Maven/
+Gradle effective model, javac/JDT, annotation processor, classpath/JAR symbols,
+component scan, dependency injection, proxy, or repository-factory semantics.
 Current default C# indexing can likewise store syntax-origin `FRAMEWORK_ROLE`
 facts for ASP.NET Core controllers/actions, minimal-API routes, EF Core
 contexts/entity sets, and xUnit/NUnit/MSTest tests, `STRUCTURAL` exact-anchor

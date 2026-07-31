@@ -5361,6 +5361,7 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::PythonConfig => Language::PythonConfig,
         DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
         DiscoveredLanguage::Java => Language::Java,
+        DiscoveredLanguage::JavaConfig => Language::JavaConfig,
         DiscoveredLanguage::CSharp => Language::CSharp,
         DiscoveredLanguage::C => Language::C,
         DiscoveredLanguage::Cpp => Language::Cpp,
@@ -12541,6 +12542,158 @@ mod tests {
             .expect("list families")
             .families
             .is_empty());
+    }
+
+    #[test]
+    fn maven_dependencies_persist_copy_forward_replace_and_remove_incrementally() {
+        let workspace = TempWorkspace::new("indexing-maven-dependencies");
+        fs::create_dir_all(workspace.path().join("module")).expect("create Maven module");
+        fs::write(
+            workspace.path().join("pom.xml"),
+            "<project><dependencies><dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.12.1</version><scope>test</scope></dependency></dependencies></project>",
+        )
+        .expect("write root POM");
+        fs::write(
+            workspace.path().join("module/pom.xml"),
+            "<project><dependencies><dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>33.4.8-jre</version></dependency></dependencies></project>",
+        )
+        .expect("write nested POM");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write unrelated TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index Maven dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Maven dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.path.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                        dependency.scope.as_str(),
+                    )
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (
+                    "module/pom.xml",
+                    "com.google.guava:guava",
+                    Some("33.4.8-jre"),
+                    "runtime",
+                ),
+                (
+                    "pom.xml",
+                    "org.junit.jupiter:junit-jupiter",
+                    Some("5.12.1"),
+                    "test",
+                ),
+            ])
+        );
+        assert!(dependencies.dependencies.iter().all(|dependency| {
+            dependency.ecosystem == "maven"
+                && dependency.directness == "direct"
+                && dependency.evidence_level == "manifest_declared"
+                && dependency.resolved_version.is_none()
+                && dependency.start_byte < dependency.end_byte
+                && !dependency.note.contains("<dependency>")
+        }));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let unrelated = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("copy Maven dependency records through unrelated edit");
+        assert_eq!(
+            unrelated.sync_report.expect("sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Maven dependencies")
+                .dependencies
+                .len(),
+            2
+        );
+
+        fs::write(
+            workspace.path().join("module/pom.xml"),
+            "<project><dependencies><dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.19.2</version></dependency></dependencies></project>",
+        )
+        .expect("replace nested Maven dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace nested Maven dependency incrementally");
+        assert_eq!(
+            replaced.sync_report.expect("replace sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        let packages = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Maven inventory")
+            .dependencies
+            .into_iter()
+            .map(|dependency| dependency.package_name)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            packages,
+            BTreeSet::from([
+                "com.fasterxml.jackson.core:jackson-databind".to_string(),
+                "org.junit.jupiter:junit-jupiter".to_string(),
+            ])
+        );
+
+        fs::remove_file(workspace.path().join("pom.xml")).expect("remove root POM");
+        sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove root Maven dependency incrementally");
+        let remaining = crate::application::storage::list_active_dependencies(&store)
+            .expect("read remaining Maven inventory")
+            .dependencies;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].package_name,
+            "com.fasterxml.jackson.core:jackson-databind"
+        );
     }
 
     #[test]

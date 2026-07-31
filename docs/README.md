@@ -71,6 +71,10 @@ context lives under `.agents/memories/`.
   Ruby's N1 preflight, discovery record, and bounded exact-`Gemfile.lock`
   dependency inventory contract are
   `decisions/ADR-0022-ruby-prism-minitest-preflight.md`.
+  Java's structural preview remains incomplete, while ADR-0030 now also owns
+  the bounded exact-root/nested-`pom.xml` direct dependency-inventory contract;
+  it is not a Maven effective model, javac/JDT provider, classpath/JAR resolver,
+  or Java completion claim.
 - v0.2 agent adoption and read displacement:
   `decisions/ADR-0013-agent-adoption-read-displacement.md`,
   `plans/v0.2-agent-adoption-read-displacement-plan.md`,

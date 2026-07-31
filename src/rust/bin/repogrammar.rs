@@ -5060,6 +5060,7 @@ mod tests {
             DiscoveredLanguage::PythonConfig => Language::PythonConfig,
             DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
             DiscoveredLanguage::Java => Language::Java,
+            DiscoveredLanguage::JavaConfig => Language::JavaConfig,
             DiscoveredLanguage::CSharp => Language::CSharp,
             DiscoveredLanguage::C => Language::C,
             DiscoveredLanguage::Cpp => Language::Cpp,
@@ -11654,6 +11655,59 @@ class User(Base):
         let value = parse_machine_output("units", &units, &workspace);
         assert_eq!(value["indexing"], "syntax_only_code_units");
         assert_eq!(value["units"].as_array().expect("units array").len(), 1);
+    }
+
+    #[test]
+    fn product_runtime_exact_maven_pom_is_source_free_static_inventory() {
+        let workspace = TempWorkspace::new("product-runtime-maven-pom-index");
+        fs::write(
+            workspace.path().join("pom.xml"),
+            "<project><dependencies><dependency><groupId>private.example</groupId><artifactId>secret-library</artifactId><version>9.8.7</version></dependency></dependencies></project>",
+        )
+        .expect("write exact Maven POM");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 1);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(value["semantic_facts"], 0);
+        assert_eq!(value["warnings"], serde_json::json!([]));
+        for secret in ["private.example", "secret-library", "9.8.7", "<dependency>"] {
+            assert!(!index.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        let status_value = parse_machine_output("status", &status, &workspace);
+        assert_eq!(status_value["dependency_records"], 1);
+        for secret in ["private.example", "secret-library", "9.8.7", "<dependency>"] {
+            assert!(!status.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open Maven inventory store");
+        let dependencies = list_active_dependencies(&store).expect("read internal Maven inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].ecosystem, "maven");
+        assert_eq!(
+            dependencies.dependencies[0].package_name,
+            "private.example:secret-library"
+        );
     }
 
     #[test]

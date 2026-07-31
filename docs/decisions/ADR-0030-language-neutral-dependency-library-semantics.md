@@ -197,6 +197,33 @@ and the documented `golang.org/x/mod/modfile` and `module` rules, retrieved
 <https://pkg.go.dev/golang.org/x/mod/modfile>, and
 <https://pkg.go.dev/golang.org/x/mod/module>.
 
+The first Maven consumer reads only exact root/nested `pom.xml` inputs through
+a bounded, non-validating static XML subset. Only direct declarations at
+`project/dependencies/dependency` with literal bounded `groupId` and
+`artifactId` become `maven` package identities in `groupId:artifactId` form.
+Literal versions remain requirements, not resolved versions; directness is
+`direct`, optionality comes only from exact `true`/`false`, and only Maven's
+default/`compile`, `runtime`, and `test` scopes map to the shared scope
+vocabulary. `provided`, `system`, `import`, unknown, or interpolated scopes stay
+`unknown`. Parent inheritance, property interpolation, dependency management,
+imported BOMs, profile activation, reactor modules, exclusions, type/classifier
+variants, build plugins, malformed or duplicated XML, DTD/entity/CDATA
+constructs, namespaced element prefixes, duplicate coordinates, and resource
+overflow produce source-free `java_dependency_inventory` typed `UNKNOWN` and
+never an effective-model claim. Default namespace attributes are accepted
+because the standard POM examples use an unprefixed `project` element. The
+reader never invokes Maven, Gradle, javac/JDT, plugins, annotation processors,
+repository or dependency code, child processes, artifact caches, repositories,
+or network resolution.
+
+This subset follows the Apache Maven POM and dependency-mechanism references,
+retrieved 2026-08-01. Those sources distinguish direct declarations from the
+transitive graph, define the six Maven scopes, and describe parent,
+dependency-management, and BOM processing as effective-model concerns.
+References: <https://maven.apache.org/pom.html>,
+<https://maven.apache.org/guides/introduction/introduction-to-dependency-mechanism.html>,
+and <https://maven.apache.org/repositories/dependencies.html>.
+
 ## Provider and package-manager policy
 
 - Manifest/lockfile parsers consume supplied bounded bytes and do not execute
@@ -243,7 +270,7 @@ permission to infer runtime behavior.
   records are copied only with their unchanged evidence unit. Source-free
   public projections, generic provider ports, and remaining per-ecosystem
   manifest adapters remain follow-up modules. This ADR, persistence slice, and
-  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer/RubyGems/Go Modules consumers do not
+  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer/RubyGems/Go Modules/Maven consumers do not
   complete any
   ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,

@@ -26,6 +26,7 @@ use tree_sitter::{Node, Parser};
 pub(crate) mod jaxrs;
 pub(crate) mod jpa;
 pub(crate) mod junit;
+pub(crate) mod maven;
 pub(crate) mod spring;
 pub(crate) mod test_data;
 

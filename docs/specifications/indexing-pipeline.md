@@ -605,6 +605,32 @@ selective Pyright cross-checks for claim-upgrading facts, bounded role
 propagation and call recovery, and compact evidence selection under token
 budget.
 
+Java source remains the existing Tree-sitter structural preview, but discovery
+now gives exact root/nested `pom.xml` a distinct `java-config` token. The
+file-local Maven adapter reads only supplied UTF-8 bytes, creates one
+`project_config` unit/IR node, and emits `manifest_declared` direct `maven`
+rows only for bounded literal `project/dependencies/dependency` declarations.
+Identity is `groupId:artifactId`; versions are requirements rather than resolved
+versions, and optionality plus default/compile/runtime/test scope are retained
+only where the declaration is literal. A strict XML token/depth/name/field/
+dependency budget rejects malformed or duplicated attributes, DTD/entity/CDATA
+markup, element prefixes, and overflow before any dependency record is admitted.
+Parent inheritance, properties, dependency management/BOMs, profiles, modules,
+exclusions, type/classifier variants, plugins, ambiguous scopes, duplicate
+identities, and unresolved versions emit bounded source-free facts with
+`affected_claim=java_dependency_inventory`. No effective model, classpath,
+resolved graph, external symbol, family, support, build, install, or runtime
+claim follows. The path does not invoke Maven, Gradle, javac/JDT, plugins,
+annotation processors, repository/dependency code, child processes, caches,
+artifact repositories, or network access.
+
+Because `java-config` consumes only its own bytes and is absent from
+`ParserProjectContext`, additions/modifications parse incrementally, removals
+drop their units/facts/dependencies, and unchanged evidence-bound rows copy
+forward exactly once. A future effective project/classpath model must add its
+actual cross-file inputs and restore the project-context gate before upgrading
+this file-local contract.
+
 Go is `discovered_only` and unsupported. Default discovery classifies bounded
 `.go` inputs as `go` and root or nested `go.mod`/`go.work` as `go-config`, then
 stores their repo-relative path, strict hash, size, and language token in the
@@ -1301,7 +1327,7 @@ copy forward only when their path and evidence code unit also copy forward,
 while Cargo rows never copy because the Cargo provider recomputes them later in
 the same generation. Changed or removed manifests therefore cannot retain stale
 dependency records, and an unrelated TS/JS source edit preserves exactly one
-copy of each unchanged npm, PyPI, vcpkg, Conan, Go Modules, Composer,
+copy of each unchanged npm, PyPI, vcpkg, Conan, Maven, Go Modules, Composer,
 RubyGems, or SwiftPM declaration/lock row.
 
 The project-context gate distinguishes *content-only modifications* from

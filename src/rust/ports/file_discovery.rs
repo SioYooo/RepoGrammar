@@ -24,6 +24,7 @@ pub enum DiscoveredLanguage {
     PythonConfig,
     TsJsConfig,
     Java,
+    JavaConfig,
     CSharp,
     C,
     Cpp,
@@ -51,6 +52,7 @@ impl DiscoveredLanguage {
             Self::PythonConfig => "python-config",
             Self::TsJsConfig => "tsjs-config",
             Self::Java => "java",
+            Self::JavaConfig => "java-config",
             Self::CSharp => "csharp",
             Self::C => "c",
             Self::Cpp => "cpp",
@@ -237,6 +239,13 @@ mod tests {
         assert_eq!(DiscoveredLanguage::Go.as_str(), "go");
         assert_eq!(DiscoveredLanguage::GoConfig.as_str(), "go-config");
         assert_ne!(DiscoveredLanguage::Go, DiscoveredLanguage::GoConfig);
+    }
+
+    #[test]
+    fn java_discovery_tokens_are_stable_and_distinct() {
+        assert_eq!(DiscoveredLanguage::Java.as_str(), "java");
+        assert_eq!(DiscoveredLanguage::JavaConfig.as_str(), "java-config");
+        assert_ne!(DiscoveredLanguage::Java, DiscoveredLanguage::JavaConfig);
     }
 
     #[test]

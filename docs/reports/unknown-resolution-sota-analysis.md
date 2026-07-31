@@ -24,7 +24,7 @@ dispatch, runtime effects, or package selection.
 | Rust analyzer | registered, not integrated | none | external-crate item identity, trait dispatch, cfg/macro/build-dependent semantics |
 | Cargo metadata | bounded `--no-deps` project model | workspace/package/target/feature/direct manifest dependency records | resolved transitive graph, source/checksum selection, code symbols, build/proc-macro effects |
 | C/C++ | no semantic provider | bounded Tree-sitter and project-config candidates | TU/header identity, Clang symbols/types/templates/macros/build variants |
-| Java | no semantic provider | bounded Tree-sitter exact-import candidates | classpath/JAR symbol identity, compiler/processor/generated/runtime framework behavior |
+| Java | no semantic provider; bounded static Maven inventory | Tree-sitter exact-import candidates plus literal direct `pom.xml` package declarations | effective Maven/Gradle model, parent/BOM/profile/property selection, classpath/JAR symbol identity, compiler/processor/generated/runtime framework behavior |
 | C#/VB.NET | no semantic provider | C# Tree-sitter exact-using candidates only | Roslyn symbol identity, references, partial/generated/dynamic/MSBuild behavior |
 | Go | discovery-only plus bounded Go Modules inventory | direct/transitive exact-version `go.mod` requirements; `go.work` is an explicit workspace UNKNOWN | every source parser, source IR, symbol, family, semantic, resolved graph, selected workspace/build variant, install, and runtime claim |
 | PHP | discovery-only plus bounded Composer inventory | direct scoped manifest requirements and runtime/development-scoped lock versions with unknown directness | every source parser, IR, symbol, family, semantic, manifest/lock-coherence, install, and runtime claim |

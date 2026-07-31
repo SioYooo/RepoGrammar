@@ -4,6 +4,13 @@
 
 ### Added
 
+- Added bounded, non-executing Maven dependency inventory for exact root/nested
+  `pom.xml` inputs. Static direct `groupId:artifactId` declarations retain
+  bounded literal requirements, Maven test/runtime scope where provable, and
+  optionality; parent/effective-model inheritance, dependency management/BOMs,
+  profiles, properties, artifact variants, plugins, malformed XML, and resource
+  limits remain `java_dependency_inventory` typed `UNKNOWN`. No Maven, Gradle,
+  javac, plugin, annotation processor, project code, or dependency code runs.
 - Added bounded, non-executing Go Modules inventory for exact root/nested
   `go.mod` inputs. Valid `require` declarations retain exact module versions and
   direct/indirect state; malformed, conflicting, graph-changing, workspace, and

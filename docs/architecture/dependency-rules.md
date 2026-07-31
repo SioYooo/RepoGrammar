@@ -82,6 +82,21 @@ cross-file inputs and token-based context invalidation before introducing Go
 source semantics. The dated suffix list is discovery metadata, not a core
 support authority.
 
+Java project-config classification belongs to the pure normalized-path policy
+in `adapters/languages/java.rs`. Exact root/nested `pom.xml` bytes may enter
+`adapters/parsing/java/maven.rs`, which owns a bounded static XML subset and
+returns only RepoGrammar-owned project-config units, evidence-bound direct
+Maven dependency declarations, and `java_dependency_inventory` typed UNKNOWNs.
+It must fail closed on malformed/duplicated markup, DTD/entity/CDATA input,
+element prefixes, ambiguous coordinates, effective-model obligations, and
+resource overflow. It must not resolve parents, profiles, properties,
+dependency management/BOMs, classpaths, artifacts, or repositories, and it
+must not invoke Maven, Gradle, javac/JDT, plugins, annotation processors,
+project/dependency code, child processes, caches, or network access. Because
+the accepted subset is file-local and absent from `ParserProjectContext`, its
+changed evidence may update incrementally and unchanged rows may copy only with
+their unchanged evidence unit.
+
 ## Tree-sitter boundary
 
 Tree-sitter is the intended universal syntax technology, but parser AST nodes

@@ -88,6 +88,16 @@ resource overflow, and unresolved module/workspace semantics become
 workspace-selection UNKNOWN. `.go` source remains source-store/parser free, and
 the adapter runs no Go command, module resolver, dependency code, child process,
 or network operation. Go therefore remains `discovered_only`.
+Exact root/nested Maven `pom.xml` now supplies the first Java dependency-
+inventory slice. A bounded static XML subset records only literal direct
+`groupId:artifactId` declarations with requirement, conservative scope, and
+optionality evidence; effective-model inheritance, dependency management/BOMs,
+profiles, properties, reactor modules, variants, exclusions, plugins, malformed
+XML, duplicate coordinates, and resource overflow stay
+`java_dependency_inventory` typed UNKNOWN. No Maven/Gradle/javac/provider,
+artifact, classpath, project code, or network path executes. This advances the
+Java C0 project-config obligation only; it does not provide javac/JDT semantics,
+external symbols, a completion review, or another passed ADR-0020 gate.
 
 ## Goal and non-goal
 
@@ -184,6 +194,14 @@ structural replacement evidence, but it is only an intermediate Java submodule.
 It does not provide javac/JDT semantics, classpath/build configuration,
 inheritance, annotation processing, runtime test discovery, or the ADR-0020
 completion review, so Java remains incomplete in C0.
+
+Java dependency checkpoint (2026-08-01): discovery now separates exact
+root/nested `pom.xml` as `java-config`, and the bounded file-local static reader
+persists only direct `maven` manifest declarations plus claim-scoped UNKNOWNs.
+Incremental tests cover copy-forward, replacement, and removal. This is not a
+Maven effective model, classpath/JAR symbol resolver, javac/JDT frontend,
+annotation-processor path, or language completion; Java therefore remains
+incomplete in C0.
 
 For C and C++, completion is reported separately even when discovery or provider
 infrastructure is shared. A shared implementation must prove language-specific

@@ -279,6 +279,17 @@ the `c`, `cpp`, and `cpp-config` language tokens; no schema change is required f
 language token). It returns repo-relative
 metadata and skip reasons, and `index`, `resync`, and `sync` store the current discovered file
 manifest in the mutable SQLite database under the next building generation id.
+Exact root/nested Maven `pom.xml` files use the distinct `java-config` token.
+Their supplied bytes may store one project-config unit/IR node, bounded
+source-free `java_dependency_inventory` UNKNOWN facts, and direct
+`manifest_declared` `maven` dependency rows. Literal versions remain
+requirements, resolved version is absent, and evidence ranges cover only the
+corresponding direct declaration inside the same config unit. The bounded
+reader does not store parent/property/profile/BOM/plugin values or source text
+and does not produce classpath, artifact, family, framework, or support rows.
+Because its output is file-local, changed POM evidence reparses incrementally,
+unchanged rows copy with their unchanged unit, and removed POMs retain no stale
+dependency row.
 Go uses the distinct `go` token for `.go` and `go-config` for root or nested
 `go.mod`/`go.work`. `.go` records store only path, strict hash, size, and token;
 the indexing loop skips their source reads and parsing. `go-config` bytes enter
@@ -636,7 +647,8 @@ every hydrated row. Writers include the safe Cargo metadata stage and bounded
 static-manifest parser output such as root npm `package.json` and Python
 `pyproject.toml`/`setup.cfg`/static-`setup.py` declarations, plus bounded root
 `vcpkg.json` names/minimum requirements and exact Conan 2.31.1 `[requires]`
-references. Exact SwiftPM schema-2/3 `Package.resolved` pins are lockfile rows;
+references, and exact root/nested Maven `pom.xml` direct declarations. Exact
+SwiftPM schema-2/3 `Package.resolved` pins are lockfile rows;
 package location, revision, directness, scope, install state, and runtime
 selection remain unavailable or explicitly unknown.
 Incremental indexing recomputes provider-owned Cargo rows and copies a static
