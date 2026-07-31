@@ -32,8 +32,10 @@ presence alone never supports a family. The current strict baseline remains
 
 The first implementation consumer is Cargo metadata, which emits generic
 `manifest_declared` dependency records. It remains a Rust project-model slice,
-not Rust language completion. Persistence, source-free projection, generic
-provider ports, and other ecosystems remain open atomic modules.
+not Rust language completion. Schema v11 now persists those records with
+same-generation source evidence and provides an internal active-generation read
+model. Source-free public projection, generic provider ports, conflict
+reporting, and other ecosystems remain open atomic modules.
 
 ## Goal and non-goal
 

@@ -2955,6 +2955,7 @@ mod tests {
         assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
         SemanticFactReadinessRequest,
     };
+    use repogrammar::application::storage::list_active_dependencies;
     use repogrammar::core::model::UnknownReasonCode;
     #[cfg(unix)]
     use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision};
@@ -8091,7 +8092,7 @@ mod tests {
         fs::create_dir_all(workspace.path().join("src")).expect("create src");
         fs::write(
             workspace.path().join("Cargo.toml"),
-            "[package]\nname = \"demo-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+            "[package]\nname = \"demo-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n\n[dependencies]\nserde = \"1\"\n",
         )
         .expect("write manifest");
         fs::write(
@@ -8158,6 +8159,53 @@ mod tests {
                     .iter()
                     .any(|assumption| assumption == "proc_macros_executed=false")
         }));
+        let dependencies = list_active_dependencies(&store).expect("list package dependencies");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "cargo");
+        assert_eq!(dependency.package_name, "serde");
+        assert_eq!(dependency.requirement.as_deref(), Some("^1"));
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert_eq!(dependency.path, "Cargo.toml");
+
+        fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub fn demo() -> usize { 2 }\n",
+        )
+        .expect("modify unrelated Rust source");
+        let sync = run_with_runtime(
+            cli_args("sync", workspace.path(), &["--json", "--progress", "never"]),
+            &runtime,
+        );
+        assert_eq!(sync.status, 0);
+        assert!(
+            !workspace.path().join("build-script-ran.txt").exists(),
+            "incremental sync must not execute Cargo build scripts"
+        );
+        let sync_value = parse_machine_output("sync", &sync, &workspace);
+        assert_eq!(sync_value["sync_mode"], "incremental");
+        let refreshed_store = runtime
+            .store_for_status_request(&status_request)
+            .expect("reopen store after sync");
+        let refreshed_dependencies =
+            list_active_dependencies(&refreshed_store).expect("list refreshed dependencies");
+        assert_eq!(refreshed_dependencies.dependencies.len(), 1);
+        assert_eq!(refreshed_dependencies.dependencies[0].package_name, "serde");
+        let refreshed_facts =
+            list_semantic_facts(&refreshed_store).expect("list refreshed semantic facts");
+        assert_eq!(
+            refreshed_facts
+                .facts
+                .iter()
+                .filter(|fact| {
+                    fact.origin_engine == "cargo_metadata"
+                        && fact.origin_method == "cargo_metadata_no_deps_v1"
+                        && fact.target.as_deref() == Some("cargo.package.demo_crate")
+                })
+                .count(),
+            1,
+            "incremental sync must recompute rather than duplicate Cargo provider facts"
+        );
     }
 
     #[test]

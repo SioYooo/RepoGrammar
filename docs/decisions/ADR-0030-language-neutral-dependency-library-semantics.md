@@ -105,9 +105,11 @@ permission to infer runtime behavior.
 - Exact package/version/symbol semantics remain auditable and conservative.
 - Existing string-only dependency facts can migrate incrementally; they are not
   retroactively promoted to resolved identities.
-- Persistence, source-free product projections, generic provider ports, and
-  per-ecosystem manifest adapters remain follow-up modules. This ADR and the
-  first Cargo consumer do not complete any ADR-0020 language gate.
+- Schema v11 persistence and an internal active-generation read model now
+  preserve generic dependency records with source evidence. Source-free public
+  projections, generic provider ports, and per-ecosystem manifest adapters
+  remain follow-up modules. This ADR, persistence slice, and first Cargo
+  consumer do not complete any ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,
   and invalidation tests. They must not become hard-coded benchmark answers.
 
@@ -128,8 +130,10 @@ permission to infer runtime behavior.
 
 ## Follow-up work
 
-1. Add a language-neutral dependency-model provider port and persistence
-   round-trip with freshness and conflict behavior.
+1. Extend the schema v11 persistence round-trip with explicit conflict
+   reporting when multiple qualified providers disagree; path freshness and
+   generation replacement are already fail-closed through derived-record
+   dependencies.
 2. Migrate bounded existing manifest readers to generic records, beginning with
    Cargo and then npm/Python/C++ project metadata.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and

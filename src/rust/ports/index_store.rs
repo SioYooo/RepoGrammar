@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 10;
+pub const STORAGE_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -43,6 +43,25 @@ pub struct IndexedSemanticFactRecord {
     pub origin_method: String,
     pub assumptions: Vec<String>,
     pub evidence_id: String,
+    pub code_unit_id: String,
+    pub path: String,
+    pub content_hash: ContentHash,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedDependencyRecord {
+    pub dependency_id: String,
+    pub ecosystem: String,
+    pub package_name: String,
+    pub requirement: Option<String>,
+    pub resolved_version: Option<String>,
+    pub scope: String,
+    pub optional: bool,
+    pub direct: bool,
+    pub evidence_level: String,
     pub code_unit_id: String,
     pub path: String,
     pub content_hash: ContentHash,
@@ -95,6 +114,12 @@ pub struct ActiveCodeUnits {
 pub struct ActiveSemanticFacts {
     pub generation_id: String,
     pub facts: Vec<IndexedSemanticFactRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveDependencyRecords {
+    pub generation_id: String,
+    pub dependencies: Vec<IndexedDependencyRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +334,19 @@ pub trait IndexStore {
     fn activate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError>;
 
     fn inspect(&self) -> Result<StorageInspection, IndexStoreError>;
+}
+
+/// Generation-scoped package dependency inventory. Kept separate from the core
+/// index port so stores that only serve syntax/family tests need not implement
+/// an unrelated package read model.
+pub trait DependencyStore {
+    fn record_dependency(
+        &self,
+        generation: &GenerationHandle,
+        dependency: &IndexedDependencyRecord,
+    ) -> Result<(), IndexStoreError>;
+
+    fn list_active_dependencies(&self) -> Result<ActiveDependencyRecords, IndexStoreError>;
 }
 
 pub trait GenerationRetentionStore {

@@ -127,7 +127,14 @@ dependency into a language-neutral `manifest_declared` `DependencyRecord` with
 package name, requirement when supplied by Cargo, scope, optionality, and
 manifest evidence. Because `--no-deps` is used, these records do not claim a
 resolved transitive graph, installed version, source, checksum, or external
-symbol. The adapter returns recoverable `UNKNOWN`s for
+symbol. The indexing application writes the records through the shared
+generation session into schema v11 `dependency_records`; active reads validate
+their closed tokens and same-generation evidence again. This persistence does
+not expose package names on CLI/MCP and does not promote package presence to a
+semantic or family claim. Full builds and incremental sync both run this stage;
+incremental sync deliberately recomputes Cargo provider facts and dependencies
+instead of copying them from the base generation. The adapter returns
+recoverable `UNKNOWN`s for
 unavailable Cargo, unreadable project configuration, or missing manifest
 candidates. Absolute manifest paths returned by Cargo are scoped against the
 canonical project root before they are accepted, so symlink-equivalent roots do

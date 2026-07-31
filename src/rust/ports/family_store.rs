@@ -322,6 +322,11 @@ pub trait GenerationWriteSession {
         fact: &IndexedSemanticFactRecord,
     ) -> Result<(), IndexStoreError>;
 
+    fn record_dependency(
+        &mut self,
+        dependency: &crate::ports::index_store::IndexedDependencyRecord,
+    ) -> Result<(), IndexStoreError>;
+
     fn record_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), StoreError>;
 
     fn record_family_member(

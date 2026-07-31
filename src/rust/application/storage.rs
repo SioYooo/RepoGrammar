@@ -2,8 +2,9 @@
 
 use crate::application::recovery::{recovery_guidance, RecoveryAction};
 use crate::core::model::{
-    FactCertainty, FamilyConstraintProfile, FamilyPrevalenceClass, FeatureConstraint, IrEdgeLabel,
-    IrNodeKind, SemanticFactKind, VariationConstraint,
+    DependencyEcosystem, DependencyEvidenceLevel, DependencyScope, FactCertainty,
+    FamilyConstraintProfile, FamilyPrevalenceClass, FeatureConstraint, IrEdgeLabel, IrNodeKind,
+    SemanticFactKind, VariationConstraint,
 };
 use crate::core::policy::paths::{looks_like_absolute_path, RepoRelativePathError};
 use crate::error::RepoGrammarError;
@@ -14,9 +15,10 @@ use crate::ports::family_store::{
     IndexedFamilyMemberRecord, IndexedFamilyRecord, IndexedVariationSlotRecord, StoreError,
 };
 use crate::ports::index_store::{
-    GenerationHandle, GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore,
-    IndexCompactReport, IndexCompactRequest, IndexMaintenanceStore, IndexStorageCleanStore,
-    IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
+    ActiveDependencyRecords, DependencyStore, GenerationHandle, GenerationPruneReport,
+    GenerationPruneRequest, GenerationRetentionStore, IndexCompactReport, IndexCompactRequest,
+    IndexMaintenanceStore, IndexStorageCleanStore, IndexStore, IndexStoreError,
+    IndexedCodeUnitRecord, IndexedDependencyRecord, IndexedFileRecord, IndexedIrEdgeRecord,
     IndexedIrNodeRecord, IndexedSemanticFactRecord, StorageCleanReport, StorageCleanRequest,
     StorageInspection,
 };
@@ -104,6 +106,22 @@ pub fn record_semantic_fact(
     session
         .record_semantic_fact(fact)
         .map_err(index_store_error)
+}
+
+pub fn record_dependency(
+    session: &mut dyn GenerationWriteSession,
+    dependency: &IndexedDependencyRecord,
+) -> Result<(), RepoGrammarError> {
+    validate_dependency(dependency)?;
+    session
+        .record_dependency(dependency)
+        .map_err(index_store_error)
+}
+
+pub fn list_active_dependencies(
+    store: &(impl DependencyStore + ?Sized),
+) -> Result<ActiveDependencyRecords, RepoGrammarError> {
+    store.list_active_dependencies().map_err(index_store_error)
 }
 
 pub fn record_family(
@@ -409,6 +427,63 @@ fn validate_semantic_fact(fact: &IndexedSemanticFactRecord) -> Result<(), RepoGr
     if fact.start_byte > fact.end_byte {
         return Err(RepoGrammarError::InvalidInput(
             "semantic fact source range start must not exceed end".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_dependency(dependency: &IndexedDependencyRecord) -> Result<(), RepoGrammarError> {
+    for (field_name, value) in [
+        ("dependency id", dependency.dependency_id.as_str()),
+        ("dependency ecosystem", dependency.ecosystem.as_str()),
+        ("dependency package name", dependency.package_name.as_str()),
+        ("dependency scope", dependency.scope.as_str()),
+        (
+            "dependency evidence level",
+            dependency.evidence_level.as_str(),
+        ),
+        ("dependency code unit id", dependency.code_unit_id.as_str()),
+        ("dependency note", dependency.note.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "{field_name} must not be empty"
+            )));
+        }
+        validate_semantic_text_field(field_name, value)?;
+    }
+    DependencyEcosystem::parse_str(&dependency.ecosystem)
+        .map_err(RepoGrammarError::InvalidInput)?;
+    DependencyScope::parse_str(&dependency.scope).map_err(RepoGrammarError::InvalidInput)?;
+    let evidence_level = DependencyEvidenceLevel::parse_str(&dependency.evidence_level)
+        .map_err(RepoGrammarError::InvalidInput)?;
+    for (field_name, value) in [
+        ("dependency requirement", dependency.requirement.as_deref()),
+        (
+            "dependency resolved version",
+            dependency.resolved_version.as_deref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            if value.trim().is_empty() {
+                return Err(RepoGrammarError::InvalidInput(format!(
+                    "{field_name} must not be empty when present"
+                )));
+            }
+            validate_semantic_text_field(field_name, value)?;
+        }
+    }
+    if evidence_level == DependencyEvidenceLevel::LockfileResolved
+        && dependency.resolved_version.is_none()
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "lockfile-resolved dependency must include a resolved version".to_string(),
+        ));
+    }
+    validate_repo_relative_path(&dependency.path)?;
+    if dependency.start_byte > dependency.end_byte {
+        return Err(RepoGrammarError::InvalidInput(
+            "dependency source range start must not exceed end".to_string(),
         ));
     }
     Ok(())

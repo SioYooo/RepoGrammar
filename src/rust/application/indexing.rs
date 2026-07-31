@@ -24,9 +24,9 @@ use crate::application::family::{
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode,
-    Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
-    SymbolId,
+    CodeUnit, CodeUnitId, ContentHash, DependencyRecord, Evidence, FactCertainty, FactOrigin,
+    IrEdge, IrNode, Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind,
+    SourceRange, SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
@@ -41,9 +41,9 @@ use crate::ports::file_discovery::{
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, GenerationEngineStampStore, IndexStorageLayout, IndexStore,
-    IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord, PythonModuleInterfaceStore,
-    STORAGE_SCHEMA_VERSION,
+    IndexStoreError, IndexedCodeUnitRecord, IndexedDependencyRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    PythonModuleInterfaceStore, STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
@@ -1572,6 +1572,7 @@ where
         if !unchanged_paths.contains(&record.path)
             || inventory_only_paths.contains(&record.path)
             || is_local_derived_support_record(record)
+            || is_rust_provider_record(record)
         {
             continue;
         }
@@ -1803,6 +1804,7 @@ where
         next_fact_offset,
         &derived_tsjs_provider_support_facts,
     )?;
+    next_fact_offset += derived_tsjs_provider_support_fact_count;
     let local_support_fact_count = copied_semantic_records.len()
         + parser_fact_count
         + framework_fact_count
@@ -1819,6 +1821,30 @@ where
         "recorded local support facts",
         known_work_units(local_support_fact_count, local_support_fact_count),
     );
+
+    // Cargo project-model facts and dependency records are provider outputs,
+    // not immutable parser records. Re-run the safe `--no-deps` provider from
+    // the complete copied-plus-reparsed code-unit set so an incremental sync
+    // converges with a full rebuild and never drops or preserves stale package
+    // inventory. The base generation's Cargo provider facts were intentionally
+    // excluded from copy-forward above.
+    let rust_provider_facts = record_rust_provider_facts(
+        &request,
+        &indexed_code_units,
+        options.rust_provider,
+        session.as_mut(),
+        &mut warnings,
+        next_fact_offset,
+    )?;
+    let rust_provider_fact_count = rust_provider_facts.len();
+    if rust_provider_fact_count > 0 {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "recorded rust provider facts",
+            known_work_units(rust_provider_fact_count, rust_provider_fact_count),
+        );
+    }
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1859,6 +1885,7 @@ where
                 + derived_csharp_support_facts.len()
                 + derived_cpp_support_facts.len()
                 + derived_rust_support_facts.len()
+                + rust_provider_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
         );
         family_facts.extend(all_parser_facts);
@@ -1869,6 +1896,7 @@ where
         family_facts.extend(derived_csharp_support_facts);
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
+        family_facts.extend(rust_provider_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
         // The incremental path always resyncs from an active base generation, so
         // its family ids are always available to diff against.
@@ -1912,7 +1940,7 @@ where
         indexing_mode: indexing_generation_mode(&report),
         parser_attempted_files,
         indexed_units: indexed_code_units.len(),
-        semantic_facts: local_support_fact_count,
+        semantic_facts: local_support_fact_count + rust_provider_fact_count,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -1932,6 +1960,10 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | CPP_DERIVED_SUPPORT_ENGINE
             | RUST_DERIVED_SUPPORT_ENGINE
     )
+}
+
+fn is_rust_provider_record(record: &IndexedSemanticFactRecord) -> bool {
+    record.origin_engine == RustProviderKind::CargoMetadata.as_str()
 }
 
 fn next_semantic_fact_offset(records: &[IndexedSemanticFactRecord]) -> usize {
@@ -2993,6 +3025,11 @@ fn record_rust_provider_facts(
     };
     let unknown_count = output.unknowns.len();
     let unknown_facts = rust_provider_unknown_facts(&provider_request, &output)?;
+    let mut dependencies = output.dependencies;
+    dependencies.sort_by(|left, right| {
+        dependency_record_sort_key(left).cmp(&dependency_record_sort_key(right))
+    });
+    record_dependencies(session, &dependencies)?;
     let mut facts = output.facts;
     facts.extend(unknown_facts);
     if unknown_count > 0 {
@@ -3003,6 +3040,109 @@ fn record_rust_provider_facts(
     sort_semantic_facts(&mut facts);
     record_semantic_facts(session, fact_id_offset, &facts)?;
     Ok(facts)
+}
+
+type DependencyRecordSortKey<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    Option<&'a str>,
+    Option<&'a str>,
+    bool,
+    bool,
+    &'a str,
+    usize,
+    usize,
+    &'a str,
+);
+
+fn dependency_record_sort_key(dependency: &DependencyRecord) -> DependencyRecordSortKey<'_> {
+    (
+        dependency.package.ecosystem.as_str(),
+        &dependency.package.name,
+        dependency.scope.as_str(),
+        dependency.requirement.as_ref().map(|value| value.as_str()),
+        dependency
+            .resolved_version
+            .as_ref()
+            .map(|value| value.as_str()),
+        dependency.optional,
+        dependency.direct,
+        &dependency.evidence.provenance.path,
+        dependency.evidence.range.start_byte,
+        dependency.evidence.range.end_byte,
+        dependency.evidence.code_unit_id.as_str(),
+    )
+}
+
+fn record_dependencies(
+    session: &mut dyn GenerationWriteSession,
+    dependencies: &[DependencyRecord],
+) -> Result<usize, RepoGrammarError> {
+    for dependency in dependencies {
+        crate::application::storage::record_dependency(
+            session,
+            &IndexedDependencyRecord {
+                dependency_id: dependency_record_id(dependency),
+                ecosystem: dependency.package.ecosystem.as_str().to_string(),
+                package_name: dependency.package.name.clone(),
+                requirement: dependency
+                    .requirement
+                    .as_ref()
+                    .map(|value| value.as_str().to_string()),
+                resolved_version: dependency
+                    .resolved_version
+                    .as_ref()
+                    .map(|value| value.as_str().to_string()),
+                scope: dependency.scope.as_str().to_string(),
+                optional: dependency.optional,
+                direct: dependency.direct,
+                evidence_level: dependency.evidence_level.as_str().to_string(),
+                code_unit_id: dependency.evidence.code_unit_id.as_str().to_string(),
+                path: dependency.evidence.provenance.path.clone(),
+                content_hash: dependency.evidence.provenance.content_hash.clone(),
+                start_byte: dependency.evidence.range.start_byte,
+                end_byte: dependency.evidence.range.end_byte,
+                note: dependency.evidence.note.clone(),
+            },
+        )?;
+    }
+    Ok(dependencies.len())
+}
+
+fn dependency_record_id(dependency: &DependencyRecord) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        dependency.package.ecosystem.as_str(),
+        dependency.package.name.as_str(),
+        dependency.scope.as_str(),
+        dependency.evidence_level.as_str(),
+        dependency
+            .requirement
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or(""),
+        dependency
+            .resolved_version
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or(""),
+        dependency.evidence.provenance.path.as_str(),
+        dependency.evidence.code_unit_id.as_str(),
+        dependency.evidence.provenance.content_hash.as_str(),
+    ] {
+        hasher.update(b"\0");
+        hasher.update(value.as_bytes());
+    }
+    hasher.update([u8::from(dependency.optional), u8::from(dependency.direct)]);
+    hasher.update(b"\0");
+    hasher.update(dependency.evidence.range.start_byte.to_string().as_bytes());
+    hasher.update(b":");
+    hasher.update(dependency.evidence.range.end_byte.to_string().as_bytes());
+    format!(
+        "dependency:{}",
+        bytes_to_lower_hex(hasher.finalize().as_ref())
+    )
 }
 
 fn rust_provider_manifest_candidates(

@@ -57,6 +57,30 @@ impl DependencyEcosystem {
             Self::NativeSystem => "native_system",
         }
     }
+
+    pub fn parse_str(value: &str) -> Result<Self, String> {
+        match value {
+            "pypi" => Ok(Self::Pypi),
+            "npm" => Ok(Self::Npm),
+            "maven" => Ok(Self::Maven),
+            "nuget" => Ok(Self::Nuget),
+            "cargo" => Ok(Self::Cargo),
+            "go_modules" => Ok(Self::GoModules),
+            "composer" => Ok(Self::Composer),
+            "rubygems" => Ok(Self::RubyGems),
+            "swift_package_manager" => Ok(Self::SwiftPackageManager),
+            "cran" => Ok(Self::Cran),
+            "bioconductor" => Ok(Self::Bioconductor),
+            "delphi_package" => Ok(Self::DelphiPackage),
+            "alire" => Ok(Self::Alire),
+            "fpm" => Ok(Self::Fpm),
+            "matlab_add_on" => Ok(Self::MatlabAddOn),
+            "sql_extension" => Ok(Self::SqlExtension),
+            "scratch_extension" => Ok(Self::ScratchExtension),
+            "native_system" => Ok(Self::NativeSystem),
+            _ => Err(format!("unsupported dependency ecosystem {value}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -106,6 +130,17 @@ impl DependencyScope {
             Self::Unknown => "unknown",
         }
     }
+
+    pub fn parse_str(value: &str) -> Result<Self, String> {
+        match value {
+            "runtime" => Ok(Self::Runtime),
+            "development" => Ok(Self::Development),
+            "test" => Ok(Self::Test),
+            "build" => Ok(Self::Build),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(format!("unsupported dependency scope {value}")),
+        }
+    }
 }
 
 /// Strongest evidence that established a dependency record.
@@ -122,6 +157,15 @@ impl DependencyEvidenceLevel {
             Self::ManifestDeclared => "manifest_declared",
             Self::LockfileResolved => "lockfile_resolved",
             Self::ProviderResolved => "provider_resolved",
+        }
+    }
+
+    pub fn parse_str(value: &str) -> Result<Self, String> {
+        match value {
+            "manifest_declared" => Ok(Self::ManifestDeclared),
+            "lockfile_resolved" => Ok(Self::LockfileResolved),
+            "provider_resolved" => Ok(Self::ProviderResolved),
+            _ => Err(format!("unsupported dependency evidence level {value}")),
         }
     }
 }
@@ -383,6 +427,63 @@ mod tests {
             DependencyEvidenceLevel::ProviderResolved.as_str(),
             "provider_resolved"
         );
+    }
+
+    #[test]
+    fn persisted_dependency_tokens_round_trip_and_reject_unknown_values() {
+        let ecosystems = [
+            DependencyEcosystem::Pypi,
+            DependencyEcosystem::Npm,
+            DependencyEcosystem::Maven,
+            DependencyEcosystem::Nuget,
+            DependencyEcosystem::Cargo,
+            DependencyEcosystem::GoModules,
+            DependencyEcosystem::Composer,
+            DependencyEcosystem::RubyGems,
+            DependencyEcosystem::SwiftPackageManager,
+            DependencyEcosystem::Cran,
+            DependencyEcosystem::Bioconductor,
+            DependencyEcosystem::DelphiPackage,
+            DependencyEcosystem::Alire,
+            DependencyEcosystem::Fpm,
+            DependencyEcosystem::MatlabAddOn,
+            DependencyEcosystem::SqlExtension,
+            DependencyEcosystem::ScratchExtension,
+            DependencyEcosystem::NativeSystem,
+        ];
+        for ecosystem in ecosystems {
+            assert_eq!(
+                DependencyEcosystem::parse_str(ecosystem.as_str()),
+                Ok(ecosystem)
+            );
+        }
+
+        let scopes = [
+            DependencyScope::Runtime,
+            DependencyScope::Development,
+            DependencyScope::Test,
+            DependencyScope::Build,
+            DependencyScope::Unknown,
+        ];
+        for scope in scopes {
+            assert_eq!(DependencyScope::parse_str(scope.as_str()), Ok(scope));
+        }
+
+        let evidence_levels = [
+            DependencyEvidenceLevel::ManifestDeclared,
+            DependencyEvidenceLevel::LockfileResolved,
+            DependencyEvidenceLevel::ProviderResolved,
+        ];
+        for evidence_level in evidence_levels {
+            assert_eq!(
+                DependencyEvidenceLevel::parse_str(evidence_level.as_str()),
+                Ok(evidence_level)
+            );
+        }
+
+        assert!(DependencyEcosystem::parse_str("unknown_ecosystem").is_err());
+        assert!(DependencyScope::parse_str("production").is_err());
+        assert!(DependencyEvidenceLevel::parse_str("guessed").is_err());
     }
 
     #[test]

@@ -535,9 +535,10 @@ repositories must be refused rather than deleted; users and agents should run
 `repogrammar resync` first to create mutable SQLite storage.
 
 The initial schema stores schema metadata, generation rows, indexed files,
-syntax-only code-unit records, IR nodes and edges, semantic facts, families,
-family members, variation slots, evidence links, derived-record dependency
-rows, and dirty-record markers. The full rebuild command path populates indexed
+syntax-only code-unit records, IR nodes and edges, semantic facts,
+language-neutral package dependency records, families, family members,
+variation slots, evidence links, derived-record dependency rows, and
+dirty-record markers. The full rebuild command path populates indexed
 files, syntax-only code units, CodeUnit-derived IR nodes, conservative IR
 containment edges, optional semantic-worker facts, and exact-anchor
 `DATAFLOW_DERIVED` support facts derived in the application layer. Incremental
@@ -574,11 +575,31 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `10`. Existing pre-release schema `1`
-through `9` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `11`. Existing pre-release schema `1`
+through `10` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
+Schema `11` adds the `dependency_records` table for the ADR-0030
+language-neutral dependency inventory. Each row is generation-scoped and
+source-evidence-bound with `PRIMARY KEY (generation_id, dependency_id)` and
+cascading foreign keys to its generation, code unit, and indexed file. The
+table stores the closed ecosystem, scope, and evidence-level tokens; bounded
+package name; optional requirement and resolved version; directness and
+optionality flags; and the evidence path, hash, byte range, and note. A
+`lockfile_resolved` row must carry a resolved version. Application and storage
+validation both reject unknown tokens, invalid paths or hashes, evidence ranges
+outside the same-generation code unit, and source/code-unit/file hash mismatch.
+
+Dependency writes also create an `external_dependency`
+`derived_record_dependencies` row. Replacing or removing the evidence path
+therefore dirties the record until bounded recomputation rewrites it, and
+generation validation remains fail-closed. `DependencyStore` exposes a
+deterministically ordered internal active-generation read model and revalidates
+every hydrated row. The first production writer is the safe Cargo metadata
+stage. There is intentionally no public CLI/MCP raw package-name projection in
+this schema slice; such a surface requires its own source-free product contract.
+
 Schema `10` adds the `python_module_interfaces` table, which persists one Python
 module interface hash per indexed `.py` module for the incremental-sync
 interface-hash gate (see `docs/specifications/indexing-pipeline.md`). Each row is

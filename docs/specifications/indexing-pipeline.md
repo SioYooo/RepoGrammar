@@ -946,8 +946,15 @@ records, records provider `UNKNOWN`s when Cargo or project
 configuration is unavailable, and does not execute build scripts or procedural
 macros. These facts are context only: package metadata, targets, features, and
 dependencies do not directly prove family membership. The generic records are
-currently provider output only; persistence and source-free product projection
-remain separate follow-up modules.
+persisted in schema v11 as generation-scoped, evidence-bound dependency rows.
+The application storage boundary can read the deterministically ordered active
+generation back through `DependencyStore`; raw package names remain internal,
+and a source-free public CLI/MCP projection is a separate follow-up module.
+Incremental sync excludes prior Cargo-provider facts from base copy-forward and
+reruns the same safe provider over the copied-plus-reparsed Cargo manifest code
+units. This recomputes both facts and dependency rows, so an unchanged manifest
+survives an unrelated source edit without duplicating facts or preserving stale
+package inventory.
 
 ## Optional providers
 
