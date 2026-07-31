@@ -11,6 +11,8 @@ use super::{Evidence, TypedUnknown};
 const MAX_PACKAGE_NAME_CHARS: usize = 512;
 const MAX_VERSION_TEXT_CHARS: usize = 256;
 const MAX_CONTRACT_ID_CHARS: usize = 160;
+const MAX_CONTRACT_EXACT_VERSIONS: usize = 64;
+const MAX_LIBRARY_CONTRACTS: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DependencyEcosystem {
@@ -373,6 +375,41 @@ pub enum LibraryCapability {
     DataflowEffect,
 }
 
+/// A finite, exact-version admission boundary for one reviewed contract.
+///
+/// Version ordering and range syntax differ by ecosystem. The language-neutral
+/// core therefore does not compare opaque version strings or guess range
+/// semantics. A contract explicitly lists the resolved versions its evidence
+/// reviewed; wider ecosystem-native ranges require a separately qualified
+/// matcher at an adapter boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryContractVersionSet(Vec<DependencyVersion>);
+
+impl LibraryContractVersionSet {
+    pub fn new(versions: impl IntoIterator<Item = DependencyVersion>) -> Result<Self, String> {
+        let mut versions = versions.into_iter().collect::<Vec<_>>();
+        if versions.is_empty() {
+            return Err("library contract must admit at least one exact version".to_string());
+        }
+        if versions.len() > MAX_CONTRACT_EXACT_VERSIONS {
+            return Err(
+                "library contract exact-version set exceeds its resource limit".to_string(),
+            );
+        }
+        versions.sort();
+        versions.dedup();
+        Ok(Self(versions))
+    }
+
+    pub fn versions(&self) -> &[DependencyVersion] {
+        &self.0
+    }
+
+    pub fn admits(&self, version: &DependencyVersion) -> bool {
+        self.0.binary_search(version).is_ok()
+    }
+}
+
 /// A reviewed, versioned behavior contract for one package.
 ///
 /// Package inventory never creates one of these automatically. Contract packs
@@ -383,6 +420,7 @@ pub struct LibraryContract {
     pub id: LibraryContractId,
     pub revision: u32,
     pub package: PackageIdentity,
+    pub versions: LibraryContractVersionSet,
     pub capabilities: Vec<LibraryCapability>,
 }
 
@@ -391,6 +429,7 @@ impl LibraryContract {
         id: LibraryContractId,
         revision: u32,
         package: PackageIdentity,
+        versions: LibraryContractVersionSet,
         capabilities: impl IntoIterator<Item = LibraryCapability>,
     ) -> Result<Self, String> {
         if revision == 0 {
@@ -406,9 +445,101 @@ impl LibraryContract {
             id,
             revision,
             package,
+            versions,
             capabilities,
         })
     }
+}
+
+/// Result of consulting reviewed contracts for one dependency and capability.
+///
+/// A match is still only contract evidence. The caller must also prove the
+/// source anchor and any package-qualified symbol obligation required by the
+/// family; this result alone never establishes behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryContractResolution<'a> {
+    Matched(&'a LibraryContract),
+    NoContract,
+    InsufficientDependencyEvidence,
+}
+
+/// Deterministic snapshot of reviewed library contracts.
+///
+/// The registry rejects duplicate ids and overlapping package/version/
+/// capability claims. This makes lookup fail closed at construction time
+/// instead of selecting whichever conflicting contract happened to be first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryContractRegistry {
+    contracts: Vec<LibraryContract>,
+}
+
+impl LibraryContractRegistry {
+    pub fn new(contracts: impl IntoIterator<Item = LibraryContract>) -> Result<Self, String> {
+        let mut contracts = contracts.into_iter().collect::<Vec<_>>();
+        if contracts.len() > MAX_LIBRARY_CONTRACTS {
+            return Err("library contract registry exceeds its resource limit".to_string());
+        }
+        contracts.sort_by(|left, right| {
+            (left.id.as_str(), left.revision).cmp(&(right.id.as_str(), right.revision))
+        });
+
+        for pair in contracts.windows(2) {
+            if pair[0].id == pair[1].id {
+                return Err("library contract ids must be unique within a registry".to_string());
+            }
+        }
+        for (index, left) in contracts.iter().enumerate() {
+            for right in &contracts[index + 1..] {
+                if contracts_overlap(left, right) {
+                    return Err(
+                        "library contracts must not overlap package, version, and capability"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
+        Ok(Self { contracts })
+    }
+
+    pub fn contracts(&self) -> &[LibraryContract] {
+        &self.contracts
+    }
+
+    pub fn resolve<'a>(
+        &'a self,
+        dependency: &DependencyRecord,
+        capability: LibraryCapability,
+    ) -> LibraryContractResolution<'a> {
+        if dependency.evidence_level == DependencyEvidenceLevel::ManifestDeclared {
+            return LibraryContractResolution::InsufficientDependencyEvidence;
+        }
+        let Some(version) = dependency.resolved_version.as_ref() else {
+            return LibraryContractResolution::InsufficientDependencyEvidence;
+        };
+        self.contracts
+            .iter()
+            .find(|contract| {
+                contract.package == dependency.package
+                    && contract.versions.admits(version)
+                    && contract.capabilities.binary_search(&capability).is_ok()
+            })
+            .map(LibraryContractResolution::Matched)
+            .unwrap_or(LibraryContractResolution::NoContract)
+    }
+}
+
+fn contracts_overlap(left: &LibraryContract, right: &LibraryContract) -> bool {
+    left.package == right.package
+        && left
+            .versions
+            .versions()
+            .iter()
+            .any(|version| right.versions.admits(version))
+        && left
+            .capabilities
+            .iter()
+            .any(|capability| right.capabilities.binary_search(capability).is_ok())
 }
 
 fn validate_untrusted_text(
@@ -550,10 +681,16 @@ mod tests {
 
     #[test]
     fn library_contracts_are_explicit_versioned_and_deterministic() {
+        let versions = LibraryContractVersionSet::new([
+            DependencyVersion::new("1.0.188").expect("version"),
+            DependencyVersion::new("1.0.188").expect("duplicate version"),
+        ])
+        .expect("versions");
         let contract = LibraryContract::new(
             LibraryContractId::new("rust.serde.model").expect("id"),
             1,
             PackageIdentity::new(DependencyEcosystem::Cargo, "serde").expect("package"),
+            versions,
             [
                 LibraryCapability::FrameworkRole,
                 LibraryCapability::SymbolIdentity,
@@ -562,6 +699,7 @@ mod tests {
         )
         .expect("contract");
         assert_eq!(contract.id.as_str(), "rust.serde.model");
+        assert_eq!(contract.versions.versions().len(), 1);
         assert_eq!(
             contract.capabilities,
             vec![
@@ -574,8 +712,86 @@ mod tests {
             LibraryContractId::new("rust.empty").expect("id"),
             0,
             PackageIdentity::new(DependencyEcosystem::Cargo, "serde").expect("package"),
+            LibraryContractVersionSet::new([DependencyVersion::new("1.0.188").expect("version"),])
+                .expect("versions"),
             [],
         )
+        .is_err());
+        assert!(LibraryContractVersionSet::new([]).is_err());
+    }
+
+    #[test]
+    fn library_contract_registry_requires_resolved_exact_versions() {
+        let package = PackageIdentity::new(DependencyEcosystem::Cargo, "serde").expect("package");
+        let contract = LibraryContract::new(
+            LibraryContractId::new("rust.serde.symbols").expect("id"),
+            2,
+            package.clone(),
+            LibraryContractVersionSet::new([DependencyVersion::new("1.0.188").expect("version")])
+                .expect("versions"),
+            [LibraryCapability::SymbolIdentity],
+        )
+        .expect("contract");
+        let registry = LibraryContractRegistry::new([contract]).expect("registry");
+
+        let locked = DependencyRecord::new(
+            package.clone(),
+            Some(DependencyVersion::new("^1").expect("requirement")),
+            Some(DependencyVersion::new("1.0.188").expect("version")),
+            DependencyScope::Runtime,
+            false,
+            DependencyDirectness::Unknown,
+            DependencyEvidenceLevel::LockfileResolved,
+            evidence(),
+        )
+        .expect("locked dependency");
+        assert!(matches!(
+            registry.resolve(&locked, LibraryCapability::SymbolIdentity),
+            LibraryContractResolution::Matched(found)
+                if found.id.as_str() == "rust.serde.symbols"
+        ));
+        assert_eq!(
+            registry.resolve(&locked, LibraryCapability::CallSemantics),
+            LibraryContractResolution::NoContract
+        );
+
+        let manifest_only = DependencyRecord::new(
+            package,
+            Some(DependencyVersion::new("1.0.188").expect("requirement")),
+            None,
+            DependencyScope::Runtime,
+            false,
+            DependencyDirectness::Direct,
+            DependencyEvidenceLevel::ManifestDeclared,
+            evidence(),
+        )
+        .expect("manifest dependency");
+        assert_eq!(
+            registry.resolve(&manifest_only, LibraryCapability::SymbolIdentity),
+            LibraryContractResolution::InsufficientDependencyEvidence
+        );
+    }
+
+    #[test]
+    fn library_contract_registry_rejects_ambiguous_claims() {
+        let package = PackageIdentity::new(DependencyEcosystem::Cargo, "serde").expect("package");
+        let contract = |id: &str| {
+            LibraryContract::new(
+                LibraryContractId::new(id).expect("id"),
+                1,
+                package.clone(),
+                LibraryContractVersionSet::new([
+                    DependencyVersion::new("1.0.188").expect("version")
+                ])
+                .expect("versions"),
+                [LibraryCapability::FrameworkRole],
+            )
+            .expect("contract")
+        };
+        assert!(LibraryContractRegistry::new([
+            contract("rust.serde.role-a"),
+            contract("rust.serde.role-b"),
+        ])
         .is_err());
     }
 

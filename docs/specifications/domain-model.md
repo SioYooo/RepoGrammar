@@ -15,14 +15,21 @@ and resolved version, scope, three-state directness (`direct`, `transitive`, or
 `unknown`), optionality, the strongest dependency evidence level, and
 repository evidence. `DependencySnapshot` is deterministic and rejects
 duplicate inventory records. `ExternalSymbolId` is always qualified by a
-package identity. `LibraryContract` is explicit, revisioned, and non-empty;
-inventory never synthesizes one.
+package identity. `LibraryContract` is explicit, revisioned, non-empty, and
+limited to a finite set of exact resolved versions; inventory never synthesizes
+one. `LibraryContractRegistry` sorts contracts deterministically and rejects
+duplicate ids or overlapping package/version/capability claims.
 
 Manifest declarations must not be described as installed, resolved, or
 behaviorally understood. Lockfile records require a resolved version but still
 do not prove runtime selection. Provider failures remain typed `UNKNOWN`, and
 reviewed library contracts remain separate auditable artifacts whose version
-and compatibility must be checked at the point of use.
+and compatibility must be checked at the point of use. Registry lookup refuses
+manifest-only or versionless dependency evidence. A successful lookup is still
+not behavior or family proof: the caller must independently establish the exact
+source anchor and any package-qualified external symbol obligation. The core
+does not compare opaque cross-ecosystem ranges; wider version ranges require a
+separately qualified ecosystem-native matcher.
 
 ## CodeUnit
 

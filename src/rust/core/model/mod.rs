@@ -14,7 +14,8 @@ pub use code_unit::{CodeUnit, CodeUnitId, CodeUnitKind, Language, SourceRange};
 pub use dependency::{
     DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
     DependencyScope, DependencySnapshot, DependencyVersion, ExternalSymbolId, LibraryCapability,
-    LibraryContract, LibraryContractId, PackageIdentity,
+    LibraryContract, LibraryContractId, LibraryContractRegistry, LibraryContractResolution,
+    LibraryContractVersionSet, PackageIdentity,
 };
 pub use evidence::Evidence;
 pub use family::{

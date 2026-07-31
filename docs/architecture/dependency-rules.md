@@ -16,6 +16,10 @@
 - optional providers, including any future CodeGraph provider, belong behind
   ports and adapters. Their SDK, CLI, MCP, or file formats must not enter
   `core`, `ports`, or `application` as concrete third-party types.
+- reviewed library-contract registration belongs in `core` and may match only
+  exact resolved versions under the language-neutral contract. Ecosystem-native
+  range parsing or ordering belongs behind a separately qualified adapter; core
+  must not compare opaque version text or select an overlapping contract.
 
 ## Forbidden dependencies
 

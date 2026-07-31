@@ -33,9 +33,11 @@ RepoGrammar adopts one language-neutral four-layer model:
    Provider unavailability, conflict, staleness, or insufficient context remains
    typed `UNKNOWN`; it never falls back to guessed identity.
 3. **Reviewed library contracts** are explicit, versioned RepoGrammar-owned
-   contract packs. A contract names one package and a bounded capability set
-   such as symbol identity, framework role, configuration model, call semantics,
-   or dataflow effect. Inventory never creates behavior contracts automatically.
+   contract packs. A contract names one package, a finite set of exact resolved
+   versions, and a bounded capability set such as symbol identity, framework
+   role, configuration model, call semantics, or dataflow effect. Inventory
+   never creates behavior contracts automatically. The language-neutral core
+   does not guess ordering or range semantics for opaque ecosystem versions.
 4. **Family evidence** may use third-party behavior only when exact source
    anchors and the required resolved symbol/contract evidence agree. A package
    name in a manifest is context, not family support.
@@ -43,8 +45,12 @@ RepoGrammar adopts one language-neutral four-layer model:
 The core owns `DependencyEcosystem`, `PackageIdentity`, `DependencyVersion`,
 `DependencyScope`, `DependencyDirectness`, `DependencyEvidenceLevel`, `DependencyRecord`,
 `DependencySnapshot`, `ExternalSymbolId`, `LibraryContractId`,
-`LibraryCapability`, and `LibraryContract`. External SDK, compiler, package
-manager, and wire-protocol types must be translated at adapter boundaries.
+`LibraryCapability`, `LibraryContractVersionSet`, `LibraryContract`, and
+`LibraryContractRegistry`. The registry rejects duplicate ids and overlapping
+package/version/capability claims. Its lookup requires non-manifest evidence
+with an exact resolved version and returns no behavior claim by itself.
+External SDK, compiler, package manager, and wire-protocol types must be
+translated at adapter boundaries.
 
 The evidence ladder is strict:
 
@@ -273,8 +279,11 @@ permission to infer runtime behavior.
   the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer/RubyGems/Go Modules/Maven consumers do not
   complete any
   ADR-0020 language gate.
-- Library contracts require explicit review, versioning, fixtures, provenance,
-  and invalidation tests. They must not become hard-coded benchmark answers.
+- Library contracts require explicit review, exact-version admission, fixtures,
+  provenance, and invalidation tests. The deterministic registry is implemented
+  as a domain boundary, but the repository currently ships no production
+  contract pack. A match still requires independent exact-anchor and symbol
+  evidence, and contracts must not become hard-coded benchmark answers.
 
 ## Alternatives considered
 
@@ -308,7 +317,8 @@ permission to infer runtime behavior.
    schemas remain open.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
-4. Specify a reviewed library-contract registry, cache invalidation, and
-   source-free product projection.
+4. Add a first reviewed contract pack only after package-qualified symbol
+   resolution, contract provenance/cache invalidation, source-free product
+   projection, and ecosystem-native version-boundary evidence are qualified.
 5. Apply each language's ADR-0020 gate independently; shared infrastructure is
    reusable evidence, never a completion waiver.

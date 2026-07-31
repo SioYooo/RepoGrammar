@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added an exact-version-scoped `LibraryContractRegistry` domain boundary. It
+  deterministically rejects duplicate or overlapping contract claims, refuses
+  manifest-only/versionless lookup, and never treats a contract match as family
+  proof without separate source-anchor and external-symbol evidence. No
+  production library contract pack is shipped by this change.
 - Added bounded, non-executing Maven dependency inventory for exact root/nested
   `pom.xml` inputs. Static direct `groupId:artifactId` declarations retain
   bounded literal requirements, Maven test/runtime scope where provable, and
