@@ -118,6 +118,23 @@ parser may inventory literal `DCC_UsePackage` values as runtime
 `delphi_dependency_inventory` UNKNOWN. `.dpk` source stays unread, and
 `.pp`/`.lpr`/`.lpi`/`.lpk` remain deferred. No compiler, MSBuild, package
 manager, source frontend, family, dialect equivalence, or support state follows.
+Ada discovery defines stable `ada` and `ada-config` tokens. Only exact lowercase
+GNAT-default `.ads` and `.adb` sources are admitted; those bytes and exact `.gpr`
+project files remain inventory-only. Exact `alire.toml` may own one
+`ProjectConfig` unit, `ada_dependency_inventory` typed UNKNOWNs, and bounded
+direct runtime `manifest_declared` `alire` records from unconditional
+`[[depends-on]]` string entries. `alire.lock` owns a config unit and an internal-
+schema UNKNOWN but no dependency identity. None of these records proves GPR
+naming selection, lock resolution, Ada semantics, library behavior, a family,
+support, or readiness.
+Fortran discovery defines stable `fortran` and `fortran-config` tokens. The
+source token covers only the frozen non-preprocessed lowercase fixed/free-form
+suffix set and remains inventory-only. Exact `fpm.toml` may own one
+`ProjectConfig` unit, `fortran_dependency_inventory` typed UNKNOWNs, and bounded
+direct `manifest_declared` `fpm` records: root `[dependencies]` maps to runtime
+scope and root `[dev-dependencies]` to development scope. Dotted namespace,
+git/path, target-specific, preprocessing, and environment selection remain
+unresolved. No Fortran source IR, family, support, or readiness state exists.
 The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
 Java classes/interfaces/methods plus Spring MVC route methods, Spring
 components, Spring Boot applications, and Spring Data repositories when exact

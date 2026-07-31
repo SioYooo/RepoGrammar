@@ -5378,6 +5378,10 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::VisualBasicConfig => Language::VisualBasicConfig,
         DiscoveredLanguage::ObjectPascal => Language::ObjectPascal,
         DiscoveredLanguage::DelphiConfig => Language::DelphiConfig,
+        DiscoveredLanguage::Ada => Language::Ada,
+        DiscoveredLanguage::AdaConfig => Language::AdaConfig,
+        DiscoveredLanguage::Fortran => Language::Fortran,
+        DiscoveredLanguage::FortranConfig => Language::FortranConfig,
         DiscoveredLanguage::Rust => Language::Rust,
         DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
@@ -5393,6 +5397,12 @@ fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
     if file.language == DiscoveredLanguage::RubyConfig {
         return !is_ruby_dependency_config_path(&file.path);
     }
+    if file.language == DiscoveredLanguage::AdaConfig {
+        return !is_ada_dependency_config_path(&file.path);
+    }
+    if file.language == DiscoveredLanguage::FortranConfig {
+        return false;
+    }
     language_token_is_inventory_only(file.language.as_str())
 }
 
@@ -5405,6 +5415,12 @@ fn indexed_file_is_inventory_only(file: &IndexedFileRecord) -> bool {
     }
     if file.language == DiscoveredLanguage::RubyConfig.as_str() {
         return !is_ruby_dependency_config_path(&file.path);
+    }
+    if file.language == DiscoveredLanguage::AdaConfig.as_str() {
+        return !is_ada_dependency_config_path(&file.path);
+    }
+    if file.language == DiscoveredLanguage::FortranConfig.as_str() {
+        return false;
     }
     language_token_is_inventory_only(&file.language)
 }
@@ -5420,6 +5436,13 @@ fn is_ruby_dependency_config_path(path: &str) -> bool {
     path.rsplit('/').next().unwrap_or(path) == "Gemfile.lock"
 }
 
+fn is_ada_dependency_config_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "alire.toml" | "alire.lock"
+    )
+}
+
 fn language_token_is_inventory_only(language: &str) -> bool {
     matches!(
         language,
@@ -5431,6 +5454,10 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "swift-config"
             | "visual-basic"
             | "object-pascal"
+            | "ada"
+            | "ada-config"
+            | "fortran"
+            | "fortran-config"
     )
 }
 
@@ -7300,6 +7327,201 @@ mod tests {
         assert!(!debug.contains("must-not-be-read"));
         assert!(!debug.contains("must not execute"));
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn ada_fortran_inventory_is_source_free_incremental_and_claim_free() {
+        let workspace = TempWorkspace::new("indexing-ada-fortran-inventory");
+        fs::create_dir_all(workspace.path().join("ada")).expect("create Ada source dir");
+        fs::create_dir_all(workspace.path().join("fortran")).expect("create Fortran source dir");
+        fs::create_dir_all(workspace.path().join("alire")).expect("create Alire dir");
+        fs::write(workspace.path().join("ada/main.adb"), [0xff, 0xfe, 0xfd])
+            .expect("write binary Ada body");
+        fs::write(
+            workspace.path().join("ada/main.ads"),
+            "ADA_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("write Ada specification");
+        fs::write(
+            workspace.path().join("demo.gpr"),
+            "GPR_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("write GPR inventory");
+        fs::write(
+            workspace.path().join("alire.toml"),
+            "[[depends-on]]\ngnatcoll = \"^25.0\"\n",
+        )
+        .expect("write Alire manifest");
+        fs::write(
+            workspace.path().join("alire/alire.lock"),
+            "LOCK_SECRET_MUST_NOT_LEAK=/private/example\n",
+        )
+        .expect("write Alire lock inventory");
+        fs::write(
+            workspace.path().join("fortran/main.f90"),
+            "FORTRAN_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("write free-form Fortran source");
+        fs::write(
+            workspace.path().join("fortran/legacy.f"),
+            [0xff, 0xfe, 0xfd],
+        )
+        .expect("write binary fixed-form Fortran source");
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            "[dependencies]\nstdlib = \"*\"\n",
+        )
+        .expect("write fpm manifest");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let source_store = RecordingSourceStore::new();
+
+        let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index Ada/Fortran inventory");
+        assert_eq!(outcome.discovered_files, 8);
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 3);
+        assert_eq!(outcome.indexed_units, 3);
+        assert_eq!(outcome.semantic_facts, 4);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "alire.toml".to_string(),
+                "alire/alire.lock".to_string(),
+                "fpm.toml".to_string(),
+            ]
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec![
+                "parser skipped unsupported language token: ada".to_string(),
+                "parser skipped unsupported language token: ada-config".to_string(),
+                "parser skipped unsupported language token: fortran".to_string(),
+            ]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Ada/Fortran dependencies");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.ecosystem.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.scope.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("alire", "gnatcoll", "runtime"),
+                ("fpm", "stdlib", "runtime")
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("read Ada/Fortran families")
+            .families
+            .is_empty());
+        let debug = format!("{outcome:?}{dependencies:?}");
+        for secret in [
+            "ADA_SOURCE_MUST_NOT_BE_READ",
+            "GPR_SOURCE_MUST_NOT_BE_READ",
+            "FORTRAN_SOURCE_MUST_NOT_BE_READ",
+            "LOCK_SECRET_MUST_NOT_LEAK",
+            "/private/example",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+
+        fs::write(
+            workspace.path().join("fortran/main.f90"),
+            "EDITED_FORTRAN_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("edit Fortran source inventory");
+        let copied = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("copy manifest dependency rows forward");
+        let copy_report = copied.sync_report.expect("copy-forward report");
+        assert_eq!(copy_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(copy_report.modified_files, 1);
+        assert_eq!(copy_report.reparsed_files, 0);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied dependencies")
+                .dependencies
+                .len(),
+            2
+        );
+
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            "[dependencies]\njson-fortran = \"~9.0\"\n",
+        )
+        .expect("replace fpm dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace fpm dependency inventory");
+        let replace_report = replaced.sync_report.expect("replace report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced dependencies");
+        assert!(dependencies
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.package_name == "json-fortran"));
+        assert!(!dependencies
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.package_name == "stdlib"));
+
+        fs::remove_file(workspace.path().join("alire.toml")).expect("remove Alire manifest");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove Alire dependency inventory");
+        let remove_report = removed.sync_report.expect("removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read dependencies after removal");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].ecosystem, "fpm");
+        assert!(store
+            .list_active_families()
+            .expect("read families after removal")
+            .families
+            .is_empty());
     }
 
     #[test]

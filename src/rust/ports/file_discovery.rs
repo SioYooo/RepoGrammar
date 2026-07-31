@@ -41,6 +41,10 @@ pub enum DiscoveredLanguage {
     VisualBasicConfig,
     ObjectPascal,
     DelphiConfig,
+    Ada,
+    AdaConfig,
+    Fortran,
+    FortranConfig,
     Rust,
     RustConfig,
 }
@@ -73,6 +77,10 @@ impl DiscoveredLanguage {
             Self::VisualBasicConfig => "visual-basic-config",
             Self::ObjectPascal => "object-pascal",
             Self::DelphiConfig => "delphi-config",
+            Self::Ada => "ada",
+            Self::AdaConfig => "ada-config",
+            Self::Fortran => "fortran",
+            Self::FortranConfig => "fortran-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
         }
@@ -275,6 +283,19 @@ mod tests {
         assert_eq!(
             SkippedReason::LanguageSpecificExclusion.as_str(),
             "language_specific_exclusion"
+        );
+    }
+
+    #[test]
+    fn ada_and_fortran_discovery_tokens_are_stable_and_distinct() {
+        assert_eq!(DiscoveredLanguage::Ada.as_str(), "ada");
+        assert_eq!(DiscoveredLanguage::AdaConfig.as_str(), "ada-config");
+        assert_ne!(DiscoveredLanguage::Ada, DiscoveredLanguage::AdaConfig);
+        assert_eq!(DiscoveredLanguage::Fortran.as_str(), "fortran");
+        assert_eq!(DiscoveredLanguage::FortranConfig.as_str(), "fortran-config");
+        assert_ne!(
+            DiscoveredLanguage::Fortran,
+            DiscoveredLanguage::FortranConfig
         );
     }
 

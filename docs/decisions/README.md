@@ -42,3 +42,5 @@ Current accepted ADRs:
 - ADR-0030: Language-neutral dependency inventory and reviewed library semantics.
 - ADR-0031: VB.NET source-free discovery and NuGet inventory.
 - ADR-0032: Delphi-qualified Object Pascal discovery and package inventory.
+- ADR-0033: Ada source-free discovery and Alire inventory.
+- ADR-0034: Fortran source-form discovery and fpm inventory.

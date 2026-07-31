@@ -250,6 +250,21 @@ allowed.
   no metadata leakage. Incremental and CLI tests must prove copy-forward,
   replacement, removal, honest mode, zero families, and no Delphi/FPC/Lazarus/
   MSBuild/compiler/package-manager execution.
+- Ada/Fortran discovery and dependency-inventory coverage must prove stable
+  source/config tokens, normalized exact-case path classification, the GNAT
+  default `.ads`/`.adb` boundary, frozen lowercase non-preprocessed Fortran
+  fixed/free forms, and explicit deferral of `.ada`, uppercase Fortran, `.fpp`,
+  `.fi`, and `.fii`. Tests must cover exact/plus-one discovery and parser byte
+  limits, bounded lines/records, non-UTF-8 source, zero SourceStore reads for
+  Ada/Fortran source and GPR, and no compiler/package-manager/project execution.
+  Exact `alire.toml` tests must cover unconditional direct strings, conditional
+  tables, pins, conflicts, malformed/resource failure, internal-lock abstention,
+  and path/secret non-leakage. Exact `fpm.toml` tests must cover runtime/dev
+  scopes, dotted namespace, inline git/path, target-specific/unsupported shapes,
+  conflict/resource UNKNOWN, and secret non-leakage. Product tests must prove
+  file-manifest-only CLI mode for deferred inputs, syntax mode for parsed
+  manifests, no family/support claims, and incremental copy-forward,
+  replacement, and removal of evidence-bound rows.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, mutable top-level database creation, active
@@ -320,7 +335,7 @@ allowed.
   `sync` coverage must include project-context fallback when TS/JS, Python, or
   Rust source inventories change and must assert stale unresolved-import
   UNKNOWNs are not copied forward after a new repo-local import target appears.
-  Go, PHP, Ruby, Visual Basic, and Object Pascal/Delphi inventory coverage must
+  Go, PHP, Ruby, Visual Basic, Object Pascal/Delphi, Ada, and Fortran inventory coverage must
   instead prove path-qualified
   incremental add/modify/remove deltas for their deferred source/configuration
   paths, zero source-store/parser calls for those paths, whole-manifest warning

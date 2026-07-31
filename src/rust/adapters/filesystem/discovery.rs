@@ -3,8 +3,10 @@
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
 use super::resource_limits::{DiscoveryLimits, DiscoveryResourceBudget};
+use crate::adapters::languages::ada::{AdaLanguageAdapter, AdaPathClassification};
 use crate::adapters::languages::cpp::CppLanguageAdapter;
 use crate::adapters::languages::csharp::CSharpLanguageAdapter;
+use crate::adapters::languages::fortran::{FortranLanguageAdapter, FortranPathClassification};
 use crate::adapters::languages::go::GoLanguageAdapter;
 use crate::adapters::languages::java::JavaLanguageAdapter;
 use crate::adapters::languages::object_pascal::{
@@ -448,6 +450,24 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
         }
         ObjectPascalPathClassification::NotObjectPascal => {}
     }
+    match AdaLanguageAdapter::classify_path(path) {
+        AdaPathClassification::Source(_) => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Ada);
+        }
+        AdaPathClassification::Config(_) => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::AdaConfig);
+        }
+        AdaPathClassification::NotAda => {}
+    }
+    match FortranLanguageAdapter::classify_path(path) {
+        FortranPathClassification::Source(_) => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Fortran);
+        }
+        FortranPathClassification::Config => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::FortranConfig);
+        }
+        FortranPathClassification::NotFortran => {}
+    }
     match PhpLanguageAdapter::classify_path(path) {
         PhpPathClassification::Source => {
             return LanguagePathClassification::Supported(DiscoveredLanguage::Php);
@@ -683,6 +703,71 @@ mod tests {
         assert!(report.files[0].content_hash.as_str().starts_with("sha256:"));
         assert_eq!(report.files[1].path, "src/b.js");
         assert_eq!(report.git_ignore_status, GitIgnoreStatus::NotRepository);
+    }
+
+    #[test]
+    fn discovers_conservative_ada_and_fortran_source_config_inventory() {
+        let workspace = TempWorkspace::new("discovery-ada-fortran");
+        fs::create_dir_all(workspace.path().join("ada")).expect("create Ada dir");
+        fs::create_dir_all(workspace.path().join("fortran")).expect("create Fortran dir");
+        fs::create_dir_all(workspace.path().join("alire")).expect("create Alire dir");
+        for path in [
+            "ada/main.adb",
+            "ada/main.ads",
+            "demo.gpr",
+            "alire.toml",
+            "alire/alire.lock",
+            "fortran/fixed.f",
+            "fortran/free.f90",
+            "fpm.toml",
+        ] {
+            fs::write(workspace.path().join(path), "inventory\n").expect("write inventory file");
+        }
+        for path in [
+            "ada/alternate.ada",
+            "fortran/preprocessed.F90",
+            "fortran/preprocessed.fpp",
+            "fortran/unproven.fi",
+        ] {
+            fs::write(workspace.path().join(path), "deferred\n").expect("write deferred file");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Ada and Fortran inventory");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("ada/main.adb", DiscoveredLanguage::Ada),
+                ("ada/main.ads", DiscoveredLanguage::Ada),
+                ("alire.toml", DiscoveredLanguage::AdaConfig),
+                ("alire/alire.lock", DiscoveredLanguage::AdaConfig),
+                ("demo.gpr", DiscoveredLanguage::AdaConfig),
+                ("fortran/fixed.f", DiscoveredLanguage::Fortran),
+                ("fortran/free.f90", DiscoveredLanguage::Fortran),
+                ("fpm.toml", DiscoveredLanguage::FortranConfig),
+            ]
+        );
+        for path in [
+            "ada/alternate.ada",
+            "fortran/preprocessed.F90",
+            "fortran/preprocessed.fpp",
+            "fortran/unproven.fi",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+                }),
+                "missing unsupported skip for {path}: {:?}",
+                report.skipped
+            );
+        }
     }
 
     #[test]
@@ -1759,6 +1844,50 @@ mod tests {
             .skipped
             .iter()
             .any(|skip| { skip.path == "too_large.go" && skip.reason == SkippedReason::TooLarge }));
+    }
+
+    #[test]
+    fn ada_fortran_size_limit_is_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-ada-fortran-size-boundary");
+        fs::write(
+            workspace.path().join("exact.adb"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Ada source");
+        fs::write(
+            workspace.path().join("too_large.ads"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too-large Ada source");
+        fs::write(
+            workspace.path().join("exact.f90"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Fortran source");
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too-large fpm manifest");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Ada/Fortran size boundary");
+        assert!(report
+            .files
+            .iter()
+            .any(|file| { file.path == "exact.adb" && file.language == DiscoveredLanguage::Ada }));
+        assert!(report.files.iter().any(|file| {
+            file.path == "exact.f90" && file.language == DiscoveredLanguage::Fortran
+        }));
+        for path in ["too_large.ads", "fpm.toml"] {
+            assert!(report
+                .skipped
+                .iter()
+                .any(|skip| { skip.path == path && skip.reason == SkippedReason::TooLarge }));
+        }
     }
 
     #[test]

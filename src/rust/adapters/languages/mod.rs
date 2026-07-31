@@ -1,7 +1,9 @@
 //! Language-specific parser adapter configuration.
 
+pub mod ada;
 pub mod cpp;
 pub mod csharp;
+pub mod fortran;
 pub mod go;
 pub mod java;
 pub mod object_pascal;

@@ -533,11 +533,12 @@ that generation active while downgrading any previously active row to
 validated. Human and JSON output must report the authoritative generation mode,
 actual `parser_attempted_files`, `indexed_units`, and `semantic_facts` counts,
 `semantic_worker`, and `mining: deferred`. A generation containing only
-inventory-only `go`, `php`, `ruby`, `swift`, or deferred non-admitted config
-paths, or no accepted source/configuration paths, reports `indexing:
+inventory-only `go`, `php`, `ruby`, `swift`, `ada`, `fortran`, or deferred
+non-admitted config paths, or no accepted source/configuration paths, reports `indexing:
 file_manifest_only` and `parser: deferred`. Exact parser-capable dependency
 inputs — `go.mod`, `go.work`, `composer.json`, `composer.lock`, `Gemfile.lock`,
-and `Package.resolved` — produce project-config units and therefore report
+`Package.resolved`, `alire.toml`, `alire.lock`, and `fpm.toml` — produce
+project-config units and therefore report
 `indexing: syntax_only_code_units` and `parser: syntax_only`, as does any other
 generation containing a parser-capable language token. This remains true for
 unchanged mixed-repository incremental rounds with zero parser attempts. The
@@ -574,13 +575,15 @@ precondition is not met, `sync` must
 fall back to the full rebuild path and report `sync_mode:
 full_rebuild_fallback` with a `fallback_reason`.
 Inventory-only `go`, `php`, deferred `php-config`, `ruby`, deferred
-`ruby-config`, `swift`, and deferred `swift-config` deltas are an explicit
+`ruby-config`, `swift`, deferred `swift-config`, `ada`, deferred `ada-config`,
+`fortran`, and deferred `fortran-config` deltas are an explicit
 token-based exception while those source/config tokens are absent from
 `ParserProjectContext`: only bounded file metadata is added, modified, removed,
 or copied, claim-bearing legacy records for their inventory-only paths are
 purged, and parser-attempt/reparse counts remain zero. Exact dependency inputs
 are path-qualified exceptions: root/nested `go.mod` and `go.work`,
-`composer.json`, `composer.lock`, `Gemfile.lock`, and `Package.resolved` are
+`composer.json`, `composer.lock`, `Gemfile.lock`, `Package.resolved`,
+`alire.toml`, `alire.lock`, and `fpm.toml` are
 parsed by their bounded static inventory adapters, so their deltas reparse
 file-locally and unchanged evidence-bound dependency rows copy forward.
 `go.mod` may emit Go Modules requirements and claim-scoped UNKNOWNs; `go.work`
@@ -609,8 +612,8 @@ scanning, syntax parsing, local support-fact recording, semantic-worker
 deferred/running state, candidate/family construction, and persistence
 validation. Known work uses exact completed/total counts and exact integer
 percentages. Inventory-only progress must say that work was deferred or
-inventoried; it must not label Go, PHP, Ruby, or Swift metadata traversal as parsed
-source.
+inventoried; it must not label Go, PHP, Ruby, Swift, Ada, or Fortran metadata
+traversal as parsed source.
 Unknown work must remain explicit and must not display fabricated
 percentages or ETAs.
 Progress events must not include source snippets, source paths, content hashes,
