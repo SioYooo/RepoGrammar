@@ -46,3 +46,6 @@ Current accepted ADRs:
 - ADR-0034: Fortran source-form discovery and fpm inventory.
 - ADR-0035: SQL source-free artifact inventory and dialect abstention.
 - ADR-0036: R static package metadata inventory.
+- ADR-0037: MATLAB R2024b+ package inventory preflight.
+- ADR-0038: Bounded GNU-as x86-64 ELF AT&T assembly substrate.
+- ADR-0039: Scratch 3 `.sb3` archive integration NO-GO.

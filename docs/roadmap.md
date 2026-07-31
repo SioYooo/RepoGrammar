@@ -436,6 +436,33 @@ sources, and runtime test behavior remain non-claims or future typed
 obligations. The incomplete semantic gate and four-part record are in
 `docs/reports/language-support/ruby-completion-review.md`.
 
+MATLAB's N3 slice is `discovered_only` and unsupported. Stable `matlab` and
+`matlab-config` tokens persist lowercase `.m` inventory and exact root/nested
+`resources/mpackage.json`. Source bytes never reach the source store or parser.
+Bounded R2024b+ package-definition JSON may add project-config units, direct
+`matlab_add_on` declarations, and `matlab_dependency_inventory` UNKNOWNs, but
+does not prove source syntax, resolution, installation, external symbols,
+MATLAB/Octave execution, Simulink, a family, or readiness. The incomplete gate
+is recorded in ADR-0037 and
+`docs/reports/language-support/matlab-completion-review.md`.
+
+Assembly's N4 slice is a bounded structural substrate and unsupported. It
+admits lowercase `.s` only, excludes preprocessed `.S`, scans a conservative
+x86-64 ELF GNU as 2.46 AT&T candidate profile, and persists module/label/
+containment/selected lexical facts together with mandatory profile uncertainty.
+It never assembles, preprocesses, links, executes, reads includes, or supports
+a family. Dialect, architecture, ABI, object-format, and symbol resolution are
+non-claims. ADR-0038 and
+`docs/reports/language-support/assembly-completion-review.md` record the gate.
+
+Scratch's N4 product integration is `NO_GO`: `.sb3` remains undiscovered and
+unsupported because current ports are UTF-8 text-only and no ZIP/deflate
+dependency has passed admission. A disconnected, stored-entry-only archive and
+JSON security preflight proves bounded rejection behavior, not Scratch support.
+ADR-0039 and `docs/reports/language-support/scratch-completion-review.md` require
+a binary-document port and maintained ZIP/deflate qualification before product
+discovery may change.
+
 Existing structural paths are starting evidence, not grandfathered completion.
 Per language, completion requires discovery/configuration, an authoritative
 frontend or format parser, RepoGrammar code units/IR, typed recoverable and

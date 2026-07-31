@@ -4,11 +4,13 @@ use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
 use super::resource_limits::{DiscoveryLimits, DiscoveryResourceBudget};
 use crate::adapters::languages::ada::{AdaLanguageAdapter, AdaPathClassification};
+use crate::adapters::languages::assembly::{AssemblyLanguageAdapter, AssemblyPathClassification};
 use crate::adapters::languages::cpp::CppLanguageAdapter;
 use crate::adapters::languages::csharp::CSharpLanguageAdapter;
 use crate::adapters::languages::fortran::{FortranLanguageAdapter, FortranPathClassification};
 use crate::adapters::languages::go::GoLanguageAdapter;
 use crate::adapters::languages::java::JavaLanguageAdapter;
+use crate::adapters::languages::matlab::{MatlabLanguageAdapter, MatlabPathClassification};
 use crate::adapters::languages::object_pascal::{
     ObjectPascalLanguageAdapter, ObjectPascalPathClassification,
 };
@@ -469,6 +471,24 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
             return LanguagePathClassification::Supported(DiscoveredLanguage::FortranConfig);
         }
         FortranPathClassification::NotFortran => {}
+    }
+    match MatlabLanguageAdapter::classify_path(path) {
+        MatlabPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Matlab);
+        }
+        MatlabPathClassification::PackageConfig => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::MatlabConfig);
+        }
+        MatlabPathClassification::NotMatlab => {}
+    }
+    match AssemblyLanguageAdapter::classify_path(path) {
+        AssemblyPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Assembly);
+        }
+        AssemblyPathClassification::ExcludedPreprocessedSource => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        AssemblyPathClassification::NotAssembly => {}
     }
     match PhpLanguageAdapter::classify_path(path) {
         PhpPathClassification::Source => {
@@ -2906,5 +2926,57 @@ mod tests {
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("packages/app/ignored.ts"));
         assert!(!debug.contains("packages/app/secrets/hidden.ts"));
+    }
+
+    #[test]
+    fn discovers_matlab_package_inventory_and_bounded_assembly_source_only() {
+        let workspace = TempWorkspace::new("discovery-matlab-assembly");
+        fs::create_dir_all(workspace.path().join("pkg/resources"))
+            .expect("create MATLAB package resources");
+        fs::write(workspace.path().join("main.m"), [0xff, 0xfe, 0xfd])
+            .expect("write binary-shaped MATLAB source inventory");
+        fs::write(
+            workspace.path().join("pkg/resources/mpackage.json"),
+            r#"{"name":"Demo","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0"}"#,
+        )
+        .expect("write MATLAB package definition");
+        fs::write(workspace.path().join("start.s"), ".text\nentry:\n ret\n")
+            .expect("write lowercase assembly source");
+        fs::write(workspace.path().join("preprocessed.S"), "#define VALUE 1\n")
+            .expect("write preprocessed assembly source");
+        fs::write(workspace.path().join("project.sb3"), b"PK\x03\x04")
+            .expect("write unsupported Scratch archive");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover MATLAB and assembly inventory");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("main.m", DiscoveredLanguage::Matlab),
+                (
+                    "pkg/resources/mpackage.json",
+                    DiscoveredLanguage::MatlabConfig,
+                ),
+                ("start.s", DiscoveredLanguage::Assembly),
+            ]
+        );
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "preprocessed.S" && skip.reason == SkippedReason::LanguageSpecificExclusion
+        }));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "project.sb3" && skip.reason == SkippedReason::UnsupportedExtension
+        }));
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("Demo"));
+        assert!(!debug.contains("entry"));
     }
 }

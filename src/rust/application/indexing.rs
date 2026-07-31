@@ -5362,6 +5362,9 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
         DiscoveredLanguage::Java => Language::Java,
         DiscoveredLanguage::JavaConfig => Language::JavaConfig,
+        DiscoveredLanguage::Matlab => Language::Matlab,
+        DiscoveredLanguage::MatlabConfig => Language::MatlabConfig,
+        DiscoveredLanguage::Assembly => Language::Assembly,
         DiscoveredLanguage::CSharp => Language::CSharp,
         DiscoveredLanguage::C => Language::C,
         DiscoveredLanguage::Cpp => Language::Cpp,
@@ -5482,6 +5485,7 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "sql-schema"
             | "sql-catalog"
             | "r"
+            | "matlab"
     )
 }
 
@@ -13172,6 +13176,124 @@ mod tests {
         assert_eq!(
             remaining[0].package_name,
             "com.fasterxml.jackson.core:jackson-databind"
+        );
+    }
+
+    #[test]
+    fn matlab_dependencies_and_assembly_unknowns_persist_without_family_support() {
+        let workspace = TempWorkspace::new("indexing-matlab-assembly-inventory");
+        fs::create_dir_all(workspace.path().join("resources"))
+            .expect("create MATLAB package resources");
+        let package = |dependency_name: &str, dependency_id: &str, requirement: &str| {
+            format!(
+                r#"{{"name":"DemoPkg","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0","dependencies":[{{"name":"{dependency_name}","compatibleVersions":"{requirement}","id":"{dependency_id}"}}],"provider":{{"email":"secret@example.invalid"}}}}"#
+            )
+        };
+        fs::write(
+            workspace.path().join("resources/mpackage.json"),
+            package(
+                "CornersPkg",
+                "e6c4123e-0068-42be-aef2-00d49d1509f5",
+                ">1.0.0",
+            ),
+        )
+        .expect("write MATLAB package definition");
+        fs::write(
+            workspace.path().join("start.s"),
+            ".text\nentry:\n call helper\n.include \"secret.inc\"\n",
+        )
+        .expect("write assembly source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded MATLAB and assembly inventory");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read MATLAB dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.path, "resources/mpackage.json");
+        assert_eq!(dependency.ecosystem, "matlab_add_on");
+        assert_eq!(
+            dependency.package_name,
+            "CornersPkg@e6c4123e-0068-42be-aef2-00d49d1509f5"
+        );
+        assert_eq!(dependency.requirement.as_deref(), Some(">1.0.0"));
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.scope, "unknown");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert!(dependency.resolved_version.is_none());
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+        let unknowns = store
+            .list_active_semantic_facts()
+            .expect("list facts")
+            .facts
+            .into_iter()
+            .filter(|fact| fact.kind == "UNKNOWN")
+            .collect::<Vec<_>>();
+        assert!(unknowns.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|value| value == "assembly_unknown_kind=unproven_target_profile")
+        }));
+        let debug = format!("{unknowns:?}");
+        assert!(!debug.contains("secret.inc"));
+        assert!(!debug.contains("secret@example.invalid"));
+
+        fs::write(
+            workspace.path().join("resources/mpackage.json"),
+            package(
+                "MathPkg",
+                "ec63e40a-8625-46d7-aae9-31a6a6c699e2",
+                ">=3.1.0 <4.0.0",
+            ),
+        )
+        .expect("replace MATLAB dependency");
+        sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace MATLAB dependency incrementally");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced MATLAB dependency")
+            .dependencies;
+        assert_eq!(dependencies.len(), 1);
+        assert!(dependencies[0].package_name.starts_with("MathPkg@"));
+
+        fs::remove_file(workspace.path().join("resources/mpackage.json"))
+            .expect("remove MATLAB package definition");
+        sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove MATLAB dependency incrementally");
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read removed MATLAB dependency inventory")
+                .dependencies
+                .is_empty()
         );
     }
 

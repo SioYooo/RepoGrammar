@@ -8,6 +8,7 @@ use crate::ports::parser::{
 use std::collections::BTreeSet;
 
 pub mod ada;
+pub mod assembly;
 pub(crate) mod bounded_json;
 pub(crate) mod bounded_xml;
 pub mod cpp;
@@ -16,6 +17,7 @@ pub mod delphi;
 pub mod fortran;
 pub mod go;
 pub mod java;
+pub mod matlab;
 pub mod php;
 pub mod python;
 pub mod r;
@@ -33,6 +35,8 @@ pub struct RepoGrammarSourceParser {
     python: python::PythonAstParser,
     java: java::JavaSyntaxParser,
     java_config: java::maven::JavaMavenConfigParser,
+    matlab_config: matlab::MatlabPackageConfigParser,
+    assembly: assembly::AssemblySyntaxParser,
     csharp: csharp::CSharpSyntaxParser,
     delphi: delphi::DelphiProjectConfigParser,
     cpp: cpp::CppSyntaxParser,
@@ -83,6 +87,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::Java => self.java.parse(document),
             crate::core::model::Language::JavaConfig => self.java_config.parse(document),
+            crate::core::model::Language::Matlab => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::MatlabConfig => self.matlab_config.parse(document),
+            crate::core::model::Language::Assembly => self.assembly.parse(document),
             crate::core::model::Language::CSharp => self.csharp.parse(document),
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
@@ -131,6 +138,13 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Java => self.java.parse_with_context(document, context),
             crate::core::model::Language::JavaConfig => {
                 self.java_config.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Matlab => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::MatlabConfig => {
+                self.matlab_config.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Assembly => {
+                self.assembly.parse_with_context(document, context)
             }
             crate::core::model::Language::CSharp => {
                 self.csharp.parse_with_context(document, context)
@@ -198,6 +212,12 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::JavaConfig => self
                 .java_config
                 .parse_with_context_output(document, context),
+            crate::core::model::Language::MatlabConfig => self
+                .matlab_config
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::Assembly => {
+                self.assembly.parse_with_context_output(document, context)
+            }
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {
@@ -486,6 +506,23 @@ mod tests {
         }
     }
 
+    fn matlab_inventory_document(language: Language) -> SourceDocument<'static> {
+        SourceDocument {
+            path: match language {
+                Language::Matlab => "main.m",
+                Language::MatlabConfig => "resources/mpackage.json",
+                _ => unreachable!("MATLAB inventory helper accepts only MATLAB tokens"),
+            },
+            language,
+            content_hash: ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            text: r#"{"name":"Demo","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0","dependencies":[]}"#,
+        }
+    }
+
     #[test]
     fn product_parser_rejects_go_source_but_statically_parses_go_mod() {
         let parser = RepoGrammarSourceParser::default();
@@ -586,6 +623,40 @@ mod tests {
             .expect("parse bounded Swift project config");
         assert_eq!(report.units.len(), 1);
         assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+    }
+
+    #[test]
+    fn product_parser_routes_matlab_config_and_assembly_without_source_execution() {
+        let parser = RepoGrammarSourceParser::default();
+        assert_eq!(
+            parser.parse(matlab_inventory_document(Language::Matlab)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+        let matlab = parser
+            .parse_with_context_output(
+                matlab_inventory_document(Language::MatlabConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("route bounded MATLAB package config");
+        assert_eq!(matlab.report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert!(matlab.dependencies.is_empty());
+
+        let assembly = parser
+            .parse(SourceDocument {
+                path: "start.s",
+                language: Language::Assembly,
+                content_hash: ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                text: ".text\nentry:\n call helper\n",
+            })
+            .expect("route bounded assembly scanner");
+        assert!(assembly
+            .semantic_facts
+            .iter()
+            .all(|fact| !fact.certainty.supports_family_membership()));
     }
 
     #[test]

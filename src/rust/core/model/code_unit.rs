@@ -48,6 +48,9 @@ pub enum Language {
     TsJsConfig,
     Java,
     JavaConfig,
+    Matlab,
+    MatlabConfig,
+    Assembly,
     CSharp,
     C,
     Cpp,
@@ -86,6 +89,9 @@ impl Language {
             Self::TsJsConfig => "tsjs-config",
             Self::Java => "java",
             Self::JavaConfig => "java-config",
+            Self::Matlab => "matlab",
+            Self::MatlabConfig => "matlab-config",
+            Self::Assembly => "assembly",
             Self::CSharp => "csharp",
             Self::C => "c",
             Self::Cpp => "cpp",
@@ -378,6 +384,9 @@ mod tests {
         assert_eq!(Language::DelphiConfig.as_str(), "delphi-config");
         assert_eq!(Language::Java.as_str(), "java");
         assert_eq!(Language::JavaConfig.as_str(), "java-config");
+        assert_eq!(Language::Matlab.as_str(), "matlab");
+        assert_eq!(Language::MatlabConfig.as_str(), "matlab-config");
+        assert_eq!(Language::Assembly.as_str(), "assembly");
         assert_eq!(CodeUnitKind::SpringMvcRoute.as_str(), "spring_mvc_route");
         assert_eq!(CodeUnitKind::SpringComponent.as_str(), "spring_component");
         assert_eq!(
