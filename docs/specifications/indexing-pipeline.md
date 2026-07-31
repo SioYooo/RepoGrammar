@@ -608,26 +608,36 @@ budget.
 Go is `discovered_only` and unsupported. Default discovery classifies bounded
 `.go` inputs as `go` and root or nested `go.mod`/`go.work` as `go-config`, then
 stores their repo-relative path, strict hash, size, and language token in the
-normal file inventory. The full and incremental parser loops recognize both as
-inventory-only before any source-store read, emit at most one deterministic,
-path-free unsupported warning per token from the whole discovery report, and
-store no Go code units, IR, semantic facts, framework roles, or families. This
-preserves warnings for unchanged inventory and preserves metadata for non-UTF-8
-Go content without interpreting or persisting its bytes. Go-only and empty
-generations report `file_manifest_only` with `parser: deferred`; mixed
-generations with parser-capable language tokens remain
-`syntax_only_code_units` even when an unchanged incremental round performs zero
-parser attempts.
+normal file inventory. `.go` remains inventory-only before any source-store
+read: the parser receives no Go source bytes, the manifest-level warning is
+path-free, and no Go-source code unit, IR, fact, role, or family exists. This
+preserves metadata for non-UTF-8 Go content without interpreting or persisting
+its bytes.
 
-While `go` and `go-config` remain inventory-only and absent from
-`ParserProjectContext`, their add/modify/remove deltas use incremental metadata
-persistence rather than project-context fallback. The token classification is
-the sole exception authority: it requires zero Go source-store/parser calls and
-filters every copied code unit, IR node/edge, semantic fact, derived-support
-input, and recomputed family for current inventory-only paths. Only file
-metadata may survive. The frontend/IR module must add Go inputs to
-`ParserProjectContext` and restore token-based project-context invalidation
-before any cross-file Go semantic or claim-bearing record is implemented.
+`go-config` uses a bounded, non-executing, file-local static parser. Every
+discovered config yields one `project_config` unit/IR node. A valid `go.mod`
+`require` declaration yields an exact `manifest_declared` `go_modules` record
+with `scope: unknown`, `optional: false`, no resolved version, and direct state
+derived only from the `// indirect` comment. Module paths, SemVer, and major
+suffixes are validated without normalization. Root and nested manifests remain
+separate evidence sources. `go.work` yields only a workspace-selection UNKNOWN.
+Malformed syntax, duplicates/conflicts, resource ceilings, replace/exclude/
+retract/toolchain/tool/godebug/ignore, local replacements, and unknown
+directives produce bounded source-free facts with
+`affected_claim=go_dependency_inventory`; they never prove resolution, library
+behavior, framework identity, or support. `go.sum` is neither discovered nor
+treated as a lockfile, and no Go command/process is invoked.
+
+`.go` add/modify/remove deltas use incremental metadata persistence and filter
+all claim-bearing copy-forward records for current source paths. Because the
+static config parser consumes only the current file's bytes and no
+`ParserProjectContext`, `go-config` additions/modifications reparse
+incrementally, unchanged units/facts/dependencies copy forward, and removals
+omit their records. A generation containing parsed config reports
+`syntax_only_code_units`; Go-source-only and empty generations remain
+`file_manifest_only`. A future cross-file Go frontend must add its actual inputs
+to `ParserProjectContext` and restore token-based invalidation before any Go
+source semantic or claim-bearing record is implemented.
 
 `GoLanguageAdapter::classify_source_path` is the single current Go path-shape
 authority. It accepts only normalized repo-relative paths and separates
@@ -1271,12 +1281,12 @@ source file takes the incremental fast path, as does a content-only edit of a
 `.py` module whose interface projection is unchanged (see the Python
 interface-hash gate below). Adding or removing any project-context source file,
 editing any `.py` module whose interface changed or could not be verified,
-editing any `conftest.py`, and adding, editing, or removing any project-config
-file fall back to a full rebuild (see the gate table below). Current
-inventory-only Go, deferred PHP/Ruby/Swift source and config tokens are the
-explicit exceptions described above. Exact Composer JSON/lock,
-`Gemfile.lock`, and `Package.resolved` are parsed as bounded static metadata.
-When safe, incremental `sync`
+editing any `conftest.py`, and changing any project config consumed as cross-file
+parser context fall back to a full rebuild (see the gate table below). Current
+inventory-only `.go` source plus deferred PHP/Ruby/Swift source/config paths are
+explicit exceptions. Bounded file-local `go.mod`/`go.work`, Composer JSON/lock,
+`Gemfile.lock`, and `Package.resolved` parsing follows the static-manifest
+evidence lifecycle. When safe, incremental `sync`
 reparses added or modified paths, omits
 removed paths, and recomputes local derived support and families before
 validation. Derived-support facts (including
@@ -1291,7 +1301,8 @@ copy forward only when their path and evidence code unit also copy forward,
 while Cargo rows never copy because the Cargo provider recomputes them later in
 the same generation. Changed or removed manifests therefore cannot retain stale
 dependency records, and an unrelated TS/JS source edit preserves exactly one
-copy of each unchanged npm, PyPI, vcpkg, Conan, or SwiftPM lock row.
+copy of each unchanged npm, PyPI, vcpkg, Conan, Go Modules, Composer,
+RubyGems, or SwiftPM declaration/lock row.
 
 The project-context gate distinguishes *content-only modifications* from
 *path-set changes*. A modified non-inventory file is one whose repo-relative path
@@ -1306,8 +1317,9 @@ appears in both the base and the current manifest with a changed content hash
 | Content-only modify | `.py` module, interface unverifiable (worker error/timeout, or a build-time probe failure left no stored hash) | full-rebuild fallback (`python_interface_unverified`) |
 | Content-only modify | `.py` module, whole-project context payload near/over the worker request cap on either manifest | full-rebuild fallback (`python_context_budget`) |
 | Content-only modify | `conftest.py` | full-rebuild fallback (`project_context_changed`) |
-| Content-only modify | any discovered project-config file | full-rebuild fallback (`project_context_changed`) |
-| Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or any project-config file | full-rebuild fallback (`project_context_changed`) |
+| Content-only modify | context-bearing discovered project config | full-rebuild fallback (`project_context_changed`) |
+| Add/modify/remove | file-local static `go.mod`/`go.work`, vcpkg, or Conan config | incremental — parse changed files and evidence-copy unchanged files |
+| Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or context-bearing project config | full-rebuild fallback (`project_context_changed`) |
 | Add/modify/remove | Java/C#/C/C++ and inventory-only source | incremental — parsers ignore project context |
 
 The content-only Rust and TS/JS fast path is sound because their parsers consume

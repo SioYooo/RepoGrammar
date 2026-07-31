@@ -79,6 +79,15 @@ sources, malformed/conflicting input, and resource overflow remain
 `ruby_dependency_inventory` uncertainty; the reader does not join resolved
 specs or read/execute Ruby DSLs, Ruby, Bundler, RubyGems, project code, child
 processes, or network access. Ruby therefore also remains `discovered_only`.
+Exact root/nested `go.mod` files now supply the Go Modules manifest slice:
+bounded valid `require` declarations retain exact semantic versions and direct
+versus `// indirect` state under `manifest_declared` evidence. Scope and resolved
+version remain unknown; duplicates, malformed syntax, graph-changing directives,
+resource overflow, and unresolved module/workspace semantics become
+`go_dependency_inventory` typed `UNKNOWN`. Exact `go.work` files emit only a
+workspace-selection UNKNOWN. `.go` source remains source-store/parser free, and
+the adapter runs no Go command, module resolver, dependency code, child process,
+or network operation. Go therefore remains `discovered_only`.
 
 ## Goal and non-goal
 
@@ -214,15 +223,20 @@ committing a complete slice.
 ADR-0021 accepts the Go architecture/security decision, and the bounded
 discovery/config module now advances Go to `discovered_only`; Go remains
 unsupported. Default indexing inventories `.go` as `go` and root/nested
-`go.mod`/`go.work` as `go-config` without parser-facing source-store reads, parsing, units, facts,
-IR, families, or readiness promotion. Its pure normalized-path classifier
+`go.mod`/`go.work` as `go-config`. `.go` bytes remain parser/source-store free.
+Exact Go config bytes enter a bounded, non-executing static parser: `go.mod`
+valid `require` declarations become evidence-bound `go_modules` dependency rows,
+while malformed/conflicting/graph-changing/resource-bounded inputs become
+claim-scoped typed UNKNOWN; `go.work` emits only a workspace-selection UNKNOWN.
+No Go source unit, Go source IR, family, readiness promotion, module-graph claim,
+or semantic support follows. The pure normalized-path classifier
 records Go-tool exclusions, `_test.go`, and a dated Go 1.26.5 GOOS/GOARCH
 suffix shape without selecting a configuration. Source marker scanning is
-explicitly deferred rather than guessed from text. While these tokens remain
-inventory-only and absent from `ParserProjectContext`, add/modify/delete deltas
-stay incremental, count zero Go parser attempts, retain warnings from the whole
-manifest, and purge claim-bearing records for Go paths. Frontend/IR must restore
-token-based project-context invalidation when it adds cross-file Go semantics.
+explicitly deferred rather than guessed from text. Add/modify/delete deltas
+stay incremental: `.go` paths count zero parser attempts and purge claim-bearing
+records, config paths reparse file-locally, and unchanged dependency evidence
+copies forward. Frontend/IR must restore token-based project-context
+invalidation when it adds cross-file Go semantics.
 
 The future semantic path must be opt-in and sandboxed, consume supplied
 source/config bytes where possible, and fail to a

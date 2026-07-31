@@ -5418,13 +5418,7 @@ fn is_ruby_dependency_config_path(path: &str) -> bool {
 fn language_token_is_inventory_only(language: &str) -> bool {
     matches!(
         language,
-        "go" | "go-config"
-            | "php"
-            | "php-config"
-            | "ruby"
-            | "ruby-config"
-            | "swift"
-            | "swift-config"
+        "go" | "php" | "php-config" | "ruby" | "ruby-config" | "swift" | "swift-config"
     )
 }
 
@@ -5619,6 +5613,18 @@ mod tests {
                 .expect("record parser path")
                 .push(document.path.to_string());
             RepoGrammarSourceParser::default().parse_with_context(document, context)
+        }
+
+        fn parse_with_context_output(
+            &self,
+            document: SourceDocument<'_>,
+            context: &ParserProjectContext,
+        ) -> Result<SourceParseOutput, ParseError> {
+            self.paths
+                .lock()
+                .expect("record parser path")
+                .push(document.path.to_string());
+            RepoGrammarSourceParser::default().parse_with_context_output(document, context)
         }
     }
 
@@ -7023,14 +7029,22 @@ mod tests {
     }
 
     #[test]
-    fn default_index_persists_source_free_go_inventory_without_claim_inputs() {
+    fn default_index_reads_only_go_configs_and_never_creates_go_language_claims() {
         let workspace = TempWorkspace::new("indexing-go-discovery-only");
         fs::create_dir_all(workspace.path().join("pkg")).expect("create Go package");
+        fs::create_dir_all(workspace.path().join("nested")).expect("create nested Go module");
         fs::write(
             workspace.path().join("go.mod"),
-            "module example.test/secret-module\n",
+            "module example.test/root\n\
+             require example.test/direct v1.2.3\n\
+             require example.test/indirect v1.0.0 // indirect\n",
         )
         .expect("write go.mod");
+        fs::write(
+            workspace.path().join("nested/go.mod"),
+            "module example.test/nested\nrequire example.test/nested-lib v1.0.0\n",
+        )
+        .expect("write nested go.mod");
         fs::write(workspace.path().join("go.work"), "go 1.25\n").expect("write go.work");
         fs::write(workspace.path().join("pkg/main.go"), [0xff, 0xfe, 0xfd])
             .expect("write Go source");
@@ -7043,7 +7057,7 @@ mod tests {
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let detector = SyntaxFrameworkRoleDetector;
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
         let mut progress_events = Vec::new();
         let mut progress = |event: ProgressEvent| progress_events.push(event);
 
@@ -7059,29 +7073,32 @@ mod tests {
             )
             .expect("index Go inventory");
 
-        assert_eq!(outcome.discovered_files, 4);
+        assert_eq!(outcome.discovered_files, 5);
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(outcome.indexed_units, 0);
-        assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 3);
+        assert_eq!(outcome.indexed_units, 3);
+        assert_eq!(outcome.semantic_facts, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "go.mod".to_string(),
+                "go.work".to_string(),
+                "nested/go.mod".to_string(),
+            ]
+        );
         assert_eq!(
             outcome.warnings,
-            vec![
-                "parser skipped unsupported language token: go".to_string(),
-                "parser skipped unsupported language token: go-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: go".to_string()]
         );
         assert!(progress_events
             .iter()
             .any(|event| event.message == "deferred inventory-only files"));
-        assert!(!progress_events
+        assert!(progress_events
             .iter()
             .any(|event| event.message == "parsed source files"));
-        assert!(!format!("{outcome:?}").contains("secret-module"));
         assert!(!format!("{outcome:?}").contains(workspace.path().to_string_lossy().as_ref()));
 
         let files = store
@@ -7096,23 +7113,71 @@ mod tests {
             vec![
                 ("go.mod", "go-config"),
                 ("go.work", "go-config"),
+                ("nested/go.mod", "go-config"),
                 ("pkg/main.go", "go"),
                 ("pkg/main_test.go", "go"),
             ]
         );
         let files_debug = format!("{files:?}");
-        assert!(!files_debug.contains("secret-module"));
         assert!(!files_debug.contains(workspace.path().to_string_lossy().as_ref()));
-        assert!(store
+        let units = store
             .list_active_code_units()
-            .expect("read Go units")
-            .units
-            .is_empty());
-        assert!(store
+            .expect("read Go config units")
+            .units;
+        assert_eq!(units.len(), 3);
+        assert!(units.iter().all(|unit| {
+            unit.language == "go-config"
+                && unit.kind == "project_config"
+                && !unit.path.ends_with(".go")
+        }));
+        let facts = store
             .list_active_semantic_facts()
-            .expect("read Go facts")
-            .facts
-            .is_empty());
+            .expect("read Go config UNKNOWN")
+            .facts;
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].kind, "UNKNOWN");
+        assert_eq!(facts[0].target.as_deref(), Some("BuildVariantAmbiguity"));
+        assert!(facts[0]
+            .assumptions
+            .contains(&"affected_claim=go_dependency_inventory".to_string()));
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Go module dependencies");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.ecosystem.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.requirement.as_deref(),
+                    dependency.directness.as_str(),
+                    dependency.evidence_level.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "go_modules",
+                    "example.test/direct",
+                    Some("v1.2.3"),
+                    "direct",
+                    "manifest_declared"
+                ),
+                (
+                    "go_modules",
+                    "example.test/indirect",
+                    Some("v1.0.0"),
+                    "transitive",
+                    "manifest_declared"
+                ),
+                (
+                    "go_modules",
+                    "example.test/nested-lib",
+                    Some("v1.0.0"),
+                    "direct",
+                    "manifest_declared"
+                ),
+            ]
+        );
         assert!(store
             .list_active_families()
             .expect("read Go families")
@@ -7817,19 +7882,16 @@ mod tests {
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(added.parser_attempted_files, 0);
+        assert_eq!(added.parser_attempted_files, 2);
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(added_report.added_files, 3);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
-        assert_eq!(added_report.reparsed_files, 0);
+        assert_eq!(added_report.reparsed_files, 2);
         assert_eq!(
             added.warnings,
-            vec![
-                "parser skipped unsupported language token: go".to_string(),
-                "parser skipped unsupported language token: go-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: go".to_string()]
         );
         assert_eq!(
             store
@@ -7841,13 +7903,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["go.mod", "go.work", "main.go", "server.ts"]
         );
-        assert_eq!(
-            store
-                .list_active_semantic_facts()
-                .expect("list facts after add")
-                .facts,
-            expected_facts
-        );
+        let facts_after_add = store
+            .list_active_semantic_facts()
+            .expect("list facts after add")
+            .facts;
+        assert_eq!(facts_after_add.len(), expected_facts.len() + 1);
+        assert!(facts_after_add.iter().any(|fact| {
+            fact.path == "go.work"
+                && fact.kind == "UNKNOWN"
+                && fact
+                    .assumptions
+                    .contains(&"affected_claim=go_dependency_inventory".to_string())
+        }));
         assert_eq!(
             store
                 .list_active_families()
@@ -7871,10 +7938,7 @@ mod tests {
         assert_eq!(unchanged_report.reparsed_files, 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: go".to_string(),
-                "parser skipped unsupported language token: go-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: go".to_string()]
         );
 
         fs::write(
@@ -7895,20 +7959,25 @@ mod tests {
             modified.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(modified.parser_attempted_files, 0);
+        assert_eq!(modified.parser_attempted_files, 2);
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
         assert_eq!(modified_report.modified_files, 3);
         assert_eq!(modified_report.removed_files, 0);
-        assert_eq!(modified_report.reparsed_files, 0);
-        assert_eq!(
-            store
-                .list_active_semantic_facts()
-                .expect("list facts after modify")
-                .facts,
-            expected_facts
-        );
+        assert_eq!(modified_report.reparsed_files, 2);
+        let facts_after_modify = store
+            .list_active_semantic_facts()
+            .expect("list facts after modify")
+            .facts;
+        assert_eq!(facts_after_modify.len(), expected_facts.len() + 1);
+        assert!(facts_after_modify.iter().any(|fact| {
+            fact.path == "go.work"
+                && fact.kind == "UNKNOWN"
+                && fact
+                    .assumptions
+                    .contains(&"affected_claim=go_dependency_inventory".to_string())
+        }));
         assert_eq!(
             store
                 .list_active_families()
@@ -7960,16 +8029,10 @@ mod tests {
         );
 
         for path in source_store.paths() {
-            assert!(
-                !indexed_language_path_is_go(&path),
-                "source read Go path {path}"
-            );
+            assert!(!path.ends_with(".go"), "source read Go source path {path}");
         }
         for path in parser.paths() {
-            assert!(
-                !indexed_language_path_is_go(&path),
-                "parser saw Go path {path}"
-            );
+            assert!(!path.ends_with(".go"), "parser saw Go source path {path}");
         }
     }
 
@@ -12478,6 +12541,204 @@ mod tests {
             .expect("list families")
             .families
             .is_empty());
+    }
+
+    #[test]
+    fn go_module_dependencies_persist_copy_forward_and_replace_incrementally() {
+        let workspace = TempWorkspace::new("indexing-go-module-dependencies");
+        fs::create_dir_all(workspace.path().join("nested")).expect("create nested module");
+        fs::write(
+            workspace.path().join("go.mod"),
+            "module example.test/root\n\
+             require example.test/root-direct v1.2.3\n\
+             require example.test/shared v1.0.0 // indirect\n",
+        )
+        .expect("write root go.mod");
+        fs::write(
+            workspace.path().join("nested/go.mod"),
+            "module example.test/nested\nrequire example.test/nested-only v1.0.0\n",
+        )
+        .expect("write nested go.mod");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write unrelated TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index root and nested go.mod dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Go module dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.path.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.requirement.as_deref(),
+                    dependency.directness.as_str(),
+                    dependency.scope.as_str(),
+                    dependency.evidence_level.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "nested/go.mod",
+                    "example.test/nested-only",
+                    Some("v1.0.0"),
+                    "direct",
+                    "unknown",
+                    "manifest_declared",
+                ),
+                (
+                    "go.mod",
+                    "example.test/root-direct",
+                    Some("v1.2.3"),
+                    "direct",
+                    "unknown",
+                    "manifest_declared",
+                ),
+                (
+                    "go.mod",
+                    "example.test/shared",
+                    Some("v1.0.0"),
+                    "transitive",
+                    "unknown",
+                    "manifest_declared",
+                ),
+            ]
+        );
+        assert!(dependencies.dependencies.iter().all(|dependency| {
+            dependency.ecosystem == "go_modules"
+                && dependency.resolved_version.is_none()
+                && !dependency.optional
+                && dependency.start_byte < dependency.end_byte
+                && dependency.note == "bounded go.mod require declaration"
+        }));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let unrelated = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("copy Go module dependencies through unrelated edit");
+        let unrelated_report = unrelated.sync_report.expect("unrelated sync report");
+        assert_eq!(unrelated_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(unrelated_report.reparsed_files, 1);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Go dependencies")
+                .dependencies
+                .len(),
+            3
+        );
+
+        fs::write(
+            workspace.path().join("nested/go.mod"),
+            "module example.test/nested\nrequire example.test/replacement v1.1.0\n",
+        )
+        .expect("replace nested manifest dependency");
+        let manifest_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace nested Go dependency");
+        let manifest_report = manifest_edit.sync_report.expect("manifest sync report");
+        assert_eq!(manifest_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(manifest_report.modified_files, 1);
+        assert_eq!(manifest_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Go dependencies");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "example.test/replacement",
+                "example.test/root-direct",
+                "example.test/shared",
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+
+        fs::remove_file(workspace.path().join("nested/go.mod")).expect("remove nested Go manifest");
+        let nested_removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove nested Go dependencies");
+        let nested_removed_report = nested_removed.sync_report.expect("nested removal report");
+        assert_eq!(
+            nested_removed_report.sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        assert_eq!(nested_removed_report.removed_files, 1);
+        assert_eq!(nested_removed_report.reparsed_files, 0);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read Go dependencies after nested removal")
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["example.test/root-direct", "example.test/shared"]
+        );
+
+        fs::remove_file(workspace.path().join("go.mod")).expect("remove root Go manifest");
+        let root_removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove root Go dependencies");
+        let root_removed_report = root_removed.sync_report.expect("root removal report");
+        assert_eq!(root_removed_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(root_removed_report.removed_files, 1);
+        assert_eq!(root_removed_report.reparsed_files, 0);
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read Go dependencies after root removal")
+                .dependencies
+                .is_empty()
+        );
     }
 
     #[test]

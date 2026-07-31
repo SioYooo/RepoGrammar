@@ -69,15 +69,18 @@ compile, and Linux/macOS/Windows runtime gates pass.
 
 Go discovery/path-shape policy belongs in `adapters/languages/go.rs`; the file
 discovery adapter may use it for stable `go`/`go-config` classification, while
-application indexing may only route those tokens as inventory-only. Until the
-authorized frontend lands, neither the application nor generic parser may read
-Go source, inspect markers, select GOOS/GOARCH, or derive units/facts/families.
-The application may keep `go`/`go-config` metadata deltas incremental only
-while those tokens are absent from `ParserProjectContext`; it must filter all
-claim-bearing copy-forward records for their paths. The frontend module must
-add token-based project-context invalidation before introducing cross-file Go
-semantics. The dated suffix list is discovery metadata, not a core support
-authority.
+application indexing keeps `.go` inventory-only. Until the authorized source
+frontend lands, neither the application nor generic parser may read Go source,
+inspect markers, select GOOS/GOARCH, or derive Go-source units/facts/families.
+The bounded parser adapter may read only discovered `go.mod`/`go.work` bytes and
+return RepoGrammar-owned project-config units, scoped UNKNOWNs, and generic
+manifest-declared dependency records; it must not execute Go or resolve a
+module graph. `.go` metadata deltas remain incremental and filter all
+claim-bearing copy-forward records. Static file-local `go-config` outputs may
+also update/copy incrementally. A future source frontend must add its real
+cross-file inputs and token-based context invalidation before introducing Go
+source semantics. The dated suffix list is discovery metadata, not a core
+support authority.
 
 ## Tree-sitter boundary
 
@@ -168,12 +171,14 @@ key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is
 not an adapter and does not execute Pyrefly, Pyright, RightTyper, or repository
 code by itself.
 
-Go remains unimplemented. ADR-0021 permits a later version-pinned Tree-sitter
-Go dependency only as syntax fallback and defines an explicit, opt-in,
-sandboxed standard-library worker over supplied inputs as the authoritative
-path. The safe default must not invoke `go/packages`, `go list`, gopls, cgo, or
-repository build/test/generate commands. No Go dependency or runtime behavior
-is authorized by that preflight alone.
+Go source parsing and semantics remain unimplemented. The in-process static
+project-config reader is limited to bounded supplied `go.mod`/`go.work` text and
+language-neutral declaration inventory; it adds no production dependency and
+authorizes no Go runtime behavior. ADR-0021 permits a later version-pinned
+Tree-sitter Go dependency only as syntax fallback and defines an explicit,
+opt-in, sandboxed standard-library worker over supplied inputs as the
+authoritative source path. The safe default must not invoke `go/packages`, `go
+list`, gopls, cgo, or repository build/test/generate commands.
 The existing TypeScript process adapter is not a Go sandbox and must not be
 reused as one. Go claim impact must enter the existing authoritative cross-
 language family-`UNKNOWN` classifier; language callers may not infer blocking

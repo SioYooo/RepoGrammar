@@ -4,6 +4,16 @@
 
 ### Added
 
+- Added bounded, non-executing Go Modules inventory for exact root/nested
+  `go.mod` inputs. Valid `require` declarations retain exact module versions and
+  direct/indirect state; malformed, conflicting, graph-changing, workspace, and
+  resource-bounded cases remain claim-scoped typed `UNKNOWN`. `.go` source is
+  never read or parsed, `go.work` creates no dependency rows, and no Go command,
+  resolver, dependency, child process, or network operation executes.
+- Added bounded direct RubyGems declaration inventory from the unique top-level
+  `DEPENDENCIES` section of exact `Gemfile.lock`. Scope and resolved version stay
+  unknown; executable Ruby/Bundler DSLs and non-registry or ambiguous inputs are
+  never evaluated or promoted to dependency behavior.
 - Added language-neutral three-state dependency directness and schema-v13
   persistence. Exact SwiftPM `Package.resolved` schema 2/3 now receives a
   bounded duplicate-key-rejecting static read that records exact semantic-

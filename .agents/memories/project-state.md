@@ -6,10 +6,11 @@ ADR-0030 introduces the language-neutral dependency evidence ladder and owned
 package, snapshot, external-symbol, and reviewed library-contract types. The
 first provider consumer is bounded Cargo metadata; static-metadata consumers
 now include the root npm `package.json` parser, the Python project-config
-frontend, the C/C++ vcpkg/Conan lane, SwiftPM lockfiles, and Composer
-manifests/lockfiles. All emit
-`manifest_declared` records and neither claims a resolved graph or language
-completion. The npm parser admits bounded names from production, development,
+frontend, the C/C++ vcpkg/Conan lane, SwiftPM lockfiles, Composer
+manifests/lockfiles, Bundler lockfiles, and Go module manifests. They emit only
+the qualified `manifest_declared` or `lockfile_resolved` level and none claims a
+resolved graph or language completion. The npm parser admits bounded names from
+production, development,
 optional, and peer sections, preserves bounded requirements, represents peer
 scope as `unknown`, and executes no Node/npm/package code. Python inventory
 covers PEP 621/build-system/dependency-group arrays when `tomllib` is available,
@@ -45,7 +46,13 @@ URLs are discarded, and no PHP/Composer/dependency code executes. Exact
 `DEPENDENCIES` section with unknown scope and no resolved version. Unsupported
 sources, malformed/conflicting input, and resource limits remain
 `ruby_dependency_inventory` uncertainty; executable Ruby DSLs are not parser
-inputs and no Ruby/Bundler/RubyGems/project code executes. The strict ADR-0020
+inputs and no Ruby/Bundler/RubyGems/project code executes. Exact root/nested
+`go.mod` inputs add strict Go Modules `require` declarations with exact versions
+and direct/transitive state; scope and resolved version remain unknown.
+Malformed/conflicting/graph-changing/resource-bounded cases remain
+`go_dependency_inventory` uncertainty, `go.work` emits no dependency rows, and
+no Go command, resolver, dependency code, child process, or network operation
+executes. The strict ADR-0020
 baseline remains
 `0/20`, TypeScript extra
 remains incomplete, Go/PHP/Swift/Ruby remain `discovered_only`, and the other
@@ -820,16 +827,18 @@ completion review remain open.
 Go's N1 preflight is accepted by ADR-0021, and its discovery/config module now
 provides bounded `.go` plus root/nested `go.mod`/`go.work` inventory with
 distinct `go`/`go-config` tokens. Go is `discovered_only` and unsupported.
-Full and incremental indexing skip parser-facing source-store reads and parsing for these tokens,
-aggregate path-free unsupported warnings by token, persist only source-free
-file metadata, and emit no units, facts, IR, or families. Go-only and empty
-generations report `file_manifest_only` with a deferred parser; mixed parsed
-generations remain syntax-only even when an incremental round has zero parser
-attempts. Warnings come from the whole current manifest. Inventory-only
-add/modify/remove deltas stay incremental, and copy-forward purges any legacy
-Go units, IR, facts, derived support, or families while retaining metadata.
-The frontend must restore token-based project-context invalidation when Go
-enters `ParserProjectContext`. A pure normalized-
+`.go` paths skip parser-facing source-store reads, persist source-free metadata,
+emit no source units/facts/IR/families, and purge any legacy claim records.
+Exact config bytes enter the bounded static project-config parser: `go.mod`
+valid `require` declarations persist as evidence-bound `go_modules` rows with
+exact version requirements and direct/transitive state; claim-scoped UNKNOWNs
+cover malformed/conflicting/graph-changing/resource-bounded input. `go.work`
+persists one config unit plus only a workspace-selection UNKNOWN. Go-only config
+generations are therefore `syntax_only_code_units`; `.go`-only generations
+remain `file_manifest_only`. Config deltas reparse file-locally, unchanged
+dependency evidence copies forward, and `.go` deltas still perform zero parser
+attempts. The frontend must restore token-based project-context invalidation
+when Go source enters `ParserProjectContext`. A pure normalized-
 path classifier records Go-tool exclusions, `_test.go`, and the dated Go 1.26.5
 known GOOS/GOARCH suffix shape without selecting an environment or proving
 support. Build-tag/generated/cgo/`go:generate` marker scanning is assigned to

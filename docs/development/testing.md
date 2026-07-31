@@ -125,21 +125,31 @@ allowed.
   `.mypy_cache`, `.ruff_cache`, `build`, `dist`, and `site-packages`,
   including nested path segments where applicable, and Git-ignored `.py` files
   in root and parent-worktree subdirectory projects.
-- Go discovery-only coverage must include stable `go`/`go-config` tokens,
+- Go discovery/config coverage must include stable `go`/`go-config` tokens,
   `.go` source and `_test.go` inventory, root/nested `go.mod` and `go.work`,
   normalized-path rejection, dot/underscore, `vendor`, and `testdata` path
   classification, the dated GOOS/GOARCH suffix-shape snapshot without ambient
   selection, exact/plus-one 1 MiB behavior, symlink refusal, deterministic and
-  source-free persistence, and incremental zero-parse metadata deltas for Go
-  source/config additions, removals, and modifications while those tokens are
-  absent from `ParserProjectContext`. Mixed repositories must retain their
+  source-free `.go` persistence, and incremental zero-parse metadata deltas for
+  Go source additions, removals, and modifications. Root/nested `go.mod`
+  coverage must include direct/indirect `require` declarations, allowed quoted
+  path/version strings, rejected quoted directive/go/toolchain/godebug positions,
+  strict module-path/SemVer/major-suffix boundaries, duplicate/conflicting
+  omission, exact/plus-one byte/line/token/directive/dependency ceilings with
+  typed resource UNKNOWNs, malformed fail-closed behavior, replace/exclude/
+  retract/toolchain/tool abstention, exact evidence ranges, persistence,
+  copy-forward, changed-manifest replacement, stale-row removal, and no
+  resolved-version claim. `go.work` must
+  produce only the scoped workspace UNKNOWN. Mixed repositories must retain their
   supported-language facts/families and `syntax_only_code_units` mode even on
   an unchanged round with zero parser attempts; tampered legacy Go claim rows
   must be omitted by generation-replacement copy-forward without being counted
-  as cleared dirty markers. The default all-Go product path must prove that its
-  source store is never called, warnings are aggregated by language token
-  without paths, and no units, facts, IR, or families are produced. Marker
-  scanning and Go project-context invalidation remain frontend/IR obligations.
+  as cleared dirty markers. The default all-Go product path must prove that
+  `.go` source is never read or parsed, only `go-config` paths are read,
+  `go.work` emits only a scoped workspace UNKNOWN, notes and UNKNOWN metadata
+  are source-free, and no framework roles or families are produced. Marker
+  scanning and Go source project-context invalidation remain frontend/IR
+  obligations.
 - PHP source-free inventory coverage must include stable `php`/`php-config` tokens;
   exact case-sensitive `.php` and literal `.php` handling; exact root/nested
   `composer.json`, `composer.lock`, `phpunit.xml`, and `phpunit.xml.dist`

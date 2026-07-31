@@ -53,8 +53,11 @@ context lives under `.agents/memories/`.
   `plans/top-20-language-expansion-plan.md`. The ADR freezes the TIOBE July
   2026 planning snapshot and defines the evidence required before a language
   can be described as supported; TypeScript is tracked separately as an extra.
-  Go's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`.
+  Go's N1 preflight, source-free `.go` discovery, and bounded static
+  `go.mod`/`go.work` dependency-inventory contract are
+  `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`; Go
+  remains `discovered_only` and unsupported, and no Go command or semantic
+  worker is authorized.
   PHP's N1 preflight plus discovery-only implementation record are
   `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`; PHP is
   `discovered_only` and unsupported, and no parser/worker dependency or

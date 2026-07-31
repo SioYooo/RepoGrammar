@@ -280,21 +280,26 @@ language token). It returns repo-relative
 metadata and skip reasons, and `index`, `resync`, and `sync` store the current discovered file
 manifest in the mutable SQLite database under the next building generation id.
 Go uses the distinct `go` token for `.go` and `go-config` for root or nested
-`go.mod`/`go.work`. Those inventory-only records store only path, strict hash,
-size, and token; the indexing loop skips source reads and parsing and therefore
-stores no Go code units, IR, facts, or families. A Go-only or empty active
-generation is `file_manifest_only`; mixed generations with parser-capable
-tokens remain `syntax_only_code_units`. Parser-attempt and `reparsed_files`
-counts measure actual parser dispatches, so Go inventory contributes zero. The full rebuild path stores
+`go.mod`/`go.work`. `.go` records store only path, strict hash, size, and token;
+the indexing loop skips their source reads and parsing. `go-config` bytes enter
+the bounded static parser and may store a `project_config` unit/IR node,
+claim-scoped typed UNKNOWN facts, and `manifest_declared` `go_modules`
+dependency rows. They store no resolved version, framework role, or family.
+Go-source-only and empty active generations are `file_manifest_only`; a
+generation containing config units is `syntax_only_code_units`. Parser-attempt
+and `reparsed_files` counts include actual `go-config` dispatches but never `.go`
+inventory. The full rebuild path stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash only for parser-supported discovered
 files. Incremental `sync` copy-forwards those records for unchanged active
 paths and reparses added or modified paths only when the project-context gate
-passes. While `go` and `go-config` are inventory-only and absent from
-`ParserProjectContext`, their add/modify/delete deltas remain incremental and
-the copy path filters every unit, IR record, fact, derived-support input, and
-family associated with current Go inventory paths. The frontend must restore
-token-based context invalidation when it adds Go project semantics.
+passes. `.go` deltas remain inventory-only and the copy path filters every unit,
+IR record, fact, derived-support input, and family associated with those paths.
+The static `go-config` parser consumes only the current file bytes, so unchanged
+config units/facts/dependencies copy forward and added/modified configs reparse
+incrementally; removed or modified manifests cannot retain stale dependency
+rows. A future cross-file Go frontend must restore token-based context
+invalidation when it adds Go source semantics.
 
 Ruby uses `ruby` for exact `.rb` paths and `ruby-config` for the accepted
 root/nested `Gemfile`, `Gemfile.lock`, `gems.rb`, `gems.locked`,

@@ -177,6 +177,26 @@ gemspec DSLs, `gems.locked`, and version selectors remain inventory-only. The
 reader invokes no Ruby, Bundler, RubyGems, Rake, repository/dependency code,
 child process, or network operation.
 
+The first Go Modules consumer reads only exact root/nested `go.mod` and
+`go.work` inputs. A bounded static `go.mod` reader accepts one valid `module`
+directive and grammar-valid `require` declarations with compatible Go module
+paths and semantic versions. It records the version as a requirement,
+directness as `direct` or `transitive` from exact `// indirect` syntax, scope as
+`unknown`, and evidence as `manifest_declared`; it does not claim a resolved
+version or graph. Duplicate/conflicting requirements, malformed syntax,
+unsupported graph-changing directives, and resource overflow affect only
+`go_dependency_inventory` uncertainty. `go.work` records no dependency rows and
+emits a workspace-selection UNKNOWN. `go.sum` is not treated as a lockfile.
+The reader consumes supplied bytes only: it never reads `.go` source, invokes a
+Go command or resolver, imports packages, executes dependency/project code,
+starts a child process, or accesses the network.
+
+The qualified lexical and path/version subset follows the Go Modules Reference
+and the documented `golang.org/x/mod/modfile` and `module` rules, retrieved
+2026-08-01. References: <https://go.dev/ref/mod>,
+<https://pkg.go.dev/golang.org/x/mod/modfile>, and
+<https://pkg.go.dev/golang.org/x/mod/module>.
+
 ## Provider and package-manager policy
 
 - Manifest/lockfile parsers consume supplied bounded bytes and do not execute
@@ -223,7 +243,7 @@ permission to infer runtime behavior.
   records are copied only with their unchanged evidence unit. Source-free
   public projections, generic provider ports, and remaining per-ecosystem
   manifest adapters remain follow-up modules. This ADR, persistence slice, and
-  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer/RubyGems consumers do not
+  the Cargo/npm/Python/vcpkg/Conan/SwiftPM/Composer/RubyGems/Go Modules consumers do not
   complete any
   ADR-0020 language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,

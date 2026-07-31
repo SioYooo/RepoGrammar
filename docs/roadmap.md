@@ -329,13 +329,17 @@ Go's N1 preflight is accepted in
 `docs/decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`, and
 its discovery/config module now inventories bounded `.go`, root/nested
 `go.mod`, and root/nested `go.work` under distinct `go`/`go-config` tokens.
-Default indexing treats both tokens as parser-source-read-free inventory, aggregates
-one path-free unsupported warning per token, persists no Go units/facts/IR/
-families, reports Go-only generations as `file_manifest_only`, and keeps
-inventory-only source/config deltas incremental with zero Go reparses. Warning
-derivation uses the whole manifest, and copy-forward purges claim-bearing
-records for Go paths. Frontend/IR must restore token-based project-context
-invalidation before adding Go semantics. A
+Default indexing keeps `.go` source bytes parser/source-store free and persists
+only their file metadata. Exact config bytes enter a bounded non-executing
+static adapter: valid `go.mod` `require` declarations become evidence-bound
+`go_modules` rows with exact version requirements and direct/transitive state;
+malformed, conflicting, graph-changing, and resource-bounded cases become
+claim-scoped UNKNOWN, while `go.work` emits only workspace-selection UNKNOWN.
+Config deltas reparse file-locally, unchanged dependency evidence copies
+forward, and `.go` deltas retain zero parser attempts while purging legacy
+claims. No source IR, family, resolved graph, selected build/workspace, runtime,
+or support claim follows. Frontend/IR must restore token-based project-context
+invalidation before adding Go source semantics. A
 pure path classifier records normalized Go-tool exclusion, `_test.go`, and the
 dated Go 1.26.5 known GOOS/GOARCH suffix shape without selecting a build
 environment; source marker scanning remains deferred. Go is therefore
@@ -385,11 +389,14 @@ is `discovered_only` and unsupported. Stable `swift`/`swift-config` tokens
 persist bounded path/hash/size/token metadata for exact `.swift` and the exact
 Swift config basename grammar through one pure classifier. Exact `.build` and
 `.swiftpm` are Swift-only exclusions; other languages below them remain
-visible. Source/config bytes bypass the source store and parser, Swift-only
-generations are `file_manifest_only`, warnings are one per token, deltas remain
-incremental, and legacy claim records are purged. No dependency, toolchain,
-worker, parser, project model, unit, IR, fact, typed `UNKNOWN`, family, or
-readiness behavior exists. The production syntax candidate is exact
+visible. Swift source and every config input except exact `Package.resolved`
+bypass the source store and parser; legacy claim records are purged. Exact
+schema-2/3 lock bytes enter the bounded unique-member static reader and may
+persist exact SwiftPM semantic-version pins with unknown scope/directness, while
+malformed or unsupported pins become claim-scoped UNKNOWN. Dependency evidence
+copies forward incrementally. No toolchain, worker, source parser, source IR,
+family, install/build/runtime state, or readiness behavior exists. The
+production syntax candidate is exact
 SwiftSyntax 603.0.2 in a separately reviewed worker, qualified against the
 exact Swift 6.3.3 compiler. Exact 6.3.3 SourceKit/sourcekitd is only an isolated
 semantic identity candidate and must not open or build the target repository.

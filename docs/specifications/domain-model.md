@@ -48,13 +48,17 @@ be represented as `python-config` language files with `project_config` code
 units so each config artifact shares the same generation, hash, and evidence
 validation boundary. Their structural parser methods are `tomllib`,
 `configparser`, and `cpython_ast`; `setup.py` is parsed, never executed.
-Go discovery defines stable `go` and `go-config` language tokens so `.go` and
-root/nested `go.mod`/`go.work` file records can be persisted source-free. Those
-tokens are inventory-only in the current product: source reads and parsing are
-skipped, and no Go `CodeUnit`, IR, semantic fact, or family is created. The
-token's presence is not support evidence. Go-only and empty generations are
-`file_manifest_only`; a mixed generation remains `syntax_only_code_units`
-because its non-Go parser-capable tokens still own code-unit semantics.
+Go discovery defines stable `go` and `go-config` language tokens. `.go` remains
+inventory-only: source reads and parsing are skipped, and it creates no Go
+`CodeUnit`, IR, semantic fact, or family. Discovered root/nested `go.mod` and
+`go.work` files enter a bounded static project-config parser. `go.mod` may create
+`project_config` units plus language-neutral, `manifest_declared` `go_modules`
+dependency records; unresolved or unsupported inventory semantics create typed
+UNKNOWNs scoped only to `go_dependency_inventory`. `go.work` always creates
+that scoped workspace UNKNOWN. These config records are not language, library,
+framework, resolution, or family evidence. A generation containing config units
+is `syntax_only_code_units`; Go-source-only and empty generations remain
+`file_manifest_only`.
 Ruby discovery likewise defines stable `ruby` and `ruby-config` tokens for
 bounded `.rb` and accepted root/nested project/configuration paths. Ruby
 source and every config except exact `Gemfile.lock` remain inventory-only.
