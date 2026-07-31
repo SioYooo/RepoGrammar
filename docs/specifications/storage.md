@@ -272,7 +272,7 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, `.jsx`, `.py`, `.java`, `.cs`, `.c`/`.h`, `.cc`/`.cpp`/`.cxx`/`.hh`/
-`.hpp`/`.hxx`, `.go`, `.php`, `.rb`, and `.rs` files (C# discovery skips the MSBuild
+`.hpp`/`.hxx`, `.go`, `.php`, `.rb`, `.swift`, `.sql`, `.R`, and `.rs` files (C# discovery skips the MSBuild
 `obj/` output directory and stores the `csharp` language token; C/C++ discovery
 skips the CLion `cmake-build-debug`/`cmake-build-release` directories and stores
 the `c`, `cpp`, and `cpp-config` language tokens; no schema change is required for a new
@@ -354,6 +354,22 @@ once.
 Exact `.build`/`.swiftpm` exclusions are Swift-only and do not globally prune
 other languages. A later bounded project model must add context invalidation
 before cross-file semantic records exist.
+
+SQL uses `sql`, `sql-migration`, `sql-schema`, and `sql-catalog`. Every SQL
+record stores only path, strict raw-byte hash, size, and token. SQL bytes are
+not decoded, no code-unit/evidence/dependency row is created, and SQL-only
+generations remain `file_manifest_only`. Incremental replacement/removal cannot
+copy forward legacy claim-bearing rows for these inventory-only paths.
+
+R uses `r` for exact `.R` and `r-config` for exact `DESCRIPTION`, `NAMESPACE`,
+and `renv.lock`. R source stores only file metadata. Configs store one bounded
+project-config unit, source-free structural/UNKNOWN facts, and, for exact
+explicit renv sources only, schema-v13 `cran` or `bioconductor` dependency rows
+with resolved version and unknown scope/directness. Unchanged rows copy forward;
+modified configs replace evidence-bound records; removal cascades them. Remote,
+URL, custom-repository, and local-path values are never persisted. R-source-only
+generations are `file_manifest_only`; admitted configs make the generation
+`syntax_only_code_units` without family/support rows.
 
 Other source-inventory or config changes still fall back to a full rebuild.
 Source snippets and absolute paths are not stored by default syntax-only

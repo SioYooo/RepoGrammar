@@ -9,8 +9,10 @@ use crate::adapters::languages::go::GoLanguageAdapter;
 use crate::adapters::languages::java::JavaLanguageAdapter;
 use crate::adapters::languages::php::{PhpLanguageAdapter, PhpPathClassification};
 use crate::adapters::languages::python::PythonLanguageAdapter;
+use crate::adapters::languages::r::{RLanguageAdapter, RPathClassification};
 use crate::adapters::languages::ruby::{RubyLanguageAdapter, RubyPathClassification};
 use crate::adapters::languages::rust::RustLanguageAdapter;
+use crate::adapters::languages::sql::{SqlLanguageAdapter, SqlPathClassification};
 use crate::adapters::languages::swift::{SwiftLanguageAdapter, SwiftPathClassification};
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
@@ -454,6 +456,33 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
         }
         SwiftPathClassification::NotSwift => {}
     }
+    match RLanguageAdapter::classify_path(path) {
+        RPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::R);
+        }
+        RPathClassification::Config => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::RConfig);
+        }
+        RPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        RPathClassification::NotR => {}
+    }
+    match SqlLanguageAdapter::classify_path(path) {
+        SqlPathClassification::Generic => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Sql);
+        }
+        SqlPathClassification::Migration => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::SqlMigration);
+        }
+        SqlPathClassification::Schema => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::SqlSchema);
+        }
+        SqlPathClassification::Catalog => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::SqlCatalog);
+        }
+        SqlPathClassification::NotSql => {}
+    }
     if path == "pyproject.toml" || path == "setup.cfg" || path == "setup.py" {
         return LanguagePathClassification::Supported(DiscoveredLanguage::PythonConfig);
     }
@@ -817,6 +846,104 @@ mod tests {
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("module example.test/module"));
         assert!(!debug.contains("package tests"));
+    }
+
+    #[test]
+    fn discovers_source_free_sql_artifacts_and_exact_r_inventory() {
+        let workspace = TempWorkspace::new("discovery-sql-r");
+        for directory in [
+            "db/migrations",
+            "R",
+            "nested",
+            "renv/library/R-4.4/pkg/R",
+            ".Rproj.user/session",
+        ] {
+            fs::create_dir_all(workspace.path().join(directory)).expect("create SQL/R fixture dir");
+        }
+        for path in [
+            "query.sql",
+            "schema.sql",
+            "catalog.sql",
+            "db/migrations/001_init.sql",
+        ] {
+            fs::write(workspace.path().join(path), [0xff, 0xfe, 0xfd])
+                .expect("write binary SQL inventory");
+        }
+        for path in [
+            "DESCRIPTION",
+            "NAMESPACE",
+            "renv.lock",
+            "nested/DESCRIPTION",
+        ] {
+            fs::write(workspace.path().join(path), "must not execute R\n")
+                .expect("write R metadata inventory");
+        }
+        fs::write(workspace.path().join("R/main.R"), [0xff, 0xfe, 0xfd])
+            .expect("write binary R source inventory");
+        fs::write(
+            workspace
+                .path()
+                .join("renv/library/R-4.4/pkg/R/generated.R"),
+            "ignored\n",
+        )
+        .expect("write managed R library source");
+        fs::write(
+            workspace.path().join(".Rproj.user/session/history.R"),
+            "ignored\n",
+        )
+        .expect("write RStudio state source");
+        for path in ["other.SQL", "main.r", ".Rprofile", "project.Rproj"] {
+            fs::write(workspace.path().join(path), "deferred\n")
+                .expect("write deferred SQL/R candidate");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover SQL/R inventory");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("DESCRIPTION", DiscoveredLanguage::RConfig),
+                ("NAMESPACE", DiscoveredLanguage::RConfig),
+                ("R/main.R", DiscoveredLanguage::R),
+                ("catalog.sql", DiscoveredLanguage::SqlCatalog),
+                (
+                    "db/migrations/001_init.sql",
+                    DiscoveredLanguage::SqlMigration
+                ),
+                ("nested/DESCRIPTION", DiscoveredLanguage::RConfig),
+                ("query.sql", DiscoveredLanguage::Sql),
+                ("renv.lock", DiscoveredLanguage::RConfig),
+                ("schema.sql", DiscoveredLanguage::SqlSchema),
+            ]
+        );
+        for path in [
+            ".Rproj.user/session/history.R",
+            "renv/library/R-4.4/pkg/R/generated.R",
+        ] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::LanguageSpecificExclusion
+            }));
+        }
+        for path in ["other.SQL", "main.r", ".Rprofile", "project.Rproj"] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+                }),
+                "{path}: {:?}",
+                report.skipped
+            );
+        }
+        let debug = format!("{report:?}");
+        assert!(!debug.contains("must not execute R"));
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -1586,6 +1713,44 @@ mod tests {
             .skipped
             .iter()
             .any(|skip| { skip.path == "too_large.go" && skip.reason == SkippedReason::TooLarge }));
+    }
+
+    #[test]
+    fn sql_and_r_size_limits_are_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-sql-r-size-boundary");
+        for (path, size) in [
+            ("exact.sql", DEFAULT_MAX_FILE_BYTES as usize),
+            ("too_large.sql", DEFAULT_MAX_FILE_BYTES as usize + 1),
+            ("exact.R", DEFAULT_MAX_FILE_BYTES as usize),
+            ("nested/DESCRIPTION", DEFAULT_MAX_FILE_BYTES as usize + 1),
+        ] {
+            if let Some(parent) = workspace.path().join(path).parent() {
+                fs::create_dir_all(parent).expect("create SQL/R size fixture parent");
+            }
+            fs::write(workspace.path().join(path), vec![b'x'; size])
+                .expect("write SQL/R size fixture");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover SQL/R size boundary");
+
+        assert!(report
+            .files
+            .iter()
+            .any(|file| { file.path == "exact.sql" && file.language == DiscoveredLanguage::Sql }));
+        assert!(report
+            .files
+            .iter()
+            .any(|file| { file.path == "exact.R" && file.language == DiscoveredLanguage::R }));
+        for path in ["too_large.sql", "nested/DESCRIPTION"] {
+            assert!(report
+                .skipped
+                .iter()
+                .any(|skip| { skip.path == path && skip.reason == SkippedReason::TooLarge }));
+        }
     }
 
     #[test]

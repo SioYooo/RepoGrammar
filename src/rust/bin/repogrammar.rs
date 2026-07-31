@@ -5072,6 +5072,12 @@ mod tests {
             DiscoveredLanguage::RubyConfig => Language::RubyConfig,
             DiscoveredLanguage::Swift => Language::Swift,
             DiscoveredLanguage::SwiftConfig => Language::SwiftConfig,
+            DiscoveredLanguage::Sql
+            | DiscoveredLanguage::SqlMigration
+            | DiscoveredLanguage::SqlSchema
+            | DiscoveredLanguage::SqlCatalog => Language::Sql,
+            DiscoveredLanguage::R => Language::R,
+            DiscoveredLanguage::RConfig => Language::RConfig,
             DiscoveredLanguage::Rust => Language::Rust,
             DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
@@ -11654,6 +11660,128 @@ class User(Base):
         let value = parse_machine_output("units", &units, &workspace);
         assert_eq!(value["indexing"], "syntax_only_code_units");
         assert_eq!(value["units"].as_array().expect("units array").len(), 1);
+    }
+
+    #[test]
+    fn product_runtime_sql_inventory_is_file_manifest_only_and_source_free() {
+        let workspace = TempWorkspace::new("product-runtime-sql-inventory-index");
+        fs::create_dir_all(workspace.path().join("db/migrations"))
+            .expect("create SQL migration dir");
+        for (path, marker) in [
+            ("query.sql", b"sql-generic-must-not-be-read".as_slice()),
+            ("schema.sql", b"sql-schema-must-not-be-read".as_slice()),
+            (
+                "db/migrations/001.sql",
+                b"sql-migration-must-not-be-read".as_slice(),
+            ),
+        ] {
+            let mut bytes = vec![0xff, 0xfe, 0xfd];
+            bytes.extend_from_slice(marker);
+            fs::write(workspace.path().join(path), bytes).expect("write binary SQL inventory");
+        }
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime,
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 3);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
+        assert_eq!(value["parser_attempted_files"], 0);
+        assert_eq!(value["indexed_units"], 0);
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("path"),
+                    file["language"].as_str().expect("language"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("db/migrations/001.sql", "sql-migration"),
+                ("query.sql", "sql"),
+                ("schema.sql", "sql-schema"),
+            ]
+        );
+        for marker in [
+            "sql-generic-must-not-be-read",
+            "sql-schema-must-not-be-read",
+            "sql-migration-must-not-be-read",
+        ] {
+            assert!(!index.stdout.contains(marker));
+            assert!(!files.stdout.contains(marker));
+        }
+    }
+
+    #[test]
+    fn product_runtime_r_reads_only_bounded_metadata_and_sanitizes_remote_sources() {
+        let workspace = TempWorkspace::new("product-runtime-r-inventory-index");
+        let mut r_source = vec![0xff, 0xfe, 0xfd];
+        r_source.extend_from_slice(b"r-source-must-not-be-read");
+        fs::write(workspace.path().join("main.R"), r_source).expect("write binary R source");
+        fs::write(
+            workspace.path().join("renv.lock"),
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"},"private":{"Package":"private","Version":"1.0","Source":"GitHub","RemoteUrl":"https://user:CLI_SECRET@example.invalid/repo"}}}"#,
+        )
+        .expect("write renv lock");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime,
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!(["parser skipped unsupported language token: r"])
+        );
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("path"),
+                    file["language"].as_str().expect("language"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![("main.R", "r"), ("renv.lock", "r-config")]
+        );
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("units", &units, &workspace);
+        assert_eq!(value["units"].as_array().expect("units array").len(), 1);
+        for output in [&index.stdout, &files.stdout, &units.stdout] {
+            for marker in ["r-source-must-not-be-read", "CLI_SECRET", "example.invalid"] {
+                assert!(!output.contains(marker), "leaked {marker}");
+            }
+        }
     }
 
     #[test]

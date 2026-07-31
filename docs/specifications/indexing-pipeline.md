@@ -24,7 +24,7 @@ Repository files
 The repository currently defines module boundaries, semantic-worker protocol
 placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
 Python `.py` discovery slice, syntax-only code-unit extractors, and
-`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python/Java/C#/C/C++/Rust
+`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python/Java/C#/C++/Rust/Go/PHP/Ruby/Swift/SQL/R
 files, read source through a hash-checked repo-relative boundary, store
 repo-relative file metadata and structural code units in a building generation
 inside the mutable `.repogrammar/repogrammar.sqlite` database, validate that
@@ -61,6 +61,17 @@ shell command line. Accepted facts are recorded only when they match the same
 building generation's indexed file, code-unit id, content hash, byte range, and
 requested operation provenance. Incremental `sync` falls back to a full rebuild
 when an explicit worker is configured.
+
+SQL and R remain `discovered_only`. Exact SQL bytes never cross the source-store
+boundary; `sql`, `sql-migration`, `sql-schema`, and `sql-catalog` are file
+manifest labels with dialect UNKNOWN. Exact `.R` bytes likewise remain
+inventory-only. Only exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` are read
+through the bounded source store and dispatched to the `r-config` adapter.
+That adapter emits project-config/typed-UNKNOWN records and admits only explicit
+CRAN/Bioconductor renv package identities and versions. It never invokes R,
+renv, profiles, package/native code, or network resolution. SQL-only and
+R-source-only generations are `file_manifest_only`; admitted R metadata makes
+the generation `syntax_only_code_units` without creating a language family.
 
 Outside the internal Rust self-dogfood extractor and explicitly configured
 semantic workers, this slice does not use Tree-sitter, call a TypeScript

@@ -412,6 +412,45 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_tracks_sql_and_r_inventory_but_not_r_managed_libraries() {
+        let workspace = TempWorkspace::new("fingerprint-sql-r-inventory");
+        fs::create_dir_all(workspace.path().join("renv/library/pkg/R"))
+            .expect("create renv library");
+        let root = workspace.path().display().to_string();
+        let baseline = repository_change_fingerprint(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint empty SQL/R workspace");
+
+        fs::write(
+            workspace.path().join("renv/library/pkg/R/generated.R"),
+            "ignored",
+        )
+        .expect("write excluded R source");
+        fs::write(workspace.path().join("query.SQL"), "deferred")
+            .expect("write deferred SQL candidate");
+        assert_eq!(
+            repository_change_fingerprint(&root, DEFAULT_MAX_FILE_BYTES)
+                .expect("fingerprint excluded SQL/R candidates"),
+            baseline
+        );
+
+        fs::write(workspace.path().join("schema.sql"), "inventory").expect("write SQL inventory");
+        let with_sql = repository_change_fingerprint(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint SQL inventory");
+        assert_ne!(with_sql, baseline);
+
+        fs::write(workspace.path().join("main.R"), "inventory").expect("write R source inventory");
+        let with_r = repository_change_fingerprint(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint R source inventory");
+        assert_ne!(with_r, with_sql);
+
+        fs::write(workspace.path().join("renv.lock"), "inventory")
+            .expect("write R config inventory");
+        let with_config = repository_change_fingerprint(&root, DEFAULT_MAX_FILE_BYTES)
+            .expect("fingerprint R config inventory");
+        assert_ne!(with_config, with_r);
+    }
+
+    #[test]
     fn fingerprint_accepts_exact_file_and_byte_limits_then_rejects_plus_one() {
         let workspace = TempWorkspace::new("fingerprint-resource-files");
         fs::write(workspace.path().join("a.ts"), "a").expect("write a");

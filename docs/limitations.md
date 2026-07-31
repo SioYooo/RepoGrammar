@@ -46,6 +46,19 @@ production-readiness claim.
   semantics, framework role, family, or readiness claim is produced. Static
   config updates are incremental; this auxiliary inventory does not imply Go
   language support.
+- SQL is discovered-only and unsupported. Exact `.sql` paths are source-free
+  generic/migration/schema/catalog inventory, not statements or dialect proof.
+  Dialect remains UNKNOWN; no SQL bytes are decoded, no database or migration
+  tool is contacted, and no code unit, semantic UNKNOWN, dependency, family,
+  provider, support, or readiness exists.
+- R is discovered-only and unsupported. Exact `.R` source is never decoded.
+  Bounded `DESCRIPTION`/`NAMESPACE` parsing cannot prove CRAN versus
+  Bioconductor, so ambiguous declarations remain typed inventory UNKNOWN and
+  produce no dependency row. Exact `renv.lock` admits only explicit CRAN or
+  Bioconductor package/version records with unknown scope/directness. Custom,
+  remote, URL, and local-path sources are omitted without retaining values.
+  No R/renv/profile/package/native/project code executes and no R family,
+  provider, support, or readiness exists.
 
 ## UNKNOWN Is Expected
 

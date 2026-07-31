@@ -90,6 +90,20 @@ unknown scope, and unknown directness. Typed uncertainty covers malformed,
 unsupported, conflicting, and over-budget pins. No Swift source frontend,
 manifest evaluation, family, selected target/toolchain/SDK, installed graph, or
 support state follows from that lock inventory.
+SQL discovery defines stable `sql`, `sql-migration`, `sql-schema`, and
+`sql-catalog` file tokens. They persist only path, strict raw-byte hash, size,
+and source-free artifact classification. All map to the internal SQL language
+identity, but no SQL `CodeUnit` exists and no token proves a dialect or semantic
+role. SQL dialect is contractually UNKNOWN; no semantic fact is fabricated
+without code-unit evidence.
+R discovery defines stable `r` and `r-config` tokens. Exact `.R` source is
+inventory-only. Exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` create bounded
+`project_config` units and claim-scoped `r_dependency_inventory` UNKNOWNs.
+Only explicit renv CRAN/Bioconductor identities become dependency rows with
+resolved versions, unknown scope, unknown directness, and `lockfile_resolved`
+evidence. DESCRIPTION/NAMESPACE direct declarations are not dependency rows
+when their ecosystem cannot be proved. None of these records is R source,
+framework, family, provider, support, or readiness evidence.
 The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
 Java classes/interfaces/methods plus Spring MVC route methods, Spring
 components, Spring Boot applications, and Spring Data repositories when exact

@@ -52,6 +52,15 @@ Maintenance:
 - `version`
 - `help`
 
+Inventory modes are evidence-sensitive. A SQL-only repository reports
+`indexing: file_manifest_only`, `parser: deferred`, zero parser attempts, and
+its exact `sql*` file tokens through `files`; CLI output never contains SQL
+text. An R-source-only repository behaves the same. Exact R metadata changes
+the mode to `syntax_only_code_units`, and `units` may show `r-config`
+`project_config` units. This does not advertise SQL or R support. Remote/local
+renv source values and arbitrary DESCRIPTION/NAMESPACE text must never appear
+in human or JSON output.
+
 ## Help contract
 
 `repogrammar --help`, `repogrammar -h`, and `repogrammar help` must print a

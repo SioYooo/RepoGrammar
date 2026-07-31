@@ -40,3 +40,5 @@ Current accepted ADRs:
 - ADR-0028: Ownership-aware product uninstall and agent disconnect.
 - ADR-0029: Additive candidate-set resolution cardinality.
 - ADR-0030: Language-neutral dependency inventory and reviewed library semantics.
+- ADR-0035: SQL source-free artifact inventory and dialect abstention.
+- ADR-0036: R static package metadata inventory.
