@@ -1,6 +1,7 @@
 //! Domain types used across RepoGrammar.
 
 pub mod code_unit;
+pub mod dependency;
 pub mod evidence;
 pub mod family;
 pub mod ir;
@@ -10,6 +11,11 @@ pub mod provider;
 pub mod semantic;
 
 pub use code_unit::{CodeUnit, CodeUnitId, CodeUnitKind, Language, SourceRange};
+pub use dependency::{
+    DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord, DependencyScope,
+    DependencySnapshot, DependencyVersion, ExternalSymbolId, LibraryCapability, LibraryContract,
+    LibraryContractId, PackageIdentity,
+};
 pub use evidence::Evidence;
 pub use family::{
     assess_family_prevalence, coverage_ratio, FamilyConstraintProfile, FamilyId, FamilyPrevalence,

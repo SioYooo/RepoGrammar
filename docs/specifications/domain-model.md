@@ -3,6 +3,26 @@
 This specification defines the initial domain vocabulary. The Rust-core bootstrap
 implements only minimal types and placeholders.
 
+## Dependency and library semantics
+
+ADR-0030 separates four evidence layers: manifest dependency inventory,
+lockfile resolution, semantic-provider external-symbol resolution, and reviewed
+library behavior contracts. The language-neutral owned types live in
+`src/rust/core/model/dependency.rs`.
+
+A `DependencyRecord` carries one package identity, optional version requirement
+and resolved version, scope, directness, optionality, the strongest dependency
+evidence level, and repository evidence. `DependencySnapshot` is deterministic
+and rejects duplicate inventory records. `ExternalSymbolId` is always qualified
+by a package identity. `LibraryContract` is explicit, revisioned, and non-empty;
+inventory never synthesizes one.
+
+Manifest declarations must not be described as installed, resolved, or
+behaviorally understood. Lockfile records require a resolved version but still
+do not prove runtime selection. Provider failures remain typed `UNKNOWN`, and
+reviewed library contracts remain separate auditable artifacts whose version
+and compatibility must be checked at the point of use.
+
 ## CodeUnit
 
 A `CodeUnit` is a repository-owned analyzable source unit such as a function,

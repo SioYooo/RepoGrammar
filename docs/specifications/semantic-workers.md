@@ -122,7 +122,12 @@ same-generation `Cargo.toml` code units exist. Non-Rust repositories, or
 repositories with no discovered `Cargo.toml`, skip this substage. The provider runs
 `cargo metadata --format-version=1 --no-deps`, parses
 workspace/package/target/feature/dependency metadata into owned
-`PROJECT_CONFIG` semantic facts, and returns recoverable `UNKNOWN`s for
+`PROJECT_CONFIG` semantic facts. Under ADR-0030 it also translates each direct
+dependency into a language-neutral `manifest_declared` `DependencyRecord` with
+package name, requirement when supplied by Cargo, scope, optionality, and
+manifest evidence. Because `--no-deps` is used, these records do not claim a
+resolved transitive graph, installed version, source, checksum, or external
+symbol. The adapter returns recoverable `UNKNOWN`s for
 unavailable Cargo, unreadable project configuration, or missing manifest
 candidates. Absolute manifest paths returned by Cargo are scoped against the
 canonical project root before they are accepted, so symlink-equivalent roots do

@@ -1,7 +1,7 @@
 # Top-20 Language Expansion Plan
 
 - Status: Active implementation plan
-- Last updated: 2026-07-16
+- Last updated: 2026-08-01
 - Scope: Execute ADR-0020 against the frozen TIOBE July 2026 Top-20 snapshot,
   with TypeScript tracked as an extra language.
 - Authority: `docs/decisions/ADR-0020-top-20-language-expansion-gate.md`
@@ -19,6 +19,21 @@
 
 If this plan conflicts with ADR-0020 or another accepted ADR, the ADR wins and
 this plan must be updated before implementation continues.
+
+## 2026-08-01 dependency/library semantics checkpoint
+
+ADR-0030 now supplies the shared third-party analysis model. Arbitrary packages
+may be inventoried through bounded manifest/lockfile evidence, but only isolated
+providers may establish package-qualified external symbols and only explicit,
+versioned, reviewed library contracts may establish library behavior. Package
+presence alone never supports a family. The current strict baseline remains
+`0/20`, with TypeScript extra also incomplete; see
+`docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
+
+The first implementation consumer is Cargo metadata, which emits generic
+`manifest_declared` dependency records. It remains a Rust project-model slice,
+not Rust language completion. Persistence, source-free projection, generic
+provider ports, and other ecosystems remain open atomic modules.
 
 ## Goal and non-goal
 

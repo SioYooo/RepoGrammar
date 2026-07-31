@@ -4,7 +4,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 
 | Path | Responsibility | Canonical docs to update |
 |---|---|---|
-| `src/rust/core/model/` | Domain identifiers, IR, evidence, semantic facts, family classification, provenance, and internal orthogonal UNKNOWN claim-impact/resolution axes behind the stable public `UnknownClass` projection | `docs/specifications/domain-model.md`, `docs/specifications/semantic-workers.md`, `docs/specifications/unknowns.md` |
+| `src/rust/core/model/` | Domain identifiers, IR, evidence, semantic facts, family classification, provenance, language-neutral dependency inventory, package-qualified external-symbol identity, reviewed library-contract types, and internal orthogonal UNKNOWN claim-impact/resolution axes behind the stable public `UnknownClass` projection | `docs/specifications/domain-model.md`, `docs/specifications/semantic-workers.md`, `docs/specifications/unknowns.md`, `docs/decisions/ADR-0030-language-neutral-dependency-library-semantics.md` |
 | `src/rust/core/mining/` | Normalization, fingerprinting, candidate discovery, alignment, anti-unification, clustering, representative selection boundaries | `docs/specifications/indexing-pipeline.md` |
 | `src/rust/core/policy/` | Compatibility, abstention, and freshness policy | `docs/specifications/domain-model.md`, `docs/specifications/product.md` |
 | `src/rust/ports/` | Traits for parser, semantic worker, index store, family store, source store, and telemetry, including bounded read-model query contracts for stats, family summaries, and family candidates, plus contract types for future Python, Rust, and TS/JS semantic providers | `docs/architecture/dependency-rules.md`, related specifications |

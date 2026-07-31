@@ -1,5 +1,17 @@
 # Project State
 
+## Top-20 dependency/library execution line — 2026-08-01
+
+ADR-0030 introduces the language-neutral dependency evidence ladder and owned
+package, snapshot, external-symbol, and reviewed library-contract types. The
+first consumer is bounded Cargo metadata, which emits `manifest_declared`
+dependency records in addition to legacy project facts; it does not claim a
+resolved graph or Rust semantic completion. The strict ADR-0020 baseline remains
+`0/20`, TypeScript extra remains incomplete, Go/PHP/Swift/Ruby remain
+`discovered_only`, and the other nine new lanes remain `not_started`. The
+current evidence matrix is
+`docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
+
 ## Build Week stable-release line
 
 The current release source identity is `0.4.0`. The earlier annotated

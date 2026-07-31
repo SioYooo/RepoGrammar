@@ -941,10 +941,13 @@ The Rust Cargo metadata provider adapter is wired into the default product
 indexing path as a safe project-model refresh stage for repositories with
 same-generation `Cargo.toml` code units. It parses
 `cargo metadata --format-version=1 --no-deps` output into owned
-`PROJECT_CONFIG` facts, records provider `UNKNOWN`s when Cargo or project
+`PROJECT_CONFIG` facts and ADR-0030 `manifest_declared` direct dependency
+records, records provider `UNKNOWN`s when Cargo or project
 configuration is unavailable, and does not execute build scripts or procedural
 macros. These facts are context only: package metadata, targets, features, and
-dependencies do not directly prove family membership.
+dependencies do not directly prove family membership. The generic records are
+currently provider output only; persistence and source-free product projection
+remain separate follow-up modules.
 
 ## Optional providers
 

@@ -35,7 +35,11 @@ The check command verifies:
   documents, the Python v0.1 analysis specification, ADR-0011, ADR-0012, the
   substrate hardening checkpoint, typed UNKNOWN specification, ADR-0009/ADR-0010,
   their durable memory mirrors under `.agents/memories/`, and the accepted
-  ADR-0020 Top-20 language expansion gate plus its active implementation plan.
+  ADR-0020 Top-20 language expansion gate plus its active implementation plan,
+  ADR-0030 dependency/library semantics, the provider/UNKNOWN analysis, the
+  dated strict baseline, and the Go/PHP/Swift/Ruby completion-review records
+  referenced by the plan. Missing review evidence fails the guard; unchecked
+  review gates remain an honest incomplete state and are not treated as support.
 - required skills exist and have `name` and `description` front matter.
 - nested `AGENTS.md` or `CLAUDE.md` files do not exist.
 - lowercase `agents.md` or `claude.md` duplicates do not exist.
