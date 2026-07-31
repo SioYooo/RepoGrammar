@@ -90,6 +90,26 @@ unknown scope, and unknown directness. Typed uncertainty covers malformed,
 unsupported, conflicting, and over-budget pins. No Swift source frontend,
 manifest evaluation, family, selected target/toolchain/SDK, installed graph, or
 support state follows from that lock inventory.
+MATLAB discovery defines stable `matlab` and `matlab-config` tokens for exact
+lowercase `.m` paths and exact root/nested `resources/mpackage.json` paths.
+MATLAB source remains inventory-only. An admitted package definition may create
+one `project_config` unit and direct `matlab_add_on` dependency declarations
+whose identity is the validated package name plus UUID, whose requirement is
+the bounded `compatibleVersions` text, and whose resolved version is absent.
+Malformed, unsupported-schema, conflicting, or over-budget package metadata
+becomes typed `matlab_dependency_inventory` uncertainty. These records do not
+prove MATLAB syntax, dependency resolution, installation, libraries, external
+symbols, toolboxes, Simulink behavior, families, or support.
+Assembly discovery defines one stable `assembly` token only for lowercase `.s`.
+Its bounded candidate scanner may represent the file as a module and source-
+visible labels as generic `unknown` code units, with containment IR and selected
+structural spellings. Every Assembly file also owns a typed unproven-target-
+profile UNKNOWN. No record proves a dialect, architecture, ABI, object format,
+instruction validity, symbol resolution, reachability, linked behavior, family,
+or support.
+Scratch has no `Language` or `DiscoveredLanguage` value. The disconnected `.sb3`
+archive preflight returns aggregate counts only and creates no domain record;
+therefore it is a security prerequisite, not Scratch discovery or support.
 Java discovery defines a separate `java-config` token for exact root/nested
 `pom.xml` inputs. Each admitted file may create one `project_config` unit and
 bounded `maven` `DependencyRecord`s only for literal direct

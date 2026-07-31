@@ -223,6 +223,34 @@ allowed.
   Autosync must track accepted Swift source/config and cross-language files below
   Swift-specific exclusions while ignoring excluded Swift candidates. Project-
   context invalidation remains a later frontend obligation.
+- MATLAB coverage must prove exact lowercase `.m` and root/nested
+  `resources/mpackage.json` classification, normalized-path rejection,
+  inventory-only source persistence, and zero source-store/parser use for `.m`.
+  Package tests must cover shared duplicate-member/depth/key limits, schema
+  1.0.0/1.1.0, later-schema abstention, validated name/UUID/version fields,
+  direct `matlab_add_on` declarations, conflicting and unsafe requirement
+  omission, resource ceilings, provider/contact non-retention, persistence,
+  copy-forward, replacement, removal, path-free UNKNOWN output, and zero family
+  support. Tests must never require MATLAB, Octave, Simulink, installation,
+  child processes, or network access.
+- Assembly coverage must prove lowercase `.s` admission, uppercase `.S`
+  exclusion, unsupported NASM/MASM suffixes, normalized-path rejection, exact
+  byte/line/label/fact limits, CRLF handling, module/label/containment output,
+  selected directive/direct-call/direct-jump spellings, and unconditional typed
+  target-profile uncertainty. Macro/include/repetition, conditionals,
+  Intel-syntax, `.code16`, `.code32`, malformed, and over-budget cases must
+  abstain without source/path leakage. Product tests must prove persistence,
+  incremental replacement/removal, no execution or include reads, and zero
+  family support.
+- Scratch prerequisite tests must use synthetic in-memory archives and cover
+  classic central/local-header coherence, entry/aggregate/ratio/path/JSON limits,
+  traversal, backslash and drive paths, duplicate names, Unix symlinks,
+  encryption, unsupported compression, missing/duplicate root `project.json`,
+  malformed/duplicate/deep JSON, aggregate target/block/event/opcode/extension
+  counts, and source-free errors. Product discovery must separately prove that
+  `.sb3` remains `UnsupportedExtension`. These tests are not evidence of common
+  deflated Scratch support, execution semantics, a general ZIP reader, or a
+  production binary-input boundary.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, mutable top-level database creation, active
@@ -1070,7 +1098,9 @@ default `init` active-index bootstrap, `--state-only` lifecycle repair,
 default auto-sync-after-index sequencing, explicit `--no-autosync`, and
 bootstrap failure preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
-TS/JS, Python, Go, PHP, Ruby, and Swift discovery filtering/hash/path-safety behavior,
+TS/JS, Python, Go, PHP, Ruby, Swift, MATLAB, and Assembly discovery
+filtering/hash/path-safety behavior, plus the disconnected Scratch archive
+security prerequisite and negative `.sb3` product-discovery contract,
 SQLite storage migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware

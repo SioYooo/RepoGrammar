@@ -25,6 +25,9 @@ pub enum DiscoveredLanguage {
     TsJsConfig,
     Java,
     JavaConfig,
+    Matlab,
+    MatlabConfig,
+    Assembly,
     CSharp,
     C,
     Cpp,
@@ -53,6 +56,9 @@ impl DiscoveredLanguage {
             Self::TsJsConfig => "tsjs-config",
             Self::Java => "java",
             Self::JavaConfig => "java-config",
+            Self::Matlab => "matlab",
+            Self::MatlabConfig => "matlab-config",
+            Self::Assembly => "assembly",
             Self::CSharp => "csharp",
             Self::C => "c",
             Self::Cpp => "cpp",
@@ -246,6 +252,14 @@ mod tests {
         assert_eq!(DiscoveredLanguage::Java.as_str(), "java");
         assert_eq!(DiscoveredLanguage::JavaConfig.as_str(), "java-config");
         assert_ne!(DiscoveredLanguage::Java, DiscoveredLanguage::JavaConfig);
+    }
+
+    #[test]
+    fn matlab_and_assembly_discovery_tokens_are_stable() {
+        assert_eq!(DiscoveredLanguage::Matlab.as_str(), "matlab");
+        assert_eq!(DiscoveredLanguage::MatlabConfig.as_str(), "matlab-config");
+        assert_ne!(DiscoveredLanguage::Matlab, DiscoveredLanguage::MatlabConfig);
+        assert_eq!(DiscoveredLanguage::Assembly.as_str(), "assembly");
     }
 
     #[test]

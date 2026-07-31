@@ -834,6 +834,39 @@ become family support without the authoritative Ruby claim-impact classifier,
 exact direct Minitest slice, support >= 3, source-free product wiring, review,
 and completion audit required by ADR-0022.
 
+MATLAB is `discovered_only` and unsupported. A single pure classifier admits
+lowercase `.m` as `matlab` and exact root/nested `resources/mpackage.json` as
+`matlab-config`. Source files persist only path/hash/size/token metadata and
+bypass parser-facing source-store access. Package-definition bytes alone enter
+the shared bounded unique-member JSON gate and may create one project-config
+unit, exact direct `matlab_add_on` declaration rows, and source-free
+`matlab_dependency_inventory` UNKNOWNs. Supported schema 1.0.0/1.1.0 metadata
+does not establish installed packages or resolved versions; later valid schema
+versions abstain. Incremental changes parse file-locally, unchanged dependency
+evidence copies forward, removals omit it, and legacy MATLAB source claims are
+purged. No MATLAB/Octave/Simulink execution, source IR, external symbol,
+framework role, family, readiness promotion, or support exists.
+
+Assembly is a bounded `structural_substrate`, not completed language support.
+Discovery admits only lowercase `.s`; uppercase `.S` is excluded rather than
+preprocessed. The in-process scanner treats accepted bytes only as candidates
+for x86-64 ELF GNU as 2.46 AT&T syntax and emits a module, generic label units,
+containment IR, selected structural spellings, and an unconditional unproven-
+profile UNKNOWN. Dialect-changing directives and preprocessor/macro/include/
+conditional boundaries add typed uncertainty. Full and incremental indexing
+may persist and replace these records, but no assembler, linker, include read,
+child process, or network access occurs and no Assembly fact can become family
+support.
+
+Scratch is a product-integration `NO_GO` at this stage. `.sb3` remains an
+unsupported extension and never enters discovery, source storage, parsing, or
+index persistence. A disconnected pure archive-security prerequisite validates
+caller-supplied classic ZIP metadata and can count targets/blocks/opcodes only
+when root `project.json` is stored without compression. Common deflated archives
+return `UnsupportedCompression`. This prerequisite creates no language token,
+domain object, fact, or claim. Product work must first add a bounded binary-
+document port and separately qualify a maintained ZIP/deflate implementation.
+
 The existing Rust-side TypeScript process adapter can validate NDJSON worker
 output and translate facts into RepoGrammar-owned semantic facts. The
 syntax-only `index` and `sync` path does not launch that worker by default. With

@@ -40,3 +40,6 @@ Current accepted ADRs:
 - ADR-0028: Ownership-aware product uninstall and agent disconnect.
 - ADR-0029: Additive candidate-set resolution cardinality.
 - ADR-0030: Language-neutral dependency inventory and reviewed library semantics.
+- ADR-0037: MATLAB R2024b+ package inventory preflight.
+- ADR-0038: Bounded GNU-as x86-64 ELF AT&T assembly substrate.
+- ADR-0039: Scratch 3 `.sb3` archive integration NO-GO.

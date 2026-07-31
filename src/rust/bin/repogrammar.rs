@@ -5061,6 +5061,9 @@ mod tests {
             DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
             DiscoveredLanguage::Java => Language::Java,
             DiscoveredLanguage::JavaConfig => Language::JavaConfig,
+            DiscoveredLanguage::Matlab => Language::Matlab,
+            DiscoveredLanguage::MatlabConfig => Language::MatlabConfig,
+            DiscoveredLanguage::Assembly => Language::Assembly,
             DiscoveredLanguage::CSharp => Language::CSharp,
             DiscoveredLanguage::C => Language::C,
             DiscoveredLanguage::Cpp => Language::Cpp,
@@ -11708,6 +11711,72 @@ class User(Base):
             dependencies.dependencies[0].package_name,
             "private.example:secret-library"
         );
+    }
+
+    #[test]
+    fn product_runtime_matlab_and_assembly_inventory_is_source_free() {
+        let workspace = TempWorkspace::new("product-runtime-matlab-assembly-index");
+        fs::create_dir_all(workspace.path().join("resources")).expect("create MATLAB resources");
+        fs::write(
+            workspace.path().join("resources/mpackage.json"),
+            r#"{"name":"PrivateDemo","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0","dependencies":[{"name":"SecretDependency","compatibleVersions":">1.0.0","id":"e6c4123e-0068-42be-aef2-00d49d1509f5"}]}"#,
+        )
+        .expect("write MATLAB package definition");
+        fs::write(
+            workspace.path().join("private.s"),
+            ".text\nsecret_entry:\n call private_target\n.include \"secret.inc\"\n",
+        )
+        .expect("write assembly source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 2);
+        for secret in [
+            "PrivateDemo",
+            "SecretDependency",
+            "e6c4123e",
+            "secret_entry",
+            "private_target",
+            "secret.inc",
+        ] {
+            assert!(!index.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        let status_value = parse_machine_output("status", &status, &workspace);
+        assert!(status_value["dependency_records"].is_number());
+        for secret in [
+            "SecretDependency",
+            "secret_entry",
+            "private_target",
+            "secret.inc",
+        ] {
+            assert!(!status.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open MATLAB inventory store");
+        let dependencies = list_active_dependencies(&store).expect("read MATLAB inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].ecosystem, "matlab_add_on");
+        assert!(dependencies.dependencies[0]
+            .package_name
+            .starts_with("SecretDependency@"));
     }
 
     #[test]

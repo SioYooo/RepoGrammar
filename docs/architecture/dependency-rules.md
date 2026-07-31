@@ -287,6 +287,39 @@ RubyGems, Rake, Rails, tests, generators, installed gems, repository tooling,
 or network access. Ruby claim impact must enter the authoritative
 cross-language family-`UNKNOWN` classifier.
 
+MATLAB discovery and bounded package inventory are implemented without a
+source frontend, licensed toolchain, or production dependency. Lowercase `.m`
+is inventory-only and never reaches the source store or parser. Only exact
+root/nested `resources/mpackage.json` bytes may enter the shared bounded,
+duplicate-key-rejecting JSON gate. The parser may emit one project-config unit,
+direct `matlab_add_on` declaration rows keyed by package name plus UUID, and
+typed `matlab_dependency_inventory` uncertainty. Provider/contact fields are
+discarded; compatibility strings are requirements, never installed or resolved
+versions. No path may invoke MATLAB, Octave, Simulink, project startup code,
+package installation, child processes, or network access, and no `.m` path may
+produce source IR, semantic facts, external symbols, families, or support.
+
+Assembly source admission is restricted to lowercase `.s`; uppercase `.S` is a
+language-specific exclusion because it conventionally requires preprocessing.
+The in-process parser is a byte/line/fact-bounded lexical scanner for one
+candidate profile: x86-64 ELF GNU as 2.46 AT&T syntax. It may emit a module,
+generic label units, containment IR, and selected source-visible directive,
+label, direct-call, and direct-jump facts. It must always emit an unproven-profile
+UNKNOWN, and macro/include/repetition, conditional, Intel-syntax, `.code16`,
+`.code32`, malformed, or over-budget evidence remains typed uncertainty. The
+scanner never assembles, preprocesses, links, executes, reads include targets,
+spawns a child, or accesses the network; lexical facts cannot support a family.
+
+Scratch remains outside product discovery and indexing. The disconnected
+`adapters/languages/scratch.rs` prerequisite accepts only caller-supplied classic
+single-disk, non-ZIP64 `.sb3` bytes, validates bounded central-directory/path/
+size/ratio/JSON structure, rejects encryption, links, traversal, duplicate
+paths, and unsupported compression, and parses only a stored root
+`project.json` without extraction. It is not a general ZIP reader and does not
+create a language token, source document, code unit, IR, fact, dependency, or
+family. A binary-document port and a maintained ZIP/deflate qualification are
+mandatory before `.sb3` discovery may be added.
+
 Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
 internals, Python AST nodes, and runtime trace payloads must be translated into
 RepoGrammar-owned facts at the adapter boundary before entering `core`. Do not
