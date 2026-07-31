@@ -5382,6 +5382,12 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::AdaConfig => Language::AdaConfig,
         DiscoveredLanguage::Fortran => Language::Fortran,
         DiscoveredLanguage::FortranConfig => Language::FortranConfig,
+        DiscoveredLanguage::Sql
+        | DiscoveredLanguage::SqlMigration
+        | DiscoveredLanguage::SqlSchema
+        | DiscoveredLanguage::SqlCatalog => Language::Sql,
+        DiscoveredLanguage::R => Language::R,
+        DiscoveredLanguage::RConfig => Language::RConfig,
         DiscoveredLanguage::Rust => Language::Rust,
         DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
@@ -5403,6 +5409,9 @@ fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
     if file.language == DiscoveredLanguage::FortranConfig {
         return false;
     }
+    if file.language == DiscoveredLanguage::RConfig {
+        return !is_r_dependency_config_path(&file.path);
+    }
     language_token_is_inventory_only(file.language.as_str())
 }
 
@@ -5421,6 +5430,9 @@ fn indexed_file_is_inventory_only(file: &IndexedFileRecord) -> bool {
     }
     if file.language == DiscoveredLanguage::FortranConfig.as_str() {
         return false;
+    }
+    if file.language == DiscoveredLanguage::RConfig.as_str() {
+        return !is_r_dependency_config_path(&file.path);
     }
     language_token_is_inventory_only(&file.language)
 }
@@ -5443,6 +5455,13 @@ fn is_ada_dependency_config_path(path: &str) -> bool {
     )
 }
 
+fn is_r_dependency_config_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "DESCRIPTION" | "NAMESPACE" | "renv.lock"
+    )
+}
+
 fn language_token_is_inventory_only(language: &str) -> bool {
     matches!(
         language,
@@ -5458,6 +5477,11 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "ada-config"
             | "fortran"
             | "fortran-config"
+            | "sql"
+            | "sql-migration"
+            | "sql-schema"
+            | "sql-catalog"
+            | "r"
     )
 }
 
@@ -7062,6 +7086,14 @@ mod tests {
             "Package.resolved",
             ".swift-version",
             "nested/Package@swift-6.3.3.swift",
+            "query.sql",
+            "db/migrations/001.sql",
+            "schema.sql",
+            "main.R",
+            "DESCRIPTION",
+            "NAMESPACE",
+            "renv.lock",
+            "nested/renv.lock",
         ] {
             assert!(!sync_path_requires_full_project_context(path), "{path}");
         }
@@ -7222,6 +7254,116 @@ mod tests {
             .expect("read Go families")
             .families
             .is_empty());
+    }
+
+    #[test]
+    fn default_index_reads_only_r_metadata_and_keeps_sql_and_r_source_inventory_only() {
+        let workspace = TempWorkspace::new("indexing-sql-r-inventory");
+        fs::create_dir_all(workspace.path().join("db/migrations"))
+            .expect("create SQL migration dir");
+        fs::create_dir_all(workspace.path().join("R")).expect("create R source dir");
+        fs::write(workspace.path().join("query.sql"), [0xff, 0xfe, 0xfd])
+            .expect("write generic SQL inventory");
+        fs::write(workspace.path().join("schema.sql"), [0xff, 0xfe, 0xfd])
+            .expect("write schema SQL inventory");
+        fs::write(
+            workspace.path().join("db/migrations/001_init.sql"),
+            [0xff, 0xfe, 0xfd],
+        )
+        .expect("write migration SQL inventory");
+        fs::write(workspace.path().join("R/main.R"), [0xff, 0xfe, 0xfd])
+            .expect("write binary R source inventory");
+        fs::write(
+            workspace.path().join("DESCRIPTION"),
+            "Package: demo\nImports: jsonlite\n",
+        )
+        .expect("write DESCRIPTION");
+        fs::write(
+            workspace.path().join("NAMESPACE"),
+            "importFrom(jsonlite, fromJSON)\n",
+        )
+        .expect("write NAMESPACE");
+        fs::write(
+            workspace.path().join("renv.lock"),
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"},"BiocGenerics":{"Package":"BiocGenerics","Version":"0.50.0","Source":"Bioconductor"},"private":{"Package":"private","Version":"1.0","Source":"GitHub","RemoteUrl":"https://user:UNIQUE_SECRET@example.invalid/repo"}}}"#,
+        )
+        .expect("write renv lock");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let source_store = RecordingSourceStore::new();
+
+        let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index SQL/R inventory");
+
+        assert_eq!(outcome.discovered_files, 7);
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 3);
+        assert_eq!(outcome.indexed_units, 3);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "DESCRIPTION".to_string(),
+                "NAMESPACE".to_string(),
+                "renv.lock".to_string(),
+            ]
+        );
+        let files = store
+            .list_active_indexed_files()
+            .expect("read SQL/R file inventory");
+        assert_eq!(
+            files
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("DESCRIPTION", "r-config"),
+                ("NAMESPACE", "r-config"),
+                ("R/main.R", "r"),
+                ("db/migrations/001_init.sql", "sql-migration"),
+                ("query.sql", "sql"),
+                ("renv.lock", "r-config"),
+                ("schema.sql", "sql-schema"),
+            ]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read R dependencies");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.ecosystem.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.resolved_version.as_deref(),
+                    dependency.directness.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("bioconductor", "BiocGenerics", Some("0.50.0"), "unknown"),
+                ("cran", "jsonlite", Some("1.8.8"), "unknown"),
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("read SQL/R families")
+            .families
+            .is_empty());
+        let debug = format!("{outcome:?}{files:?}{dependencies:?}");
+        assert!(!debug.contains("UNIQUE_SECRET"));
+        assert!(!debug.contains("example.invalid"));
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -8782,6 +8924,110 @@ mod tests {
         );
         assert_eq!(source_store.paths(), vec!["server.ts".to_string()]);
         assert_eq!(parser.paths(), vec!["server.ts".to_string()]);
+    }
+
+    #[test]
+    fn incremental_sync_replaces_and_removes_r_lock_dependencies_while_sql_stays_source_free() {
+        let workspace = TempWorkspace::new("indexing-sql-r-incremental");
+        fs::write(
+            workspace.path().join("DESCRIPTION"),
+            "Package: demo\nImports: jsonlite\n",
+        )
+        .expect("write DESCRIPTION");
+        fs::write(workspace.path().join("query.sql"), [0xff, 0xfe, 0xfd])
+            .expect("write SQL inventory");
+        let lock_path = workspace.path().join("renv.lock");
+        fs::write(
+            &lock_path,
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"}}}"#,
+        )
+        .expect("write base renv lock");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_families_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index base SQL/R inventory");
+        let base_dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read base R dependencies");
+        assert_eq!(base_dependencies.dependencies.len(), 1);
+        assert_eq!(
+            base_dependencies.dependencies[0]
+                .resolved_version
+                .as_deref(),
+            Some("1.8.8")
+        );
+
+        fs::write(workspace.path().join("query.sql"), [0xaa, 0xbb, 0xcc])
+            .expect("modify SQL inventory");
+        fs::write(
+            &lock_path,
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.9.0","Source":"Repository","Repository":"CRAN"},"BiocGenerics":{"Package":"BiocGenerics","Version":"0.52.0","Source":"Bioconductor"}}}"#,
+        )
+        .expect("replace renv lock");
+        let modified = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync modified SQL/R inventory");
+        assert_eq!(
+            modified.sync_report.as_ref().map(|report| report.sync_mode),
+            Some(IndexingSyncMode::Incremental)
+        );
+        assert_eq!(modified.parser_attempted_files, 1);
+        let replaced = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced R dependencies");
+        assert_eq!(replaced.dependencies.len(), 2);
+        assert!(replaced.dependencies.iter().any(|dependency| {
+            dependency.package_name == "jsonlite"
+                && dependency.resolved_version.as_deref() == Some("1.9.0")
+        }));
+        assert!(!replaced
+            .dependencies
+            .iter()
+            .any(|dependency| { dependency.resolved_version.as_deref() == Some("1.8.8") }));
+
+        fs::remove_file(&lock_path).expect("remove renv lock");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync removed renv lock");
+        assert_eq!(
+            removed.sync_report.as_ref().map(|report| report.sync_mode),
+            Some(IndexingSyncMode::Incremental)
+        );
+        assert_eq!(removed.parser_attempted_files, 0);
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after removal")
+                .dependencies
+                .is_empty()
+        );
+        assert!(store
+            .list_active_code_units()
+            .expect("read units after lock removal")
+            .units
+            .iter()
+            .any(|unit| unit.path == "DESCRIPTION"));
+        assert!(!source_store.paths().iter().any(|path| path == "query.sql"));
     }
 
     #[test]

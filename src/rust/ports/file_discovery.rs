@@ -45,6 +45,12 @@ pub enum DiscoveredLanguage {
     AdaConfig,
     Fortran,
     FortranConfig,
+    Sql,
+    SqlMigration,
+    SqlSchema,
+    SqlCatalog,
+    R,
+    RConfig,
     Rust,
     RustConfig,
 }
@@ -81,6 +87,12 @@ impl DiscoveredLanguage {
             Self::AdaConfig => "ada-config",
             Self::Fortran => "fortran",
             Self::FortranConfig => "fortran-config",
+            Self::Sql => "sql",
+            Self::SqlMigration => "sql-migration",
+            Self::SqlSchema => "sql-schema",
+            Self::SqlCatalog => "sql-catalog",
+            Self::R => "r",
+            Self::RConfig => "r-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
         }
@@ -269,6 +281,12 @@ mod tests {
         assert_eq!(DiscoveredLanguage::Ruby.as_str(), "ruby");
         assert_eq!(DiscoveredLanguage::RubyConfig.as_str(), "ruby-config");
         assert_ne!(DiscoveredLanguage::Ruby, DiscoveredLanguage::RubyConfig);
+        assert_eq!(DiscoveredLanguage::Sql.as_str(), "sql");
+        assert_eq!(DiscoveredLanguage::SqlMigration.as_str(), "sql-migration");
+        assert_eq!(DiscoveredLanguage::SqlSchema.as_str(), "sql-schema");
+        assert_eq!(DiscoveredLanguage::SqlCatalog.as_str(), "sql-catalog");
+        assert_eq!(DiscoveredLanguage::R.as_str(), "r");
+        assert_eq!(DiscoveredLanguage::RConfig.as_str(), "r-config");
         assert_eq!(
             SkippedReason::LanguageSpecificExclusion.as_str(),
             "language_specific_exclusion"

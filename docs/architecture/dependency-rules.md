@@ -321,6 +321,23 @@ any compiler/package manager. Free Pascal/Lazarus `.pp`/`.lpr`/`.lpi`/`.lpk`
 formats are not aliases for Delphi metadata and remain deferred. Dynamic,
 malformed, conflicting, or over-limit claims remain scoped
 `delphi_dependency_inventory` `UNKNOWN`s.
+SQL discovery is implemented by the pure normalized-path classifier in
+`adapters/languages/sql.rs`. All SQL tokens remain inventory-only: application
+indexing must not read SQL source, invoke a parser/client/database/migration
+tool, retain statement literals, select a dialect, or emit `sql_extension`
+rows. ADR-0035 records why PostgreSQL/SQLite ambiguity keeps dialect UNKNOWN.
+Any future dialect frontend or extension manifest requires a separate pinned,
+source-backed dependency and sandbox qualification.
+
+R discovery belongs in `adapters/languages/r.rs`; bounded metadata parsing
+belongs in `adapters/parsing/r.rs`. `.R` source is inventory-only. The parser may
+read only exact supplied `DESCRIPTION`, `NAMESPACE`, and `renv.lock` bytes and
+must not run R, parse/eval/source R code, profiles, renv, packages, native code,
+children, or network operations. DESCRIPTION/NAMESPACE cannot default to CRAN.
+Only explicit bounded renv CRAN/Bioconductor records may cross the parser port
+as language-neutral dependencies; remote/custom/URL/local source values must be
+discarded, never sanitized into an output surrogate. This slice uses existing
+Rust/serde_json APIs and authorizes no production dependency.
 
 Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
 internals, Python AST nodes, and runtime trace payloads must be translated into

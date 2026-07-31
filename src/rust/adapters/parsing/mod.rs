@@ -18,6 +18,7 @@ pub mod go;
 pub mod java;
 pub mod php;
 pub mod python;
+pub mod r;
 pub mod ruby;
 pub mod rust;
 pub mod swift;
@@ -38,6 +39,7 @@ pub struct RepoGrammarSourceParser {
     go: go::GoProjectConfigParser,
     php: php::PhpConfigParser,
     ruby: RubyConfigParser,
+    r: r::RProjectConfigParser,
     rust: rust::RustSyntaxParser,
     swift: swift::SwiftProjectConfigParser,
     visual_basic: visual_basic::VisualBasicProjectConfigParser,
@@ -101,6 +103,10 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Fortran => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::FortranConfig => self.fortran.parse(document),
             crate::core::model::Language::RubyConfig => self.ruby.parse(document),
+            crate::core::model::Language::RConfig => self.r.parse(document),
+            crate::core::model::Language::Sql | crate::core::model::Language::R => {
+                Err(ParseError::UnsupportedLanguage)
+            }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -164,6 +170,10 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::RubyConfig => {
                 self.ruby.parse_with_context(document, context)
             }
+            crate::core::model::Language::RConfig => self.r.parse_with_context(document, context),
+            crate::core::model::Language::Sql | crate::core::model::Language::R => {
+                Err(ParseError::UnsupportedLanguage)
+            }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -216,6 +226,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::RubyConfig => {
                 self.ruby.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::RConfig => {
+                self.r.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)
@@ -449,6 +462,30 @@ mod tests {
         }
     }
 
+    fn sql_r_inventory_document(language: Language) -> SourceDocument<'static> {
+        let path = match &language {
+            Language::Sql => "schema.sql",
+            Language::R => "main.R",
+            Language::RConfig => "renv.lock",
+            _ => unreachable!("SQL/R inventory helper accepts only SQL/R tokens"),
+        };
+        let text = if language == Language::RConfig {
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"}}}"#
+        } else {
+            "inventory only"
+        };
+        SourceDocument {
+            path,
+            language,
+            content_hash: ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            text,
+        }
+    }
+
     #[test]
     fn product_parser_rejects_go_source_but_statically_parses_go_mod() {
         let parser = RepoGrammarSourceParser::default();
@@ -467,6 +504,30 @@ mod tests {
             .expect("statically parse go.mod project config");
         assert_eq!(report.units.len(), 1);
         assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+    }
+
+    #[test]
+    fn product_parser_rejects_sql_and_r_source_but_parses_exact_r_metadata() {
+        let parser = RepoGrammarSourceParser::default();
+        for language in [Language::Sql, Language::R] {
+            assert_eq!(
+                parser.parse(sql_r_inventory_document(language)),
+                Err(ParseError::UnsupportedLanguage)
+            );
+        }
+        let output = parser
+            .parse_with_context_output(
+                sql_r_inventory_document(Language::RConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("exact renv.lock must return bounded dependency evidence");
+        assert_eq!(output.report.units.len(), 1);
+        assert_eq!(output.report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert_eq!(output.dependencies.len(), 1);
+        assert_eq!(
+            output.dependencies[0].package.ecosystem,
+            crate::core::model::DependencyEcosystem::Cran
+        );
     }
 
     #[test]

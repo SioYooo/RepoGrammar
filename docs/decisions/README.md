@@ -44,3 +44,5 @@ Current accepted ADRs:
 - ADR-0032: Delphi-qualified Object Pascal discovery and package inventory.
 - ADR-0033: Ada source-free discovery and Alire inventory.
 - ADR-0034: Fortran source-form discovery and fpm inventory.
+- ADR-0035: SQL source-free artifact inventory and dialect abstention.
+- ADR-0036: R static package metadata inventory.

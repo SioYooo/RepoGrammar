@@ -68,6 +68,9 @@ pub enum Language {
     AdaConfig,
     Fortran,
     FortranConfig,
+    Sql,
+    R,
+    RConfig,
     Rust,
     RustConfig,
     Unknown(String),
@@ -103,6 +106,9 @@ impl Language {
             Self::AdaConfig => "ada-config",
             Self::Fortran => "fortran",
             Self::FortranConfig => "fortran-config",
+            Self::Sql => "sql",
+            Self::R => "r",
+            Self::RConfig => "r-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
             Self::Unknown(value) => value.as_str(),
@@ -361,6 +367,9 @@ mod tests {
         assert_eq!(Language::PhpConfig.as_str(), "php-config");
         assert_eq!(Language::Ruby.as_str(), "ruby");
         assert_eq!(Language::RubyConfig.as_str(), "ruby-config");
+        assert_eq!(Language::Sql.as_str(), "sql");
+        assert_eq!(Language::R.as_str(), "r");
+        assert_eq!(Language::RConfig.as_str(), "r-config");
         assert_eq!(Language::Swift.as_str(), "swift");
         assert_eq!(Language::SwiftConfig.as_str(), "swift-config");
         assert_eq!(Language::VisualBasic.as_str(), "visual-basic");

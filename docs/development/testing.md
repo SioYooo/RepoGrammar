@@ -265,6 +265,24 @@ allowed.
   file-manifest-only CLI mode for deferred inputs, syntax mode for parsed
   manifests, no family/support claims, and incremental copy-forward,
   replacement, and removal of evidence-bound rows.
+- SQL discovery tests must cover exact `.sql` case, normalized-path rejection,
+  generic/migration/schema/catalog precedence, binary bytes, source-store/parser
+  zero-call behavior, deterministic raw-byte metadata, CLI
+  `file_manifest_only` mode, incremental replace/remove, legacy-claim purge, and
+  absence of SQL literals or absolute paths. Tests must prove that path labels
+  do not select PostgreSQL, SQLite, or another dialect and that no database,
+  client, migration tool, extension dependency, semantic fact, or family runs.
+- R discovery/config tests must cover exact `.R`, `DESCRIPTION`, `NAMESPACE`,
+  and `renv.lock`; R-specific managed-library/IDE exclusions; binary source;
+  source-store reads limited to the three metadata basenames; DCF continuation,
+  duplicate/malformed fields, official dependency fields, literal namespace
+  imports, bounded unique-member JSON, and exact explicit CRAN/Bioconductor
+  source/version admission. Byte, line, field, JSON, and dependency bounds need
+  exact/+1 tests. Remote/custom/URL/local sources must be omitted with typed
+  UNKNOWN and no value leakage. Persistence tests must cover unknown
+  directness, copy-forward, changed-lock replacement, stale-row removal, CLI
+  modes, and zero family/support output without invoking R, renv, profiles,
+  packages, native code, children, or network.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, mutable top-level database creation, active
@@ -1115,8 +1133,8 @@ default `init` active-index bootstrap, `--state-only` lifecycle repair,
 default auto-sync-after-index sequencing, explicit `--no-autosync`, and
 bootstrap failure preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
-TS/JS, Python, Go, PHP, Ruby, Swift, Visual Basic .NET, and Object Pascal/Delphi
-discovery filtering/hash/path-safety behavior,
+TS/JS, Python, Go, PHP, Ruby, Swift, Visual Basic .NET, Object Pascal/Delphi,
+Ada, Fortran, SQL, and R discovery filtering/hash/path-safety behavior,
 SQLite storage migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware
