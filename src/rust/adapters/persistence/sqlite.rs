@@ -8915,6 +8915,42 @@ mod tests {
     }
 
     #[test]
+    fn composer_lock_dependency_round_trips_with_static_evidence_level() {
+        let workspace = TempWorkspace::new("sqlite-composer-dependency");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("composer.lock"))
+            .expect("record Composer lock");
+        store
+            .record_code_unit(&generation, &code_unit("composer.lock"))
+            .expect("record Composer project-config unit");
+        let mut composer = dependency("composer.lock");
+        composer.dependency_id = "dependency:composer.lock:symfony-console".to_string();
+        composer.ecosystem = "composer".to_string();
+        composer.package_name = "symfony/console".to_string();
+        composer.requirement = None;
+        composer.resolved_version = Some("v7.2.1".to_string());
+        composer.direct = false;
+        composer.evidence_level = "lockfile_resolved".to_string();
+        composer.note =
+            "bounded static Composer lock entry; not proof of runtime selection".to_string();
+        DependencyStore::record_dependency(&store, &generation, &composer)
+            .expect("record Composer dependency");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        assert_eq!(
+            store
+                .list_active_dependencies()
+                .expect("list Composer dependency")
+                .dependencies,
+            vec![composer]
+        );
+    }
+
+    #[test]
     fn active_dependency_reads_reject_tampered_evidence_levels() {
         let workspace = TempWorkspace::new("sqlite-invalid-dependency-read");
         let store = store(&workspace);

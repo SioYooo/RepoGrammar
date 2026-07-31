@@ -5,7 +5,9 @@
 //! cannot directly support a family or prove library behavior.
 
 use super::CPP_ANCHOR_ENGINE;
-use crate::adapters::parsing::{ir_edges_for_units, ir_nodes_for_units};
+use crate::adapters::parsing::{
+    ir_edges_for_units, ir_nodes_for_units, json_members::has_duplicate_or_excess_members,
+};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, DependencyEcosystem, DependencyEvidenceLevel,
     DependencyRecord, DependencyScope, DependencySnapshot, DependencyVersion, Evidence,
@@ -24,9 +26,13 @@ const COMPILE_COMMANDS_TU_LIMIT: usize = 100;
 /// manifest. Excess input is represented by a typed UNKNOWN rather than an
 /// unbounded allocation or a falsely complete inventory.
 const CPP_CONFIG_DEPENDENCY_LIMIT: usize = 2_000;
-const CPP_CONFIG_JSON_MEMBER_LIMIT: usize = 8_192;
-const CPP_CONFIG_JSON_KEY_LIMIT: usize = 256;
-const CPP_CONFIG_JSON_DEPTH_LIMIT: usize = 128;
+#[cfg(test)]
+const CPP_CONFIG_JSON_MEMBER_LIMIT: usize =
+    crate::adapters::parsing::json_members::JSON_MEMBER_LIMIT;
+#[cfg(test)]
+const CPP_CONFIG_JSON_KEY_LIMIT: usize = crate::adapters::parsing::json_members::JSON_KEY_LIMIT;
+#[cfg(test)]
+const CPP_CONFIG_JSON_DEPTH_LIMIT: usize = crate::adapters::parsing::json_members::JSON_DEPTH_LIMIT;
 
 pub(super) fn parse(document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
     parse_output(document).map(|output| output.report)
@@ -278,7 +284,7 @@ fn vcpkg_inventory(
     document: &SourceDocument<'_>,
     unit: &CodeUnit,
 ) -> Result<(Vec<SemanticFact>, Vec<DependencyRecord>), ParseError> {
-    let Ok(false) = JsonMemberScanner::has_duplicate_or_excess_members(document.text) else {
+    let Ok(false) = has_duplicate_or_excess_members(document.text) else {
         return malformed_vcpkg_inventory(document, unit);
     };
     let Ok(serde_json::Value::Object(value)) =
@@ -425,156 +431,6 @@ fn malformed_vcpkg_inventory(
         ],
         Vec::new(),
     ))
-}
-
-struct JsonMemberScanner<'a> {
-    text: &'a str,
-    bytes: &'a [u8],
-    cursor: usize,
-    member_count: usize,
-}
-
-impl<'a> JsonMemberScanner<'a> {
-    fn has_duplicate_or_excess_members(text: &'a str) -> Result<bool, ()> {
-        let mut scanner = Self {
-            text,
-            bytes: text.as_bytes(),
-            cursor: 0,
-            member_count: 0,
-        };
-        let duplicate = scanner.scan_value(0)?;
-        scanner.skip_whitespace();
-        (scanner.cursor == scanner.bytes.len())
-            .then_some(duplicate)
-            .ok_or(())
-    }
-
-    fn scan_value(&mut self, depth: usize) -> Result<bool, ()> {
-        if depth > CPP_CONFIG_JSON_DEPTH_LIMIT {
-            return Err(());
-        }
-        self.skip_whitespace();
-        match self.bytes.get(self.cursor).copied() {
-            Some(b'{') => self.scan_object(depth + 1),
-            Some(b'[') => self.scan_array(depth + 1),
-            Some(b'"') => {
-                self.scan_string()?;
-                Ok(false)
-            }
-            Some(_) => {
-                let start = self.cursor;
-                while self.bytes.get(self.cursor).is_some_and(|byte| {
-                    !byte.is_ascii_whitespace() && !matches!(byte, b',' | b']' | b'}')
-                }) {
-                    self.cursor += 1;
-                }
-                (self.cursor > start).then_some(false).ok_or(())
-            }
-            None => Err(()),
-        }
-    }
-
-    fn scan_object(&mut self, depth: usize) -> Result<bool, ()> {
-        self.cursor += 1;
-        self.skip_whitespace();
-        if self.consume(b'}') {
-            return Ok(false);
-        }
-        let mut keys = BTreeSet::new();
-        loop {
-            let (start, end) = self.scan_string()?;
-            let key = serde_json::from_str::<String>(&self.text[start..end]).map_err(|_| ())?;
-            self.member_count += 1;
-            if self.member_count > CPP_CONFIG_JSON_MEMBER_LIMIT
-                || key.len() > CPP_CONFIG_JSON_KEY_LIMIT
-            {
-                return Err(());
-            }
-            if !keys.insert(key) {
-                return Ok(true);
-            }
-            self.skip_whitespace();
-            if !self.consume(b':') {
-                return Err(());
-            }
-            if self.scan_value(depth)? {
-                return Ok(true);
-            }
-            self.skip_whitespace();
-            if self.consume(b'}') {
-                return Ok(false);
-            }
-            if !self.consume(b',') {
-                return Err(());
-            }
-            self.skip_whitespace();
-        }
-    }
-
-    fn scan_array(&mut self, depth: usize) -> Result<bool, ()> {
-        self.cursor += 1;
-        self.skip_whitespace();
-        if self.consume(b']') {
-            return Ok(false);
-        }
-        loop {
-            if self.scan_value(depth)? {
-                return Ok(true);
-            }
-            self.skip_whitespace();
-            if self.consume(b']') {
-                return Ok(false);
-            }
-            if !self.consume(b',') {
-                return Err(());
-            }
-            self.skip_whitespace();
-        }
-    }
-
-    fn scan_string(&mut self) -> Result<(usize, usize), ()> {
-        let start = self.cursor;
-        if !self.consume(b'"') {
-            return Err(());
-        }
-        while let Some(byte) = self.bytes.get(self.cursor).copied() {
-            match byte {
-                b'"' => {
-                    self.cursor += 1;
-                    return Ok((start, self.cursor));
-                }
-                b'\\' => {
-                    self.cursor += 1;
-                    if self.bytes.get(self.cursor).is_none() {
-                        return Err(());
-                    }
-                    self.cursor += 1;
-                }
-                0x00..=0x1f => return Err(()),
-                _ => self.cursor += 1,
-            }
-        }
-        Err(())
-    }
-
-    fn skip_whitespace(&mut self) {
-        while self
-            .bytes
-            .get(self.cursor)
-            .is_some_and(u8::is_ascii_whitespace)
-        {
-            self.cursor += 1;
-        }
-    }
-
-    fn consume(&mut self, expected: u8) -> bool {
-        if self.bytes.get(self.cursor) == Some(&expected) {
-            self.cursor += 1;
-            true
-        } else {
-            false
-        }
-    }
 }
 
 fn conanfile_inventory(
@@ -1034,26 +890,21 @@ mod tests {
     fn vcpkg_json_member_scanner_bounds_are_inclusive() {
         let maximum_key = "k".repeat(CPP_CONFIG_JSON_KEY_LIMIT);
         assert_eq!(
-            JsonMemberScanner::has_duplicate_or_excess_members(&format!(
-                "{{\"{maximum_key}\":null}}"
-            )),
+            has_duplicate_or_excess_members(&format!("{{\"{maximum_key}\":null}}")),
             Ok(false)
         );
         let oversized_key = "k".repeat(CPP_CONFIG_JSON_KEY_LIMIT + 1);
-        assert!(JsonMemberScanner::has_duplicate_or_excess_members(&format!(
-            "{{\"{oversized_key}\":null}}"
-        ))
-        .is_err());
+        assert!(has_duplicate_or_excess_members(&format!("{{\"{oversized_key}\":null}}")).is_err());
 
         let maximum_members = (0..CPP_CONFIG_JSON_MEMBER_LIMIT)
             .map(|index| format!("\"k{index}\":null"))
             .collect::<Vec<_>>()
             .join(",");
         assert_eq!(
-            JsonMemberScanner::has_duplicate_or_excess_members(&format!("{{{maximum_members}}}")),
+            has_duplicate_or_excess_members(&format!("{{{maximum_members}}}")),
             Ok(false)
         );
-        assert!(JsonMemberScanner::has_duplicate_or_excess_members(&format!(
+        assert!(has_duplicate_or_excess_members(&format!(
             "{{{maximum_members},\"overflow\":null}}"
         ))
         .is_err());
@@ -1063,16 +914,13 @@ mod tests {
             "[".repeat(CPP_CONFIG_JSON_DEPTH_LIMIT),
             "]".repeat(CPP_CONFIG_JSON_DEPTH_LIMIT)
         );
-        assert_eq!(
-            JsonMemberScanner::has_duplicate_or_excess_members(&maximum_depth),
-            Ok(false)
-        );
+        assert_eq!(has_duplicate_or_excess_members(&maximum_depth), Ok(false));
         let excessive_depth = format!(
             "{}null{}",
             "[".repeat(CPP_CONFIG_JSON_DEPTH_LIMIT + 1),
             "]".repeat(CPP_CONFIG_JSON_DEPTH_LIMIT + 1)
         );
-        assert!(JsonMemberScanner::has_duplicate_or_excess_members(&excessive_depth).is_err());
+        assert!(has_duplicate_or_excess_members(&excessive_depth).is_err());
     }
 
     #[test]

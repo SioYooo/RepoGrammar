@@ -11705,10 +11705,10 @@ class User(Base):
         let mut php_source = vec![0xff, 0xfe, 0xfd];
         php_source.extend_from_slice(b"php-source-must-not-be-read");
         fs::write(workspace.path().join("main.php"), php_source).expect("write binary PHP source");
-        let mut composer_config = vec![0xff, 0xfe, 0xfd];
-        composer_config.extend_from_slice(b"php-config-must-not-be-read");
-        fs::write(workspace.path().join("composer.json"), composer_config)
-            .expect("write binary Composer config");
+        let mut phpunit_config = vec![0xff, 0xfe, 0xfd];
+        phpunit_config.extend_from_slice(b"php-config-must-not-be-read");
+        fs::write(workspace.path().join("phpunit.xml"), phpunit_config)
+            .expect("write binary deferred PHPUnit config");
         let runtime = ProductCliRuntime;
 
         let init = run_with_runtime(
@@ -11760,7 +11760,7 @@ class User(Base):
                     )
                 })
                 .collect::<Vec<_>>(),
-            vec![("composer.json", "php-config"), ("main.php", "php")]
+            vec![("main.php", "php"), ("phpunit.xml", "php-config")]
         );
         assert!(!files.stdout.contains("php-source-must-not-be-read"));
         assert!(!files.stdout.contains("php-config-must-not-be-read"));
