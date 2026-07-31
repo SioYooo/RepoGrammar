@@ -577,12 +577,12 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `11`. Existing pre-release schema `1`
-through `10` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `12`. Existing pre-release schema `1`
+through `11` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
-Schema `11` adds the `dependency_records` table for the ADR-0030
+Schema `11` added the `dependency_records` table for the ADR-0030
 language-neutral dependency inventory. Each row is generation-scoped and
 source-evidence-bound with `PRIMARY KEY (generation_id, dependency_id)` and
 cascading foreign keys to its generation, code unit, and indexed file. The
@@ -593,6 +593,12 @@ optionality flags; and the evidence path, hash, byte range, and note. A
 validation both reject unknown tokens, invalid paths or hashes, evidence ranges
 outside the same-generation code unit, and source/code-unit/file hash mismatch.
 
+Schema `12` adds distinct closed `vcpkg` and `conan` ecosystem tokens. This
+prevents equal package names from separate C/C++ registries from becoming one
+identity. Because the repository database is fully derived, an existing schema
+11 database follows the same explicit stale-read/full-resync-rebuild policy as
+all earlier schemas; no user-authored data is migrated or discarded.
+
 Dependency writes also create an `external_dependency`
 `derived_record_dependencies` row. Replacing or removing the evidence path
 therefore dirties the record until bounded recomputation rewrites it, and
@@ -600,7 +606,9 @@ generation validation remains fail-closed. `DependencyStore` exposes a
 deterministically ordered internal active-generation read model and revalidates
 every hydrated row. Writers include the safe Cargo metadata stage and bounded
 static-manifest parser output such as root npm `package.json` and Python
-`pyproject.toml`/`setup.cfg`/static-`setup.py` declarations.
+`pyproject.toml`/`setup.cfg`/static-`setup.py` declarations, plus bounded root
+`vcpkg.json` names/minimum requirements and exact Conan 2.31.1 `[requires]`
+references.
 Incremental indexing recomputes provider-owned Cargo rows and copies a static
 row only when its unchanged evidence code unit also copies. There is
 intentionally no public CLI/MCP raw package-name projection in this schema

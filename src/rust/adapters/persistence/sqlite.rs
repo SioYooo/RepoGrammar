@@ -4904,7 +4904,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'dependency_records_v11', datetime('now'))",
+             VALUES (?1, 'dependency_ecosystems_v12', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -6406,7 +6406,7 @@ CREATE TABLE IF NOT EXISTS semantic_facts (
 CREATE TABLE IF NOT EXISTS dependency_records (
     generation_id TEXT NOT NULL,
     dependency_id TEXT NOT NULL CHECK (dependency_id <> ''),
-    ecosystem TEXT NOT NULL CHECK (ecosystem IN ('pypi', 'npm', 'maven', 'nuget', 'cargo', 'go_modules', 'composer', 'rubygems', 'swift_package_manager', 'cran', 'bioconductor', 'delphi_package', 'alire', 'fpm', 'matlab_add_on', 'sql_extension', 'scratch_extension', 'native_system')),
+    ecosystem TEXT NOT NULL CHECK (ecosystem IN ('pypi', 'npm', 'maven', 'nuget', 'cargo', 'go_modules', 'composer', 'rubygems', 'swift_package_manager', 'cran', 'bioconductor', 'delphi_package', 'alire', 'fpm', 'matlab_add_on', 'sql_extension', 'scratch_extension', 'vcpkg', 'conan', 'native_system')),
     package_name TEXT NOT NULL CHECK (package_name <> ''),
     requirement TEXT,
     resolved_version TEXT,

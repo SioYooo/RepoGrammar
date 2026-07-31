@@ -127,7 +127,8 @@ pub trait SourceParser {
 
     /// Parse with project context and return any indexing-only metadata emitted
     /// by that same frontend request. The default preserves existing parser
-    /// behavior; only the Python frontend currently attaches metadata.
+    /// behavior; bounded manifest frontends attach only metadata validated from
+    /// supplied repository bytes.
     fn parse_with_context_output(
         &self,
         document: SourceDocument<'_>,

@@ -36,7 +36,7 @@ the bounded root npm `package.json` parser, which now emits direct declarations
 for production, development, optional, and peer dependency sections without
 executing Node, npm, package scripts, or dependency code. Peer dependencies use
 the shared `unknown` scope unless the model later gains a reviewed peer token.
-Schema v11 persists both consumers with same-generation source evidence. On an
+Schema v12 persists these consumers with same-generation source evidence. On an
 unrelated incremental source edit, Cargo output is recomputed while unchanged
 static npm declarations copy forward with their evidence unit, retaining one
 fresh record. The Python project-config frontend now emits PyPI
@@ -50,8 +50,14 @@ non-authoritative, malformed, or over-budget dependency fields become
 evidence-bound incremental copy-forward as npm. These are project-model slices,
 not Python, Rust, JavaScript, or TypeScript language completion. Source-free
 public projection, generic provider ports, conflict reporting, lockfile
-resolution, Poetry/PDM/uv-specific metadata, C/C++ migration, and other
-ecosystems remain open atomic modules.
+resolution, Poetry/PDM/uv-specific metadata, wider C/C++ schemas, and other
+ecosystems remain open atomic modules. The bounded existing C/C++ project-model
+lane now also emits distinct, grammar-valid `vcpkg` package names/minimum
+requirements and exact Conan 2 `name/version` requirements without executing
+either package manager. Scope remains `unknown`; uninterpreted vcpkg fields,
+malformed Conan sections, Conan ranges/revisions/user-channel references,
+conflicts, and overflow abstain. This advances C0 project inventory but does not
+complete C or C++.
 
 ## Goal and non-goal
 

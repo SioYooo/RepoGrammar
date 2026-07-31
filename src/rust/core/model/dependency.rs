@@ -31,6 +31,8 @@ pub enum DependencyEcosystem {
     MatlabAddOn,
     SqlExtension,
     ScratchExtension,
+    Vcpkg,
+    Conan,
     NativeSystem,
 }
 
@@ -54,6 +56,8 @@ impl DependencyEcosystem {
             Self::MatlabAddOn => "matlab_add_on",
             Self::SqlExtension => "sql_extension",
             Self::ScratchExtension => "scratch_extension",
+            Self::Vcpkg => "vcpkg",
+            Self::Conan => "conan",
             Self::NativeSystem => "native_system",
         }
     }
@@ -77,6 +81,8 @@ impl DependencyEcosystem {
             "matlab_add_on" => Ok(Self::MatlabAddOn),
             "sql_extension" => Ok(Self::SqlExtension),
             "scratch_extension" => Ok(Self::ScratchExtension),
+            "vcpkg" => Ok(Self::Vcpkg),
+            "conan" => Ok(Self::Conan),
             "native_system" => Ok(Self::NativeSystem),
             _ => Err(format!("unsupported dependency ecosystem {value}")),
         }
@@ -449,6 +455,8 @@ mod tests {
             DependencyEcosystem::MatlabAddOn,
             DependencyEcosystem::SqlExtension,
             DependencyEcosystem::ScratchExtension,
+            DependencyEcosystem::Vcpkg,
+            DependencyEcosystem::Conan,
             DependencyEcosystem::NativeSystem,
         ];
         for ecosystem in ecosystems {

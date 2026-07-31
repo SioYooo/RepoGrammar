@@ -110,7 +110,10 @@ source-ordered issue vector consumed monotonically by `mod.rs`; it never
 resolves aliases or copies suite names into case facts. Bounded
 `compile_commands.json`, `vcpkg.json`, and
 `conanfile.txt` decoding stays in `cpp/project_config.rs`, which returns only
-RepoGrammar-owned project-config facts through the parser port.
+RepoGrammar-owned project-config facts and bounded vcpkg/Conan generic
+dependency records through the parser port. It never invokes either package
+manager or interprets unsupported conditional, feature, revision, range, or
+build semantics.
 
 C# Tree-sitter nodes stay in `src/rust/adapters/parsing/csharp.rs`; the pure
 `csharp/test_data.rs` helper owns xUnit `MemberData` argument classification and

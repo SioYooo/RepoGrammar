@@ -95,6 +95,12 @@ records for modules, classes/structs, and functions plus GoogleTest test cases
 and fixtures, Catch2/doctest test cases, and Boost.Test cases and suites when
 include-evidence-gated registration-macro shapes are present, and `cpp-config`
 `PROJECT_CONFIG` records for `compile_commands.json`/`vcpkg.json`/`conanfile.txt`.
+The root vcpkg and Conan configuration units may also own bounded generic
+dependency records: vcpkg package names and bounded minimum-version constraints
+use ecosystem `vcpkg`, while exact Conan 2 `[requires]` `name/version`
+references use ecosystem `conan` and retain the version as a requirement. Both
+use unknown scope and prove no build,
+installed graph, external symbol, behavior contract, or family membership.
 The Rust v0.2 preview persists Tree-sitter Rust structural records
 for modules, structs, enums, traits, impl blocks, functions, methods, and tests,
 plus RepoGrammar self-dogfood roles and — in any repository — general framework
@@ -193,7 +199,9 @@ Current default C/C++ indexing can likewise store syntax-origin `FRAMEWORK_ROLE`
 facts for GoogleTest/Catch2/doctest/Boost.Test cases, fixtures, and suites,
 `STRUCTURAL` exact-anchor facts for include-evidence-gated registration macros,
 `PROJECT_CONFIG` facts for `compile_commands.json`/`vcpkg.json`/`conanfile.txt`
-inventory, and typed `UNKNOWN` facts for unresolved framework identity,
+inventory, bounded manifest-declared vcpkg/Conan dependency rows, and typed
+`UNKNOWN` facts for unresolved or partial dependency inventory, framework
+identity,
 Catch2-vs-doctest conflicts, build variants, macro boundaries, moc/generated
 code, and dispatch. Only application-layer `repogrammar-cpp-derived`
 `DATAFLOW_DERIVED` facts with exact whitelisted targets and

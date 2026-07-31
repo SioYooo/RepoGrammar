@@ -107,6 +107,11 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context_output(document, context)
             }
+            crate::core::model::Language::C
+            | crate::core::model::Language::Cpp
+            | crate::core::model::Language::CppConfig => {
+                self.cpp.parse_with_context_output(document, context)
+            }
             _ => self
                 .parse_with_context(document, context)
                 .map(SourceParseOutput::from_report),

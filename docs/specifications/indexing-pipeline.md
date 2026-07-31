@@ -409,9 +409,17 @@ truly wraps the file, has no alternative branch, and immediately defines the
 same identifier with an empty object-like `#define`; ordinary partial or
 value-defining `#ifndef` regions remain build variants. `#pragma once` is not a
 conditional. Tree-sitter ERROR-node regions are blocking `cpp_macro_boundary`.
-Qt `Q_OBJECT`/moc, string SIGNAL/SLOT dispatch, function-pointer dispatch, and
-`compile_commands.json`/`vcpkg.json`/`conanfile.txt` project configuration stay
-non-blocking subclaims or structural `PROJECT_CONFIG` inventory. The application
+Qt `Q_OBJECT`/moc, string SIGNAL/SLOT dispatch, and function-pointer dispatch
+stay non-blocking subclaims. `compile_commands.json` remains structural
+`PROJECT_CONFIG` inventory. Bounded, grammar-valid root `vcpkg.json` names and
+minimum `version>=` requirements plus exact Conan 2 `[requires]`
+`name/version` references additionally emit `manifest_declared` dependency
+records under distinct ecosystems with `scope=unknown`. Unsupported vcpkg
+fields, malformed Conan sections, Conan ranges/revisions/user-channel
+references, conflicts, and overflow emit `cpp_dependency_inventory` `UNKNOWN`.
+The v2 project-config method also rejects duplicate vcpkg JSON members through a
+bounded member/depth/key scan before normal JSON decoding. These records remain
+non-supporting context. The application
 layer promotes accepted C/C++ anchors to `DATAFLOW_DERIVED` support facts with
 engine `repogrammar-cpp-derived` and method `bounded_tree_sitter_c_cpp_anchor_v1`,
 carrying `provider_resolved=false`,
@@ -965,7 +973,7 @@ records, records provider `UNKNOWN`s when Cargo or project
 configuration is unavailable, and does not execute build scripts or procedural
 macros. These facts are context only: package metadata, targets, features, and
 dependencies do not directly prove family membership. The generic records are
-persisted in schema v11 as generation-scoped, evidence-bound dependency rows.
+persisted in schema v12 as generation-scoped, evidence-bound dependency rows.
 The application storage boundary can read the deterministically ordered active
 generation back through `DependencyStore`; raw package names remain internal,
 and a source-free public CLI/MCP projection is a separate follow-up module.
@@ -1253,7 +1261,7 @@ copy forward only when their path and evidence code unit also copy forward,
 while Cargo rows never copy because the Cargo provider recomputes them later in
 the same generation. Changed or removed manifests therefore cannot retain stale
 dependency records, and an unrelated TS/JS source edit preserves exactly one
-copy of each unchanged npm declaration.
+copy of each unchanged npm, PyPI, vcpkg, or Conan declaration.
 
 The project-context gate distinguishes *content-only modifications* from
 *path-set changes*. A modified non-inventory file is one whose repo-relative path

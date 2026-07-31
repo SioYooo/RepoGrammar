@@ -8,8 +8,10 @@
 //! and Boost suite-state validation, and typed UNKNOWN facts for every
 //! macro-boundary, build-variant, generated-code, or dispatch semantic that
 //! remains unresolved. `compile_commands.json`, `vcpkg.json`, and
-//! `conanfile.txt` are parsed as structural `PROJECT_CONFIG` inventory only,
-//! never as family support.
+//! `conanfile.txt` are parsed as structural `PROJECT_CONFIG` inventory; bounded
+//! vcpkg names and exact Conan references additionally become
+//! manifest-declared dependency inventory, never family support or resolved
+//! library behavior.
 
 mod preprocessor;
 mod project_config;
@@ -23,7 +25,7 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    SourceDocument, SourceParser,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser};
@@ -69,6 +71,18 @@ impl SourceParser for CppSyntaxParser {
         let mut scanner = CppTreeScanner::new(document, root);
         scanner.scan_tree(root)?;
         scanner.finish()
+    }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        if document.language == Language::CppConfig {
+            return project_config::parse_output(document);
+        }
+        self.parse_with_context(document, context)
+            .map(SourceParseOutput::from_report)
     }
 }
 

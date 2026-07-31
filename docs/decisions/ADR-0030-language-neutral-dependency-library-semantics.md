@@ -80,6 +80,46 @@ byte bounded; the revisioned private response is capped at 2 MiB and becomes a
 typed resource-limit outcome instead of crossing the host boundary.
 Parser-origin records can never claim `provider_resolved`.
 
+The first C/C++ static-manifest consumers are the existing root `vcpkg.json`
+and `conanfile.txt` readers. They use distinct `vcpkg` and `conan` ecosystem
+tokens so equal package spellings from different registries never collapse into
+one identity. vcpkg inventory accepts only bounded names under the official
+lowercase/digit/hyphen grammar, either as string entries or objects; a bounded
+official `version>=` string is retained as a minimum requirement. It does not
+interpret features, host/build selection, registries, baselines, top-level
+overrides, or platform expressions. Conan inventory accepts only direct exact
+Conan 2 lowercase `name/version` entries in `[requires]`.
+Ranges, recipe revisions, user/channel references, malformed references,
+duplicate package names with conflicting requirements, uninterpreted vcpkg
+object fields, malformed Conan section syntax, and record-limit overflow become
+`cpp_dependency_inventory` typed `UNKNOWN`. Valid names remain inventoried when
+only wider semantics are unknown. Both paths use `scope=unknown`, execute no
+package-manager or project code, and preserve their legacy `PROJECT_CONFIG`
+facts as non-family context.
+
+The C/C++ project-config provenance method is
+`bounded_cpp_project_inventory_v2`. Before vcpkg decoding, a non-executing JSON
+member scanner rejects duplicate object keys, nesting beyond 128 levels, more
+than 8,192 object members, or decoded keys above 256 bytes. This prevents JSON
+map overwrite from turning ambiguous manifests into apparently complete
+inventory. The normal `serde_json` parse remains the syntax authority after
+that admission gate.
+
+The qualified format snapshot is fixed for auditability:
+
+- Microsoft Learn `vcpkg.json` Reference, retrieved 2026-08-01. The accepted
+  subset uses its lowercase package-name grammar and dependency `name` plus
+  bounded `version>=` fields. Other dependency-object fields remain inventory
+  context with `UNKNOWN` semantics.
+- Conan 2.31.1 package-reference grammar and `conanfile.txt` `[requires]`,
+  retrieved 2026-08-01. Only lowercase 2–101 byte `name/version` references are
+  admitted. Version ranges, revisions, user/channel references, and other
+  requirement sections remain outside this subset.
+
+References: <https://learn.microsoft.com/en-us/vcpkg/reference/vcpkg-json>,
+<https://docs.conan.io/2/reference/conanfile/attributes.html>, and
+<https://docs.conan.io/2/reference/conanfile_txt.html>.
+
 ## Provider and package-manager policy
 
 - Manifest/lockfile parsers consume supplied bounded bytes and do not execute
@@ -103,8 +143,9 @@ The initial ecosystem mapping is an implementation target, not completion
 evidence: PyPI, npm, Maven, NuGet, Cargo, Go modules, Composer, RubyGems, Swift
 Package Manager, CRAN/Bioconductor, Delphi package metadata, Alire, fpm, MATLAB
 add-ons, SQL extensions, Scratch extensions, and native/system dependencies.
-C/C++ project manifests such as vcpkg and Conan map to package identities only
-after their exact bounded schemas are qualified.
+C/C++ vcpkg names and bounded Conan exact references now map to distinct package
+identities under the qualified subset above. Wider vcpkg and Conan schemas
+remain unqualified.
 
 Languages without a conventional package manager still use the same model:
 Assembly can inventory explicitly declared native/system dependencies, SQL can
@@ -119,13 +160,14 @@ permission to infer runtime behavior.
 - Exact package/version/symbol semantics remain auditable and conservative.
 - Existing string-only dependency facts can migrate incrementally; they are not
   retroactively promoted to resolved identities.
-- Schema v11 persistence and an internal active-generation read model now
+- Schema v12 persistence and an internal active-generation read model now
   preserve generic dependency records with source evidence. Cargo records are
   recomputed by their provider on incremental sync; unchanged static-manifest
   records are copied only with their unchanged evidence unit. Source-free
   public projections, generic provider ports, and remaining per-ecosystem
   manifest adapters remain follow-up modules. This ADR, persistence slice, and
-  the Cargo/npm consumers do not complete any ADR-0020 language gate.
+  the Cargo/npm/Python/vcpkg/Conan consumers do not complete any ADR-0020
+  language gate.
 - Library contracts require explicit review, versioning, fixtures, provenance,
   and invalidation tests. They must not become hard-coded benchmark answers.
 
@@ -146,14 +188,14 @@ permission to infer runtime behavior.
 
 ## Follow-up work
 
-1. Extend the schema v11 persistence round-trip with explicit conflict
-   reporting when multiple qualified providers disagree; path freshness and
-   generation replacement are already fail-closed through derived-record
-   dependencies.
+1. Extend the schema v12 persistence round-trip with explicit cross-provider
+   conflict reporting when multiple qualified providers disagree; path
+   freshness and generation replacement are already fail-closed through
+   derived-record dependencies.
 2. Continue migrating bounded existing manifest readers to generic records.
-   Cargo, root npm `package.json`, and the bounded standard Python project
-   formats are complete at manifest-declaration level; qualified C/C++ project
-   metadata and additional Python tool-specific schemas remain next.
+   Cargo, root npm `package.json`, bounded standard Python project formats, and
+   the qualified vcpkg/Conan subsets are complete at manifest-declaration level;
+   wider C/C++ and additional Python tool-specific schemas remain open.
 3. Add package-qualified external-symbol queries to the TypeScript, Python, and
    Rust provider lanes before adding new framework contracts.
 4. Specify a reviewed library-contract registry, cache invalidation, and

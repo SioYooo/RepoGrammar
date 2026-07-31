@@ -17,7 +17,14 @@ an authoritative static-AST `setup.py` call. It PEP-503-normalizes PyPI names,
 omits URL/path requirement suffixes, never executes `setup.py`, and represents
 dynamic dependency expressions as `python_dependency_inventory` typed
 `UNKNOWN`. Its private response is independently revisioned and capped at 2 MiB;
-invalid TOML packaging shapes and resource overflow abstain. Schema v11 persists
+invalid TOML packaging shapes and resource overflow abstain. The bounded C/C++
+project-config parser now also emits distinct grammar-valid vcpkg names/minimum
+requirements and exact Conan 2 `name/version` manifest declarations.
+Unsupported vcpkg fields, malformed Conan sections, Conan
+ranges/revisions/user-channel references, conflicts, and overflow affect
+`cpp_dependency_inventory` as typed `UNKNOWN`, and neither package manager
+executes. The `bounded_cpp_project_inventory_v2` gate rejects duplicate or
+over-budget vcpkg JSON members before normal decoding. Schema v12 persists
 the records with same-generation code-unit/file evidence, derived-path
 freshness, strict token validation, and deterministic internal
 active-generation readback. Incremental sync recomputes Cargo provider output
@@ -201,7 +208,10 @@ preview dist-tag remains `0.2.0-preview.0`.
   exception), ERROR-node macro regions, Qt `Q_OBJECT`/moc and
   string SIGNAL/SLOT, and function-pointer dispatch as typed `UNKNOWN`. It parses
   `compile_commands.json`, `vcpkg.json`, and `conanfile.txt` as structural
-  `PROJECT_CONFIG` inventory only. It never runs a build, compiler, preprocessor,
+  `PROJECT_CONFIG` inventory. The later ADR-0030 slice additionally emits
+  bounded vcpkg and exact Conan manifest-declared dependency records under
+  distinct ecosystems; these remain non-family context. It never runs a build,
+  compiler, preprocessor,
   or moc/protoc, and never expands macros. The 2026-07-15 identity-hardening
   review fixed three correctness/security edges: fixture bases had bypassed the
   include gate, recognized macro names had accepted unbounded arguments, and

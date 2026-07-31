@@ -377,7 +377,10 @@ Some unknowns block only specific claims:
   (`cpp_indirect_dispatch`), and absent or unreadable
   `compile_commands.json`/`vcpkg.json`/`conanfile.txt` project configuration
   (`cpp_project_config`) remain explicit non-blocking `UNKNOWN` subclaims or
-  non-supporting context. RepoGrammar never runs a build, compiler, preprocessor,
+  non-supporting context. Partial, conflicting, unsupported, malformed-section,
+  or resource-limited vcpkg/Conan declaration parsing additionally affects only
+  `cpp_dependency_inventory`; it does not erase valid bounded records or become
+  family evidence. RepoGrammar never runs a build, compiler, preprocessor,
   or moc/protoc, and never expands macros; generated and build-variant facts
   remain unsupported context. The accepted contract snapshot is intentionally
   narrower than all framework versions: underscore-bearing `TEST`/`TEST_F`/

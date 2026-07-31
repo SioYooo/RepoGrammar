@@ -12282,6 +12282,88 @@ mod tests {
     }
 
     #[test]
+    fn cpp_manifest_dependencies_persist_and_copy_forward_without_execution() {
+        let workspace = TempWorkspace::new("indexing-cpp-dependencies");
+        fs::write(
+            workspace.path().join("vcpkg.json"),
+            r#"{"dependencies":[{"name":"boost-test","version>=":"1.87.0"}]}"#,
+        )
+        .expect("write vcpkg manifest");
+        fs::write(
+            workspace.path().join("conanfile.txt"),
+            "[requires]\nfmt/10.1.1\n",
+        )
+        .expect("write Conan manifest");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded C/C++ manifest dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read C/C++ dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.ecosystem.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                        dependency.scope.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("conan", "fmt", Some("10.1.1"), "unknown"),
+                ("vcpkg", "boost-test", Some(">=1.87.0"), "unknown"),
+            ]
+        );
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.reparsed_files, 1);
+
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied C/C++ dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+    }
+
+    #[test]
     fn parser_semantic_facts_cannot_claim_semantic_certainty() {
         let workspace = TempWorkspace::new("indexing-parser-semantic-fact");
         fs::write(
