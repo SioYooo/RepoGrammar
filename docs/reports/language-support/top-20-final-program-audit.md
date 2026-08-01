@@ -149,10 +149,11 @@ audit branch.
 ## Correctness, security, completeness, and performance decision
 
 - Correctness: evidence levels, directness, provider status, and contract
-  status remain separate. The pre-existing status JSON field named
-  `dependency_records` does not yet represent the authoritative active
-  dependency read model; the discrepancy remains documented rather than being
-  silently broadened into this program.
+  status remain separate. The status/doctor JSON count that used to be named
+  `dependency_records` — while counting `derived_record_dependencies` — is now
+  named `derived_record_dependencies`. The authoritative active dependency read
+  model still has no public projection; that remains an open follow-up rather
+  than a misnamed surface.
 - Security: new manifest/config/archive readers are bounded and non-executing.
   No package manager, build system, compiler, plugin, generator, repository
   code, dependency code, child process, network resolver, database, MATLAB,

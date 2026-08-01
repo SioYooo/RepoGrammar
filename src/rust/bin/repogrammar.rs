@@ -11812,7 +11812,7 @@ class User(Base):
 
         let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
         let status_value = parse_machine_output("status", &status, &workspace);
-        assert_eq!(status_value["dependency_records"], 1);
+        assert_eq!(status_value["derived_record_dependencies"], 1);
         for secret in ["private.example", "secret-library", "9.8.7", "<dependency>"] {
             assert!(!status.stdout.contains(secret), "leaked {secret}");
         }
@@ -12107,7 +12107,7 @@ class User(Base):
 
         let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
         let status_value = parse_machine_output("status", &status, &workspace);
-        assert!(status_value["dependency_records"].is_number());
+        assert!(status_value["derived_record_dependencies"].is_number());
         for secret in [
             "SecretDependency",
             "secret_entry",

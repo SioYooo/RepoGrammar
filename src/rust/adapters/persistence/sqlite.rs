@@ -1061,7 +1061,7 @@ impl IndexStore for SqliteIndexStore {
                     active_generation: None,
                     schema_version: None,
                     code_unit_count: None,
-                    dependency_record_count: None,
+                    derived_record_dependency_count: None,
                     dirty_record_count: None,
                     journal_mode: None,
                     foreign_keys_enabled: None,
@@ -5086,7 +5086,7 @@ fn inspect_connection(
     let integrity_check = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(sql_unavailable)?;
-    let (code_unit_count, dependency_record_count, dirty_record_count) =
+    let (code_unit_count, derived_record_dependency_count, dirty_record_count) =
         if let Some(active_generation) = active_generation {
             (
                 Some(active_generation_table_count(
@@ -5099,7 +5099,7 @@ fn inspect_connection(
                     connection,
                     "derived_record_dependencies",
                     active_generation,
-                    "dependency record",
+                    "derived record dependency",
                 )?),
                 Some(active_generation_table_count(
                     connection,
@@ -5121,7 +5121,7 @@ fn inspect_connection(
         active_generation: active_generation.map(str::to_string),
         schema_version,
         code_unit_count,
-        dependency_record_count,
+        derived_record_dependency_count,
         dirty_record_count,
         journal_mode: Some(journal_mode),
         foreign_keys_enabled: Some(foreign_keys == 1),
@@ -7695,8 +7695,20 @@ mod tests {
             ]
         );
         let inspection = store.inspect().expect("inspect storage");
-        assert_eq!(inspection.dependency_record_count, Some(6));
+        assert_eq!(inspection.derived_record_dependency_count, Some(6));
         assert_eq!(inspection.dirty_record_count, Some(0));
+
+        // The reported count is the incremental-invalidation graph, not the
+        // ADR-0030 third-party inventory. This generation has six of the former
+        // and zero of the latter, so a surface that published this number as
+        // `dependency_records` would be reporting a different subsystem.
+        let third_party_dependency_rows: i64 = Connection::open(store.mutable_database_path())
+            .expect("open mutable database")
+            .query_row("SELECT count(*) FROM dependency_records", [], |row| {
+                row.get(0)
+            })
+            .expect("count third-party dependency rows");
+        assert_eq!(third_party_dependency_rows, 0);
     }
 
     #[test]
@@ -8518,7 +8530,7 @@ mod tests {
 
         assert_eq!(inspection.active_generation, Some("gen-000001".to_string()));
         assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
-        assert_eq!(inspection.dependency_record_count, Some(0));
+        assert_eq!(inspection.derived_record_dependency_count, Some(0));
         assert_eq!(inspection.dirty_record_count, Some(0));
         assert_eq!(inspection.journal_mode.as_deref(), Some("wal"));
         assert_eq!(inspection.foreign_keys_enabled, Some(true));

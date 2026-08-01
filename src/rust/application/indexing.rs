@@ -17917,7 +17917,7 @@ extraPaths = ["src/lib", "C:/secret"]
                     active_generation: Some(self.active_generation.borrow().clone()),
                     schema_version: Some(STORAGE_SCHEMA_VERSION),
                     code_unit_count: Some(0),
-                    dependency_record_count: Some(0),
+                    derived_record_dependency_count: Some(0),
                     dirty_record_count: Some(0),
                     journal_mode: Some("wal".to_string()),
                     foreign_keys_enabled: Some(true),

@@ -2819,7 +2819,7 @@ mod tests {
                 active_generation: Some("gen-000001".to_string()),
                 schema_version: None,
                 code_unit_count: Some(1),
-                dependency_record_count: Some(0),
+                derived_record_dependency_count: Some(0),
                 dirty_record_count: Some(0),
                 journal_mode: None,
                 foreign_keys_enabled: None,

@@ -9853,9 +9853,9 @@ fn status_human(
             .unwrap_or("not_implemented")
     ));
     output.push_str(&format!(
-        "dependency_records: {}\n",
+        "derived_record_dependencies: {}\n",
         storage_inspection
-            .and_then(|inspection| inspection.dependency_record_count)
+            .and_then(|inspection| inspection.derived_record_dependency_count)
             .map(|count| count.to_string())
             .unwrap_or_else(|| "none".to_string())
     ));
@@ -9935,7 +9935,7 @@ fn status_json(
         "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
         "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
         "foreign_keys_enabled": storage_inspection.and_then(|inspection| inspection.foreign_keys_enabled),
-        "dependency_records": storage_inspection.and_then(|inspection| inspection.dependency_record_count),
+        "derived_record_dependencies": storage_inspection.and_then(|inspection| inspection.derived_record_dependency_count),
         "dirty_records": storage_inspection.and_then(|inspection| inspection.dirty_record_count),
         "storage": implementation_status(report.storage),
         "indexing": implementation_status(report.indexing),
@@ -10010,7 +10010,7 @@ where
             "shm_bytes": storage_inspection.and_then(|inspection| inspection.shm_bytes),
             "journal_mode": storage_inspection.and_then(|inspection| inspection.journal_mode.as_deref()),
             "integrity_check": storage_inspection.and_then(|inspection| inspection.integrity_check.as_deref()),
-            "dependency_records": storage_inspection.and_then(|inspection| inspection.dependency_record_count),
+            "derived_record_dependencies": storage_inspection.and_then(|inspection| inspection.derived_record_dependency_count),
             "dirty_records": storage_inspection.and_then(|inspection| inspection.dirty_record_count),
         },
         "readiness": readiness_json(&report.status.readiness),

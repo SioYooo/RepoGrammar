@@ -88,12 +88,13 @@ Observed limitations are intentionally preserved:
   inventory rather than source semantics;
 - Assembly facts are deliberately structural candidates with an unconditional
   target-profile UNKNOWN;
-- the status JSON field named `dependency_records` currently counts the
-  existing `derived_record_dependencies` status source rather than the
-  authoritative active dependency read model. Product tests therefore verify
-  MATLAB dependency count through `list_active_dependencies`; this pre-existing
-  naming/count issue was not broadened into the language slice and remains a
-  follow-up correctness risk.
+- the status/doctor JSON count that used to be published as `dependency_records`
+  is now published as `derived_record_dependencies`, which is the table it
+  actually counts. The ADR-0030 third-party dependency inventory still has no
+  CLI or MCP projection, so product tests continue to verify MATLAB dependency
+  count through `list_active_dependencies`. Publishing a bounded count of the
+  authoritative active dependency read model remains an open follow-up, but the
+  surface no longer misnames a different subsystem's count as that model.
 
 ## Completeness review
 

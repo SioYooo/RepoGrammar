@@ -187,7 +187,10 @@ pub struct StorageInspection {
     pub active_generation: Option<String>,
     pub schema_version: Option<u32>,
     pub code_unit_count: Option<u64>,
-    pub dependency_record_count: Option<u64>,
+    /// Row count of the `derived_record_dependencies` incremental-invalidation
+    /// graph, not of the ADR-0030 third-party `dependency_records` inventory.
+    /// The two are unrelated; the name states which one this is.
+    pub derived_record_dependency_count: Option<u64>,
     pub dirty_record_count: Option<u64>,
     pub journal_mode: Option<String>,
     pub foreign_keys_enabled: Option<bool>,

@@ -480,8 +480,13 @@ Doctor JSON must use `checks.manifest_schema_version` and
 `checks.schema_version` field. The product payload schema token stays at the
 top-level `schema_version`, never inside `checks`. When storage can be inspected,
 doctor JSON also
-reports `checks.dependency_records` and `checks.dirty_records` so stale/dirty
-storage diagnostics are machine-readable. It must also report
+reports `checks.derived_record_dependencies` and `checks.dirty_records` so
+stale/dirty storage diagnostics are machine-readable.
+`checks.derived_record_dependencies` counts rows of the
+`derived_record_dependencies` incremental-invalidation graph. It must not be
+named `dependency_records`: that name belongs to the unrelated ADR-0030
+third-party dependency inventory table, which has no CLI or MCP projection in
+this slice. It must also report
 `checks.storage_layout`, `checks.mutable_database_present`,
 `checks.legacy_generation_layout_present`, `checks.wal_bytes`, and
 `checks.shm_bytes`. Legacy-only storage and mixed mutable-plus-legacy storage
