@@ -334,7 +334,7 @@ PHP uses `php` for exact `.php` paths and `php-config` for exact root/nested
 basenames. PHP source and PHPUnit XML persist only path, strict raw-byte hash,
 size, and token, with zero source-store/parser dispatch and no claim-bearing
 records. Exact `composer.json` and `composer.lock` instead produce bounded
-`PROJECT_CONFIG` units, inventory-only typed `UNKNOWN`, and schema-v13
+`PROJECT_CONFIG` units, inventory-only typed `UNKNOWN`, and schema-v14
 `composer` dependency rows. Manifest rows are direct `manifest_declared`
 runtime/development requirements; lock rows have `unknown` directness and
 `lockfile_resolved` entries and do not prove installation, runtime selection,
@@ -392,12 +392,12 @@ Ada uses `ada` for exact lowercase `.ads`/`.adb` and `ada-config` for exact
 lowercase `.gpr`, `alire.toml`, and `alire.lock` basenames. Source and GPR paths
 persist only metadata and bypass SourceStore/parser dispatch. Exact Alire
 manifest/lock paths store project-config units and typed inventory facts;
-unconditional direct manifest strings may additionally store schema-v13
+unconditional direct manifest strings may additionally store schema-v14
 `alire` rows. Lock rows are never inferred from the internal Alire format.
 Fortran uses `fortran` for the frozen lowercase non-preprocessed fixed/free form
 suffixes and `fortran-config` for exact `fpm.toml`. Source paths remain metadata-
 only; the manifest may store one project-config unit, typed inventory facts,
-and schema-v13 scoped direct `fpm` rows. Both languages remain absent from
+and schema-v14 scoped direct `fpm` rows. Both languages remain absent from
 `ParserProjectContext`, so deferred deltas are incremental, claim-bearing legacy
 records are filtered, and unchanged static-manifest evidence copies exactly once.
 SQL uses `sql`, `sql-migration`, `sql-schema`, and `sql-catalog`. Every SQL
@@ -660,8 +660,8 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `13`. Existing pre-release schema `1`
-through `12` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `14`. Existing pre-release schema `1`
+through `13` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
@@ -688,6 +688,23 @@ lockfile that lacks root-manifest relation data from being persisted as falsely
 transitive. Existing manifest producers write `direct`; bounded SwiftPM
 `Package.resolved` schema-2/3 pins write `unknown`. All write, activation, and
 read paths reject values outside the closed vocabulary.
+
+Schema `14` adds the nullable `platform_target` and `alias` columns, which carry
+the manifest-stated declaration selectors verbatim: the platform/configuration
+predicate that scopes a declaration (a Cargo `[target.'cfg(...)'.dependencies]`
+table key) and the local alias a manifest binds a package to (a Cargo `rename`).
+`NULL` means the manifest stated none; it never means "applies on every
+platform", because no reader evaluates the predicate. Both columns are bounded
+untrusted text validated on write and on read.
+
+These are also identity fields. One package may be declared several times in one
+manifest — once per `cfg(...)` table, once per alias — and those declarations
+are otherwise identical, down to a shared manifest evidence range. The stored
+`dependency_id` therefore hashes every persisted field including these two.
+Omitting them made distinct declarations collide on
+`PRIMARY KEY (generation_id, dependency_id)`, which failed the whole write.
+Their absence from the record-uniqueness key had the same effect one layer up,
+where a snapshot rejected a valid manifest as containing duplicate records.
 
 Dependency writes also create an `external_dependency`
 `derived_record_dependencies` row. Replacing or removing the evidence path

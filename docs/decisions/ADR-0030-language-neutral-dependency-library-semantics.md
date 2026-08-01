@@ -67,10 +67,21 @@ recorded in telemetry. Public source-free surfaces may expose bounded package
 counts and low-cardinality ecosystem/evidence tokens; raw package/symbol text
 requires an explicitly reviewed product contract.
 
+A dependency record is identified by its declaration, not by its package. One
+manifest may declare the same package several times, distinguished only by a
+platform/configuration predicate or by a local alias. A record therefore carries
+the manifest-stated `platform_target` and `alias` selectors verbatim, and both
+participate in record identity and in the record-uniqueness key. A reader never
+evaluates a predicate: an absent selector means the manifest stated none, never
+that the declaration applies on every platform. Collapsing such declarations
+into one record is forbidden — it discards a declared distinction and makes two
+different declarations indistinguishable.
+
 The first provider consumer is the existing Cargo metadata adapter. It emits
 generic `manifest_declared` dependency records alongside its legacy project
 facts. `cargo metadata --no-deps` does not provide a resolved transitive graph,
-so those records must not be labeled lockfile- or provider-resolved. The first
+so those records must not be labeled lockfile- or provider-resolved. It records
+`target` as `platform_target` and `rename` as `alias`. The first
 static-manifest consumers are the bounded root `package.json` parser and the
 Python project-config frontend. The npm path records valid names from
 `dependencies`, `devDependencies`,

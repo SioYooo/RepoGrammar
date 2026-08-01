@@ -1158,7 +1158,7 @@ records, records provider `UNKNOWN`s when Cargo or project
 configuration is unavailable, and does not execute build scripts or procedural
 macros. These facts are context only: package metadata, targets, features, and
 dependencies do not directly prove family membership. The generic records are
-persisted in schema v13 as generation-scoped, evidence-bound dependency rows.
+persisted in schema v14 as generation-scoped, evidence-bound dependency rows.
 The application storage boundary can read the deterministically ordered active
 generation back through `DependencyStore`; raw package names remain internal,
 and a source-free public CLI/MCP projection is a separate follow-up module.

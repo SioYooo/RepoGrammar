@@ -83,7 +83,7 @@ The cross-language foundation now has:
 - bounded package identities and three-state directness;
 - an evidence ladder of `manifest_declared`, `lockfile_resolved`, and
   `provider_resolved` without promoting lower evidence;
-- schema-v13 generation persistence and active readback;
+- schema-v14 generation persistence and active readback;
 - package-qualified external-symbol and reviewed-contract domain types; and
 - an exact-version contract registry that rejects duplicate ids, overlapping
   package/version/capability claims, versionless queries, and manifest-only

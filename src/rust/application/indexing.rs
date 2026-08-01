@@ -3125,6 +3125,8 @@ fn record_dependencies(
                 optional: dependency.optional,
                 directness: dependency.directness.as_str().to_string(),
                 evidence_level: dependency.evidence_level.as_str().to_string(),
+                platform_target: dependency.platform_target.clone(),
+                alias: dependency.alias.clone(),
                 code_unit_id: dependency.evidence.code_unit_id.as_str().to_string(),
                 path: dependency.evidence.provenance.path.clone(),
                 content_hash: dependency.evidence.provenance.content_hash.clone(),
@@ -3137,6 +3139,12 @@ fn record_dependencies(
     Ok(dependencies.len())
 }
 
+/// The stored identity of one dependency declaration.
+///
+/// Every field the row persists must feed this hash. A field that is stored but
+/// not hashed lets two genuinely different declarations collide on one primary
+/// key, which fails the whole write rather than losing a row quietly — see the
+/// platform-target and alias inputs below.
 fn dependency_record_id(dependency: &DependencyRecord) -> String {
     let mut hasher = Sha256::new();
     for value in [
@@ -3144,6 +3152,8 @@ fn dependency_record_id(dependency: &DependencyRecord) -> String {
         dependency.package.name.as_str(),
         dependency.scope.as_str(),
         dependency.evidence_level.as_str(),
+        dependency.platform_target.as_deref().unwrap_or(""),
+        dependency.alias.as_deref().unwrap_or(""),
         dependency
             .requirement
             .as_ref()

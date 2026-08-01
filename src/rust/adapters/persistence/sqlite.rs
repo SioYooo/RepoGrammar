@@ -2169,9 +2169,11 @@ impl SqliteGenerationWriteSession {
             .execute(
                 "INSERT INTO dependency_records \
                  (generation_id, dependency_id, ecosystem, package_name, requirement, \
-                  resolved_version, scope, optional, directness, evidence_level, code_unit_id, \
+                  resolved_version, scope, optional, directness, evidence_level, \
+                  platform_target, alias, code_unit_id, \
                   path, content_hash, start_byte, end_byte, note) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+                  ?17, ?18)",
                 params![
                     self.generation.generation_id,
                     dependency.dependency_id,
@@ -2183,6 +2185,8 @@ impl SqliteGenerationWriteSession {
                     dependency.optional,
                     dependency.directness,
                     dependency.evidence_level,
+                    dependency.platform_target.as_deref(),
+                    dependency.alias.as_deref(),
                     dependency.code_unit_id,
                     dependency.path,
                     dependency.content_hash.as_str(),
@@ -4581,7 +4585,8 @@ fn query_dependencies(
                     dependency_records.start_byte, dependency_records.end_byte, \
                     dependency_records.note, code_units.path, code_units.content_hash, \
                     code_units.start_byte, code_units.end_byte, indexed_files.content_hash, \
-                    indexed_files.size_bytes \
+                    indexed_files.size_bytes, dependency_records.platform_target, \
+                    dependency_records.alias \
              FROM dependency_records \
              JOIN code_units \
                ON code_units.generation_id = dependency_records.generation_id \
@@ -4621,6 +4626,8 @@ fn query_dependencies(
                 row.get::<_, i64>(18)?,
                 row.get::<_, String>(19)?,
                 row.get::<_, i64>(20)?,
+                row.get::<_, Option<String>>(21)?,
+                row.get::<_, Option<String>>(22)?,
             ))
         })
         .map_err(sql_unavailable)?;
@@ -4648,6 +4655,8 @@ fn query_dependencies(
             unit_end_byte,
             file_hash,
             file_size,
+            platform_target,
+            alias,
         ) = row.map_err(sql_unavailable)?;
         let start_byte = usize::try_from(start_byte)
             .map_err(|_| invalid_state("stored dependency start byte is invalid"))?;
@@ -4688,6 +4697,8 @@ fn query_dependencies(
             optional,
             directness,
             evidence_level,
+            platform_target,
+            alias,
             code_unit_id,
             path,
             content_hash: ContentHash::new(content_hash)
@@ -4905,7 +4916,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'dependency_directness_v13', datetime('now'))",
+             VALUES (?1, 'dependency_declaration_selectors_v14', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -5891,6 +5902,11 @@ fn validate_dependency_record(dependency: &IndexedDependencyRecord) -> Result<()
             dependency.resolved_version.as_deref(),
             "dependency resolved version",
         ),
+        (
+            dependency.platform_target.as_deref(),
+            "dependency platform target",
+        ),
+        (dependency.alias.as_deref(), "dependency alias"),
     ] {
         if let Some(value) = value {
             validate_index_text_field(value, label)?;
@@ -6417,6 +6433,8 @@ CREATE TABLE IF NOT EXISTS dependency_records (
     optional INTEGER NOT NULL CHECK (optional IN (0, 1)),
     directness TEXT NOT NULL CHECK (directness IN ('direct', 'transitive', 'unknown')),
     evidence_level TEXT NOT NULL CHECK (evidence_level IN ('manifest_declared', 'lockfile_resolved', 'provider_resolved')),
+    platform_target TEXT CHECK (platform_target IS NULL OR platform_target <> ''),
+    alias TEXT CHECK (alias IS NULL OR alias <> ''),
     code_unit_id TEXT NOT NULL,
     path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
@@ -6627,6 +6645,8 @@ mod tests {
             optional: false,
             directness: "direct".to_string(),
             evidence_level: "manifest_declared".to_string(),
+            platform_target: None,
+            alias: None,
             code_unit_id: code_unit(path).id,
             path: path.to_string(),
             content_hash: file(path).content_hash,
@@ -8935,6 +8955,70 @@ mod tests {
             assert!(!value.contains(workspace_path.as_ref()));
             assert!(!value.contains("UNIQUE_SOURCE_SENTINEL"));
         }
+    }
+
+    #[test]
+    fn platform_scoped_declarations_of_one_package_persist_side_by_side() {
+        // Cargo emits one entry per declaration, so a crate declared under two
+        // `cfg(...)` tables reaches storage as two rows that share every other
+        // field and one manifest evidence range. Both must persist and read back
+        // with their predicate intact.
+        let workspace = TempWorkspace::new("sqlite-platform-scoped-dependencies");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+
+        let mut unix = dependency("Cargo.toml");
+        unix.dependency_id = "dependency:Cargo.toml:libc:unix".to_string();
+        unix.package_name = "libc".to_string();
+        unix.platform_target = Some("cfg(unix)".to_string());
+        let mut windows = unix.clone();
+        windows.dependency_id = "dependency:Cargo.toml:libc:windows".to_string();
+        windows.platform_target = Some("cfg(windows)".to_string());
+        let mut aliased = dependency("Cargo.toml");
+        aliased.dependency_id = "dependency:Cargo.toml:serde:codec".to_string();
+        aliased.alias = Some("codec".to_string());
+
+        DependencyStore::record_dependency(&store, &generation, &unix)
+            .expect("record cfg(unix) declaration");
+        DependencyStore::record_dependency(&store, &generation, &windows)
+            .expect("record cfg(windows) declaration");
+        DependencyStore::record_dependency(&store, &generation, &aliased)
+            .expect("record aliased declaration");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store
+            .list_active_dependencies()
+            .expect("list active dependencies");
+        let mut predicates = report
+            .dependencies
+            .iter()
+            .filter(|record| record.package_name == "libc")
+            .map(|record| record.platform_target.clone())
+            .collect::<Vec<_>>();
+        predicates.sort();
+        assert_eq!(
+            predicates,
+            vec![
+                Some("cfg(unix)".to_string()),
+                Some("cfg(windows)".to_string())
+            ]
+        );
+        assert_eq!(
+            report
+                .dependencies
+                .iter()
+                .find(|record| record.package_name == "serde")
+                .and_then(|record| record.alias.clone()),
+            Some("codec".to_string())
+        );
     }
 
     #[test]

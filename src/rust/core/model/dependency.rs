@@ -9,6 +9,10 @@
 use super::{Evidence, TypedUnknown};
 
 const MAX_PACKAGE_NAME_CHARS: usize = 512;
+/// Bound for manifest-stated declaration selectors such as a Cargo
+/// `cfg(...)` target predicate. Selectors are copied verbatim from the
+/// manifest, so they are untrusted bounded text like every other package field.
+const MAX_DEPENDENCY_SELECTOR_CHARS: usize = 512;
 const MAX_VERSION_TEXT_CHARS: usize = 256;
 const MAX_CONTRACT_ID_CHARS: usize = 160;
 const MAX_CONTRACT_EXACT_VERSIONS: usize = 64;
@@ -217,6 +221,19 @@ pub struct DependencyRecord {
     pub optional: bool,
     pub directness: DependencyDirectness,
     pub evidence_level: DependencyEvidenceLevel,
+    /// The platform/configuration predicate that scopes this declaration, as
+    /// the manifest literally wrote it (for example a Cargo
+    /// `[target.'cfg(unix)'.dependencies]` table key).
+    ///
+    /// `None` means the manifest stated no predicate. It never means "this
+    /// dependency applies on every platform": deciding that would require
+    /// evaluating the predicate against a resolved target, which no bounded
+    /// manifest reader does.
+    pub platform_target: Option<String>,
+    /// The local alias the manifest binds the package to when it differs from
+    /// the package name (for example a Cargo `rename`). `None` means the
+    /// manifest declared no alias.
+    pub alias: Option<String>,
     pub evidence: Evidence,
 }
 
@@ -258,6 +275,8 @@ type DependencySortKey<'a> = (
     DependencyEvidenceLevel,
     Option<&'a str>,
     Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
     &'a str,
 );
 
@@ -274,6 +293,12 @@ fn dependency_sort_key(record: &DependencyRecord) -> DependencySortKey<'_> {
             .resolved_version
             .as_ref()
             .map(DependencyVersion::as_str),
+        // Two declarations of the same package that differ only by platform
+        // predicate or local alias are distinct declarations. Leaving them out
+        // of the key would make the snapshot reject a valid manifest as
+        // containing duplicate records.
+        record.platform_target.as_deref(),
+        record.alias.as_deref(),
         &record.evidence.provenance.path,
     )
 }
@@ -335,8 +360,36 @@ impl DependencyRecord {
             optional,
             directness,
             evidence_level,
+            platform_target: None,
+            alias: None,
             evidence,
         })
+    }
+
+    /// Records the manifest-stated platform/configuration predicate that scopes
+    /// this declaration. Two declarations of the same package that differ only
+    /// by predicate are distinct records, not duplicates.
+    pub fn with_platform_target(
+        mut self,
+        platform_target: impl Into<String>,
+    ) -> Result<Self, String> {
+        self.platform_target = Some(validate_untrusted_text(
+            "dependency platform target",
+            platform_target,
+            MAX_DEPENDENCY_SELECTOR_CHARS,
+        )?);
+        Ok(self)
+    }
+
+    /// Records the manifest-stated local alias for this package. Two aliases of
+    /// the same package are distinct records, not duplicates.
+    pub fn with_alias(mut self, alias: impl Into<String>) -> Result<Self, String> {
+        self.alias = Some(validate_untrusted_text(
+            "dependency alias",
+            alias,
+            MAX_PACKAGE_NAME_CHARS,
+        )?);
+        Ok(self)
     }
 }
 

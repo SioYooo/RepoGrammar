@@ -36,7 +36,7 @@ the bounded root npm `package.json` parser, which now emits direct declarations
 for production, development, optional, and peer dependency sections without
 executing Node, npm, package scripts, or dependency code. Peer dependencies use
 the shared `unknown` scope unless the model later gains a reviewed peer token.
-Schema v13 persists these consumers with same-generation source evidence and
+Schema v14 persists these consumers with same-generation source evidence and
 represents dependency directness as the closed `direct`/`transitive`/`unknown`
 set rather than collapsing unresolved lockfile graph position into a boolean.
 On an unrelated incremental source edit, Cargo output is recomputed while unchanged
@@ -550,7 +550,7 @@ The bounded five-round campaign is consolidated in
 `docs/reports/language-support/top-20-final-program-audit.md` and
 `docs/reports/language-support/top-20-program-summary.json`. It produced 20
 ranked completion reviews plus the TypeScript-extra review, bounded dependency
-inventory across 17 of 20 ecosystem tokens, schema-v13 persistence, and an
+inventory across 17 of 20 ecosystem tokens, schema-v14 persistence, and an
 exact-version reviewed-contract registry. The registry intentionally ships no
 production contract packs.
 

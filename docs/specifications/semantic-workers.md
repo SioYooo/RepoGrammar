@@ -128,7 +128,7 @@ package name, requirement when supplied by Cargo, scope, optionality, and
 manifest evidence. Because `--no-deps` is used, these records do not claim a
 resolved transitive graph, installed version, source, checksum, or external
 symbol. The indexing application writes the records through the shared
-generation session into schema v13 `dependency_records`; active reads validate
+generation session into schema v14 `dependency_records`; active reads validate
 their closed tokens and same-generation evidence again. This persistence does
 not expose package names on CLI/MCP and does not promote package presence to a
 semantic or family claim. Full builds and incremental sync both run this stage;

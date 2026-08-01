@@ -34,7 +34,7 @@ installed, selected, importable, compatible, or behaviorally understood.
 | Layer | Result | Evidence boundary |
 |---|---|---|
 | Package identity | Implemented | ecosystem plus bounded canonicalized package text; unknown ecosystems are rejected |
-| Dependency snapshots | Implemented | deterministic records, typed directness, evidence level, source provenance, schema-v13 persistence |
+| Dependency snapshots | Implemented | deterministic records, typed directness, evidence level, source provenance, schema-v14 persistence |
 | Generic no-contract packages | Implemented at inventory level | arbitrary admitted names remain visible internally; behavior stays `UNKNOWN` |
 | External symbols | Model only / incomplete consumers | `ExternalSymbolId` exists, but no cross-language complete package-qualified resolver |
 | Reviewed contracts | Registry implemented, packs absent | exact-version sets, revision, capabilities, duplicate/overlap rejection; production pack count 0 |

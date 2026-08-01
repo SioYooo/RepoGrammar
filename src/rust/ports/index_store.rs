@@ -5,7 +5,7 @@
 
 use crate::core::model::ContentHash;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 13;
+pub const STORAGE_SCHEMA_VERSION: u32 = 14;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationHandle {
@@ -62,6 +62,11 @@ pub struct IndexedDependencyRecord {
     pub optional: bool,
     pub directness: String,
     pub evidence_level: String,
+    /// Manifest-stated platform/configuration predicate, or `None` when the
+    /// manifest stated none. `None` never means "applies everywhere".
+    pub platform_target: Option<String>,
+    /// Manifest-stated local alias for the package, or `None` when none.
+    pub alias: Option<String>,
     pub code_unit_id: String,
     pub path: String,
     pub content_hash: ContentHash,
