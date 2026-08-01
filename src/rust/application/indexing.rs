@@ -5406,48 +5406,41 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
     }
 }
 
-fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
-    if file.language == DiscoveredLanguage::SwiftConfig {
-        return file.path.rsplit('/').next() != Some("Package.resolved");
+/// The single authority for whether a file is inventory-only: recognized by
+/// discovery, but never decoded, parsed, or turned into code units.
+///
+/// Both the discovery-side and the indexed-record-side callers route through
+/// this one classifier. Keeping the decision here — rather than reimplementing
+/// it per record type — is what stops a newly added inventory-only language
+/// from being wired into one path and silently forgotten on the other.
+fn file_is_inventory_only(language: &str, path: &str) -> bool {
+    if language == DiscoveredLanguage::SwiftConfig.as_str() {
+        return path.rsplit('/').next() != Some("Package.resolved");
     }
-    if file.language == DiscoveredLanguage::PhpConfig {
-        return !is_composer_dependency_config_path(&file.path);
+    if language == DiscoveredLanguage::PhpConfig.as_str() {
+        return !is_composer_dependency_config_path(path);
     }
-    if file.language == DiscoveredLanguage::RubyConfig {
-        return !is_ruby_dependency_config_path(&file.path);
+    if language == DiscoveredLanguage::RubyConfig.as_str() {
+        return !is_ruby_dependency_config_path(path);
     }
-    if file.language == DiscoveredLanguage::AdaConfig {
-        return !is_ada_dependency_config_path(&file.path);
+    if language == DiscoveredLanguage::AdaConfig.as_str() {
+        return !is_ada_dependency_config_path(path);
     }
-    if file.language == DiscoveredLanguage::FortranConfig {
+    if language == DiscoveredLanguage::FortranConfig.as_str() {
         return false;
     }
-    if file.language == DiscoveredLanguage::RConfig {
-        return !is_r_dependency_config_path(&file.path);
+    if language == DiscoveredLanguage::RConfig.as_str() {
+        return !is_r_dependency_config_path(path);
     }
-    language_token_is_inventory_only(file.language.as_str())
+    language_token_is_inventory_only(language)
+}
+
+fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
+    file_is_inventory_only(file.language.as_str(), &file.path)
 }
 
 fn indexed_file_is_inventory_only(file: &IndexedFileRecord) -> bool {
-    if file.language == DiscoveredLanguage::SwiftConfig.as_str() {
-        return file.path.rsplit('/').next() != Some("Package.resolved");
-    }
-    if file.language == DiscoveredLanguage::PhpConfig.as_str() {
-        return !is_composer_dependency_config_path(&file.path);
-    }
-    if file.language == DiscoveredLanguage::RubyConfig.as_str() {
-        return !is_ruby_dependency_config_path(&file.path);
-    }
-    if file.language == DiscoveredLanguage::AdaConfig.as_str() {
-        return !is_ada_dependency_config_path(&file.path);
-    }
-    if file.language == DiscoveredLanguage::FortranConfig.as_str() {
-        return false;
-    }
-    if file.language == DiscoveredLanguage::RConfig.as_str() {
-        return !is_r_dependency_config_path(&file.path);
-    }
-    language_token_is_inventory_only(&file.language)
+    file_is_inventory_only(&file.language, &file.path)
 }
 
 fn is_composer_dependency_config_path(path: &str) -> bool {
@@ -5715,6 +5708,141 @@ mod tests {
 
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
+    }
+
+    #[test]
+    fn declarations_differing_only_by_platform_target_or_alias_get_distinct_ids() {
+        // A Cargo manifest may declare one crate under several `cfg(...)` target
+        // tables, or bind it to several aliases. Those declarations are equal in
+        // every other field and share one manifest evidence range, so if the id
+        // does not hash the discriminators they collide on
+        // `PRIMARY KEY (generation_id, dependency_id)` and abort the whole sync.
+        fn cargo_record() -> DependencyRecord {
+            DependencyRecord::new(
+                crate::core::model::PackageIdentity::new(DependencyEcosystem::Cargo, "libc")
+                    .expect("package identity"),
+                Some(crate::core::model::DependencyVersion::new("^0.2").expect("requirement")),
+                None,
+                crate::core::model::DependencyScope::Runtime,
+                false,
+                DependencyDirectness::Direct,
+                crate::core::model::DependencyEvidenceLevel::ManifestDeclared,
+                Evidence::new(
+                    CodeUnitId::new("unit:Cargo.toml:0").expect("code unit id"),
+                    SourceRange::new(0, 10).expect("range"),
+                    Provenance::new(
+                        "Cargo.toml",
+                        strict_hash(
+                            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                        ),
+                        RepositoryRevision::new("UNKNOWN").expect("revision"),
+                    )
+                    .expect("provenance"),
+                    "Cargo metadata dependency declaration",
+                )
+                .expect("evidence"),
+            )
+            .expect("dependency record")
+        }
+
+        let unscoped = cargo_record();
+        let unix = cargo_record()
+            .with_platform_target("cfg(unix)")
+            .expect("platform target");
+        let windows = cargo_record()
+            .with_platform_target("cfg(windows)")
+            .expect("platform target");
+        let aliased = cargo_record().with_alias("libc_alias").expect("alias");
+
+        let ids = [&unscoped, &unix, &windows, &aliased]
+            .into_iter()
+            .map(dependency_record_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ids.len(),
+            4,
+            "each distinct declaration needs its own stored identity"
+        );
+
+        // An unscoped, unaliased record keeps a stable identity regardless of
+        // how the discriminators are represented internally.
+        assert_eq!(
+            dependency_record_id(&unscoped),
+            dependency_record_id(&cargo_record())
+        );
+    }
+
+    #[test]
+    fn discovered_and_indexed_inventory_only_classifiers_share_one_decision() {
+        // Both record types must route through `file_is_inventory_only`. A pair
+        // that disagrees means the decision was reimplemented for one caller,
+        // which is how a new inventory-only language gets wired into discovery
+        // and forgotten on the indexed-record path.
+        const CASES: &[(DiscoveredLanguage, &str, bool)] = &[
+            // Path-sensitive config lanes: the dependency input is parsed, every
+            // other path under the same language token stays inventory-only.
+            (DiscoveredLanguage::SwiftConfig, "Package.resolved", false),
+            (DiscoveredLanguage::SwiftConfig, "Package.swift", true),
+            (DiscoveredLanguage::PhpConfig, "composer.json", false),
+            (DiscoveredLanguage::PhpConfig, "composer.lock", false),
+            (DiscoveredLanguage::PhpConfig, "phpunit.xml", true),
+            (DiscoveredLanguage::RubyConfig, "Gemfile.lock", false),
+            (DiscoveredLanguage::RubyConfig, "Gemfile", true),
+            (DiscoveredLanguage::AdaConfig, "alire.toml", false),
+            (DiscoveredLanguage::AdaConfig, "alire.lock", false),
+            (DiscoveredLanguage::AdaConfig, "demo.gpr", true),
+            (DiscoveredLanguage::RConfig, "DESCRIPTION", false),
+            (DiscoveredLanguage::RConfig, "NAMESPACE", false),
+            (DiscoveredLanguage::RConfig, "renv.lock", false),
+            (DiscoveredLanguage::RConfig, ".Rprofile", true),
+            // Path-insensitive lanes.
+            (DiscoveredLanguage::FortranConfig, "fpm.toml", false),
+            (DiscoveredLanguage::Go, "cmd/demo/main.go", true),
+            (DiscoveredLanguage::GoConfig, "go.mod", false),
+            (DiscoveredLanguage::Ruby, "app/models/user.rb", true),
+            (DiscoveredLanguage::Swift, "Sources/App/main.swift", true),
+            (DiscoveredLanguage::VisualBasic, "src/Program.vb", true),
+            (DiscoveredLanguage::ObjectPascal, "src/Unit1.pas", true),
+            (DiscoveredLanguage::Ada, "ada/main.adb", true),
+            (DiscoveredLanguage::Fortran, "fortran/free.f90", true),
+            (DiscoveredLanguage::Sql, "schema.sql", true),
+            (DiscoveredLanguage::R, "R/main.R", true),
+            (DiscoveredLanguage::Matlab, "solver.m", true),
+            // Languages with a real source frontend are never inventory-only.
+            (DiscoveredLanguage::Python, "app/main.py", false),
+            (DiscoveredLanguage::Rust, "src/lib.rs", false),
+            (DiscoveredLanguage::Assembly, "boot.s", false),
+        ];
+
+        for (language, path, expected) in CASES {
+            let discovered = DiscoveredFile {
+                path: (*path).to_string(),
+                language: *language,
+                content_hash: strict_hash(
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                ),
+                size_bytes: 1,
+            };
+            let indexed = IndexedFileRecord {
+                path: (*path).to_string(),
+                content_hash: discovered.content_hash.clone(),
+                size_bytes: discovered.size_bytes,
+                language: language.as_str().to_string(),
+            };
+
+            assert_eq!(
+                discovered_file_is_inventory_only(&discovered),
+                *expected,
+                "discovered classification for {} {path}",
+                language.as_str()
+            );
+            assert_eq!(
+                indexed_file_is_inventory_only(&indexed),
+                *expected,
+                "indexed classification for {} {path}",
+                language.as_str()
+            );
+        }
     }
 
     fn assert_active_pydantic_validator_evidence(store: &impl IndexStore) {
