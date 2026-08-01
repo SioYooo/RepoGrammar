@@ -1250,10 +1250,12 @@ allowlist `canonical`, `support`, `variation`, and `exception`; the current
 builder emits `canonical` and `support`, plus a narrow Python `variation`
 label when a ready family's exact-compatible framework-anchor support targets
 differ. The builder may also emit metadata-only variation slots when
-parser-context profiles differ inside an already-supported Python family, but
-those slots do not imply variation evidence coverage. Requested exception
-coverage and broader variation coverage are reported as missing until family
-evidence is explicitly linked to variation slots or counterexamples. This
+parser-context profiles differ inside an already-supported family whose
+language has a variation-prefix table (Python, TS/JS, Java, C#, C/C++, and
+Rust), but those slots do not imply variation evidence coverage. Requested
+exception coverage and broader variation coverage are reported as missing
+until family evidence is explicitly linked to variation slots or
+counterexamples. This
 selector does not replace future medoid
 selection, template induction, or exception mining.
 

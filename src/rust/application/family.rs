@@ -580,6 +580,11 @@ fn family_claim_from_supported_evidence(
         &supported_evidence,
         features_by_unit,
     ));
+    variation_slots.extend(rust_context_variation_slots(
+        key,
+        &supported_evidence,
+        features_by_unit,
+    ));
     variation_slots.extend(non_blocking_unknown_variation_slots(&claim_unknowns));
     let assessment = assess_family_prevalence(prevalence_inputs);
     let prevalence = FamilyPrevalence {
@@ -896,6 +901,9 @@ fn variation_feature_prefixes(
     }
     if is_c_cpp_language(language) {
         return cpp_variation_feature_prefixes(framework_role);
+    }
+    if language == "rust" {
+        return rust_variation_feature_prefixes(framework_role);
     }
     &[]
 }
@@ -1478,6 +1486,83 @@ fn cpp_variation_feature_prefixes(
         "framework:gtest.fixture" => &[("cpp_test_fixture_shape", &["fixture_shape:"])],
         "framework:boost_test.suite" => &[("cpp_test_suite_shape", &["suite_shape:"])],
         _ => &[],
+    }
+}
+
+fn rust_context_variation_slots(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationSlot> {
+    if key.language != "rust" {
+        return Vec::new();
+    }
+    rust_variation_feature_prefixes(key.framework_role.as_str())
+        .iter()
+        .filter_map(|(slot_name, prefixes)| {
+            let profiles = evidence
+                .iter()
+                .map(|item| prefixed_feature_profile(item, features_by_unit, prefixes))
+                .collect::<BTreeSet<_>>();
+            let has_context = profiles.iter().any(|profile| !profile.is_empty());
+            (has_context && profiles.len() > 1).then(|| VariationSlot {
+                slot_id: format!("slot:{slot_name}"),
+                description: format!(
+                    "variation:{slot_name}:context metadata differs across supported members"
+                ),
+            })
+        })
+        .collect()
+}
+
+/// Rust variation dimensions per framework role, keyed by the raw (dotted)
+/// `framework_role` the way every sibling variation table is.
+///
+/// Each entry is disjoint from the same role's `rust_characteristic_prefixes`
+/// (keyed by the `stable_token` underscore form of the same role): characteristic
+/// prefixes are pinned equal across members by `rust_evidence_pair_is_compatible`,
+/// so they can never also be a legal variation. Only the prefixes
+/// `add_rust_family_features` can actually emit for the role appear here.
+///
+/// `import_context:` is deliberately absent. The only facts that produce it for
+/// Rust (`module:` targets and `rust_module_resolution=` assumptions) are bound to
+/// `RustUseItem`/`RustExternalModule` code units, which `rust_family_eligible_kind`
+/// excludes, so no Rust family member can carry that prefix.
+fn rust_variation_feature_prefixes(
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    match framework_role {
+        // serde pins the support family and the derived trait anchor; the derive
+        // attribute shape (`none` / `rename_all` / ...) may still differ.
+        "framework:serde.model" => &[("rust_serde_attr_shape", &["serde_attr_shape:"])],
+        // thiserror pins only the support family, so the `#[error(...)]` message
+        // shape (literal vs formatted) is the remaining emitted dimension.
+        "framework:thiserror.error" => {
+            &[("rust_thiserror_message_shape", &["error_message_shape:"])]
+        }
+        // clap pins only the support family, which is the same
+        // `clap.derive_parser` family for `Parser`, `Subcommand`, and `Args`, so
+        // both the derived trait anchor and the attribute shape may differ.
+        "framework:clap.parser" => &[
+            ("rust_clap_derive_target", &["framework_api_anchor:"]),
+            ("rust_clap_attr_shape", &["clap_attr_shape:"]),
+        ],
+        // axum pins the support family, the HTTP method, and the route path shape;
+        // the only other feature its anchor emits is the role-constant
+        // `anchor_kind:axum_route`, so no dimension may legally differ. The arm is
+        // explicit so axum never falls through to the self-dogfood dimensions.
+        "framework:axum.route" => &[],
+        // The tokio anchors emit only the role-constant `anchor_kind:` beyond the
+        // pinned support family, so they likewise have no variation dimension.
+        "framework:tokio.entry" | "framework:tokio.test" => &[],
+        // Self-dogfood roles pin their structural-shape profile, leaving the body
+        // call/control shape and the crate-layer path context (`rust_path_context`,
+        // e.g. `application` vs `adapters`) as the dimensions that may differ.
+        _ => &[
+            ("rust_self_dogfood_call_shape", &["call_shape:"]),
+            ("rust_self_dogfood_control_shape", &["control_shape:"]),
+            ("rust_self_dogfood_path_context", &["path_context:"]),
+        ],
     }
 }
 
@@ -6080,6 +6165,184 @@ mod tests {
             claim.framework_role == "framework:repogrammar.rust_parser_adapter"
                 && claim.support == 3
         }));
+    }
+
+    /// Every framework role a Rust unit can carry: the six general-framework roles
+    /// from `adapters::frameworks::rust_general` and the nine self-dogfood roles
+    /// from `core::policy::rust_self_dogfood`.
+    const RUST_FRAMEWORK_ROLES: [&str; 15] = [
+        "framework:serde.model",
+        "framework:thiserror.error",
+        "framework:clap.parser",
+        "framework:axum.route",
+        "framework:tokio.entry",
+        "framework:tokio.test",
+        "framework:repogrammar.rust_cli_command",
+        "framework:repogrammar.rust_mcp_handler",
+        "framework:repogrammar.rust_indexing_phase",
+        "framework:repogrammar.rust_family_gate",
+        "framework:repogrammar.rust_parser_adapter",
+        "framework:repogrammar.rust_installer_action",
+        "framework:repogrammar.rust_storage_validation",
+        "framework:repogrammar.rust_source_span_renderer",
+        "framework:repogrammar.rust_product_test",
+    ];
+
+    #[test]
+    fn rust_variation_dimensions_are_disjoint_from_characteristic_prefixes() {
+        // The two tables key the same role differently: the variation table by the
+        // raw dotted role, the characteristic table by its `stable_token` form.
+        // A characteristic prefix is pinned equal across every member, so it can
+        // never also be a dimension along which members legally differ.
+        for role in RUST_FRAMEWORK_ROLES {
+            let characteristic = rust_characteristic_prefixes(&stable_token(role));
+            assert!(
+                !characteristic.is_empty(),
+                "rust role {role} must pin at least one characteristic prefix"
+            );
+            for (dimension, prefixes) in variation_feature_prefixes("rust", role) {
+                for prefix in *prefixes {
+                    assert!(
+                        !characteristic.contains(prefix),
+                        "rust dimension {dimension} reuses characteristic prefix {prefix} \
+                         for role {role}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rust_roles_declare_variation_dimensions_through_the_shared_dispatch() {
+        // Guards the defect this table fixes: `variation_feature_prefixes` used to
+        // fall through to the empty language default for rust, silently emitting no
+        // slots and no allowed-variation constraints. Only axum and the tokio
+        // entrypoints legitimately have none (their anchors emit nothing beyond the
+        // pinned support family and a role-constant `anchor_kind:`).
+        let intentionally_empty = [
+            "framework:axum.route",
+            "framework:tokio.entry",
+            "framework:tokio.test",
+        ];
+        for role in RUST_FRAMEWORK_ROLES {
+            let dimensions = variation_feature_prefixes("rust", role);
+            assert_eq!(
+                dimensions.is_empty(),
+                intentionally_empty.contains(&role),
+                "unexpected rust variation coverage for role {role}"
+            );
+        }
+        // The general-framework arms must be explicit, never the self-dogfood
+        // fallback that pins structural shapes the general anchors never emit.
+        let self_dogfood =
+            variation_feature_prefixes("rust", "framework:repogrammar.rust_family_gate");
+        for role in ["framework:serde.model", "framework:thiserror.error"] {
+            assert_ne!(
+                variation_feature_prefixes("rust", role),
+                self_dogfood,
+                "general rust role {role} must not fall through to the self-dogfood arm"
+            );
+        }
+    }
+
+    fn rust_self_dogfood_fact(
+        unit: &IndexedCodeUnitRecord,
+        role: &str,
+        target: &str,
+        call_shape: &str,
+        path_context: &str,
+    ) -> SemanticFact {
+        let mut fact = rust_derived_fact(unit, target, role);
+        fact.assumptions.extend([
+            "rust_anchor_kind=storage_validation".to_string(),
+            "rust_signature_shape=fn_result".to_string(),
+            "rust_visibility_shape=pub_crate".to_string(),
+            "rust_arity_shape=two".to_string(),
+            "rust_return_shape=result".to_string(),
+            "rust_attribute_shape=none".to_string(),
+            "rust_error_shape=typed".to_string(),
+            "rust_test_shape=none".to_string(),
+            "rust_control_shape=linear".to_string(),
+            format!("rust_call_shape={call_shape}"),
+            format!("rust_path_context={path_context}"),
+        ]);
+        fact
+    }
+
+    #[test]
+    fn rust_self_dogfood_family_emits_call_shape_and_path_context_variation() {
+        // Two members in the application layer with a direct call shape plus one in
+        // the adapter layer with a chained one: the members stay compatible (their
+        // characteristic structural shapes are equal) but now legally differ along
+        // the two dimensions the rust variation table declares. Control shape is
+        // identical everywhere, so it must produce neither slot nor constraint.
+        let role = "framework:repogrammar.rust_storage_validation";
+        let target = "repogrammar.rust.storage_validation";
+        let members = [
+            ("src/rust/application/storage.rs", "direct", "application"),
+            ("src/rust/application/session.rs", "direct", "application"),
+            (
+                "src/rust/adapters/persistence/sqlite.rs",
+                "chained",
+                "adapters",
+            ),
+        ];
+        let mut units = Vec::new();
+        let mut facts = Vec::new();
+        for (index, (path, call_shape, path_context)) in members.into_iter().enumerate() {
+            let unit = unit_with_language(path, "rust", "rust_function", index);
+            facts.push(role_fact(&unit, role));
+            facts.push(rust_self_dogfood_fact(
+                &unit,
+                role,
+                target,
+                call_shape,
+                path_context,
+            ));
+            units.push(unit);
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1, "{report:?}");
+        let claim = &report.claims[0];
+        assert_eq!(claim.language, "rust");
+        assert_eq!(claim.support, 3);
+
+        let slot_ids = claim
+            .variation_slots
+            .iter()
+            .map(|slot| slot.slot_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(slot_ids.contains("slot:rust_self_dogfood_call_shape"));
+        assert!(slot_ids.contains("slot:rust_self_dogfood_path_context"));
+        assert!(!slot_ids.contains("slot:rust_self_dogfood_control_shape"));
+
+        let call_shape =
+            variation_constraint(&claim.constraint_profile, "rust_self_dogfood_call_shape")
+                .expect("call shape varies across the self-dogfood members");
+        assert!(!call_shape.includes_absent_profile);
+        assert_eq!(call_shape.observed_profiles.len(), 2);
+        let path_context =
+            variation_constraint(&claim.constraint_profile, "rust_self_dogfood_path_context")
+                .expect("path context varies across the self-dogfood members");
+        assert_eq!(path_context.observed_profiles.len(), 2);
+        assert!(
+            variation_constraint(&claim.constraint_profile, "rust_self_dogfood_control_shape")
+                .is_none()
+        );
+
+        // Same co-persistence agreement the Python and TS/JS families assert: for
+        // every dimension the rust table can emit, slot and constraint agree.
+        for entry in variation_feature_prefixes(&claim.language, claim.framework_role.as_str()) {
+            let dimension = entry.0;
+            let slot_present = slot_ids.contains(format!("slot:{dimension}").as_str());
+            let constraint_present =
+                variation_constraint(&claim.constraint_profile, dimension).is_some();
+            assert_eq!(
+                slot_present, constraint_present,
+                "variation slot and constraint disagree for dimension {dimension}"
+            );
+        }
     }
 
     #[test]
