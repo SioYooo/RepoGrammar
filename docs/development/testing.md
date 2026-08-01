@@ -272,7 +272,8 @@ allowed.
   absence of SQL literals or absolute paths. Tests must prove that path labels
   do not select PostgreSQL, SQLite, or another dialect and that no database,
   client, migration tool, extension dependency, semantic fact, or family runs.
-- R discovery/config tests must cover exact `.R`, `DESCRIPTION`, `NAMESPACE`,
+- R discovery/config tests must cover exact `.R` and `.r`, `DESCRIPTION`,
+  `NAMESPACE`,
   and `renv.lock`; R-specific managed-library/IDE exclusions; binary source;
   source-store reads limited to the three metadata basenames; DCF continuation,
   duplicate/malformed fields, official dependency fields, literal namespace

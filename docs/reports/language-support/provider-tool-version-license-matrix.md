@@ -29,7 +29,7 @@ nothing in default indexing.
 | Flang/f18 | no admitted version | LLVM licensing known upstream; exact artifact/closure not qualified | `NO_GO` for current zero-execution lane | prescan/include/preprocess behavior violates current boundary |
 | GNU `as` profile | candidate behavior documented against 2.46, x86-64 ELF AT&T | external GNU tool not bundled or executed | internal lexical scanner only | extension and spellings do not prove dialect, instruction validity, or symbols |
 | MATLAB/Code Analyzer | no admitted release/provider | proprietary licensed tool; redistribution and headless isolation unresolved | not integrated | `mpackage.json` static metadata only; no MATLAB/Octave execution |
-| R parser/runtime/languageserver | no pin | not qualified | no provider | `.R` source remains zero-read |
+| R parser/runtime/languageserver | no pin | not qualified | no provider | `.R`/`.r` source remains zero-read |
 | SQL grammar/database/catalog provider | no pin | not qualified | no provider | no database/client/migration execution or dialect selection |
 | Scratch ZIP/deflate + VM | no admitted dependency | dependency/license/security qualification absent | product `NO_GO`; disconnected stored-entry preflight | no `.sb3` discovery, common deflate, VM, extension execution, or family |
 

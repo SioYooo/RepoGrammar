@@ -1141,6 +1141,8 @@ mod tests {
         }
         fs::write(workspace.path().join("R/main.R"), [0xff, 0xfe, 0xfd])
             .expect("write binary R source inventory");
+        fs::write(workspace.path().join("R/model.r"), [0xff, 0xfe, 0xfd])
+            .expect("write binary lowercase R source inventory");
         fs::write(
             workspace
                 .path()
@@ -1149,11 +1151,24 @@ mod tests {
         )
         .expect("write managed R library source");
         fs::write(
+            workspace
+                .path()
+                .join("renv/library/R-4.4/pkg/R/lowercase.r"),
+            "ignored\n",
+        )
+        .expect("write managed lowercase R library source");
+        fs::write(
             workspace.path().join(".Rproj.user/session/history.R"),
             "ignored\n",
         )
         .expect("write RStudio state source");
-        for path in ["other.SQL", "main.r", ".Rprofile", "project.Rproj"] {
+        for path in [
+            "other.SQL",
+            ".Rprofile",
+            "project.Rproj",
+            "notes.Rmd",
+            "report.rmd",
+        ] {
             fs::write(workspace.path().join(path), "deferred\n")
                 .expect("write deferred SQL/R candidate");
         }
@@ -1174,6 +1189,7 @@ mod tests {
                 ("DESCRIPTION", DiscoveredLanguage::RConfig),
                 ("NAMESPACE", DiscoveredLanguage::RConfig),
                 ("R/main.R", DiscoveredLanguage::R),
+                ("R/model.r", DiscoveredLanguage::R),
                 ("catalog.sql", DiscoveredLanguage::SqlCatalog),
                 (
                     "db/migrations/001_init.sql",
@@ -1188,12 +1204,24 @@ mod tests {
         for path in [
             ".Rproj.user/session/history.R",
             "renv/library/R-4.4/pkg/R/generated.R",
+            "renv/library/R-4.4/pkg/R/lowercase.r",
         ] {
-            assert!(report.skipped.iter().any(|skipped| {
-                skipped.path == path && skipped.reason == SkippedReason::LanguageSpecificExclusion
-            }));
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path
+                        && skipped.reason == SkippedReason::LanguageSpecificExclusion
+                }),
+                "{path}: {:?}",
+                report.skipped
+            );
         }
-        for path in ["other.SQL", "main.r", ".Rprofile", "project.Rproj"] {
+        for path in [
+            "other.SQL",
+            ".Rprofile",
+            "project.Rproj",
+            "notes.Rmd",
+            "report.rmd",
+        ] {
             assert!(
                 report.skipped.iter().any(|skipped| {
                     skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension

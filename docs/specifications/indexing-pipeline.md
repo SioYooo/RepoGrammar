@@ -64,7 +64,7 @@ when an explicit worker is configured.
 
 SQL and R remain `discovered_only`. Exact SQL bytes never cross the source-store
 boundary; `sql`, `sql-migration`, `sql-schema`, and `sql-catalog` are file
-manifest labels with dialect UNKNOWN. Exact `.R` bytes likewise remain
+manifest labels with dialect UNKNOWN. Exact `.R` and `.r` bytes likewise remain
 inventory-only. Only exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` are read
 through the bounded source store and dispatched to the `r-config` adapter.
 That adapter emits project-config/typed-UNKNOWN records and admits only explicit

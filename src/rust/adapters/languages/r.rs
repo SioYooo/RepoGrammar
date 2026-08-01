@@ -1,6 +1,6 @@
 //! Non-executing R source and project-metadata path classification.
 //!
-//! Only exact `.R` source files and exact `DESCRIPTION`, `NAMESPACE`, and
+//! Only exact `.R`/`.r` source files and exact `DESCRIPTION`, `NAMESPACE`, and
 //! `renv.lock` basenames are admitted. No R profile, project file, package
 //! archive, generated library, or executable package code is classified as
 //! project metadata.
@@ -35,7 +35,7 @@ impl RLanguageAdapter {
         };
         let classification = if matches!(file_name, "DESCRIPTION" | "NAMESPACE" | "renv.lock") {
             RPathClassification::Config
-        } else if file_name.ends_with(".R") {
+        } else if file_name.ends_with(".R") || file_name.ends_with(".r") {
             RPathClassification::Source
         } else {
             RPathClassification::NotR
@@ -70,10 +70,20 @@ mod tests {
 
     #[test]
     fn classifies_exact_sources_and_supported_metadata() {
-        for path in ["main.R", ".R", "R/model.R", "nested/main.R"] {
+        for path in [
+            "main.R",
+            ".R",
+            "R/model.R",
+            "nested/main.R",
+            "main.r",
+            ".r",
+            "R/model.r",
+            "nested/main.r",
+        ] {
             assert_eq!(
                 RLanguageAdapter::classify_path(path),
-                RPathClassification::Source
+                RPathClassification::Source,
+                "{path}"
             );
         }
         for path in [
@@ -100,9 +110,11 @@ mod tests {
             "DESCRIPTION.in",
             "NAMESPACE.in",
             "renv.lock.json",
-            "main.r",
             "main.Rmd",
+            "main.rmd",
             "main.Rhistory",
+            "main.Rdata",
+            "main.rda",
         ] {
             assert_eq!(
                 RLanguageAdapter::classify_path(path),
@@ -143,16 +155,32 @@ mod tests {
                 "nested/.Rproj.user/session/main.R",
                 RPathExclusion::RProjectStateDirectory,
             ),
+            (
+                "renv/library/R-4.4/pkg/R/code.r",
+                RPathExclusion::RenvManagedDirectory,
+            ),
+            (
+                ".Rproj.user/session/main.r",
+                RPathExclusion::RProjectStateDirectory,
+            ),
+            (
+                "packrat/lib/pkg/R/code.r",
+                RPathExclusion::PackratManagedDirectory,
+            ),
         ] {
             assert_eq!(
                 RLanguageAdapter::classify_path(path),
-                RPathClassification::Excluded(expected)
+                RPathClassification::Excluded(expected),
+                "{path}"
             );
         }
-        assert_eq!(
-            RLanguageAdapter::classify_path("renv/activate.R"),
-            RPathClassification::Source
-        );
+        for path in ["renv/activate.R", "renv/activate.r"] {
+            assert_eq!(
+                RLanguageAdapter::classify_path(path),
+                RPathClassification::Source,
+                "{path}"
+            );
+        }
     }
 
     #[test]
@@ -161,7 +189,6 @@ mod tests {
             "description",
             "namespace",
             "RENV.LOCK",
-            "main.r",
             "",
             "/main.R",
             "./main.R",
@@ -169,6 +196,9 @@ mod tests {
             "R//main.R",
             "R\\main.R",
             "file://main.R",
+            "/main.r",
+            "./main.r",
+            "R/../main.r",
         ] {
             assert_eq!(
                 RLanguageAdapter::classify_path(path),

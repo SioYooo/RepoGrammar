@@ -168,7 +168,8 @@ and source-free artifact classification. All map to the internal SQL language
 identity, but no SQL `CodeUnit` exists and no token proves a dialect or semantic
 role. SQL dialect is contractually UNKNOWN; no semantic fact is fabricated
 without code-unit evidence.
-R discovery defines stable `r` and `r-config` tokens. Exact `.R` source is
+R discovery defines stable `r` and `r-config` tokens. Exact `.R` and `.r`
+source is
 inventory-only. Exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` create bounded
 `project_config` units and claim-scoped `r_dependency_inventory` UNKNOWNs.
 Only explicit renv CRAN/Bioconductor identities become dependency rows with

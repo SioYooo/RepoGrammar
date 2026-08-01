@@ -7,8 +7,8 @@
 
 ## ADR-0020 gate
 
-- [x] Discovery/configuration — exact `.R`, `DESCRIPTION`, `NAMESPACE`, and
-  `renv.lock`, R-specific exclusions, bounded dependency metadata, typed
+- [x] Discovery/configuration — exact `.R`/`.r`, `DESCRIPTION`, `NAMESPACE`,
+  and `renv.lock`, R-specific exclusions, bounded dependency metadata, typed
   inventory uncertainty, persistence, and incremental behavior are covered.
 - [ ] Authoritative sandboxed R source frontend and selected project/profile.
 - [ ] RepoGrammar-owned R source code units and IR.
@@ -25,8 +25,8 @@
 
 ## Current evidence and blocker
 
-`.R` bytes are never decoded or parsed. The metadata adapter is static and
-non-executing. DESCRIPTION/NAMESPACE package declarations abstain when CRAN
+`.R` and `.r` bytes are never decoded or parsed. The metadata adapter is static
+and non-executing. DESCRIPTION/NAMESPACE package declarations abstain when CRAN
 versus Bioconductor cannot be proved. renv rows retain unknown directness and
 scope; remote/custom/local sources are omitted without retaining their values.
 No R, renv, profile, package, native code, repository script, child process, or
@@ -42,15 +42,15 @@ support. No R family, provider, support, or readiness exists.
 | Required field | Audited result |
 |---|---|
 | Language / rank | R / 9 |
-| Dialect/version | Exact `.R` is inventory-only; no R release, platform, project, library path, profile, renv activation, native-code, or repository selection. |
+| Dialect/version | Exact `.R`/`.r` is inventory-only; no R release, platform, project, library path, profile, renv activation, native-code, or repository selection. |
 | Provider/frontend/version | None; no R parser, languageserver, compiler/runtime, or provider version. |
-| Discovery/config | `.R`, `DESCRIPTION`, `NAMESPACE`, and `renv.lock` with managed-library/IDE exclusions. |
+| Discovery/config | `.R`, `.r`, `DESCRIPTION`, `NAMESPACE`, and `renv.lock` with managed-library/IDE exclusions. |
 | Manifest/lockfile | Bounded DESCRIPTION/NAMESPACE declarations plus exact explicit CRAN/Bioconductor `renv.lock` versions; ambiguous registries and remote/custom/local sources are omitted. |
 | Owned source IR / external symbols | Both absent; package imports, S3/S4/R6 dispatch, native symbols, NSE, and generated code are unresolved. |
 | Library Contracts | Registry exists, production packs = 0; inventory never creates a behavior contract. |
 | Exact family / fixtures | No family. Strong DCF/JSON/resource/remote-source/leakage/incremental tests; no R source-family corpus. |
 | Primary UNKNOWN cases | Repository identity, selected lock/project/profile, remote sources, package directness/scope, NSE/metaprogramming, dispatch, native code, and provider availability. |
-| Source-free / security | Metadata results are source-free; `.R` is zero-read; no R, renv, package/profile script, native code, child, repository code, or network runs. |
+| Source-free / security | Metadata results are source-free; `.R`/`.r` is zero-read; no R, renv, package/profile script, native code, child, repository code, or network runs. |
 | Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only explicit registry evidence and

@@ -61,7 +61,8 @@ production-readiness claim.
   Dialect remains UNKNOWN; no SQL bytes are decoded, no database or migration
   tool is contacted, and no code unit, semantic UNKNOWN, dependency, family,
   provider, support, or readiness exists.
-- R is discovered-only and unsupported. Exact `.R` source is never decoded.
+- R is discovered-only and unsupported. Exact `.R` and `.r` source is never
+  decoded.
   Bounded `DESCRIPTION`/`NAMESPACE` parsing cannot prove CRAN versus
   Bioconductor, so ambiguous declarations remain typed inventory UNKNOWN and
   produce no dependency row. Exact `renv.lock` admits only explicit CRAN or

@@ -334,7 +334,8 @@ Any future dialect frontend or extension manifest requires a separate pinned,
 source-backed dependency and sandbox qualification.
 
 R discovery belongs in `adapters/languages/r.rs`; bounded metadata parsing
-belongs in `adapters/parsing/r.rs`. `.R` source is inventory-only. The parser may
+belongs in `adapters/parsing/r.rs`. `.R` and `.r` source is inventory-only. The
+parser may
 read only exact supplied `DESCRIPTION`, `NAMESPACE`, and `renv.lock` bytes and
 must not run R, parse/eval/source R code, profiles, renv, packages, native code,
 children, or network operations. DESCRIPTION/NAMESPACE cannot default to CRAN.

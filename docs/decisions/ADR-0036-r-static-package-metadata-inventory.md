@@ -34,14 +34,15 @@ Primary sources reviewed on 2026-08-01:
 
 ## Decision
 
-R remains `discovered_only` and unsupported. Discovery admits exact
-case-sensitive `.R` source plus exact root/nested basenames `DESCRIPTION`,
-`NAMESPACE`, and `renv.lock`. R source is inventory-only and is never decoded or
-parsed. Managed `renv/library`, `renv/cache`, `renv/staging`, `.Rproj.user`, and
-packrat library candidates are R-specific exclusions; they do not globally
-prune unrelated languages. `.Rprofile`, `.Renviron`, `.Rproj`, `.Rmd`, lowercase
-`.r`, renv activation code, and executable project/package selectors are not R
-metadata inputs.
+R remains `discovered_only` and unsupported. Discovery admits exact `.R` and
+exact lowercase `.r` source plus exact root/nested basenames `DESCRIPTION`,
+`NAMESPACE`, and `renv.lock`. Both source spellings are source, not metadata:
+neither is decoded, parsed, or routed to the `r-config` adapter, and they are
+inventory-only. Managed `renv/library`, `renv/cache`, `renv/staging`,
+`.Rproj.user`, and packrat library candidates are R-specific exclusions applied
+identically to both source spellings; they do not globally prune unrelated
+languages. `.Rprofile`, `.Renviron`, `.Rproj`, `.Rmd`, renv activation code,
+and executable project/package selectors are not R metadata inputs.
 
 The three admitted metadata files enter one bounded, pure Rust, non-executing
 `r-config` adapter:
