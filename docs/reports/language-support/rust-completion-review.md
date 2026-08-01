@@ -73,8 +73,15 @@ and preserve macro/trait behavior as `UNKNOWN`.
 
 ### Exact families and typed `UNKNOWN`
 
-Self-dogfood families cover repeated RepoGrammar implementation roles. General
-preview families use exact same-file imports or FQNs for serde derive models,
+Self-dogfood families cover repeated RepoGrammar implementation roles. Every
+`framework:repogrammar.rust_*` role in
+`src/rust/core/policy/rust_self_dogfood.rs` is gated on RepoGrammar's own
+non-standard `src/rust/<documented-module-root>/` layout, where the accepted
+roots are exactly the ones documented in `docs/architecture/module-map.md`. The
+gate applies before every rule, so the previously path-independent rules (any
+`#[test]` function, any name containing `mcp`/`tools_call`, any `handle_*` name)
+can no longer brand a third-party Rust repository. General preview families use
+exact same-file imports or FQNs for serde derive models,
 thiserror error enums, tokio entry/tests, clap derives, and literal axum routes.
 The shared family gate requires support at least three and compatible profiles;
 `repogrammar-rust-derived`/`bounded_tree_sitter_anchor_v1` is structural derived
@@ -173,7 +180,9 @@ count.**
   `src/rust/ports/rust_provider.rs`, `src/rust/core/model/provider.rs`,
   `src/rust/application/providers.rs`
 - Family/pipeline: `src/rust/adapters/frameworks/rust_general.rs`,
+  `src/rust/core/policy/rust_self_dogfood.rs`,
   `src/rust/application/indexing.rs`, `src/rust/application/family.rs`
+- Self-dogfood layout roots: `docs/architecture/module-map.md`
 - Fixtures: `src/fixtures/rust/release/v0_2/`,
   `src/fixtures/unknown_reduction/rust_module_unresolved/`,
   `src/fixtures/unknown_reduction/rust_module_resolved/`,
@@ -220,6 +229,21 @@ prerequisite chain:
   generated implementations or trait dispatch.
 - Self-dogfood evidence is RepoGrammar-specific and cannot be generalized to all
   Rust repositories.
+- The self-dogfood layout gate is **not proof of repository identity**. It
+  establishes only that a unit's repo-relative path sits inside
+  `src/rust/<documented-module-root>/`. An ordinary Rust crate places sources
+  directly under `src/`, so this is a strong signal, but any repository may
+  adopt the same directory names, and this policy holds no remote, manifest
+  identity, or content evidence with which to refute that. The residual
+  misattribution risk stays `UNKNOWN`: this lane does not claim that a gated
+  unit belongs to RepoGrammar, only that it is layout-eligible for a
+  RepoGrammar-internal structural role.
+- The gate is deliberately narrower than the on-disk tree. Paths directly under
+  `src/rust/` and roots the module map does not document (currently
+  `src/rust/config/` and `src/rust/error/`, which hold no `#[test]` functions
+  today) receive no role. Adding a module root to `src/rust/` therefore requires
+  the matching `docs/architecture/module-map.md` row before its units can carry
+  a self-dogfood role.
 - Build scripts and procedural macros remain intentionally unexecuted; their
   affected facts must stay `UNKNOWN`.
 
