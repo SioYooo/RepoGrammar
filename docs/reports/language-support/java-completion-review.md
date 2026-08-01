@@ -97,7 +97,7 @@ obligations, complete fixture/readiness matrices, and final linked audit.
 | G3 RepoGrammar-owned units/IR | Satisfied | Java structural code/framework units and IR are RepoGrammar-owned. |
 | G4 Typed `UNKNOWN` / fallback | Partial | Parse, generated/Lombok, data-provider, and Maven abstentions exist; effective-model/classpath/provider obligations are incomplete. |
 | G5 Exact recurring family | Satisfied | Exact Spring MVC, JUnit 5, JPA, and JAX-RS families have support-at-least-three product evidence. |
-| G6 Completion fixture matrix | Partial | Exact, lookalike, low-support, data-provider, and unknown-reduction fixtures exist; the complete version/config/stale/conflict/provider matrix does not. |
+| G6 Completion fixture matrix | Partial | `src/fixtures/java/release/v0_2/` holds exact (Spring MVC, JUnit 5, JPA, JAX-RS), lookalike (`test_annotation_lookalikes`), low-support (`low_support`), and same-class data-provider (`test_data_local_resolution`) fixtures, plus the `src/fixtures/unknown_reduction/java_*` pairs; the complete version/config/stale/conflict/provider matrix does not exist. |
 | G7 Source-free readiness | Partial | Strong Maven no-execution/leakage and family tests exist; the full Java public-surface and provider-fallback matrix is incomplete. |
 | G8 Four-part review | Satisfied by this snapshot | This document records findings and bounds; unresolved findings remain blockers/risks and require tests. |
 | G9 Atomic delivery/final audit | Open | Exact substrate SHAs exist, but no completion audit verifies a chain satisfying all nine gates. |

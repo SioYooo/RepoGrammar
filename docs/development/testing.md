@@ -552,9 +552,11 @@ allowed.
   non-clustering, JAX-RS/Jakarta REST `@Path` resource classes and verb methods
   with a verb-outside-`@Path` block, mixed JUnit 4/5 `@Test` conflict blocking,
   Lombok non-blocking generated-members `UNKNOWN`, Spring Data derived-query
-  metadata as non-support, the `test_annotation_lookalikes` negative smoke, and
-  the `java_junit_unresolved`/`java_junit_resolved` benchmark pair
-  (`java_test_annotation_model`).
+  metadata as non-support, the `test_annotation_lookalikes` negative smoke, the
+  `java_junit_unresolved`/`java_junit_resolved` benchmark pair
+  (`java_test_annotation_model`), and the `low_support` fixture, whose single
+  exact-anchored Spring MVC route must resolve its anchor while forming no
+  family and emitting no claim payload.
 - Java test-data-link tests must cover exact same-class/class-like JUnit
   `@MethodSource` scalar, array, direct-repeatable, blank/omitted same-name, and
   complete-set resolution; coexistence with `ValueSource`/`CsvSource`; exact

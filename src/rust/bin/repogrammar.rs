@@ -7267,6 +7267,67 @@ mod tests {
         );
     }
 
+    /// A single exact Spring MVC route is a resolvable-but-lonely member: the
+    /// unit is indexed and its framework anchor is derived, yet support stays
+    /// below the min-support-3 family threshold, so no family row and no claim
+    /// payload may reach the product surface.
+    #[test]
+    fn java_low_support_stays_unknown_without_family_rows() {
+        const LOW_SUPPORT_PATH: &str =
+            "src/main/java/com/example/lowsupport/SingleRouteController.java";
+        let (workspace, runtime) =
+            index_java_release_v0_2_fixture("low_support", "java-release-low-support");
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let java_unit_kinds = units_json["units"]
+            .as_array()
+            .expect("units array")
+            .iter()
+            .filter(|unit| unit["language"] == "java")
+            .filter_map(|unit| unit["kind"].as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            java_unit_kinds.contains(&"spring_mvc_route"),
+            "low-support fixture must still index its Java route unit; got {java_unit_kinds:?}"
+        );
+
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        let route_derived = derived
+            .iter()
+            .filter(|(path, target, _)| {
+                path == LOW_SUPPORT_PATH && target == "spring.web.bind.annotation.GetMapping"
+            })
+            .count();
+        assert_eq!(
+            route_derived, 1,
+            "low-support fixture must derive exactly one route anchor: {derived:?}"
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "UNKNOWN");
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
+        assert_no_output_leakage("families", &families.stdout, &workspace);
+
+        for command in ["family", "member", "find", "explain", "check"] {
+            let output = run_with_runtime(
+                cli_args(command, workspace.path(), &[LOW_SUPPORT_PATH, "--json"]),
+                &runtime,
+            );
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_unknown_query_json(command, &value);
+            assert_no_claim_payload(command, &value);
+        }
+    }
+
     fn index_csharp_release_v0_2_fixture(
         fixture: &str,
         prefix: &str,
