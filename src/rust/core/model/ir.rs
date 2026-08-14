@@ -105,7 +105,9 @@ impl IrNodeKind {
             CodeUnitKind::PydanticModel => Self::PydanticModel,
             CodeUnitKind::SqlAlchemyModel => Self::SqlAlchemyModel,
             CodeUnitKind::SqlAlchemyRepositoryMethod => Self::SqlAlchemyRepositoryMethod,
-            CodeUnitKind::DjangoModel | CodeUnitKind::DjangoTest => Self::Class,
+            CodeUnitKind::DjangoModel
+            | CodeUnitKind::DjangoTest
+            | CodeUnitKind::MarshmallowSchema => Self::Class,
             CodeUnitKind::DjangoUrlPattern
             | CodeUnitKind::FlaskRoute
             | CodeUnitKind::ClickCommand

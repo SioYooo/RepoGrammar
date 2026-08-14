@@ -31,8 +31,8 @@ code, runtime import hooks, arbitrary packaging frontends, and
 environment-specific import behavior are outside the completed scope.
 
 The official v0.1 framework focus remains FastAPI, pytest, SQLAlchemy, and
-Pydantic. Django, Flask, unittest, click/typer, and Celery are separate bounded
-preview slices and do not widen this completion decision.
+Pydantic. Django, Flask, unittest, click/typer, Celery, and marshmallow are
+separate bounded preview slices and do not widen this completion decision.
 
 ## Current implementation evidence
 

@@ -3165,7 +3165,7 @@ fn python_evidence_pair_is_compatible(
             non_builtin_pytest_fixture_context(left, features_by_unit)
                 == non_builtin_pytest_fixture_context(right, features_by_unit)
         }
-        "framework_pydantic_model" => {
+        "framework_pydantic_model" | "framework_marshmallow_schema" => {
             equal_feature_profiles(left, right, features_by_unit, &["class_base:"])
         }
         "framework_sqlalchemy_model" | "framework_sqlalchemy_repository_method" => {
@@ -3709,7 +3709,7 @@ fn characteristic_profile_prefixes(
 fn python_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
     match framework_role {
         "framework_fastapi_route" => &["decorator_shape:"],
-        "framework_pydantic_model" => &["class_base:"],
+        "framework_pydantic_model" | "framework_marshmallow_schema" => &["class_base:"],
         "framework_django_url_pattern" => &["route_path_shape:"],
         "framework_flask_route" => &["http_method:", "route_path_shape:"],
         // pytest is handled by `cluster_characteristic_profile` directly; the
@@ -3975,6 +3975,7 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
             _ => "pytest.test_anchor".to_string(),
         },
         "framework:pytest.fixture" => "pytest.fixture_decorator".to_string(),
+        "framework:marshmallow.schema" => "marshmallow.schema_base".to_string(),
         "framework:pydantic.model" => match target {
             "pydantic.BaseSettings" | "pydantic_settings.BaseSettings" => {
                 "pydantic.settings_base".to_string()
@@ -4580,6 +4581,7 @@ pub(crate) fn python_support_target_is_role_compatible(
             Some(matches!(target, "pytest.test" | "pytest.mark.parametrize"))
         }
         "framework:pytest.fixture" => Some(matches!(target, "pytest.fixture")),
+        "framework:marshmallow.schema" => Some(target == "marshmallow.Schema"),
         "framework:pydantic.model" => Some(matches!(
             target,
             "pydantic.BaseModel" | "pydantic.BaseSettings" | "pydantic_settings.BaseSettings"
@@ -4637,6 +4639,7 @@ pub(crate) fn python_framework_role_is_known(framework_role: &str) -> bool {
         || framework_role.starts_with("framework:click")
         || framework_role.starts_with("framework:typer")
         || framework_role.starts_with("framework:celery")
+        || framework_role.starts_with("framework:marshmallow")
 }
 
 fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
@@ -4676,6 +4679,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "pytest_test"
             | "pytest_fixture"
             | "pydantic_model"
+            | "marshmallow_schema"
             | "sqlalchemy_model"
             | "sqlalchemy_repository_method"
             | "django_model"
@@ -4942,6 +4946,7 @@ mod tests {
             "pytest_test" => Some("framework:pytest.test"),
             "pytest_fixture" => Some("framework:pytest.fixture"),
             "pydantic_model" => Some("framework:pydantic.model"),
+            "marshmallow_schema" => Some("framework:marshmallow.schema"),
             "sqlalchemy_model" => Some("framework:sqlalchemy.model"),
             "sqlalchemy_repository_method" => Some("framework:sqlalchemy.repository_method"),
             _ => None,

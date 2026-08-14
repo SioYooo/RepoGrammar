@@ -2108,6 +2108,7 @@ fn code_unit_kind(value: &str) -> Option<CodeUnitKind> {
         "django_model" => Some(CodeUnitKind::DjangoModel),
         "django_url_pattern" => Some(CodeUnitKind::DjangoUrlPattern),
         "django_test" => Some(CodeUnitKind::DjangoTest),
+        "marshmallow_schema" => Some(CodeUnitKind::MarshmallowSchema),
         "flask_route" => Some(CodeUnitKind::FlaskRoute),
         "unittest_test_method" => Some(CodeUnitKind::UnittestTestMethod),
         "click_command" => Some(CodeUnitKind::ClickCommand),

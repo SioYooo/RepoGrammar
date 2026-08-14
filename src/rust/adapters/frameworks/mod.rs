@@ -108,6 +108,11 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
             "CPython ast code unit indicates pytest fixture role",
             "pytest fixture graph unresolved",
         ),
+        CodeUnitKind::MarshmallowSchema => (
+            "framework:marshmallow.schema",
+            "CPython ast code unit indicates marshmallow schema role",
+            "marshmallow load/dump validation behavior unresolved",
+        ),
         CodeUnitKind::PydanticModel => (
             "framework:pydantic.model",
             "CPython ast code unit indicates Pydantic model role",

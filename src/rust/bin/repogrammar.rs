@@ -6412,6 +6412,13 @@ mod tests {
             member_role: "framework:unittest.test",
         },
         PythonExactAnchorSmokeCase {
+            fixture: "marshmallow_exact_schemas",
+            family_id: "family:python:marshmallow_schema:framework_marshmallow_schema",
+            support_target: "marshmallow.Schema",
+            evidence_path: "schemas.py",
+            member_role: "framework:marshmallow.schema",
+        },
+        PythonExactAnchorSmokeCase {
             fixture: "django_urls_exact",
             family_id: "family:python:django_url_pattern:framework_django_url_pattern",
             support_target: "django.urls.path",
@@ -6513,7 +6520,11 @@ mod tests {
 
     #[test]
     fn python_v0_2_preview_lookalikes_and_low_support_form_no_family() {
-        for fixture in ["framework_lookalikes", "low_support"] {
+        for fixture in [
+            "framework_lookalikes",
+            "low_support",
+            "marshmallow_lookalikes",
+        ] {
             let workspace = TempWorkspace::new(&format!("python-v0-2-negative-{fixture}"));
             copy_python_release_v0_2_fixture(fixture, workspace.path());
             let runtime = ProductCliRuntime;

@@ -152,6 +152,7 @@ PYDANTIC_MODEL_BASES = {
     "pydantic.BaseSettings",
     "pydantic_settings.BaseSettings",
 }
+MARSHMALLOW_SCHEMA_BASES = {"marshmallow.Schema"}
 SQLALCHEMY_MODEL_BASES = {
     "sqlalchemy.orm.DeclarativeBase",
     "sqlalchemy.orm.declarative_base",
@@ -726,6 +727,14 @@ def is_pydantic_model(node: ast.ClassDef, aliases: dict[str, str] | None = None)
     )
 
 
+def is_marshmallow_schema(node: ast.ClassDef, aliases: dict[str, str] | None = None) -> bool:
+    aliases = aliases or {}
+    return any(
+        canonical_name(name, aliases, {}) in MARSHMALLOW_SCHEMA_BASES
+        for name in base_names(node)
+    )
+
+
 def class_has_pydantic_member_signal(node: ast.ClassDef, aliases: dict[str, str]) -> bool:
     for item in node.body:
         if isinstance(item, ast.AnnAssign):
@@ -1021,6 +1030,11 @@ def class_kind(
         return "django_model"
     if is_django_test(node, aliases, assignments):
         return "django_test"
+    # Ordered last among the class anchors. A class assigns exactly one kind, so
+    # a model that somehow carries two framework bases keeps the earlier one
+    # rather than producing a second framework role.
+    if is_marshmallow_schema(node, aliases):
+        return "marshmallow_schema"
     return "class"
 
 

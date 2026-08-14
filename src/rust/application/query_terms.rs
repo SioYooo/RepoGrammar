@@ -266,6 +266,7 @@ pub const FRAMEWORK_ALIASES: &[(&str, &[&str])] = &[
     ("pytest", &["pytest"]),
     ("sqlalchemy", &["sqlalchemy"]),
     ("pydantic", &["pydantic"]),
+    ("marshmallow", &["marshmallow"]),
     ("axum", &["axum"]),
     ("spring", &["spring", "spring_boot", "spring_data"]),
     ("aspnet", &["aspnetcore"]),
@@ -362,6 +363,7 @@ pub const ROLE_CONCEPTS: &[(&str, Concept)] = &[
         "framework:fluentvalidation.validator",
         Concept::ValidationModel,
     ),
+    ("framework:marshmallow.schema", Concept::ValidationModel),
     ("framework:drizzle.schema.table", Concept::ValidationModel),
     // Data-access roles: ORM models, repositories, queries, transactions.
     ("framework:sqlalchemy.model", Concept::DataAccess),
@@ -428,6 +430,7 @@ pub const KNOWN_FRAMEWORK_TOKENS: &[&str] = &[
     "jpa",
     "junit4",
     "junit5",
+    "marshmallow",
     "mstest",
     "nestjs",
     "next",

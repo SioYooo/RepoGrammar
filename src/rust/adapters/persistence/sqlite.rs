@@ -3341,6 +3341,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         "python" => {
             "code_units.language = 'python' AND code_units.kind IN (\
              'fastapi_route', 'pytest_test', 'pytest_fixture', 'pydantic_model', \
+             'marshmallow_schema', \
              'pydantic_settings', 'sqlalchemy_model', 'sqlalchemy_repository_method', \
              'django_model', 'django_url_pattern', 'django_test', 'flask_route', \
              'unittest_test_method', 'click_command', 'typer_command', 'celery_task')"
