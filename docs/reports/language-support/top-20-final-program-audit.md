@@ -54,6 +54,7 @@ The accepted terminal label is partial audited progress. `COMPLETE`,
 | 2026-08-14 R2 — SQL frontend | ADR-0040 dialect-invariance decision, bounded DDL frontend, owned units/IR, typed `UNKNOWN`s | SQL gates 2, 3, 4 close; 5/9 |
 | 2026-08-14 R3 — SQL family | role registry, owned derived support, `sql.schema.table_definition`, adversarial fixture corpus | SQL gates 5, 6 close; 7/9 |
 | 2026-08-14 R4 — blocker partition | per-language `blocker_class`/`blocker` in the summary JSON, stale-document sweep | every lane has a source-backed conclusion |
+| 2026-08-14 R5 — SQL readiness | source-free/leakage audit across `status`, `doctor`, `stats`, `unknowns`, `families`, `files`, and MCP; corrected the dialect recovery mechanism | SQL gate 7 closes; 8/9, gate 9 left to a maintainer ruling |
 
 ## Strict language matrix
 
@@ -76,7 +77,7 @@ means a recorded ADR decision closed the lane.
 | 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | no C# project/NuGet inventory | no |
 | 6 | JavaScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
 | 7 | Visual Basic .NET | `discovered_only` | 2/9 | `zero_dependency_excluded` | literal `.vbproj` NuGet declarations only | no |
-| 8 | SQL | `structural_substrate` | 7/9 | `open_under_zero_dependency` | no SQL extension dependency consumer | no |
+| 8 | SQL | `structural_substrate` | 8/9 | `open_under_zero_dependency` | no SQL extension dependency consumer | no |
 | 9 | R | `discovered_only` | 2/9 | `open_under_zero_dependency` | bounded CRAN/Bioconductor manifest/renv evidence | no |
 | 10 | Rust | `structural_substrate` | 3/9 | `zero_dependency_excluded` | Cargo manifest/project-model declarations only | no |
 | 11 | Delphi/Object Pascal | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal Delphi package declarations only | no |
@@ -242,11 +243,16 @@ and unattempted, and SQL is the only one this continuation advanced -- from
 `discovered_only` 2/9 to `structural_substrate` 7/9 -- which is also the
 evidence that the open-lane label is not merely optimistic.
 
-The single highest-EV next action under the constraint is to close SQL's
-remaining two gates: audit its source-free readiness across `status`, `doctor`,
-`stats`, `unknowns`, CLI, and MCP, then land the linked completion audit. That
-would make SQL the first language at 9/9 and would establish, on a real lane,
-what a completion chain looks like -- which every other open lane can then copy.
+SQL now stands at 8/9. Its last gate is not an engineering task but a ruling:
+ADR-0020 G9 lists frontend/IR and `UNKNOWN`/provider as separate submodules, and
+for SQL they landed together because they are inseparable -- a semantic
+`UNKNOWN` requires code-unit evidence, so the abstentions cannot precede the
+frontend that produces the units, and no provider exists to form the other half.
+The chain is otherwise four independently coherent commits with their own tests
+and documentation. Deciding whether that satisfies G9 is the single highest-EV
+next action under the constraint: it either produces the program's first 9/9
+language or states exactly what a completion chain must look like, and every
+other open lane copies whichever answer comes back.
 
 If the constraint is lifted, the single highest-EV next action reverts to
 finishing one end-to-end Python vertical:

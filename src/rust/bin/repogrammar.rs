@@ -4122,6 +4122,114 @@ mod tests {
         }
     }
 
+    /// Every identifier and literal in the SQL fixture corpus, so one assertion
+    /// covers "no repository name or source text reached this surface".
+    const SQL_FIXTURE_MARKERS: &[&str] = &[
+        "fixture_accounts",
+        "fixture_orders",
+        "FixtureItems",
+        "fixture-default-label",
+        "fixture_solo_a",
+        "fixture_solo_b",
+        "fixture_ghost",
+        "fixture_log",
+        "fixture_diverged",
+        "CREATE TABLE",
+        "PRIMARY KEY",
+        "INTEGER",
+    ];
+
+    #[test]
+    fn sql_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let (workspace, runtime) =
+            index_sql_release_v0_1_fixture("exact_table_definitions", "sql-release-readiness");
+
+        // ADR-0020 gate 7 names these surfaces. Each must expose bounded tokens,
+        // states, counts, provenance, and recovery only.
+        for command in ["status", "doctor", "stats", "unknowns", "families", "files"] {
+            let output =
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime);
+            // Non-vacuity: a surface that errored out would trivially satisfy
+            // every leakage assertion below.
+            assert_eq!(output.status, 0, "{command} stderr: {}", output.stderr);
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_eq!(value["command"], command);
+            assert_no_output_leakage(command, &output.stdout, &workspace);
+            for marker in SQL_FIXTURE_MARKERS {
+                assert!(
+                    !output.stdout.contains(marker),
+                    "{command} leaked SQL source text or identifier {marker}"
+                );
+            }
+        }
+
+        // Non-vacuity for the claim-bearing surface: the SQL lane really does
+        // report typed UNKNOWNs here, so the leakage assertions above ran over
+        // content that had something to leak.
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, &workspace);
+        // The surface reports the SQL lane by bounded token and count only: the
+        // language name and reason code appear, the claim string and the
+        // repository's own identifiers do not.
+        assert!(
+            unknowns_json["unknown_inventory"]["by_language"]
+                .as_array()
+                .expect("by_language")
+                .iter()
+                .any(|row| row["language"] == "sql"
+                    && row["count"].as_u64().unwrap_or_default() >= 1),
+            "the SQL lane should reach the unknowns surface: {unknowns_json}"
+        );
+
+        // The dialect UNKNOWN must not advertise a mechanism this product does
+        // not have. No repository-local evidence selects a SQL dialect, so there
+        // is no config to add and no provider to enable.
+        assert!(
+            unknowns_json["unknown_inventory"]["by_required_mechanism"]
+                .as_array()
+                .expect("by_required_mechanism")
+                .iter()
+                .any(|row| row["required_mechanism"] == "manual_dialect_declaration"),
+            "SQL dialect recovery must be manual: {unknowns_json}"
+        );
+        assert!(
+            !unknowns_json.to_string().contains("add_project_config"),
+            "adding a project config cannot select a SQL dialect: {unknowns_json}"
+        );
+
+        // And the readiness surface really is describing the SQL family rather
+        // than an empty repository.
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        let status_json = parse_machine_output("status", &status, &workspace);
+        assert_eq!(
+            status_json["product_readiness"]["family_prevalence"]["total_count"],
+            1
+        );
+
+        // The MCP surface routes through the same evidence, and its own helper
+        // already rejects absolute paths.
+        for arguments in [
+            serde_json::json!({"operation": "inspect_readiness"}),
+            serde_json::json!({
+                "operation": "find_analogues",
+                "target": "db/schema.sql",
+                "mode": "compact",
+            }),
+        ] {
+            let payload = mcp_context_payload(&runtime, &workspace, arguments);
+            let rendered = payload.to_string();
+            for marker in SQL_FIXTURE_MARKERS {
+                assert!(
+                    !rendered.contains(marker),
+                    "MCP leaked SQL source text or identifier {marker}: {rendered}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn sql_release_fixture_exact_table_definitions_form_one_family() {
         let (workspace, runtime) =
@@ -4429,6 +4537,10 @@ mod tests {
         assert!(
             !output.contains(rust_release_fixture_v0_2_root().to_string_lossy().as_ref()),
             "{command} leaked absolute Rust v0.2 fixture path: {output}"
+        );
+        assert!(
+            !output.contains(sql_release_fixture_v0_1_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute SQL v0.1 fixture path: {output}"
         );
         assert!(
             !output.contains(unknown_reduction_fixture_root().to_string_lossy().as_ref()),

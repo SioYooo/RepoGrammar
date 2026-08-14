@@ -39,12 +39,29 @@
   three admitted definitions precede a dollar-quoted construct forms none,
   because the divergence unproves every boundary in it. No unresolved-to-
   resolved pair exists, since no provider can resolve a SQL claim.
-- [ ] Complete source-free readiness and leakage matrix across required public
-  surfaces — fixture-level leakage assertions cover `families`, `unknowns`, and
-  `files`; `status`, `doctor`, `stats`, and MCP have not been audited for SQL.
+- [x] Complete source-free readiness and leakage matrix across required public
+  surfaces — `status`, `doctor`, `stats`, `unknowns`, `families`, `files`, and
+  the MCP `inspect_readiness` and `find_analogues` payloads are each asserted
+  over an indexed SQL repository to expose no table, column, literal, or SQL
+  keyword text and no absolute path. The assertions are non-vacuous: each
+  command must exit zero and parse, the SQL lane must appear in the unknowns
+  inventory by bounded language token and count, and the readiness surface must
+  report the SQL family.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
-- [ ] Linked atomic prerequisites and final completion audit.
+- [ ] Linked atomic prerequisites and final completion audit — the chain is
+  `82ced893f81a954b64e20546dfc4ad81043b28e5` (discovery/configuration),
+  `ccf2429` (ADR-0040 decision), `83194a5` (frontend, owned IR, typed
+  `UNKNOWN`), `a7eb390` (family and fixtures), and the readiness/review commit
+  that carries this report. Each is an independently coherent Conventional
+  Commit with its own tests and documentation. It is left unchecked for one
+  reason, stated rather than worked around: ADR-0020 G9 lists frontend/IR and
+  `UNKNOWN`/provider as separate submodules, and they landed together in
+  `83194a5`. For SQL they are not separable — ADR-0035's own argument is that a
+  semantic `UNKNOWN` needs code-unit evidence, so the abstentions cannot exist
+  before the frontend that produces the units, and no provider exists to form
+  the other half. Whether that satisfies G9's structure is a maintainer ruling,
+  not a self-grant.
 
 ## Current evidence and blocker
 
@@ -73,10 +90,18 @@ subset to a construct the members lex differently would falsify the middle one,
 which is why ADR-0040 makes widening a decision rather than an implementation
 detail.
 
-The remaining blockers are gate 7 and gate 9. No source-free readiness matrix
-has been audited across `status`, `doctor`, `stats`, `unknowns`, CLI, and MCP
-for SQL specifically, and no final completion audit links the prerequisite
-chain. Migration order, catalog state, extension identity, cross-statement table
+The readiness audit also corrected a defect it was written to look for. The
+dialect `UNKNOWN` reported `project_config_reader` as its required mechanism and
+`add_project_config` as its recovery, inherited from the assembly lane where a
+build-metadata file genuinely can prove the target profile. For SQL that is
+false by ADR-0035's own finding: no repository-local evidence selects a dialect,
+so there is no config to add and no provider to enable. The mechanism is now
+`manual_dialect_declaration` recovering through `manual_review_required`, and a
+regression assertion forbids `add_project_config` from reappearing on this
+claim. Advertising a mechanism the product does not have is the same class of
+invented certainty as a heuristic fact.
+
+The remaining blocker is gate 9 alone. Migration order, catalog state, extension identity, cross-statement table
 identity, dynamic SQL, procedures, and triggers remain `UNKNOWN` by decision,
 not by omission. Family variation slots and context features, which other
 languages carry, are absent for SQL: the family forms without them, and adding
@@ -86,9 +111,10 @@ distinct.
 ## Completion verdict
 
 Not complete. SQL has a frontend, owned code units, IR, typed `UNKNOWN`s, one
-exact family, and an adversarial fixture corpus. It has no audited source-free
-readiness matrix and no final completion audit, and no provider exists or is
-authorized. Do not count SQL as supported.
+exact family, an adversarial fixture corpus, and an audited source-free
+readiness matrix — eight of nine gates. Gate 9 is left to a maintainer ruling
+for the reason recorded above, and no provider exists or is authorized. Do not
+count SQL as supported and do not set `top20_complete`.
 
 ## Final program audit fields
 
@@ -102,8 +128,8 @@ authorized. Do not count SQL as supported.
 | Library Contracts | Registry exists, production packs = 0; no `sql_extension` rows are emitted. |
 | Exact family / fixtures | `sql.schema.table_definition` over the fixed `sql.ddl.create_table` target, minimum support three, owned derived origin required. Fixtures cover admitted anchors, comment/string lookalikes, all six divergence classes, unadmitted `CREATE TABLE` spellings, semicolons inside strings/comments/parens, resource limits, IR edges, name/literal leakage at the parser, and a product-CLI corpus for positive, low-support, lookalike, and divergence cases. No unresolved-to-resolved pair exists, because no provider can resolve a SQL claim. |
 | Primary UNKNOWN cases | Dialect/version, lexical divergence, unadmitted statement shape, migration ordering/tool, extension identity, search path, catalog state, cross-statement table identity, dynamic SQL, procedures/triggers, and provider availability. |
-| Source-free / security | No table, column, index, or literal text reaches a unit id, fact target, note, assumption, or public surface, proven by leakage fixtures at both the frontend and the product CLI. No database, client, driver, migration tool, credential, child process, or network access exists, and nothing is executed, prepared, planned, or validated. |
-| Completion state / counted | `bounded_preview` is not claimed; `structural_substrate` with strict gate count `7/9`; Top-20 complete = no. |
+| Source-free / security | No table, column, index, or literal text reaches a unit id, fact target, note, assumption, or public surface, proven by leakage assertions at the frontend, the product CLI (`status`, `doctor`, `stats`, `unknowns`, `families`, `files`), and the MCP readiness and analogue payloads. No database, client, driver, migration tool, credential, child process, or network access exists, and nothing is executed, prepared, planned, or validated. |
+| Completion state / counted | `bounded_preview` is not claimed; `structural_substrate` with strict gate count `8/9`; Top-20 complete = no. |
 
 Four-part review: correctness rests on the dialect-invariance argument — the
 admitted parse cannot change with the unproven dialect, which is exactly why

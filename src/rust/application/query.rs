@@ -2109,6 +2109,18 @@ fn claim_specific_required_unknown_mechanism(
     framework_role: &str,
     assumptions: &[String],
 ) -> Option<&'static str> {
+    if language == "sql" {
+        return match affected_claim {
+            // No repository-local evidence selects a SQL dialect. That is
+            // ADR-0035's finding and the premise ADR-0040 builds on, so there is
+            // no config to add and no provider to enable: only a person can say
+            // which dialect a file targets. Reporting `project_config_reader`
+            // here would advertise a mechanism this product does not have.
+            "sql_dialect_profile" => Some("manual_dialect_declaration"),
+            "sql_statement_boundary" => Some("conflict_resolution"),
+            _ => None,
+        };
+    }
     if language == "python" {
         return match affected_claim {
             "python_import_resolution" => Some("python_import_graph"),
@@ -2293,6 +2305,7 @@ fn registered_recovery_mechanism(mechanism: &str) -> Option<RegisteredRecoveryMe
         | "cpp_build_variant_model"
         | "build_variant_model"
         | "conflict_resolution"
+        | "manual_dialect_declaration"
         | "compatible_support_evidence" => Some(recoverable("manual_review_required")),
         "runtime_trace_required" => Some(irreducible("runtime_trace_required")),
         "java_annotation_processor_boundary"
