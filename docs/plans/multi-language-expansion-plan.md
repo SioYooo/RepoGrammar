@@ -394,6 +394,10 @@ resolve:
 
 ### The other fourteen entries, archived
 
+> Superseded by "Where all twenty-one entries stand" at the end of the Wave
+> F2 section. The partition below is the state as Wave F1 closed and is kept
+> as the record of what that wave decided, not as current state.
+
 Wave F1 landed a framework family for seven of the twenty-one tracked entries.
 "Add common framework support for all languages" cannot be satisfied further
 than that today, and the reason differs per language, so each is recorded in
@@ -543,6 +547,34 @@ the backlog exists to prevent, so Fortran's honest state is
 same reason. Its scanner route was never the blocker: ADR-0034 forbids no text
 matching, and fixed-form and free-form Fortran are both scannable. Reopening
 this needs a backlog entry first, not an ADR first.
+
+### Where all twenty-one entries stand
+
+Wave F2 closes the question the goal asked. Every tracked entry now has a state
+in `top-20-program-summary.json` under `framework_support`, and none of them is
+an open queue item waiting on framework work.
+
+**Landed (12).** Python/marshmallow, C++/CppUnit, Java/Jakarta Servlet,
+C#/FluentValidation, JavaScript/Playwright, TypeScript/Playwright,
+Rust/tracing (F1); R/testthat, VB.NET/MSTest, Delphi/DUnitX, Ada/AUnit,
+MATLAB/`matlab.unittest` (F2).
+
+**Closed by decision (7).** Assembly (ADR-0038), Scratch (ADR-0039), SQL
+(ADR-0035 and ADR-0040), and Go, Ruby, PHP, Swift — the last four because their
+preflight ADRs each forbid text or regex matching as evidence for the claim and
+each name a pinned real parser as primary evidence, which the
+zero-external-dependency constraint puts out of reach. Go's scanner shipped
+anyway as auxiliary evidence and derives no support.
+
+**No qualifying candidate yet (2).** C and Fortran. Both have a route and
+neither has a backlog entry naming a framework, and in both cases inventing one
+at implementation time is the failure the backlog exists to prevent.
+
+The four closed-by-decision language lanes are the only entries where a
+maintainer decision could change the answer, and there are exactly two such
+decisions: revise those evidence ladders, or lift the zero-external-dependency
+constraint. Neither is within an implementing agent's authority, and neither is
+a defect.
 
 Each lane follows the ADR-first order ADR-0040 established: decide the admitted
 subset and the exact anchor in the ADR, because both decide what the code is —

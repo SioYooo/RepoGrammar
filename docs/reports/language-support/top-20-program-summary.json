@@ -258,10 +258,10 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Object Pascal source is unread and no compiler is authorized. A bounded pure-Rust frontend over a declared Delphi dialect subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": null,
-        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+        "state": "landed",
+        "framework": "DUnitX",
+        "family": "dunitx.test_procedure",
+        "wave": "F2"
       },
       "provider_status": "no_delphi_or_fpc_provider",
       "library_analysis_status": "delphi_package_manifest_inventory_only",
@@ -322,8 +322,9 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0024's sandboxed PHP frontend is excluded. A bounded pure-Rust frontend over a declared PHP subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0024 D6 item 4, under the zero-external-dependency constraint",
+        "why": "ADR-0024 forbids text or regex matching as evidence for the claim and names a pinned real parser as primary evidence, which the constraint puts out of reach.",
         "first_candidate_family": "php.phpunit.test_method"
       },
       "provider_status": "frontend_qualification_incomplete",
@@ -343,8 +344,9 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0025's SwiftSyntax and SourceKit route is excluded. A bounded pure-Rust frontend over a declared Swift subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0025 D7 item 5, under the zero-external-dependency constraint",
+        "why": "ADR-0025 forbids text or regex matching as evidence for the claim and names SwiftSyntax as primary evidence, which the constraint puts out of reach.",
         "first_candidate_family": "swift.xctest.test_method"
       },
       "provider_status": "frontend_qualification_incomplete",
@@ -364,10 +366,10 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Libadalang is already NO-GO for this lane and stays excluded. A bounded pure-Rust frontend over a declared Ada subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": null,
-        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+        "state": "landed",
+        "framework": "AUnit",
+        "family": "aunit.test_registration",
+        "wave": "F2"
       },
       "provider_status": "libadalang_no_go_for_current_lane",
       "library_analysis_status": "alire_manifest_inventory_only",
@@ -407,10 +409,10 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "A MATLAB or Octave runtime is excluded. A bounded pure-Rust frontend over a declared MATLAB source subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": null,
-        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+        "state": "landed",
+        "framework": "matlab.unittest",
+        "family": "matlab_unittest.test_method",
+        "wave": "F2"
       },
       "provider_status": "no_matlab_or_octave_frontend",
       "library_analysis_status": "matlab_add_on_manifest_inventory_only",
@@ -429,10 +431,8 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Flang is already NO-GO for this lane and stays excluded. A bounded pure-Rust frontend over a declared free-form Fortran subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": null,
-        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+        "state": "no_qualifying_candidate_yet",
+        "why": "The priority-ordered framework backlog in docs/plans/multi-language-expansion-plan.md -- this program's authority on what a common framework is, compiled against the 2026-07-11 developer surveys -- lists no Fortran framework. pFUnit, test-drive, and Vegetables all exist and none of them appears in those surveys. Choosing one at implementation time would present fresh research as if the backlog had named it. The scanner route was never the blocker: ADR-0034 forbids no text matching, and both source forms are scannable. The prerequisite is a backlog entry, not an ADR."
       },
       "provider_status": "flang_no_go_for_current_lane",
       "library_analysis_status": "fpm_manifest_inventory_only",
@@ -451,8 +451,9 @@
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0022's Prism route is excluded as an external native artifact. A bounded pure-Rust frontend over a declared Ruby subset is possible in principle and was not attempted here.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0022 D5 item 4, under the zero-external-dependency constraint",
+        "why": "ADR-0022 forbids text or regex matching as evidence for the claim and names a pinned real parser as primary evidence, which the constraint puts out of reach. Ruby's grammar is also independently hostile to a bounded scanner: heredocs, %w-family literals, and regex literals share delimiters with other constructs.",
         "first_candidate_family": "ruby.minitest.test_method"
       },
       "provider_status": "prism_qualification_incomplete",
