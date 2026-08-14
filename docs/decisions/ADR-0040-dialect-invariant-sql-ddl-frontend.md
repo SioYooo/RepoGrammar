@@ -108,7 +108,9 @@ Admitted, because PostgreSQL 16 and SQLite 3 agree:
 Refused, because the members disagree and the disagreement moves token
 boundaries:
 
-- Dollar-quoted string constants (`$tag$ … $tag$`) — PostgreSQL only.
+- Any `$`. Dollar-quoted string constants (`$tag$ … $tag$`) are PostgreSQL
+  only, and the two members also spell dollar parameters differently, so the
+  scanner refuses the character rather than deciding which reading applies.
 - C-style escape string constants (`E'…'`) — PostgreSQL only.
 - Backtick-quoted and bracket-quoted identifiers — SQLite only.
 - Nested block comments.

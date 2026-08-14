@@ -61,7 +61,7 @@ use crate::ports::semantic_worker::{
     SemanticWorker, SemanticWorkerError, SemanticWorkerOperation, SemanticWorkerOperationKind,
     SemanticWorkerRequest,
 };
-use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
+use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -766,14 +766,16 @@ where
             );
             continue;
         }
-        let source = source_store
-            .read_source(SourceReadRequest {
-                repository_root: request.repository_root.clone(),
-                path: file.path.clone(),
-                expected_content_hash: file.content_hash.clone(),
-                max_file_bytes: request.max_file_bytes,
-            })
-            .map_err(source_store_error)?;
+        let Some(source) = read_source_for_parsing(source_store, &request, file, &mut warnings)?
+        else {
+            emit_progress(
+                progress,
+                ProgressStage::SyntaxParsing,
+                "parsed source files",
+                known_work_units(index + 1, report.files.len()),
+            );
+            continue;
+        };
         parser_attempted_files += 1;
         let SourceParseOutput {
             report: parse_report,
@@ -1638,14 +1640,16 @@ where
             );
             continue;
         }
-        let source = source_store
-            .read_source(SourceReadRequest {
-                repository_root: request.repository_root.clone(),
-                path: file.path.clone(),
-                expected_content_hash: file.content_hash.clone(),
-                max_file_bytes: request.max_file_bytes,
-            })
-            .map_err(source_store_error)?;
+        let Some(source) = read_source_for_parsing(source_store, &request, file, &mut warnings)?
+        else {
+            emit_progress(
+                progress,
+                ProgressStage::SyntaxParsing,
+                "parsed source files",
+                known_work_units(index + 1, changed_files.len()),
+            );
+            continue;
+        };
         parser_attempted_files += 1;
         let SourceParseOutput {
             report: parse_report,
@@ -5523,10 +5527,6 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "ada-config"
             | "fortran"
             | "fortran-config"
-            | "sql"
-            | "sql-migration"
-            | "sql-schema"
-            | "sql-catalog"
             | "r"
             | "matlab"
     )
@@ -5602,6 +5602,35 @@ fn extend_inventory_only_language_warnings(
 
 fn discovery_error(error: FileDiscoveryError) -> RepoGrammarError {
     RepoGrammarError::InvalidInput(error.to_string())
+}
+
+/// Read one discovered file for parsing, or abstain from it.
+///
+/// `Ok(None)` means the file's bytes are not UTF-8, so no frontend in this
+/// product can read it. That is a property of the one file, not of the run, so
+/// the index warns and keeps going rather than failing: one latin-1 SQL dump or
+/// binary blob under a source extension must not make a whole repository
+/// unindexable. Every other read failure stays fatal, because it means
+/// discovery and the filesystem disagree about what is there.
+fn read_source_for_parsing(
+    source_store: &dyn SourceStore,
+    request: &IndexingRequest,
+    file: &DiscoveredFile,
+    warnings: &mut Vec<String>,
+) -> Result<Option<SourceText>, RepoGrammarError> {
+    match source_store.read_source(SourceReadRequest {
+        repository_root: request.repository_root.clone(),
+        path: file.path.clone(),
+        expected_content_hash: file.content_hash.clone(),
+        max_file_bytes: request.max_file_bytes,
+    }) {
+        Ok(source) => Ok(Some(source)),
+        Err(SourceStoreError::NonUtf8(_)) => {
+            warnings.push(format!("parser skipped non-UTF-8 source: {}", file.path));
+            Ok(None)
+        }
+        Err(error) => Err(source_store_error(error)),
+    }
 }
 
 fn source_store_error(error: SourceStoreError) -> RepoGrammarError {
@@ -5878,13 +5907,20 @@ mod tests {
             (DiscoveredLanguage::ObjectPascal, "src/Unit1.pas", true),
             (DiscoveredLanguage::Ada, "ada/main.adb", true),
             (DiscoveredLanguage::Fortran, "fortran/free.f90", true),
-            (DiscoveredLanguage::Sql, "schema.sql", true),
             (DiscoveredLanguage::R, "R/main.R", true),
             (DiscoveredLanguage::Matlab, "solver.m", true),
             // Languages with a real source frontend are never inventory-only.
             (DiscoveredLanguage::Python, "app/main.py", false),
             (DiscoveredLanguage::Rust, "src/lib.rs", false),
             (DiscoveredLanguage::Assembly, "boot.s", false),
+            (DiscoveredLanguage::Sql, "schema.sql", false),
+            (
+                DiscoveredLanguage::SqlMigration,
+                "db/migrations/1.sql",
+                false,
+            ),
+            (DiscoveredLanguage::SqlSchema, "schema.sql", false),
+            (DiscoveredLanguage::SqlCatalog, "catalog.sql", false),
         ];
 
         for (language, path, expected) in CASES {
@@ -7472,7 +7508,7 @@ mod tests {
     }
 
     #[test]
-    fn default_index_reads_only_r_metadata_and_keeps_sql_and_r_source_inventory_only() {
+    fn default_index_skips_undecodable_sql_reads_r_metadata_and_keeps_r_source_inventory_only() {
         let workspace = TempWorkspace::new("indexing-sql-r-inventory");
         fs::create_dir_all(workspace.path().join("db/migrations"))
             .expect("create SQL migration dir");
@@ -7525,14 +7561,30 @@ mod tests {
         );
         assert_eq!(outcome.parser_attempted_files, 3);
         assert_eq!(outcome.indexed_units, 3);
+        // ADR-0040 admits SQL to the frontend, so these paths are now read
+        // instead of deferred. Their bytes are not UTF-8, so each is skipped
+        // with a warning and contributes no code unit: one undecodable file
+        // must not fail the run, and must not read as a clean empty parse.
         assert_eq!(
             source_store.paths(),
             vec![
                 "DESCRIPTION".to_string(),
                 "NAMESPACE".to_string(),
+                "db/migrations/001_init.sql".to_string(),
+                "query.sql".to_string(),
                 "renv.lock".to_string(),
+                "schema.sql".to_string(),
             ]
         );
+        for path in ["db/migrations/001_init.sql", "query.sql", "schema.sql"] {
+            assert!(
+                outcome
+                    .warnings
+                    .contains(&format!("parser skipped non-UTF-8 source: {path}")),
+                "warnings={:?}",
+                outcome.warnings
+            );
+        }
         let files = store
             .list_active_indexed_files()
             .expect("read SQL/R file inventory");
@@ -9142,7 +9194,8 @@ mod tests {
     }
 
     #[test]
-    fn incremental_sync_replaces_and_removes_r_lock_dependencies_while_sql_stays_source_free() {
+    fn incremental_sync_replaces_and_removes_r_lock_dependencies_while_undecodable_sql_stays_unit_free(
+    ) {
         let workspace = TempWorkspace::new("indexing-sql-r-incremental");
         fs::write(
             workspace.path().join("DESCRIPTION"),
@@ -9242,7 +9295,16 @@ mod tests {
             .units
             .iter()
             .any(|unit| unit.path == "DESCRIPTION"));
-        assert!(!source_store.paths().iter().any(|path| path == "query.sql"));
+        // ADR-0040 admits SQL to the frontend, so a changed `.sql` path is now
+        // read. These bytes are not UTF-8, so every attempt is skipped with a
+        // warning and no SQL code unit is ever stored.
+        assert!(source_store.paths().iter().any(|path| path == "query.sql"));
+        assert!(!store
+            .list_active_code_units()
+            .expect("read units after lock removal")
+            .units
+            .iter()
+            .any(|unit| unit.path == "query.sql"));
     }
 
     #[test]

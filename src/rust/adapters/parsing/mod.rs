@@ -23,6 +23,7 @@ pub mod python;
 pub mod r;
 pub mod ruby;
 pub mod rust;
+pub mod sql;
 pub mod swift;
 pub mod syntax;
 pub mod tree_sitter;
@@ -45,6 +46,7 @@ pub struct RepoGrammarSourceParser {
     ruby: RubyConfigParser,
     r: r::RProjectConfigParser,
     rust: rust::RustSyntaxParser,
+    sql: sql::SqlDdlParser,
     swift: swift::SwiftProjectConfigParser,
     visual_basic: visual_basic::VisualBasicProjectConfigParser,
     ada: ada::AdaProjectConfigParser,
@@ -111,9 +113,8 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::FortranConfig => self.fortran.parse(document),
             crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::RConfig => self.r.parse(document),
-            crate::core::model::Language::Sql | crate::core::model::Language::R => {
-                Err(ParseError::UnsupportedLanguage)
-            }
+            crate::core::model::Language::Sql => self.sql.parse(document),
+            crate::core::model::Language::R => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -185,9 +186,8 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.ruby.parse_with_context(document, context)
             }
             crate::core::model::Language::RConfig => self.r.parse_with_context(document, context),
-            crate::core::model::Language::Sql | crate::core::model::Language::R => {
-                Err(ParseError::UnsupportedLanguage)
-            }
+            crate::core::model::Language::Sql => self.sql.parse_with_context(document, context),
+            crate::core::model::Language::R => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -249,6 +249,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::RConfig => {
                 self.r.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Sql => {
+                self.sql.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)
@@ -544,14 +547,23 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_rejects_sql_and_r_source_but_parses_exact_r_metadata() {
+    fn product_parser_routes_sql_to_its_frontend_rejects_r_source_and_parses_exact_r_metadata() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Sql, Language::R] {
-            assert_eq!(
-                parser.parse(sql_r_inventory_document(language)),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(sql_r_inventory_document(Language::R)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+        // ADR-0040 routes SQL to the bounded DDL frontend. "inventory only" is
+        // not an admitted statement shape, so the file yields its module unit
+        // and one statement unit and no anchor.
+        let sql = parser
+            .parse(sql_r_inventory_document(Language::Sql))
+            .expect("SQL must reach the bounded DDL frontend");
+        assert_eq!(sql.units.len(), 2);
+        assert!(sql
+            .semantic_facts
+            .iter()
+            .all(|fact| !fact.certainty.supports_family_membership()));
         let output = parser
             .parse_with_context_output(
                 sql_r_inventory_document(Language::RConfig),

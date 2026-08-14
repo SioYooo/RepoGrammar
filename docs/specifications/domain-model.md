@@ -163,11 +163,17 @@ scope and root `[dev-dependencies]` to development scope. Dotted namespace,
 git/path, target-specific, preprocessing, and environment selection remain
 unresolved. No Fortran source IR, family, support, or readiness state exists.
 SQL discovery defines stable `sql`, `sql-migration`, `sql-schema`, and
-`sql-catalog` file tokens. They persist only path, strict raw-byte hash, size,
-and source-free artifact classification. All map to the internal SQL language
-identity, but no SQL `CodeUnit` exists and no token proves a dialect or semantic
-role. SQL dialect is contractually UNKNOWN; no semantic fact is fabricated
-without code-unit evidence.
+`sql-catalog` file tokens, which persist path, strict raw-byte hash, size, and
+source-free artifact classification and prove no dialect or semantic role. All
+map to the internal SQL language identity, which ADR-0040 routes to a bounded
+DDL frontend. Admitted files own a `module` unit and one `sql_statement` or
+`sql_table_definition` unit per top-level statement, with IR containment edges.
+The dialect stays contractually UNKNOWN: the frontend scans only constructs
+PostgreSQL 16 and SQLite 3 lex identically, so its anchors never rest on the
+selection it cannot make. A construct the two spell differently degrades the
+whole file to its module unit plus a `ConflictingFacts` UNKNOWN, because a
+diverged token stream leaves every later statement boundary unproven. No table,
+column, index, or literal text reaches a unit id, fact, or public surface.
 R discovery defines stable `r` and `r-config` tokens. Exact `.R` and `.r`
 source is
 inventory-only. Exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` create bounded

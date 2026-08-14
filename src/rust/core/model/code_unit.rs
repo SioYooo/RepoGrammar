@@ -220,6 +220,8 @@ pub enum CodeUnitKind {
     TokioTest,
     ClapParser,
     AxumRoute,
+    SqlStatement,
+    SqlTableDefinition,
     ProjectConfig,
     Unknown,
 }
@@ -317,6 +319,8 @@ impl CodeUnitKind {
             Self::TokioTest => "tokio_test",
             Self::ClapParser => "clap_parser",
             Self::AxumRoute => "axum_route",
+            Self::SqlStatement => "sql_statement",
+            Self::SqlTableDefinition => "sql_table_definition",
             Self::ProjectConfig => "project_config",
             Self::Unknown => "unknown",
         }

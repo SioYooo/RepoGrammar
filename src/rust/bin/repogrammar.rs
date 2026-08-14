@@ -12006,21 +12006,29 @@ class User(Base):
     }
 
     #[test]
-    fn product_runtime_sql_inventory_is_file_manifest_only_and_source_free() {
-        let workspace = TempWorkspace::new("product-runtime-sql-inventory-index");
+    fn product_runtime_sql_ddl_is_bounded_and_source_free() {
+        let workspace = TempWorkspace::new("product-runtime-sql-ddl-index");
         fs::create_dir_all(workspace.path().join("db/migrations"))
             .expect("create SQL migration dir");
-        for (path, marker) in [
-            ("query.sql", b"sql-generic-must-not-be-read".as_slice()),
-            ("schema.sql", b"sql-schema-must-not-be-read".as_slice()),
+        // Every identifier and literal here is a marker: ADR-0040 forbids any of
+        // them from reaching a code unit id, fact, or public surface, because a
+        // name's identity is exactly the dialect-dependent fact this frontend
+        // cannot assert.
+        for (path, body) in [
+            (
+                "query.sql",
+                "SELECT secret_column FROM hidden_table WHERE token = 'sql-literal-marker';\n",
+            ),
+            (
+                "schema.sql",
+                "CREATE TABLE marker_accounts (id INTEGER PRIMARY KEY, email TEXT);\n",
+            ),
             (
                 "db/migrations/001.sql",
-                b"sql-migration-must-not-be-read".as_slice(),
+                "CREATE TABLE marker_orders (id INTEGER);\nCREATE TABLE marker_items (id INTEGER);\n",
             ),
         ] {
-            let mut bytes = vec![0xff, 0xfe, 0xfd];
-            bytes.extend_from_slice(marker);
-            fs::write(workspace.path().join(path), bytes).expect("write binary SQL inventory");
+            fs::write(workspace.path().join(path), body).expect("write SQL source");
         }
         let runtime = ProductCliRuntime;
         assert_eq!(
@@ -12035,14 +12043,12 @@ class User(Base):
         let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("index", &index, &workspace);
         assert_eq!(value["discovered_files"], 3);
-        assert_eq!(value["indexing"], "file_manifest_only");
-        assert_eq!(value["parser"], "deferred");
-        assert_eq!(value["parser_attempted_files"], 0);
-        assert_eq!(value["indexed_units"], 0);
+        assert_eq!(value["parser_attempted_files"], 3);
+        // Three module units plus the four top-level statements.
+        assert_eq!(value["indexed_units"], 7);
 
         let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("files", &files, &workspace);
-        assert_eq!(value["indexing"], "file_manifest_only");
         assert_eq!(
             value["files"]
                 .as_array()
@@ -12059,13 +12065,24 @@ class User(Base):
                 ("schema.sql", "sql-schema"),
             ]
         );
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
         for marker in [
-            "sql-generic-must-not-be-read",
-            "sql-schema-must-not-be-read",
-            "sql-migration-must-not-be-read",
+            "marker_accounts",
+            "marker_orders",
+            "marker_items",
+            "secret_column",
+            "hidden_table",
+            "sql-literal-marker",
         ] {
-            assert!(!index.stdout.contains(marker));
-            assert!(!files.stdout.contains(marker));
+            for output in [&index, &files, &unknowns] {
+                assert!(
+                    !output.stdout.contains(marker),
+                    "{marker} leaked into a public surface"
+                );
+            }
         }
     }
 

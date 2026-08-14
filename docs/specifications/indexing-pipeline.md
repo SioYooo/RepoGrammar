@@ -62,16 +62,23 @@ building generation's indexed file, code-unit id, content hash, byte range, and
 requested operation provenance. Incremental `sync` falls back to a full rebuild
 when an explicit worker is configured.
 
-SQL and R remain `discovered_only`. Exact SQL bytes never cross the source-store
-boundary; `sql`, `sql-migration`, `sql-schema`, and `sql-catalog` are file
-manifest labels with dialect UNKNOWN. Exact `.R` and `.r` bytes likewise remain
-inventory-only. Only exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` are read
-through the bounded source store and dispatched to the `r-config` adapter.
-That adapter emits project-config/typed-UNKNOWN records and admits only explicit
+R remains `discovered_only`: exact `.R` and `.r` bytes stay inventory-only, and
+only exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` are read through the
+bounded source store and dispatched to the `r-config` adapter. That adapter
+emits project-config/typed-UNKNOWN records and admits only explicit
 CRAN/Bioconductor renv package identities and versions. It never invokes R,
-renv, profiles, package/native code, or network resolution. SQL-only and
-R-source-only generations are `file_manifest_only`; admitted R metadata makes
-the generation `syntax_only_code_units` without creating a language family.
+renv, profiles, package/native code, or network resolution. R-source-only
+generations are `file_manifest_only`; admitted R metadata makes the generation
+`syntax_only_code_units` without creating a language family.
+
+Under ADR-0040 SQL bytes do cross the source-store boundary. `sql`,
+`sql-migration`, `sql-schema`, and `sql-catalog` are dispatched to the bounded
+in-process DDL frontend, which reads only constructs PostgreSQL 16 and SQLite 3
+lex identically and keeps the dialect itself UNKNOWN. It opens no database,
+client, driver, or migration tool and executes nothing. A file whose bytes are
+not UTF-8 is skipped with a `parser skipped non-UTF-8 source` warning and
+contributes no unit; that abstention is per file, so one undecodable dump cannot
+fail the run, and a skipped file is never recorded as a clean empty parse.
 
 Outside the internal Rust self-dogfood extractor and explicitly configured
 semantic workers, this slice does not use Tree-sitter, call a TypeScript

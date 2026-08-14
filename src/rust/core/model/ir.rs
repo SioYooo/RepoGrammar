@@ -154,6 +154,11 @@ impl IrNodeKind {
             | CodeUnitKind::ClapParser => Self::Class,
             CodeUnitKind::TokioEntry | CodeUnitKind::TokioTest => Self::Function,
             CodeUnitKind::AxumRoute => Self::Method,
+            // A SQL statement is not a function, class, or method, and this IR
+            // vocabulary names no statement concept. The node keeps its range,
+            // provenance, and containment edge; only the kind projection
+            // abstains, the same way Rust use items and macro invocations do.
+            CodeUnitKind::SqlStatement | CodeUnitKind::SqlTableDefinition => Self::Unknown,
             CodeUnitKind::ProjectConfig => Self::ProjectConfig,
             CodeUnitKind::Unknown => Self::Unknown,
         }
