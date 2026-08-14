@@ -25,6 +25,9 @@ pub(crate) const ROLE_JPA_MAPPED_SUPERCLASS: &str = "framework:jpa.mapped_superc
 pub(crate) const ROLE_JPA_EMBEDDABLE: &str = "framework:jpa.embeddable";
 pub(crate) const ROLE_JAXRS_RESOURCE: &str = "framework:jaxrs.resource";
 pub(crate) const ROLE_JAXRS_RESOURCE_METHOD: &str = "framework:jaxrs.resource_method";
+pub(crate) const ROLE_SERVLET_HTTP_SERVLET: &str = "framework:servlet.http_servlet";
+
+pub(crate) const SERVLET_TARGETS: &[&str] = &["servlet.annotation.WebServlet"];
 
 pub(crate) const SPRING_MVC_ROUTE_TARGETS: &[&str] = &[
     "spring.web.bind.annotation.RequestMapping",
@@ -102,6 +105,7 @@ pub(crate) const COPIED_ASSUMPTION_FEATURES: &[(&str, &str)] = &[
     ("jpa_namespace_root=", "jpa_namespace_root:"),
     ("jpa_id_present=", "jpa_id_present:"),
     ("jpa_relationship_shape=", "jpa_relationship_shape:"),
+    ("servlet_namespace_root=", "servlet_namespace_root:"),
 ];
 
 /// Whether a Structural-anchor assumption is copied onto its derived support fact.
@@ -180,6 +184,11 @@ pub(crate) fn role_for_code_unit_kind(kind: &CodeUnitKind) -> Option<JavaFramewo
             note: "Tree-sitter Java code unit indicates exact JAX-RS resource-method role",
             assumption: "JAX-RS runtime dispatch unresolved",
         }),
+        CodeUnitKind::ServletHttpServlet => Some(JavaFrameworkRole {
+            target: ROLE_SERVLET_HTTP_SERVLET,
+            note: "Tree-sitter Java code unit indicates exact Servlet @WebServlet role",
+            assumption: "servlet container mapping and web.xml overrides unresolved",
+        }),
         _ => None,
     }
 }
@@ -193,6 +202,7 @@ pub(crate) fn framework_role_is_known(framework_role: &str) -> bool {
         || framework_role.starts_with("framework:testng.")
         || framework_role.starts_with("framework:jpa.")
         || framework_role.starts_with("framework:jaxrs.")
+        || framework_role.starts_with("framework:servlet.")
 }
 
 pub(crate) fn support_target_is_role_compatible(
@@ -218,6 +228,7 @@ pub(crate) fn support_target_is_role_compatible(
         ROLE_JPA_EMBEDDABLE => Some(JPA_EMBEDDABLE_TARGETS.contains(&target)),
         ROLE_JAXRS_RESOURCE => Some(JAXRS_RESOURCE_TARGETS.contains(&target)),
         ROLE_JAXRS_RESOURCE_METHOD => Some(JAXRS_RESOURCE_METHOD_TARGETS.contains(&target)),
+        ROLE_SERVLET_HTTP_SERVLET => Some(SERVLET_TARGETS.contains(&target)),
         _ if framework_role_is_known(framework_role) => Some(false),
         _ => None,
     }
@@ -244,6 +255,7 @@ pub(crate) fn support_family(target: &str, framework_role: &str) -> String {
         ROLE_JPA_ENTITY => "jpa.persistence.entity".to_string(),
         ROLE_JPA_MAPPED_SUPERCLASS => "jpa.persistence.mapped_superclass".to_string(),
         ROLE_JPA_EMBEDDABLE => "jpa.persistence.embeddable".to_string(),
+        ROLE_SERVLET_HTTP_SERVLET => "servlet.web_servlet".to_string(),
         ROLE_JAXRS_RESOURCE => "jaxrs.resource_path".to_string(),
         ROLE_JAXRS_RESOURCE_METHOD => "jaxrs.resource_method_mapping".to_string(),
         _ => target.to_string(),

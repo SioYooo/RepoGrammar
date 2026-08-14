@@ -3306,6 +3306,16 @@ fn java_evidence_pair_is_compatible(
                 &["support_family:", "jpa_namespace_root:"],
             )
         }
+        "framework_servlet_http_servlet" => {
+            // jakarta and javax servlets share the annotation's simple name but
+            // are different types, so they must never cluster together.
+            equal_feature_profiles(
+                left,
+                right,
+                features_by_unit,
+                &["support_family:", "servlet_namespace_root:"],
+            )
+        }
         "framework_jaxrs_resource" => equal_feature_profiles(
             left,
             right,
@@ -3754,6 +3764,7 @@ fn java_characteristic_prefixes(framework_role: &str) -> &'static [&'static str]
         "framework_jpa_entity" | "framework_jpa_mapped_superclass" | "framework_jpa_embeddable" => {
             &["support_family:", "jpa_namespace_root:"]
         }
+        "framework_servlet_http_servlet" => &["support_family:", "servlet_namespace_root:"],
         "framework_jaxrs_resource" => &["support_family:", "class_route_path_shape:"],
         "framework_jaxrs_resource_method" => &["anchor_kind:", "http_method:", "route_path_shape:"],
         _ => &[],
@@ -4687,6 +4698,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "jpa_embeddable"
             | "jaxrs_resource_class"
             | "jaxrs_resource_method"
+            | "servlet_http_servlet"
             | "aspnet_controller"
             | "aspnet_controller_action"
             | "aspnet_minimal_api_route"

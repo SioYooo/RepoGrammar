@@ -134,7 +134,8 @@ impl IrNodeKind {
             CodeUnitKind::JpaEntity
             | CodeUnitKind::JpaMappedSuperclass
             | CodeUnitKind::JpaEmbeddable
-            | CodeUnitKind::JaxrsResourceClass => Self::Class,
+            | CodeUnitKind::JaxrsResourceClass
+            | CodeUnitKind::ServletHttpServlet => Self::Class,
             CodeUnitKind::Junit5TestMethod
             | CodeUnitKind::Junit4TestMethod
             | CodeUnitKind::TestngTestMethod

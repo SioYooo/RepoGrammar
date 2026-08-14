@@ -3368,7 +3368,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
              'spring_mvc_route', 'spring_component', 'spring_boot_application', \
              'spring_data_repository', 'junit5_test_method', 'junit4_test_method', \
              'testng_test_method', 'jpa_entity', 'jpa_mapped_superclass', 'jpa_embeddable', \
-             'jaxrs_resource_class', 'jaxrs_resource_method')"
+             'jaxrs_resource_class', 'jaxrs_resource_method', 'servlet_http_servlet')"
         }
         "csharp" => {
             "code_units.language = 'csharp' AND code_units.kind IN (\

@@ -7437,6 +7437,64 @@ mod tests {
     }
 
     #[test]
+    fn java_servlet_web_servlets_form_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_java_release_v0_2_fixture(
+            "servlet_exact_web_servlets",
+            "java-release-servlet-exact",
+        );
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "servlet.annotation.WebServlet")
+                .count(),
+            3,
+            "three exact @WebServlet classes should derive three support facts: {derived:?}"
+        );
+        assert_single_java_family(
+            &runtime,
+            &workspace,
+            "family:java:servlet_http_servlet:framework_servlet_http_servlet",
+        );
+
+        // A locally declared @WebServlet annotation is not the Jakarta one.
+        let (workspace, runtime) = index_java_release_v0_2_fixture(
+            "servlet_lookalikes",
+            "java-release-servlet-lookalikes",
+        );
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target == "servlet.annotation.WebServlet"),
+            "an unimported @WebServlet must not derive support: {derived:?}"
+        );
+    }
+
+    #[test]
+    fn java_servlet_detector_leaves_the_shipped_families_intact() {
+        // Two framework roles on one unit deletes a family silently, so the
+        // pre-existing Java families are re-asserted after adding the servlet
+        // detector.
+        for (fixture, family_prefix) in [
+            (
+                "jpa_exact_entities",
+                "family:java:jpa_entity:framework_jpa_entity",
+            ),
+            (
+                "jaxrs_exact_resources",
+                "family:java:jaxrs_resource_method:framework_jaxrs_resource_method",
+            ),
+        ] {
+            let (workspace, runtime) = index_java_release_v0_2_fixture(
+                fixture,
+                &format!("java-release-servlet-regression-{fixture}"),
+            );
+            assert_single_java_family(&runtime, &workspace, family_prefix);
+        }
+    }
+
+    #[test]
     fn java_jaxrs_exact_resources_form_family_without_worker() {
         let (workspace, runtime) = index_java_release_v0_2_fixture(
             "jaxrs_exact_resources",
