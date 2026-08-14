@@ -63,12 +63,12 @@ parse-degraded gate stays open for exactly that reason.
 | Provider/frontend/version | None; no R parser, languageserver, compiler/runtime, or provider version. |
 | Discovery/config | `.R`, `.r`, `DESCRIPTION`, `NAMESPACE`, and `renv.lock` with managed-library/IDE exclusions. |
 | Manifest/lockfile | Bounded DESCRIPTION/NAMESPACE declarations plus exact explicit CRAN/Bioconductor `renv.lock` versions; ambiguous registries and remote/custom/local sources are omitted. |
-| Owned source IR / external symbols | Both absent; package imports, S3/S4/R6 dispatch, native symbols, NSE, and generated code are unresolved. |
+| Owned source IR / external symbols | Owned units exist for the ADR-0042 anchor only, and the IR abstains on their kind because a testthat block is a call, not a declaration; external symbols stay absent, and package imports, S3/S4/R6 dispatch, native symbols, NSE, and generated code are unresolved. |
 | Library Contracts | Registry exists, production packs = 0; inventory never creates a behavior contract. |
-| Exact family / fixtures | No family. Strong DCF/JSON/resource/remote-source/leakage/incremental tests; no R source-family corpus. |
+| Exact family / fixtures | One exact family, `framework:testthat.test_that` over the testthat block anchor, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded and resolved/unresolved do not, because a scanner has no parse failure and there is no R provider. |
 | Primary UNKNOWN cases | Repository identity, selected lock/project/profile, remote sources, package directness/scope, NSE/metaprogramming, dispatch, native code, and provider availability. |
 | Source-free / security | Metadata results are source-free; `.R`/`.r` is zero-read; no R, renv, package/profile script, native code, child, repository code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `2/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only explicit registry evidence and
 never defaults ambiguous packages to CRAN; security discards remote/path values

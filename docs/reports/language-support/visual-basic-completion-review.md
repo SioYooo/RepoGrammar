@@ -67,12 +67,12 @@ parse-degraded gate stays open for that reason.
 | Dialect/version | Exact lowercase `.vb`/`.vbproj` inventory is explicitly VB.NET; VB6 is excluded. No SDK, target framework, language version, compile-item, or MSBuild profile is selected. |
 | Provider/frontend/version | None; no Roslyn/VB compiler provider or version. |
 | Manifest/lockfile | Bounded direct literal NuGet `PackageReference` declarations from `.vbproj`; no restore graph, central versioning, assets lock, or resolved assembly. |
-| Owned source IR / external symbols | Both absent; config units are not VB source IR, and types/members/assemblies are unresolved. |
+| Owned source IR / external symbols | Owned units and IR exist for the ADR-0043 anchor only; external symbols stay absent, and types, members, and assemblies are unresolved. |
 | Library Contracts | Exact-version registry exists, production packs = 0; manifest-only NuGet rows are insufficient for lookup. |
-| Exact family / fixtures | No exact family. Strong discovery/XML/resource/leakage/incremental tests exist, but no source-family matrix. |
+| Exact family / fixtures | One exact family, `framework:vb_mstest.test_method` over `mstest.TestMethod`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded and resolved/unresolved do not, because a scanner has no parse failure and there is no VB provider. |
 | Primary UNKNOWN cases | SDK imports, properties, conditions, item transforms, central versions, analyzers/generators, target framework, assembly graph, source recovery, and provider availability. |
 | Source-free / security | Inventory outputs are source-free; XML is bounded and DTD/entity-free; no compiler, `dotnet`, MSBuild, NuGet, analyzer, child, project code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `2/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only literal direct declarations;
 security fails closed on dynamic XML/MSBuild semantics; completeness lacks every

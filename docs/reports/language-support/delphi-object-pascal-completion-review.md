@@ -82,12 +82,12 @@ deferred and must not be counted as implemented by this lane.
 | Dialect/version | Source suffixes remain dialect-neutral Object Pascal; only `.dproj` metadata is Delphi-qualified. No RAD Studio/Delphi version or Free Pascal equivalence is selected. |
 | Provider/frontend/version | None; no Delphi/FPC parser, compiler, LSP, or version. |
 | Manifest/lockfile | Bounded literal `.dproj` `DCC_UsePackage` rows with runtime scope, unknown directness, and no version; `.lpi`/`.lpk`/`fpmake` remain deferred. |
-| Owned source IR / external symbols | Both absent. Package/unit/class/member identity is unresolved. |
+| Owned source IR / external symbols | Owned units and IR exist for the ADR-0044 anchor only; external symbols stay absent, and package, unit, class, and member identity is unresolved. |
 | Library Contracts | Registry exists, production packs = 0; versionless unknown-directness rows cannot match a reviewed contract. |
-| Exact family / fixtures | No family. Strong discovery/XML/resource/leakage/incremental tests exist, but no source-family corpus. |
+| Exact family / fixtures | One exact family, `framework:dunitx.test_procedure` over `dunitx.Test`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded and resolved/unresolved do not, because a scanner has no parse failure and there is no Delphi provider. |
 | Primary UNKNOWN cases | Compiler dialect, project selection, MSBuild properties/conditions/imports, automatically added packages, version suffixes, unit search paths, generated forms/resources, and provider availability. |
 | Source-free / security | Source/config outputs are source-free; bounded XML rejects active constructs; no compiler, IDE, MSBuild, package loader, child, repository code, or network runs. |
-| Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
 
 Four-part review: correctness retains explicit direct-root text while preserving
 unknown directness; security is non-executing and fail-closed; completeness has
