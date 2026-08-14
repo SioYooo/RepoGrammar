@@ -40,7 +40,7 @@
       "provider_status": "python_type_provider_not_integrated",
       "library_analysis_status": "pypi_manifest_inventory_only",
       "primary_unknowns": ["python_import_graph", "framework_semantic_provider"],
-      "evidence_paths": ["docs/reports/language-support/python-completion-review.md", "src/rust/adapters/parsing/python.rs", "src/workers/python/worker.py"],
+      "evidence_paths": ["docs/reports/language-support/python-completion-review.md", "src/rust/adapters/parsing/python.rs", "src/workers/python/worker.py", "src/rust/ports/python_provider.rs"],
       "prerequisite_commits": ["e275c9b2a3d9ba1984ba2e344b0ad9e826abc973", "afc472bc2bf23abe63c24e1a501f1bc354b5b24e"]
     },
     {

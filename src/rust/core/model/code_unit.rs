@@ -2,7 +2,13 @@
 
 use super::provenance::Provenance;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Identity of one analyzable source unit.
+///
+/// The ordering is the identifier's byte order and exists so callers can key
+/// ordered collections by code unit. It is a deterministic collation key only:
+/// two ids comparing adjacent says nothing about the units being related,
+/// nested, or near each other in a file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeUnitId(String);
 
 impl CodeUnitId {
@@ -334,6 +340,22 @@ mod tests {
     #[test]
     fn rejects_empty_code_unit_ids() {
         assert!(CodeUnitId::new("   ").is_err());
+    }
+
+    #[test]
+    fn code_unit_ids_order_by_identifier_bytes() {
+        let mut ids = [
+            CodeUnitId::new("unit:src/b.py:0").expect("id"),
+            CodeUnitId::new("unit:src/a.py:10").expect("id"),
+            CodeUnitId::new("unit:src/a.py:2").expect("id"),
+        ];
+        ids.sort();
+
+        assert_eq!(
+            ids.iter().map(CodeUnitId::as_str).collect::<Vec<_>>(),
+            ["unit:src/a.py:10", "unit:src/a.py:2", "unit:src/b.py:0"],
+            "ordering is byte collation of the id, not source position"
+        );
     }
 
     #[test]

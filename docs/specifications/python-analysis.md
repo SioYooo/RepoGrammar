@@ -376,9 +376,25 @@ The current implementation covers a bounded static CPython `ast` slice only:
   only, while dynamic or nonlocal targets preserve `UNKNOWN`.
 - a Rust `ports::python_provider` boundary for future candidate-scoped
   Pyrefly/Pyright/RightTyper requests, provider provenance assumptions,
-  provider cache-key dimensions, and recoverable provider-unavailable
-  `UNKNOWN`s. This boundary is not a provider adapter, does not execute external
-  tools, and does not add production Pyrefly/Pyright/RightTyper support. Future
+  provider cache-key dimensions, and typed provider-abstention `UNKNOWN`s.
+  Abstention has exactly three states — `absent` when no provider answered,
+  `stale` when the answer describes source whose content hash has since moved or
+  whose code unit is gone, and `conflicting` when an answer about current source
+  contradicts itself. `classify_python_provider_answer` is the one entrypoint
+  that decides which applies; callers route, format, persist, and test its
+  result but must not rederive it from raw provenance, hash, or fact fields. The
+  precedence is absent, then stale, then conflicting, because a disagreement
+  inside an answer about already-changed source says nothing about the current
+  revision. Absent and stale are recoverable and name their mechanism; a
+  provider contradicting itself is irreducible, since re-running the same
+  provider over the same source reproduces it and no registered mechanism
+  adjudicates it. A subject may hold many targets without contradiction under
+  `CallHierarchy` and `ObserveRuntimeTypes`, which are additive by construction;
+  only single-valued operations treat two targets for one subject as a conflict.
+  Every state yields zero facts and no provenance, so no provider failure can
+  degrade into a confident structural claim. This boundary is not a provider
+  adapter, does not execute external tools, and does not add production
+  Pyrefly/Pyright/RightTyper support. Future
   provider adapters must translate accepted provider spans into existing
   same-code-unit path/hash/range support evidence before EC-MVFI-lite can use
   them; provider origin alone cannot bypass canonical target compatibility.

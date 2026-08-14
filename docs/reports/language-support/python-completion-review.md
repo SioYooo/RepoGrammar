@@ -67,7 +67,15 @@ shapes. Inventory proves neither installation nor import resolution.
 Third-party behavior remains incomplete. `python_type_provider` is registered
 but `not_integrated`; `src/rust/ports/python_provider.rs` and the application
 planner define future Pyrefly/Pyright/RightTyper requests and cache/provenance
-types but execute no provider. Therefore arbitrary import spellings are not
+types but execute no provider. The port does now own the whole abstention
+decision: `classify_python_provider_answer` is the single entrypoint that reads
+a recorded answer and returns `absent`, `stale`, `conflicting`, or nothing, and
+`PythonProviderOutput::abstained` turns each state into a typed `UNKNOWN` with
+its own reason code, class, and recovery while carrying zero facts and no
+provenance. Freshness is decided against the content hash each candidate had
+when the provider saw it, so no caller may rederive abstention from raw
+provenance, hash, or fact fields. That is a contract, not an integration: no
+provider produces an answer to classify. Therefore arbitrary import spellings are not
 package-qualified external symbols and no provider-backed dependency graph
 exists. The exact-version contract registry from `4e4d0de` has zero production
 contract packs, so it cannot establish behavior.
@@ -157,9 +165,9 @@ performance limits therefore remain an open gate, not an inferred success.
 | 1. Discovery/config | Partial | `.py` plus bounded root Python config, skips, size/symlink tests, and project inventory exist. The syntax-version boundary is now explicit rather than implicit: because the worker runs on the host interpreter, parseable grammar is capped by that interpreter's version, and a run that degrades a Python file reports the version that bounded it, or `UNKNOWN`. Dialect selection and wider packaging-profile qualification are still not closed as one completion module. |
 | 2. Authoritative frontend | Pass for the implemented syntax slice | CPython `ast`/`symtable` is authoritative and bounded; this does not supply the missing type/import provider or implemented Tree-sitter fallback. |
 | 3. Owned code units/IR | Pass | Worker output is validated and translated to owned units, IR, facts, evidence, provenance, and deterministic storage records. |
-| 4. Typed `UNKNOWN` | Partial | Broad claim-scoped classes and recovery codes exist. The degraded parse path is no longer silent: an error diagnostic now emits a distinct file-level `parse degraded` token stating that missing code units are not evidence of absence, proven end to end against the real CPython frontend. Pyrefly/Pyright remains `not_integrated` and provider conflict/freshness closure is still absent. |
+| 4. Typed `UNKNOWN` | Partial | Broad claim-scoped classes and recovery codes exist. The degraded parse path is no longer silent: an error diagnostic now emits a distinct file-level `parse degraded` token stating that missing code units are not evidence of absence, proven end to end against the real CPython frontend. Provider abstention is no longer an open vocabulary either: absent, stale, and conflicting are the port's whole answer space, each mapping to a distinct reason code and class, with conflicting typed irreducible because no registered mechanism adjudicates a provider's contradiction with itself. Pyrefly/Pyright remains `not_integrated`, so no product path exercises those states yet. |
 | 5. Family-first exact anchor | Pass as substrate | Multiple exact families meet support >= 3 and compatibility rules; this is reusable evidence, not completion without the other gates. |
-| 6. Fixture proof | Partial | Positive, lookalike/dynamic, low-support, stale, conflict, and selected unresolved/resolved fixtures exist. The parse-degraded case is now covered end to end: an unparseable module is indexed, yields zero units, and is reported as degraded rather than as a clean empty parse. The provider-state matrix is still required before closure. |
+| 6. Fixture proof | Partial | Positive, lookalike/dynamic, low-support, stale, conflict, and selected unresolved/resolved fixtures exist. The parse-degraded case is now covered end to end: an unparseable module is indexed, yields zero units, and is reported as degraded rather than as a clean empty parse. The provider-state matrix now exists at the port boundary: absent, stale by changed hash, stale by deleted candidate, conflicting by two targets for one single-valued subject, conflicting by a provider's own `CONFLICTING` certainty, the additive operations that must not read many targets as a conflict, and the stale-outranks-conflict precedence are each pinned by a fixture. Closure still needs the same matrix on a product path, which requires a provider that answers. |
 | 7. Source-free readiness | Partial | CLI/MCP/query/readiness and leakage controls exist, but the language's final provider/readiness matrix has not been audited and linked as a completion submodule. |
 | 8. Four-part review | Satisfied by this snapshot | This report records correctness, security, completeness, and performance findings. Open findings remain blockers or risks and are not converted into test or implementation evidence. |
 | 9. Atomic delivery/audit | Fail | The main Python landing was an aggregate commit and no final audit links independently complete discovery, frontend/IR, provider/UNKNOWN, family/fixtures, and review commits with full gates. |
@@ -212,10 +220,14 @@ prerequisite chain:
    library-contract inputs without promoting manifest presence.
 3. Add provider absent/present/stale/conflicting and controlled
    unresolved-to-resolved product fixtures; prove negative/degraded cases stay
-   family-free. The parse-degraded half of this step is done: an error
-   diagnostic now carries a distinct file-level degraded token instead of
+   family-free. Two halves of this step are done. The parse-degraded half: an
+   error diagnostic now carries a distinct file-level degraded token instead of
    sharing the recoverable-diagnostic wording, with synthetic and real-frontend
-   coverage.
+   coverage. The abstention half: the port classifies absent, stale, and
+   conflicting answers into typed `UNKNOWN`s and a fixture matrix pins every
+   state, its precedence, and the additive operations that are not conflicts.
+   What remains is the `present` leg and the product path, both of which need an
+   executing provider under a separate ADR-0020 D3 review.
 4. Re-audit one exact family end-to-end, including leakage and representative
    resource measurements.
 5. Deliver each completed submodule as its own Conventional Commit, then run all
