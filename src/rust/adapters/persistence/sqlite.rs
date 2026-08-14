@@ -3373,7 +3373,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         "csharp" => {
             "code_units.language = 'csharp' AND code_units.kind IN (\
              'aspnet_controller', 'aspnet_controller_action', 'aspnet_minimal_api_route', \
-             'efcore_db_context', 'efcore_entity_set', 'xunit_test_method', \
+             'efcore_db_context', 'efcore_entity_set', 'fluentvalidation_validator', 'xunit_test_method', \
              'nunit_test_method', 'mstest_test_method')"
         }
         "c/cpp" => {

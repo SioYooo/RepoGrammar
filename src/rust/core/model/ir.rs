@@ -116,7 +116,9 @@ impl IrNodeKind {
             CodeUnitKind::SpringComponent
             | CodeUnitKind::SpringBootApplication
             | CodeUnitKind::SpringDataRepository => Self::Class,
-            CodeUnitKind::AspNetController | CodeUnitKind::EfCoreDbContext => Self::Class,
+            CodeUnitKind::AspNetController
+            | CodeUnitKind::EfCoreDbContext
+            | CodeUnitKind::FluentValidationValidator => Self::Class,
             CodeUnitKind::AspNetControllerAction
             | CodeUnitKind::AspNetMinimalApiRoute
             | CodeUnitKind::EfCoreEntitySet

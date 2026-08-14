@@ -7678,6 +7678,90 @@ mod tests {
     }
 
     #[test]
+    fn csharp_fluentvalidation_validators_form_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_csharp_release_v0_2_fixture(
+            "fluentvalidation_exact_validators",
+            "csharp-release-fluentvalidation-exact",
+        );
+
+        let derived = csharp_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "fluentvalidation.AbstractValidator")
+                .count(),
+            3,
+            "three exact validators should derive three support facts: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:csharp:fluentvalidation_validator:framework_fluentvalidation_validator"
+            ));
+        assert_eq!(family_array[0]["support"], 3);
+
+        // A locally declared AbstractValidator<T> with no using and no fully
+        // qualified path is some other type entirely.
+        let (workspace, runtime) = index_csharp_release_v0_2_fixture(
+            "fluentvalidation_lookalikes",
+            "csharp-release-fluentvalidation-lookalikes",
+        );
+        let derived = csharp_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target == "fluentvalidation.AbstractValidator"),
+            "lookalike bases must not derive support: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("fluentvalidation"))))
+                .unwrap_or(false),
+            "lookalikes must not form a FluentValidation family: {families_json}"
+        );
+    }
+
+    #[test]
+    fn csharp_fluentvalidation_detector_leaves_the_shipped_families_intact() {
+        // A second detector on an already-claimed unit deletes a family
+        // silently, so the pre-existing C# families are re-asserted here.
+        let (workspace, runtime) = index_csharp_release_v0_2_fixture(
+            "aspnet_exact_controllers",
+            "csharp-release-fluentvalidation-regression",
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert_eq!(family_array[0]["support"], 3);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:csharp:aspnet_controller_action:framework_aspnetcore_controller_action"
+            ));
+    }
+
+    #[test]
     fn csharp_xunit_exact_tests_form_family_without_worker() {
         let (workspace, runtime) = index_csharp_release_v0_2_fixture(
             "xunit_exact_tests",

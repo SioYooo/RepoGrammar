@@ -270,6 +270,7 @@ pub const FRAMEWORK_ALIASES: &[(&str, &[&str])] = &[
     ("spring", &["spring", "spring_boot", "spring_data"]),
     ("aspnet", &["aspnetcore"]),
     ("xunit", &["xunit"]),
+    ("fluentvalidation", &["fluentvalidation"]),
     ("gtest", &["gtest"]),
     ("catch2", &["catch2"]),
     ("junit", &["junit4", "junit5"]),
@@ -356,6 +357,10 @@ pub const ROLE_CONCEPTS: &[(&str, Concept)] = &[
     ("framework:pydantic.model", Concept::ValidationModel),
     ("framework:zod.schema", Concept::ValidationModel),
     ("framework:serde.model", Concept::ValidationModel),
+    (
+        "framework:fluentvalidation.validator",
+        Concept::ValidationModel,
+    ),
     ("framework:drizzle.schema.table", Concept::ValidationModel),
     // Data-access roles: ORM models, repositories, queries, transactions.
     ("framework:sqlalchemy.model", Concept::DataAccess),
@@ -409,6 +414,7 @@ pub const KNOWN_FRAMEWORK_TOKENS: &[&str] = &[
     "django",
     "doctest",
     "drizzle",
+    "fluentvalidation",
     "efcore",
     "express",
     "fastapi",

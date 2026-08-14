@@ -26,6 +26,7 @@ pub(crate) const CSHARP_ANCHOR_METHOD: &str = "tree_sitter_csharp_structural_anc
 
 const ASPNET_MVC_NAMESPACE: &str = "Microsoft.AspNetCore.Mvc";
 const EFCORE_NAMESPACE: &str = "Microsoft.EntityFrameworkCore";
+const FLUENTVALIDATION_NAMESPACE: &str = "FluentValidation";
 const XUNIT_NAMESPACE: &str = "Xunit";
 const NUNIT_NAMESPACE: &str = "NUnit.Framework";
 const MSTEST_NAMESPACE: &str = "Microsoft.VisualStudio.TestTools.UnitTesting";
@@ -316,10 +317,25 @@ impl<'a> CSharpTreeScanner<'a> {
                 context.usings.as_ref(),
             );
 
+        // Ordered after the ASP.NET and EF Core arms so one class never claims
+        // two framework roles: a unit holding two is dropped from family
+        // support silently instead of reporting a conflict.
+        let fluent_validator = controller_target.is_none()
+            && !db_context
+            && node.kind() == "class_declaration"
+            && base_is_exact(
+                &bases,
+                "AbstractValidator",
+                FLUENTVALIDATION_NAMESPACE,
+                context.usings.as_ref(),
+            );
+
         let kind = if controller_target.is_some() {
             CodeUnitKind::AspNetController
         } else if db_context {
             CodeUnitKind::EfCoreDbContext
+        } else if fluent_validator {
+            CodeUnitKind::FluentValidationValidator
         } else {
             CodeUnitKind::Class
         };
@@ -375,6 +391,30 @@ impl<'a> CSharpTreeScanner<'a> {
                     format!("csharp_class_shape={class_shape}"),
                 ],
                 "bounded C# EF Core DbContext anchor",
+            )?);
+            self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
+        } else if fluent_validator {
+            self.semantic_facts.push(structural_anchor_fact(
+                &self.document,
+                &unit,
+                SemanticFactKind::Type,
+                "fluentvalidation.AbstractValidator",
+                vec![
+                    "provider_resolved=false".to_string(),
+                    "csharp_anchor_kind=fluentvalidation_validator".to_string(),
+                    format!("csharp_visibility_shape={visibility}"),
+                    format!("csharp_class_shape={class_shape}"),
+                ],
+                "bounded C# FluentValidation validator anchor",
+            )?);
+            self.semantic_facts.push(unknown_fact(
+                &self.document,
+                &unit,
+                UnknownReasonCode::FrameworkMagic,
+                "csharp_fluentvalidation_rule_chain",
+                "fluentvalidation_rule_chain",
+                "FluentValidation rule builder chains and validator resolution are runtime behavior",
+                Vec::new(),
             )?);
             self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
         } else if has_non_exact_known_attribute(

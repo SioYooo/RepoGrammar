@@ -3367,7 +3367,9 @@ fn csharp_evidence_pair_is_compatible(
         "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
             equal_feature_profiles(left, right, features_by_unit, &["test_attribute:"])
         }
-        "framework_efcore_db_context" | "framework_efcore_entity_set" => {
+        "framework_efcore_db_context"
+        | "framework_efcore_entity_set"
+        | "framework_fluentvalidation_validator" => {
             equal_feature_profiles(left, right, features_by_unit, &["support_family:"])
         }
         _ => true,
@@ -3771,7 +3773,9 @@ fn csharp_characteristic_prefixes(framework_role: &str) -> &'static [&'static st
         "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
             &["test_attribute:"]
         }
-        "framework_efcore_db_context" | "framework_efcore_entity_set" => &["support_family:"],
+        "framework_efcore_db_context"
+        | "framework_efcore_entity_set"
+        | "framework_fluentvalidation_validator" => &["support_family:"],
         _ => &[],
     }
 }
@@ -4688,6 +4692,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "aspnet_minimal_api_route"
             | "efcore_db_context"
             | "efcore_entity_set"
+            | "fluentvalidation_validator"
             | "xunit_test_method"
             | "nunit_test_method"
             | "mstest_test_method"
