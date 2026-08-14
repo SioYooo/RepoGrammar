@@ -285,6 +285,11 @@ fn strip_line(line: &str) -> String {
     while index < bytes.len() {
         match bytes[index] {
             b'%' => break,
+            // `...` continues the statement on the next line, and everything
+            // after it to end of line is ignored the way a comment is.
+            b'.' if bytes.get(index + 1) == Some(&b'.') && bytes.get(index + 2) == Some(&b'.') => {
+                break
+            }
             b'.' if bytes.get(index + 1) == Some(&b'\'')
                 && tick_is_transpose(previous_byte)
                 && index > 0 =>
@@ -709,6 +714,22 @@ mod tests {
              \x20   end\nend\n",
         );
         assert_eq!(tests_found(&parsed), 1);
+    }
+
+    #[test]
+    fn an_ellipsis_continuation_comment_does_not_close_a_block() {
+        // Everything after `...` is ignored to end of line, so the bare `end`
+        // in that trailing text is not a block terminator.
+        let parsed = output(
+            "classdef CatalogTest < matlab.unittest.TestCase\n    methods (Test)\n\
+             \x20       function loadsCatalog(testCase)\n\
+             \x20           total = 1 + ... sum everything through to the end\n\
+             \x20                   2;\n\
+             \x20       end\n\
+             \x20       function filtersCatalog(testCase)\n        end\n\
+             \x20   end\nend\n",
+        );
+        assert_eq!(tests_found(&parsed), 2);
     }
 
     #[test]

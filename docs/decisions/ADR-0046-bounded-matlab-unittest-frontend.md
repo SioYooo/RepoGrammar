@@ -89,9 +89,18 @@ keyword and attribute matching is case-sensitive.
 Out of scope and named rather than left to inference: function-based tests
 (`tests = functiontests(localfunctions)`), script-based tests, `TestClassSetup`
 and `TestMethodSetup` blocks, `ParameterCombination` and parameterised
-properties, `TestTags` filtering, abstract or inherited test classes, and Octave
+properties, `TestTags` filtering, inherited test classes, and Octave
 compatibility — ADR-0037's MATLAB/Octave separation is untouched, and this
 anchor claims MATLAB only because `matlab.unittest.TestCase` is a MATLAB name.
+
+### D2a. Abstractness is not read
+
+The `classdef` attribute list is not consulted, so the methods of an abstract
+`matlab.unittest.TestCase` anchor even though the framework runs them only
+through a concrete subclass. This is stated rather than fixed: the declaration
+is real and the methods are real tests of the subclasses, and reading the
+attribute list to exclude them would suppress evidence that exists. What the
+anchor does not claim is that the declaring class is itself runnable.
 
 ### D3. Only admitted declarations become units
 
@@ -102,10 +111,17 @@ no unit, so the absence of a unit is not evidence that a file has no code.
 ### D4. The scanner is comment-, string-, and tick-aware
 
 `%` comments, `%{ … %}` block comments, `'…'` character arrays with `''`
-doubling, `"…"` strings with `""` doubling, and transposes never contribute to
-an anchor. The tick rule in the context section is implemented exactly as
-stated. This is a decision because the repository has shipped the opposite
-defect four times.
+doubling, `"…"` strings with `""` doubling, transposes, and the text after a
+`...` continuation never contribute to an anchor. The tick rule in the context
+section is implemented exactly as stated.
+
+This is a decision because the repository has shipped the opposite defect four
+times.
+
+The `...` case is called out separately because it is not obviously a comment:
+MATLAB ignores everything after an ellipsis to end of line, so a bare `end`
+written there is prose, not a block terminator, and counting it would close the
+`methods (Test)` block early.
 
 ### D5. What the anchor claims
 
