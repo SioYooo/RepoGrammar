@@ -153,9 +153,9 @@ performance limits therefore remain an open gate, not an inferred success.
 | 1. Discovery/config | Partial | `.py` plus bounded root Python config, skips, size/symlink tests, and project inventory exist; version/dialect and wider packaging-profile qualification are not closed as one completion module. |
 | 2. Authoritative frontend | Pass for the implemented syntax slice | CPython `ast`/`symtable` is authoritative and bounded; this does not supply the missing type/import provider or implemented Tree-sitter fallback. |
 | 3. Owned code units/IR | Pass | Worker output is validated and translated to owned units, IR, facts, evidence, provenance, and deterministic storage records. |
-| 4. Typed `UNKNOWN` | Partial | Broad claim-scoped classes and recovery codes exist, but Pyrefly/Pyright is `not_integrated`, provider conflict/freshness closure is absent, and required degraded-path proof is incomplete. |
+| 4. Typed `UNKNOWN` | Partial | Broad claim-scoped classes and recovery codes exist. The degraded parse path is no longer silent: an error diagnostic now emits a distinct file-level `parse degraded` token stating that missing code units are not evidence of absence, proven end to end against the real CPython frontend. Pyrefly/Pyright remains `not_integrated` and provider conflict/freshness closure is still absent. |
 | 5. Family-first exact anchor | Pass as substrate | Multiple exact families meet support >= 3 and compatibility rules; this is reusable evidence, not completion without the other gates. |
-| 6. Fixture proof | Partial | Positive, lookalike/dynamic, low-support, stale, conflict, and selected unresolved/resolved fixtures exist. The plan explicitly requires a complete parse-degraded and provider-state matrix before closure. |
+| 6. Fixture proof | Partial | Positive, lookalike/dynamic, low-support, stale, conflict, and selected unresolved/resolved fixtures exist. The parse-degraded case is now covered end to end: an unparseable module is indexed, yields zero units, and is reported as degraded rather than as a clean empty parse. The provider-state matrix is still required before closure. |
 | 7. Source-free readiness | Partial | CLI/MCP/query/readiness and leakage controls exist, but the language's final provider/readiness matrix has not been audited and linked as a completion submodule. |
 | 8. Four-part review | Satisfied by this snapshot | This report records correctness, security, completeness, and performance findings. Open findings remain blockers or risks and are not converted into test or implementation evidence. |
 | 9. Atomic delivery/audit | Fail | The main Python landing was an aggregate commit and no final audit links independently complete discovery, frontend/IR, provider/UNKNOWN, family/fixtures, and review commits with full gates. |
@@ -206,9 +206,12 @@ prerequisite chain:
    timeout, conflict, and source-free failure behavior.
 2. Add package-qualified external-symbol resolution and versioned reviewed
    library-contract inputs without promoting manifest presence.
-3. Add parse-degraded, provider absent/present/stale/conflicting, and controlled
+3. Add provider absent/present/stale/conflicting and controlled
    unresolved-to-resolved product fixtures; prove negative/degraded cases stay
-   family-free.
+   family-free. The parse-degraded half of this step is done: an error
+   diagnostic now carries a distinct file-level degraded token instead of
+   sharing the recoverable-diagnostic wording, with synthetic and real-frontend
+   coverage.
 4. Re-audit one exact family end-to-end, including leakage and representative
    resource measurements.
 5. Deliver each completed submodule as its own Conventional Commit, then run all

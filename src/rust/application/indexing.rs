@@ -46,8 +46,9 @@ use crate::ports::index_store::{
     PythonModuleInterfaceStore, STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
-    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    ParserProjectFileContext, ParserTsJsPathAlias, PythonInterfaceProbe, SourceDocument,
+    SourceParseOutput, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -2874,11 +2875,33 @@ fn record_parse_report(
     framework_roles: Option<&dyn FrameworkRoleDetector>,
     warnings: &mut Vec<String>,
 ) -> Result<ParseStorageOutcome, RepoGrammarError> {
-    for _diagnostic in parse_report.diagnostics {
-        warnings.push(format!(
-            "parse diagnostic for {}: syntax-only parser reported a diagnostic",
-            file.path
-        ));
+    // An error diagnostic means the frontend could not build a complete unit set
+    // for this file, so the units it did return are a floor rather than the whole
+    // file. Downstream family analysis must not read the resulting absence of a
+    // code unit as evidence that the construct is absent, which is exactly what a
+    // shared token with recoverable warnings would invite, so a degraded file gets
+    // its own low-cardinality token. Diagnostic messages and the frontend-reported
+    // path stay out of both warnings: both are frontend free text and can quote
+    // source or absolute host paths. One token per file is enough, because the
+    // text carries no per-diagnostic detail to distinguish repeats.
+    let mut reported_degraded = false;
+    for diagnostic in &parse_report.diagnostics {
+        match diagnostic.severity {
+            ParseDiagnosticSeverity::Error => {
+                if !reported_degraded {
+                    reported_degraded = true;
+                    warnings.push(format!(
+                        "parse degraded for {}: frontend reported an error diagnostic; \
+                         missing code units are not evidence that a construct is absent",
+                        file.path
+                    ));
+                }
+            }
+            ParseDiagnosticSeverity::Warning => warnings.push(format!(
+                "parse diagnostic for {}: syntax-only parser reported a diagnostic",
+                file.path
+            )),
+        }
     }
     parse_report.units.sort_by(|left, right| {
         (
@@ -17502,6 +17525,124 @@ extraPaths = ["src/lib", "C:/secret"]
         assert!(!outcome.warnings[0].contains("UNIQUE_SOURCE_SENTINEL"));
         assert!(!outcome.warnings[0].contains("/tmp/absolute"));
         assert!(!outcome.warnings[0].contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn error_diagnostics_mark_the_file_parse_degraded_without_exposing_frontend_text() {
+        // Only an error diagnostic means the returned unit set is incomplete. A
+        // degraded file has to stay distinguishable from a cleanly parsed one that
+        // simply has no match, or family analysis silently reads absence as
+        // evidence of absence.
+        struct DegradedDiagnosticParser;
+
+        impl SourceParser for DegradedDiagnosticParser {
+            fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                let unit = parser_unit(
+                    &document,
+                    "unit:src/a.ts#module:0-1",
+                    document.path,
+                    document.content_hash.clone(),
+                    0,
+                    1,
+                );
+                let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+                let diagnostic = |severity, ordinal: usize| ParseDiagnostic {
+                    path: "/tmp/absolute/source.ts".to_string(),
+                    range: None,
+                    severity,
+                    message: format!("UNIQUE_SOURCE_SENTINEL_DO_NOT_LEAK {ordinal}"),
+                };
+                Ok(ParseReport {
+                    units: vec![unit],
+                    ir_nodes: vec![ir_node],
+                    ir_edges: Vec::new(),
+                    semantic_facts: Vec::new(),
+                    diagnostics: vec![
+                        diagnostic(ParseDiagnosticSeverity::Error, 0),
+                        diagnostic(ParseDiagnosticSeverity::Error, 1),
+                        diagnostic(ParseDiagnosticSeverity::Warning, 2),
+                    ],
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("indexing-degraded-diagnostic");
+        fs::write(workspace.path().join("a.ts"), "x").expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &DegradedDiagnosticParser,
+            &store,
+        )
+        .expect("index with degraded diagnostic");
+
+        let degraded: Vec<&String> = outcome
+            .warnings
+            .iter()
+            .filter(|warning| warning.starts_with("parse degraded for a.ts"))
+            .collect();
+        assert_eq!(
+            degraded.len(),
+            1,
+            "repeated error diagnostics collapse to one file-level token: {:?}",
+            outcome.warnings
+        );
+        assert!(degraded[0].contains("not evidence that a construct is absent"));
+        // A recoverable diagnostic keeps the weaker token, so the two never merge.
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("parse diagnostic for a.ts")));
+        for warning in &outcome.warnings {
+            assert!(!warning.contains("UNIQUE_SOURCE_SENTINEL"));
+            assert!(!warning.contains("/tmp/absolute"));
+            assert!(!warning.contains(workspace.path().to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn python_syntax_errors_reach_indexing_as_a_parse_degraded_warning() {
+        // CPython is the only frontend that reports an error diagnostic, and it
+        // returns no code units at all for an unparseable module. That is exactly
+        // the case that must not read as a clean parse with nothing to report, so
+        // assert the real frontend reaches the degraded token end to end rather
+        // than trusting the synthetic-parser test alone.
+        let workspace = TempWorkspace::new("indexing-python-parse-degraded");
+        fs::write(workspace.path().join("broken.py"), "def broken(:\n")
+            .expect("write broken python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &PythonAstParser::default(),
+            &store,
+        )
+        .expect("index broken python");
+
+        assert_eq!(
+            outcome.indexed_units, 0,
+            "an unparseable module yields no units, which is why the token matters"
+        );
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.starts_with("parse degraded for broken.py")),
+            "warnings={:?}",
+            outcome.warnings
+        );
+        for warning in &outcome.warnings {
+            assert!(!warning.contains(workspace.path().to_string_lossy().as_ref()));
+        }
     }
 
     #[test]

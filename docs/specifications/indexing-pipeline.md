@@ -593,6 +593,18 @@ edges. The Rust self-dogfood extractor uses Tree-sitter Rust for tolerant
 structural extraction and typed UNKNOWN generation. No Tree-sitter node type is
 stored in core, persistence, CLI, or MCP output.
 
+Parser diagnostics are separated by severity before they become index warnings.
+A recoverable diagnostic keeps the `parse diagnostic for <path>` token. An error
+diagnostic instead emits `parse degraded for <path>`, once per file, because an
+error means the frontend could not build a complete unit set: the units it did
+return are a floor, not the whole file. CPython is currently the only frontend
+that reports an error severity, and an unparseable module yields no code units
+at all, so without the distinct token that file is indistinguishable from one
+that parsed cleanly and genuinely had no match. The degraded token states that
+missing code units are not evidence that a construct is absent. Neither warning
+carries the diagnostic message or the frontend-reported path, both of which are
+frontend free text that can quote source or absolute host paths.
+
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
 facts.
