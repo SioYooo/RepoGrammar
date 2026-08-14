@@ -15,6 +15,7 @@ pub mod express;
 pub mod go;
 pub mod java;
 pub mod jest;
+pub mod matlab;
 pub mod nestjs;
 pub mod r;
 pub mod react;
@@ -90,6 +91,14 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
         });
     }
     if let Some(role) = go::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = matlab::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,

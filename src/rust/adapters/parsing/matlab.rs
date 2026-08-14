@@ -5,6 +5,8 @@
 //! starts MATLAB/Octave, opens a project, mutates the MATLAB path, installs a
 //! toolbox, loads Java/MEX code, evaluates scripts, or includes Simulink.
 
+pub mod unittest;
+
 use super::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{

@@ -3,13 +3,16 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{ada, cpp, csharp, delphi, java, r, sql, tsjs, visual_basic};
+use crate::adapters::frameworks::{
+    ada, cpp, csharp, delphi, java, matlab, r, sql, tsjs, visual_basic,
+};
 use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
 use crate::adapters::parsing::go::source::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
+use crate::adapters::parsing::matlab::unittest::{MATLAB_ANCHOR_ENGINE, MATLAB_ANCHOR_METHOD};
 use crate::adapters::parsing::python::PYTHON_ANCHOR_ENGINE;
 use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
@@ -61,6 +64,8 @@ pub(crate) const DELPHI_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-delphi-deriv
 pub(crate) const DELPHI_DERIVED_SUPPORT_METHOD: &str = "bounded_delphi_dunitx_anchor_v1";
 pub(crate) const ADA_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-ada-derived";
 pub(crate) const ADA_DERIVED_SUPPORT_METHOD: &str = "bounded_ada_aunit_anchor_v1";
+pub(crate) const MATLAB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-matlab-derived";
+pub(crate) const MATLAB_DERIVED_SUPPORT_METHOD: &str = "bounded_matlab_unittest_anchor_v1";
 pub(crate) const R_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-r-derived";
 pub(crate) const R_DERIVED_SUPPORT_METHOD: &str = "bounded_r_testthat_anchor_v1";
 pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
@@ -2438,6 +2443,7 @@ enum FamilyUnknownDomain {
     VisualBasic,
     Delphi,
     Ada,
+    Matlab,
 }
 
 impl FamilyUnknownDomain {
@@ -2493,6 +2499,11 @@ impl FamilyUnknownDomain {
             return (origin_engine == ADA_ANCHOR_ENGINE && origin_method == ADA_ANCHOR_METHOD)
                 .then_some(Self::Ada);
         }
+        if language == "matlab" {
+            return (origin_engine == MATLAB_ANCHOR_ENGINE
+                && origin_method == MATLAB_ANCHOR_METHOD)
+                .then_some(Self::Matlab);
+        }
         None
     }
 
@@ -2510,6 +2521,7 @@ impl FamilyUnknownDomain {
             Self::VisualBasic => "vb_mstest_attribute_binding",
             Self::Delphi => "delphi_dunitx_attribute_binding",
             Self::Ada => "ada_aunit_registration_binding",
+            Self::Matlab => "matlab_unittest_class_binding",
         }
     }
 
@@ -2527,6 +2539,7 @@ impl FamilyUnknownDomain {
             Self::VisualBasic => "VB.NET",
             Self::Delphi => "Delphi",
             Self::Ada => "Ada",
+            Self::Matlab => "MATLAB",
         }
     }
 
@@ -2565,6 +2578,7 @@ impl FamilyUnknownDomain {
             Self::VisualBasic => vb_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::Delphi => delphi_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::Ada => ada_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Matlab => matlab_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2603,6 +2617,7 @@ impl FamilyUnknownDomain {
             Self::VisualBasic => false,
             Self::Delphi => false,
             Self::Ada => false,
+            Self::Matlab => false,
         }
     }
 }
@@ -2639,6 +2654,21 @@ fn vb_unknown_reason_blocks_family_membership(
     match reason {
         UnknownReasonCode::UnresolvedImport => {
             affected_claim == "vb_mstest_attribute_binding" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// A `Test` methods block in a class that does not derive from
+/// `matlab.unittest.TestCase` blocks the anchor: the framework is unproven.
+fn matlab_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "matlab_unittest_class_binding"
+                || affected_claim.starts_with("family:")
         }
         _ => false,
     }
@@ -4184,6 +4214,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if ada::framework_role_is_known(framework_role) => {
             ada::support_family(target, framework_role)
         }
+        framework_role if matlab::framework_role_is_known(framework_role) => {
+            matlab::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4469,6 +4502,9 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if ada::framework_role_is_known(framework_role) {
         return ada_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if matlab::framework_role_is_known(framework_role) {
+        return matlab_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     // Go has no arm on purpose. ADR-0021's evidence ladder forbids text or
     // regex matching for the claim, and ADR-0041's correction demotes the
     // scanner to auxiliary evidence: its role is detected, and no support fact
@@ -4490,6 +4526,25 @@ fn vb_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) ->
         VB_DERIVED_SUPPORT_METHOD,
         framework_role,
         &["derived_from=bounded_vbnet_mstest_anchors".to_string()],
+    )
+}
+
+fn matlab_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = matlab::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && matlab_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn matlab_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        MATLAB_DERIVED_SUPPORT_ENGINE,
+        MATLAB_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_matlab_unittest_anchors".to_string()],
     )
 }
 
@@ -4760,6 +4815,13 @@ pub(crate) fn vb_support_target_is_role_compatible(
     visual_basic::support_target_is_role_compatible(target, framework_role)
 }
 
+pub(crate) fn matlab_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    matlab::support_target_is_role_compatible(target, framework_role)
+}
+
 pub(crate) fn ada_support_target_is_role_compatible(
     target: &str,
     framework_role: &str,
@@ -5012,6 +5074,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "vb_test_method"
             | "delphi_test_procedure"
             | "ada_test_registration"
+            | "matlab_test_method"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -5035,6 +5098,10 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "matlab" {
+        // The MATLAB completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
         3
     } else if language == "ada" {
         // The Ada completion review requires support at least three, the
@@ -5541,6 +5608,7 @@ mod tests {
             crate::adapters::frameworks::visual_basic::ROLE_MSTEST_TEST,
             crate::adapters::frameworks::delphi::ROLE_DUNITX_TEST,
             crate::adapters::frameworks::ada::ROLE_AUNIT_TEST,
+            crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST,
             crate::adapters::frameworks::r::ROLE_TESTTHAT_TEST,
             crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION,
         ];
@@ -5557,6 +5625,7 @@ mod tests {
                 ("visual_basic", visual_basic::framework_role_is_known(role)),
                 ("delphi", delphi::framework_role_is_known(role)),
                 ("ada", ada::framework_role_is_known(role)),
+                ("matlab", matlab::framework_role_is_known(role)),
             ]
             .into_iter()
             .filter(|(_, claimed)| *claimed)

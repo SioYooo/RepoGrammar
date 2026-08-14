@@ -50,6 +50,7 @@ pub struct RepoGrammarSourceParser {
     visual_basic_mstest: visual_basic::mstest::VisualBasicMsTestParser,
     delphi_dunitx: delphi::dunitx::DelphiDUnitXParser,
     ada_aunit: ada::aunit::AdaAUnitParser,
+    matlab_unittest: matlab::unittest::MatlabUnitTestParser,
     rust: rust::RustSyntaxParser,
     sql: sql::SqlDdlParser,
     swift: swift::SwiftProjectConfigParser,
@@ -94,7 +95,7 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::Java => self.java.parse(document),
             crate::core::model::Language::JavaConfig => self.java_config.parse(document),
-            crate::core::model::Language::Matlab => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Matlab => self.matlab_unittest.parse(document),
             crate::core::model::Language::MatlabConfig => self.matlab_config.parse(document),
             crate::core::model::Language::Assembly => self.assembly.parse(document),
             crate::core::model::Language::CSharp => self.csharp.parse(document),
@@ -145,7 +146,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::JavaConfig => {
                 self.java_config.parse_with_context(document, context)
             }
-            crate::core::model::Language::Matlab => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Matlab => {
+                self.matlab_unittest.parse_with_context(document, context)
+            }
             crate::core::model::Language::MatlabConfig => {
                 self.matlab_config.parse_with_context(document, context)
             }
@@ -259,6 +262,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::Ada => {
                 self.ada_aunit.parse_with_context_output(document, context)
             }
+            crate::core::model::Language::Matlab => self
+                .matlab_unittest
+                .parse_with_context_output(document, context),
             crate::core::model::Language::DelphiConfig => {
                 self.delphi.parse_with_context_output(document, context)
             }
@@ -389,6 +395,7 @@ fn is_class_like(kind: &str) -> bool {
             | "servlet_http_servlet"
             | "vb_test_class"
             | "delphi_test_fixture"
+            | "matlab_test_class"
             | "marshmallow_schema"
             | "aspnet_controller"
             | "efcore_db_context"
@@ -420,6 +427,7 @@ fn is_method_like(kind: &str) -> bool {
             | "cppunit_suite_registration"
             | "vb_test_method"
             | "delphi_test_procedure"
+            | "matlab_test_method"
             | "junit5_test_method"
             | "junit4_test_method"
             | "testng_test_method"
@@ -678,10 +686,15 @@ mod tests {
     #[test]
     fn product_parser_routes_matlab_config_and_assembly_without_source_execution() {
         let parser = RepoGrammarSourceParser::default();
-        assert_eq!(
-            parser.parse(matlab_inventory_document(Language::Matlab)),
-            Err(ParseError::UnsupportedLanguage)
-        );
+        // ADR-0046 routes `.m` to the bounded unittest scanner. This fixture
+        // declares no test class, so it yields the file's module unit alone --
+        // no anchor, no fact, and still no MATLAB or Octave execution.
+        let matlab_source = parser
+            .parse(matlab_inventory_document(Language::Matlab))
+            .expect("route bounded MATLAB source");
+        assert_eq!(matlab_source.units.len(), 1);
+        assert_eq!(matlab_source.units[0].kind, CodeUnitKind::Module);
+        assert!(matlab_source.semantic_facts.is_empty());
         let matlab = parser
             .parse_with_context_output(
                 matlab_inventory_document(Language::MatlabConfig),

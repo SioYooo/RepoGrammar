@@ -4156,6 +4156,128 @@ mod tests {
         }
     }
 
+    fn matlab_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("matlab")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_matlab_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &matlab_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn matlab_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-matlab-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn matlab_unittest_exact_classes_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) = index_matlab_release_v0_2_fixture(
+            "unittest_exact_tests",
+            "matlab-release-unittest-exact",
+        );
+
+        let derived = matlab_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "matlab_unittest.TestMethod")
+                .count(),
+            3,
+            "the private method and the file-local function are not tests: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:matlab:matlab_test_method:framework_matlab_unittest_test_method"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn matlab_unbound_test_blocks_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("unittest_unbound_block", "matlab-release-unittest-unbound"),
+            (
+                "unittest_low_support",
+                "matlab-release-unittest-low-support",
+            ),
+        ] {
+            let (workspace, runtime) = index_matlab_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("matlab_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a MATLAB unittest family: {families_json}"
+            );
+            if fixture == "unittest_unbound_block" {
+                assert!(
+                    matlab_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "a Test block outside a TestCase class must derive no support"
+                );
+            }
+        }
+    }
+
     fn ada_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")

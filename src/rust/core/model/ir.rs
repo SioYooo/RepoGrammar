@@ -164,6 +164,8 @@ impl IrNodeKind {
             // class, or method; this IR vocabulary names no such concept,
             // so the projection abstains the way testthat blocks do.
             CodeUnitKind::AdaTestRegistration => Self::Unknown,
+            CodeUnitKind::MatlabTestClass => Self::Class,
+            CodeUnitKind::MatlabTestMethod => Self::Method,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,

@@ -1,10 +1,10 @@
 # MATLAB language completion review
 
 - Language/rank: MATLAB, frozen Top-20 rank 18
-- Status: Incomplete — `discovered_only`
-- Authority: ADR-0020, ADR-0030, ADR-0037
+- Status: Incomplete — `structural_substrate`
+- Authority: ADR-0020, ADR-0030, ADR-0037, ADR-0046
 - Branch/base: `feat/top20-matlab-assembly-scratch` from `9d3a0ba`
-- Last updated: 2026-08-01
+- Last updated: 2026-08-15
 - Top-20 counted: no
 
 ## Capability record
@@ -16,10 +16,10 @@
 | Provider version | RepoGrammar crate version for the static reader; no MATLAB/Octave/Code Analyzer version. |
 | Discovery/config | Normalized lowercase `.m` metadata discovery and exact root/nested `resources/mpackage.json`. |
 | Manifest/lockfile | Direct `matlab_add_on` `name@uuid` declarations with optional compatible-version requirement; no lockfile/resolution/install proof. |
-| Owned IR | One `project_config` unit/IR node per parsed package definition; no MATLAB source IR. |
+| Owned IR | One `project_config` unit/IR node per parsed package definition, plus owned units and IR for the ADR-0046 anchor: a module unit per decoded `.m`, a test-class unit, and a test-method unit. |
 | External symbols | None. Imports, packages, class/function binding, Java/MEX, path precedence, and dynamic dispatch are unresolved. |
 | Library contracts | None. Package presence proves no toolbox or runtime behavior. |
-| Exact-anchor family | None; `matlab.unittest` and class/function families are not implemented. |
+| Exact-anchor family | One: `framework:matlab_unittest.test_method` over `matlab_unittest.TestMethod`, gated at support three. Function-based and script-based tests are not implemented. |
 | Fixtures/tests | Inline real-shape manifest, malformed/duplicate/conflict/unsafe-value/resource tests, discovery, routing, persistence/incremental removal, zero-family, and public leakage tests under `src/rust/`. |
 | Typed UNKNOWN | `matlab_dependency_inventory` covers malformed identity/schema/container, forward schema, partial/conflicting declarations, and resource limits. Source semantics have no frontend and remain unsupported rather than guessed. |
 | Source-free | Public index/status tests reject package names/UUID fragments and assembly source text. Provider/contact URLs are discarded. |
@@ -66,12 +66,17 @@ one second after compilation on the recorded development host.
   broader project/toolbox metadata do not.
 - [ ] 2. Authoritative frontend/format parser — package JSON is authoritative
   only for its bounded manifest fields, not MATLAB source.
-- [ ] 3. Owned code units/IR — config only; source IR absent.
-- [ ] 4. Typed UNKNOWN — config inventory only; source/provider obligations not
-  integrated.
-- [ ] 5. Exact-anchor family — absent.
-- [ ] 6. Fixture proof — unit/product inventory tests exist, but no supported
-  family fixture set.
+- [x] 3. Owned code units/IR — ADR-0046 emits a module unit per decoded `.m`,
+  one unit for an admitted `matlab.unittest.TestCase` class, and one per
+  admitted test method, each projected into the shared IR.
+- [x] 4. Typed UNKNOWN — a `Test` methods block in a class that does not derive
+  from `matlab.unittest.TestCase` yields `UnresolvedImport` under
+  `matlab_unittest_class_binding`, and it blocks family membership.
+- [x] 5. Exact-anchor family — `framework:matlab_unittest.test_method` with
+  support at least three.
+- [ ] 6. Fixture proof — positive, lookalike, and low-support fixtures exist;
+  parse-degraded and resolved/unresolved do not, because a scanner has no parse
+  failure and there is no MATLAB provider to resolve against.
 - [ ] 7. Source-free readiness — tested for this inventory path, not all
   required MATLAB readiness/unknown surfaces.
 - [x] 8. Four-part review — this record.
@@ -80,12 +85,22 @@ one second after compilation on the recorded development host.
 
 ## Completion verdict and exact non-claims
 
-`PARTIAL_AUDITED_PROGRESS`; strict gate count `1/9`; Top-20 counted `no`.
-RepoGrammar can prove only bounded static R2024b+ package declarations from the
-exact JSON format. It cannot prove MATLAB source syntax/semantics, a release,
-toolbox installation, dependency resolution, external symbols, unit-test
-identity, runtime behavior, or any Simulink fact. No `LICENSE_BLOCKED` claim is
-made because no licensed provider was probed.
+`PARTIAL_AUDITED_PROGRESS`; strict gate count `4/9`; Top-20 counted `no`.
+Beyond the bounded static R2024b+ package declarations, RepoGrammar now proves
+one exact class-based `matlab.unittest` declaration shape under ADR-0046. It
+still cannot prove a MATLAB release, toolbox installation, dependency
+resolution, external symbols, runtime behavior, or any Simulink fact. No
+`LICENSE_BLOCKED` claim is made because no licensed provider was probed.
+
+Two limitations are stated rather than left to inference. This frontend is a
+scanner, so malformed MATLAB does not fail — it yields fewer admitted
+declarations, which is indistinguishable from a file with fewer declarations.
+And it never interprets a statement: MATLAB's command syntax cannot be
+distinguished from an expression without the workspace (`a -1` is a subtraction
+or the call `a('-1')` depending on runtime binding), and that ambiguity is left
+outside the claim surface rather than resolved. It does not reach the scanner,
+because command arguments are unquoted and so never change what is a comment or
+a string.
 
 ## Evidence paths and risks
 

@@ -517,15 +517,32 @@ real files.
 | Open lane | First framework | Scanner soundness | Authority | State |
 |---|---|---|---|---|
 | R | testthat `test_that` | sound: line comments, quoted and raw strings, unambiguous nesting; no heredocs, regex literals, or transpose ambiguity | ADR-0042 | landed; review reports 5/9 |
-| MATLAB | `matlab.unittest` | doubtful: `'` is both transpose and string delimiter, which is the same class of hazard that rules Ruby out | needs an ADR | not started |
+| MATLAB | `matlab.unittest` class-based tests | sound, and the earlier prediction is retracted: ADR-0045 shows an overloaded tick is decidable by a local rule, so "one character has two jobs" is a hazard, not a proof. MATLAB's rule is whitespace-sensitive — `[a' b']` is two transposes, `[a 'b']` is a concatenation. Its genuinely undecidable construct is command syntax, which never reaches the scanner | ADR-0046 | landed; review reports 4/9 |
 | Visual Basic .NET | MSTest attributes | sound: `'`/`REM` comments and double-quoted-only strings mean the comment character is never a delimiter | ADR-0043 | landed; review reports 5/9 |
 | Delphi/Object Pascal | DUnitX `[TestFixture]` | sound: `//`, `{ }`, `(* *)` comments and single-quoted strings are disjoint delimiter sets, so no character serves two purposes | ADR-0044 | landed; review reports 5/9 |
 | Ada | AUnit `Register_Routine` | sound: one comment form, one string form, and the overloaded tick resolved by the same local rule real Ada lexers use — a tick after an identifier character or `)` is an attribute, otherwise a three-byte character literal | ADR-0045 | landed; review reports 5/9 |
-| Fortran | none dominant | blocked on target selection, not on route | needs an ADR | not started |
+| Fortran | none in the backlog | blocked on target selection, not on route | none available | closed as `no_qualifying_candidate_yet` |
 
 R is taken first because testthat is the only entry among the six that is
 genuinely dominant in its own ecosystem, and because its runner convention makes
 the file path identity evidence rather than a style guess.
+
+### Fortran is closed without an implementation, on this document's own evidence
+
+Five of the six open lanes landed. Fortran did not, and the reason is recorded
+here rather than deferred: the priority-ordered backlog below — this
+repository's own authority on what "common frameworks" means, compiled against
+the 2026-07-11 developer surveys — lists no Fortran framework at all. pFUnit,
+test-drive, and Vegetables each exist, and none of them appears in the surveys
+the backlog was built from.
+
+Choosing one now would mean researching a candidate at implementation time and
+presenting the result as if the backlog had named it. That is the failure mode
+the backlog exists to prevent, so Fortran's honest state is
+`no_qualifying_candidate_yet` — the same state C already carries, and for the
+same reason. Its scanner route was never the blocker: ADR-0034 forbids no text
+matching, and fixed-form and free-form Fortran are both scannable. Reopening
+this needs a backlog entry first, not an ADR first.
 
 Each lane follows the ADR-first order ADR-0040 established: decide the admitted
 subset and the exact anchor in the ADR, because both decide what the code is —
