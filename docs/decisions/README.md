@@ -51,3 +51,4 @@ Current accepted ADRs:
 - ADR-0039: Scratch 3 `.sb3` archive integration NO-GO.
 - ADR-0040: Dialect-invariant bounded SQL DDL frontend.
 - ADR-0041: Bounded Go test-declaration frontend.
+- ADR-0042: Bounded R testthat frontend.

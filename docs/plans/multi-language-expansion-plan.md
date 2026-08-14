@@ -514,6 +514,19 @@ keyword make a bounded scan exact. A language whose grammar defeats scanning
 should get a source-backed refusal rather than a scanner that abstains on most
 real files.
 
+| Open lane | First framework | Scanner soundness | Authority | State |
+|---|---|---|---|---|
+| R | testthat `test_that` | sound: line comments, quoted and raw strings, unambiguous nesting; no heredocs, regex literals, or transpose ambiguity | ADR-0042 | in progress |
+| MATLAB | `matlab.unittest` | doubtful: `'` is both transpose and string delimiter, which is the same class of hazard that rules Ruby out | needs an ADR | not started |
+| Visual Basic .NET | MSTest attributes | plausible: line-oriented, `End Sub`/`End Class`, bracketed attributes | needs an ADR | not started |
+| Delphi/Object Pascal | DUnitX `[TestFixture]` | plausible: `begin`/`end`, declared procedures | needs an ADR | not started |
+| Ada | AUnit | plausible: verbose but highly regular grammar | needs an ADR | not started |
+| Fortran | none dominant | blocked on target selection, not on route | needs an ADR | not started |
+
+R is taken first because testthat is the only entry among the six that is
+genuinely dominant in its own ecosystem, and because its runner convention makes
+the file path identity evidence rather than a style guess.
+
 Each lane follows the ADR-first order ADR-0040 established: decide the admitted
 subset and the exact anchor in the ADR, because both decide what the code is —
 and read the preflight's evidence ladder before writing it, which is the
