@@ -460,6 +460,39 @@ implemented serially because all six edit the same core-model, family, indexing,
 query-vocabulary, and persistence files; parallel worktrees would conflict in
 every one of them.
 
+## Wave F2 — frontend-enabled framework lanes
+
+Wave F1 covered every language that already had a source frontend. The ten
+languages it could not reach are blocked on a frontend, not on framework work,
+and Wave F2 is where that prerequisite gets built one language at a time.
+
+The unit of work is a pair: a bounded frontend scoped to exactly what one
+framework anchor needs, then that framework's family. Scoping the frontend to
+the anchor is the whole discipline — SQL's frontend reads dialect-invariant DDL
+and nothing else, and Go's reads one declaration shape in one filename class.
+A frontend that tries to cover a language is a different, much larger project
+and is not what this wave does.
+
+Wave F2 lanes may change ADR-0020 gate counts, which is why they are not part of
+Wave F1: that wave's acceptance explicitly forbids gate movement because every
+language in it already had its exact family. A language crossing from
+`discovered_only` to a frontend genuinely closes gates, and the completion
+review reports which ones against delivered code.
+
+| Lane | Frontend scope | Framework | Authority | State |
+|---|---|---|---|---|
+| Go | `*_test.go` declarations only | `go.testing.test_function` | ADR-0041 | in progress |
+| Ruby | to be scoped | `ruby.minitest.test_method` | needs an ADR | not started |
+| PHP | to be scoped | `php.phpunit.test_method` | needs an ADR | not started |
+| Swift | to be scoped | `swift.xctest.test_method` | needs an ADR | not started |
+
+Visual Basic .NET, Delphi/Object Pascal, Ada, Fortran, R, and MATLAB stay out of
+this table because none of them names a first framework target yet; choosing one
+is part of scoping their frontend.
+
+Each lane follows the ADR-first order ADR-0040 established: decide the admitted
+subset and the exact anchor in the ADR, because both decide what the code is.
+
 ## Later waves (priority-ordered backlog)
 
 - C#: SignalR `Hub` bases + `MapHub<T>`, FluentValidation
