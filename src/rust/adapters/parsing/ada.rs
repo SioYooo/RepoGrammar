@@ -4,6 +4,8 @@
 //! `alire.toml` are admitted. GPR source naming and Alire's internal lockfile
 //! format remain inventory-only/UNKNOWN; no Ada or Alire tool is invoked.
 
+pub mod aunit;
+
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,

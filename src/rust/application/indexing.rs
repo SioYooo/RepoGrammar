@@ -2,6 +2,7 @@
 
 use crate::adapters::frameworks::rust_general::rust_support_target_is_role_compatible;
 use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
+use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
@@ -15,19 +16,20 @@ use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::family::{
-    build_family_claims, cpp_support_target_is_role_compatible,
-    csharp_support_target_is_role_compatible, delphi_support_target_is_role_compatible,
-    family_constraint_profile_record, family_eligible_kind, family_storage_records,
-    family_unknown_blocks_claim, java_support_target_is_role_compatible, min_family_support,
+    ada_support_target_is_role_compatible, build_family_claims,
+    cpp_support_target_is_role_compatible, csharp_support_target_is_role_compatible,
+    delphi_support_target_is_role_compatible, family_constraint_profile_record,
+    family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
+    java_support_target_is_role_compatible, min_family_support,
     python_support_target_is_role_compatible, r_support_target_is_role_compatible,
     sql_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
-    vb_support_target_is_role_compatible, CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD,
-    CSHARP_DERIVED_SUPPORT_ENGINE, CSHARP_DERIVED_SUPPORT_METHOD, DELPHI_DERIVED_SUPPORT_ENGINE,
-    DELPHI_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
-    RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD, R_DERIVED_SUPPORT_ENGINE,
-    R_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD,
-    TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD, VB_DERIVED_SUPPORT_ENGINE,
-    VB_DERIVED_SUPPORT_METHOD,
+    vb_support_target_is_role_compatible, ADA_DERIVED_SUPPORT_ENGINE, ADA_DERIVED_SUPPORT_METHOD,
+    CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
+    CSHARP_DERIVED_SUPPORT_METHOD, DELPHI_DERIVED_SUPPORT_ENGINE, DELPHI_DERIVED_SUPPORT_METHOD,
+    JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD, RUST_DERIVED_SUPPORT_ENGINE,
+    RUST_DERIVED_SUPPORT_METHOD, R_DERIVED_SUPPORT_ENGINE, R_DERIVED_SUPPORT_METHOD,
+    SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE,
+    TSJS_DERIVED_SUPPORT_METHOD, VB_DERIVED_SUPPORT_ENGINE, VB_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
@@ -1035,6 +1037,28 @@ where
             + derived_vb_support_fact_count,
         &derived_delphi_support_facts,
     )?;
+    let mut derived_ada_support_facts = derive_ada_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_ada_support_facts);
+    let derived_ada_support_fact_count = record_semantic_facts(
+        session.as_mut(),
+        parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + derived_tsjs_support_fact_count
+            + derived_java_support_fact_count
+            + derived_csharp_support_fact_count
+            + derived_cpp_support_fact_count
+            + derived_rust_support_fact_count
+            + derived_sql_support_fact_count
+            + derived_r_support_fact_count
+            + derived_vb_support_fact_count
+            + derived_delphi_support_fact_count,
+        &derived_ada_support_facts,
+    )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
@@ -1046,7 +1070,8 @@ where
         + derived_sql_support_fact_count
         + derived_r_support_fact_count
         + derived_vb_support_fact_count
-        + derived_delphi_support_fact_count;
+        + derived_delphi_support_fact_count
+        + derived_ada_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1169,6 +1194,7 @@ where
         family_facts.extend(derived_r_support_facts);
         family_facts.extend(derived_vb_support_facts);
         family_facts.extend(derived_delphi_support_facts);
+        family_facts.extend(derived_ada_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
@@ -1966,6 +1992,18 @@ where
         &derived_delphi_support_facts,
     )?;
     next_fact_offset += derived_delphi_support_fact_count;
+    let mut derived_ada_support_facts = derive_ada_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_ada_support_facts);
+    let derived_ada_support_fact_count = record_semantic_facts(
+        session.as_mut(),
+        next_fact_offset,
+        &derived_ada_support_facts,
+    )?;
+    next_fact_offset += derived_ada_support_fact_count;
     // Recompute provider-resolved TS/JS support from the copied-forward worker
     // facts so incremental-sync family support matches a full rebuild for
     // unchanged files instead of silently dropping it.
@@ -2084,6 +2122,7 @@ where
         family_facts.extend(derived_r_support_facts);
         family_facts.extend(derived_vb_support_facts);
         family_facts.extend(derived_delphi_support_facts);
+        family_facts.extend(derived_ada_support_facts);
         family_facts.extend(rust_provider_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
         // The incremental path always resyncs from an active base generation, so
@@ -2151,6 +2190,7 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | R_DERIVED_SUPPORT_ENGINE
             | VB_DERIVED_SUPPORT_ENGINE
             | DELPHI_DERIVED_SUPPORT_ENGINE
+            | ADA_DERIVED_SUPPORT_ENGINE
     )
 }
 
@@ -5146,6 +5186,99 @@ fn derived_vb_framework_support_fact(
     )
 }
 
+fn derive_ada_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "ada"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_ada_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "ada" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if ada_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_ada_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_ada_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == ADA_ANCHOR_ENGINE
+        && fact.origin.method == ADA_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_ada_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_ada_aunit_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: ADA_DERIVED_SUPPORT_ENGINE,
+            method: ADA_DERIVED_SUPPORT_METHOD,
+            note: "bounded Ada AUnit registration anchor support",
+            assumptions,
+        },
+    )
+}
+
 fn derive_delphi_framework_support_facts(
     code_units: &[IndexedCodeUnitRecord],
     parser_facts: &[SemanticFact],
@@ -6080,6 +6213,11 @@ fn file_is_inventory_only(language: &str, path: &str) -> bool {
         // stays inventory.
         return !crate::adapters::parsing::r::testthat::is_testthat_path(path);
     }
+    if language == DiscoveredLanguage::Ada.as_str() {
+        // ADR-0045 admits only `.adb` bodies. `.ads` specs stay inventory,
+        // and ADR-0033's `.gpr` boundary is untouched.
+        return !crate::adapters::parsing::ada::aunit::is_ada_body_path(path);
+    }
     if language == DiscoveredLanguage::ObjectPascal.as_str() {
         // ADR-0044 admits only `.pas` units. `.dpr` programs and `.dpk`
         // packages stay inventory, and ADR-0032's instruction that the
@@ -6137,7 +6275,6 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "ruby-config"
             | "swift"
             | "swift-config"
-            | "ada"
             | "ada-config"
             | "fortran"
             | "fortran-config"
@@ -6522,7 +6659,10 @@ mod tests {
             (DiscoveredLanguage::ObjectPascal, "src/Unit1.pas", false),
             (DiscoveredLanguage::ObjectPascal, "src/App.dpr", true),
             (DiscoveredLanguage::ObjectPascal, "packages/Tools.dpk", true),
-            (DiscoveredLanguage::Ada, "ada/main.adb", true),
+            // ADR-0045 admits `.adb` bodies and leaves specs as inventory,
+            // so the suffix decides within one language token.
+            (DiscoveredLanguage::Ada, "ada/main.adb", false),
+            (DiscoveredLanguage::Ada, "ada/main.ads", true),
             (DiscoveredLanguage::Fortran, "fortran/free.f90", true),
             (DiscoveredLanguage::R, "R/main.R", true),
             (DiscoveredLanguage::Matlab, "solver.m", true),
@@ -8443,8 +8583,12 @@ mod tests {
         assert_eq!(outcome.indexed_units, 3);
         assert_eq!(outcome.semantic_facts, 4);
         assert_eq!(
+            // ADR-0045 admits `.adb`, so the body is read; these bytes are not
+            // UTF-8, so it is read and then skipped. The `.ads` spec, the
+            // `.gpr`, and every Fortran source stay unread.
             source_store.paths(),
             vec![
+                "ada/main.adb".to_string(),
                 "alire.toml".to_string(),
                 "alire/alire.lock".to_string(),
                 "fpm.toml".to_string(),
@@ -8453,9 +8597,12 @@ mod tests {
         assert_eq!(
             outcome.warnings,
             vec![
+                // The `.ads` spec keeps the inventory warning; the admitted
+                // `.adb` body reports its own decode failure instead.
                 "parser skipped unsupported language token: ada".to_string(),
                 "parser skipped unsupported language token: ada-config".to_string(),
                 "parser skipped unsupported language token: fortran".to_string(),
+                "parser skipped non-UTF-8 source: ada/main.adb".to_string(),
             ]
         );
         let dependencies = crate::application::storage::list_active_dependencies(&store)

@@ -160,6 +160,10 @@ impl IrNodeKind {
             CodeUnitKind::VbTestMethod => Self::Method,
             CodeUnitKind::DelphiTestFixture => Self::Class,
             CodeUnitKind::DelphiTestProcedure => Self::Method,
+            // An AUnit registration is a call, not a declared function,
+            // class, or method; this IR vocabulary names no such concept,
+            // so the projection abstains the way testthat blocks do.
+            CodeUnitKind::AdaTestRegistration => Self::Unknown,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,

@@ -7,6 +7,7 @@ use crate::core::model::{
 use crate::core::policy::rust_self_dogfood::rust_self_dogfood_role_for_unit;
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 
+pub mod ada;
 pub mod cpp;
 pub mod csharp;
 pub mod delphi;
@@ -89,6 +90,14 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
         });
     }
     if let Some(role) = go::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = ada::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,

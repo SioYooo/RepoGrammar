@@ -4156,6 +4156,124 @@ mod tests {
         }
     }
 
+    fn ada_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("ada")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_ada_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &ada_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn ada_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-ada-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ada_aunit_exact_registrations_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) =
+            index_ada_release_v0_2_fixture("aunit_exact_tests", "ada-release-aunit-exact");
+
+        let derived = ada_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "aunit.Register_Routine")
+                .count(),
+            3,
+            "the commented call, the string, and the variable argument are not \
+             registrations: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:ada:ada_test_registration:framework_aunit_test_registration"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn ada_unbound_registrations_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("aunit_unbound_registrations", "ada-release-aunit-unbound"),
+            ("aunit_low_support", "ada-release-aunit-low-support"),
+        ] {
+            let (workspace, runtime) = index_ada_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("ada_test_registration"))))
+                    .unwrap_or(false),
+                "{fixture} must not form an Ada AUnit family: {families_json}"
+            );
+            if fixture == "aunit_unbound_registrations" {
+                assert!(
+                    ada_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "a registration without an AUnit with clause must derive no support"
+                );
+            }
+        }
+    }
+
     fn delphi_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
@@ -12838,7 +12956,7 @@ class User(Base):
     }
 
     #[test]
-    fn product_runtime_ada_fortran_sources_and_gpr_are_file_manifest_only() {
+    fn product_runtime_undecodable_ada_fortran_sources_and_gpr_yield_no_units() {
         let workspace = TempWorkspace::new("product-runtime-ada-fortran-inventory");
         let mut ada_source = vec![0xff, 0xfe, 0xfd];
         ada_source.extend_from_slice(b"ADA_SOURCE_MUST_NOT_BE_READ");
@@ -12859,21 +12977,28 @@ class User(Base):
         let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("index", &index, &workspace);
         assert_eq!(value["discovered_files"], 3);
-        assert_eq!(value["indexing"], "file_manifest_only");
-        assert_eq!(value["parser"], "deferred");
+        // ADR-0045 admits `.adb`, so the generation reports the mode it
+        // attempted; these bytes are not UTF-8, so the body is read and then
+        // skipped and still yields no unit. `.gpr` and Fortran stay deferred.
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
         assert_eq!(value["parser_attempted_files"], 0);
         assert_eq!(value["indexed_units"], 0);
         assert_eq!(value["semantic_facts"], 0);
         assert_eq!(
             value["warnings"],
             serde_json::json!([
-                "parser skipped unsupported language token: ada",
                 "parser skipped unsupported language token: ada-config",
-                "parser skipped unsupported language token: fortran"
+                "parser skipped unsupported language token: fortran",
+                "parser skipped non-UTF-8 source: main.adb"
             ])
         );
         let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("files", &files, &workspace);
+        // `index` reports the mode it attempted from discovery; the persisted
+        // generation reports what it actually holds. Nothing decoded here, so a
+        // later query reads the weaker of the two, and the two answers are
+        // asserted separately rather than assumed equal.
         assert_eq!(value["indexing"], "file_manifest_only");
         assert_eq!(
             value["files"]

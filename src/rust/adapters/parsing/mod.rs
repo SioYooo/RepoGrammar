@@ -49,6 +49,7 @@ pub struct RepoGrammarSourceParser {
     r_testthat: r::testthat::RTestThatParser,
     visual_basic_mstest: visual_basic::mstest::VisualBasicMsTestParser,
     delphi_dunitx: delphi::dunitx::DelphiDUnitXParser,
+    ada_aunit: ada::aunit::AdaAUnitParser,
     rust: rust::RustSyntaxParser,
     sql: sql::SqlDdlParser,
     swift: swift::SwiftProjectConfigParser,
@@ -111,7 +112,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::VisualBasic => self.visual_basic_mstest.parse(document),
             crate::core::model::Language::ObjectPascal => self.delphi_dunitx.parse(document),
             crate::core::model::Language::DelphiConfig => self.delphi.parse(document),
-            crate::core::model::Language::Ada => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Ada => self.ada_aunit.parse(document),
             crate::core::model::Language::AdaConfig => self.ada.parse(document),
             crate::core::model::Language::Fortran => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::FortranConfig => self.fortran.parse(document),
@@ -184,7 +185,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::DelphiConfig => {
                 self.delphi.parse_with_context(document, context)
             }
-            crate::core::model::Language::Ada => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Ada => {
+                self.ada_aunit.parse_with_context(document, context)
+            }
             crate::core::model::Language::AdaConfig => {
                 self.ada.parse_with_context(document, context)
             }
@@ -253,6 +256,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::ObjectPascal => self
                 .delphi_dunitx
                 .parse_with_context_output(document, context),
+            crate::core::model::Language::Ada => {
+                self.ada_aunit.parse_with_context_output(document, context)
+            }
             crate::core::model::Language::DelphiConfig => {
                 self.delphi.parse_with_context_output(document, context)
             }

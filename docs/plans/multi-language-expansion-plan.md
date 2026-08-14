@@ -520,7 +520,7 @@ real files.
 | MATLAB | `matlab.unittest` | doubtful: `'` is both transpose and string delimiter, which is the same class of hazard that rules Ruby out | needs an ADR | not started |
 | Visual Basic .NET | MSTest attributes | sound: `'`/`REM` comments and double-quoted-only strings mean the comment character is never a delimiter | ADR-0043 | landed; review reports 5/9 |
 | Delphi/Object Pascal | DUnitX `[TestFixture]` | sound: `//`, `{ }`, `(* *)` comments and single-quoted strings are disjoint delimiter sets, so no character serves two purposes | ADR-0044 | landed; review reports 5/9 |
-| Ada | AUnit | plausible: verbose but highly regular grammar | needs an ADR | not started |
+| Ada | AUnit `Register_Routine` | sound: one comment form, one string form, and the overloaded tick resolved by the same local rule real Ada lexers use — a tick after an identifier character or `)` is an attribute, otherwise a three-byte character literal | ADR-0045 | landed; review reports 5/9 |
 | Fortran | none dominant | blocked on target selection, not on route | needs an ADR | not started |
 
 R is taken first because testthat is the only entry among the six that is

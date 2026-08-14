@@ -3,7 +3,8 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{cpp, csharp, delphi, java, r, sql, tsjs, visual_basic};
+use crate::adapters::frameworks::{ada, cpp, csharp, delphi, java, r, sql, tsjs, visual_basic};
+use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
@@ -58,6 +59,8 @@ pub(crate) const VB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-vbnet-derived";
 pub(crate) const VB_DERIVED_SUPPORT_METHOD: &str = "bounded_vbnet_mstest_anchor_v1";
 pub(crate) const DELPHI_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-delphi-derived";
 pub(crate) const DELPHI_DERIVED_SUPPORT_METHOD: &str = "bounded_delphi_dunitx_anchor_v1";
+pub(crate) const ADA_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-ada-derived";
+pub(crate) const ADA_DERIVED_SUPPORT_METHOD: &str = "bounded_ada_aunit_anchor_v1";
 pub(crate) const R_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-r-derived";
 pub(crate) const R_DERIVED_SUPPORT_METHOD: &str = "bounded_r_testthat_anchor_v1";
 pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
@@ -2434,6 +2437,7 @@ enum FamilyUnknownDomain {
     R,
     VisualBasic,
     Delphi,
+    Ada,
 }
 
 impl FamilyUnknownDomain {
@@ -2485,6 +2489,10 @@ impl FamilyUnknownDomain {
                 && origin_method == DELPHI_ANCHOR_METHOD)
                 .then_some(Self::Delphi);
         }
+        if language == "ada" {
+            return (origin_engine == ADA_ANCHOR_ENGINE && origin_method == ADA_ANCHOR_METHOD)
+                .then_some(Self::Ada);
+        }
         None
     }
 
@@ -2501,6 +2509,7 @@ impl FamilyUnknownDomain {
             Self::R => "r_testthat_identity",
             Self::VisualBasic => "vb_mstest_attribute_binding",
             Self::Delphi => "delphi_dunitx_attribute_binding",
+            Self::Ada => "ada_aunit_registration_binding",
         }
     }
 
@@ -2517,6 +2526,7 @@ impl FamilyUnknownDomain {
             Self::R => "R",
             Self::VisualBasic => "VB.NET",
             Self::Delphi => "Delphi",
+            Self::Ada => "Ada",
         }
     }
 
@@ -2554,6 +2564,7 @@ impl FamilyUnknownDomain {
             Self::R => r_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::VisualBasic => vb_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::Delphi => delphi_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Ada => ada_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2591,6 +2602,7 @@ impl FamilyUnknownDomain {
             Self::R => r_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
             Self::VisualBasic => false,
             Self::Delphi => false,
+            Self::Ada => false,
         }
     }
 }
@@ -2627,6 +2639,21 @@ fn vb_unknown_reason_blocks_family_membership(
     match reason {
         UnknownReasonCode::UnresolvedImport => {
             affected_claim == "vb_mstest_attribute_binding" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// A registration without an AUnit `with` clause blocks the anchor: the
+/// framework is unproven.
+fn ada_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "ada_aunit_registration_binding"
+                || affected_claim.starts_with("family:")
         }
         _ => false,
     }
@@ -4154,6 +4181,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if delphi::framework_role_is_known(framework_role) => {
             delphi::support_family(target, framework_role)
         }
+        framework_role if ada::framework_role_is_known(framework_role) => {
+            ada::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4436,6 +4466,9 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if delphi::framework_role_is_known(framework_role) {
         return delphi_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if ada::framework_role_is_known(framework_role) {
+        return ada_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     // Go has no arm on purpose. ADR-0021's evidence ladder forbids text or
     // regex matching for the claim, and ADR-0041's correction demotes the
     // scanner to auxiliary evidence: its role is detected, and no support fact
@@ -4457,6 +4490,22 @@ fn vb_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) ->
         VB_DERIVED_SUPPORT_METHOD,
         framework_role,
         &["derived_from=bounded_vbnet_mstest_anchors".to_string()],
+    )
+}
+
+fn ada_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = ada::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && ada_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn ada_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        ADA_DERIVED_SUPPORT_ENGINE,
+        ADA_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_ada_aunit_anchors".to_string()],
     )
 }
 
@@ -4711,6 +4760,13 @@ pub(crate) fn vb_support_target_is_role_compatible(
     visual_basic::support_target_is_role_compatible(target, framework_role)
 }
 
+pub(crate) fn ada_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    ada::support_target_is_role_compatible(target, framework_role)
+}
+
 pub(crate) fn delphi_support_target_is_role_compatible(
     target: &str,
     framework_role: &str,
@@ -4955,6 +5011,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "r_test_that_block"
             | "vb_test_method"
             | "delphi_test_procedure"
+            | "ada_test_registration"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -4978,6 +5035,10 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "ada" {
+        // The Ada completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
         3
     } else if language == "object-pascal" {
         // The Delphi completion review requires support at least three, the
@@ -5479,6 +5540,7 @@ mod tests {
         let roles = [
             crate::adapters::frameworks::visual_basic::ROLE_MSTEST_TEST,
             crate::adapters::frameworks::delphi::ROLE_DUNITX_TEST,
+            crate::adapters::frameworks::ada::ROLE_AUNIT_TEST,
             crate::adapters::frameworks::r::ROLE_TESTTHAT_TEST,
             crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION,
         ];
@@ -5494,6 +5556,7 @@ mod tests {
                 ("r", r::framework_role_is_known(role)),
                 ("visual_basic", visual_basic::framework_role_is_known(role)),
                 ("delphi", delphi::framework_role_is_known(role)),
+                ("ada", ada::framework_role_is_known(role)),
             ]
             .into_iter()
             .filter(|(_, claimed)| *claimed)

@@ -3264,6 +3264,7 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "r",
     "visual-basic",
     "object-pascal",
+    "ada",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3394,6 +3395,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         "object-pascal" => {
             "code_units.language = 'object-pascal' AND code_units.kind = 'delphi_test_procedure'"
         }
+        "ada" => "code_units.language = 'ada' AND code_units.kind = 'ada_test_registration'",
         _ => "0",
     }
 }
@@ -3413,6 +3415,7 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "r" => "indexed_files.language IN ('r', 'r-config')",
         "visual-basic" => "indexed_files.language IN ('visual-basic', 'visual-basic-config')",
         "object-pascal" => "indexed_files.language IN ('object-pascal', 'delphi-config')",
+        "ada" => "indexed_files.language IN ('ada', 'ada-config')",
         _ => "0",
     }
 }
@@ -3432,6 +3435,7 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "r" => "code_units.language = 'r'",
         "visual-basic" => "code_units.language = 'visual-basic'",
         "object-pascal" => "code_units.language = 'object-pascal'",
+        "ada" => "code_units.language = 'ada'",
         _ => "0",
     }
 }
@@ -3457,6 +3461,7 @@ fn repo_shape_family_where(language: &str) -> &'static str {
         "r" => "families.family_id GLOB 'family:r:*'",
         "visual-basic" => "families.family_id GLOB 'family:visual_basic:*'",
         "object-pascal" => "families.family_id GLOB 'family:object_pascal:*'",
+        "ada" => "families.family_id GLOB 'family:ada:*'",
         _ => "0",
     }
 }
