@@ -1,10 +1,21 @@
 # ADR-0035: SQL source-free artifact inventory and dialect abstention
 
-- Status: Accepted
+- Status: Accepted; partially superseded by ADR-0040
 - Date: 2026-08-01
 - Scope: SQL Round-4 discovery/inventory slice under ADR-0020
 - Refines: ADR-0020 and ADR-0030
-- Related: `docs/reports/language-support/sql-completion-review.md`
+- Related: `docs/reports/language-support/sql-completion-review.md`,
+  `docs/decisions/ADR-0040-dialect-invariant-sql-ddl-frontend.md`
+
+ADR-0040 retires two clauses below and leaves the rest in force. SQL bytes now
+reach a bounded in-process frontend and the source store, so "every SQL token is
+inventory-only", "zero parser attempts", and "source text is never decoded" no
+longer describe the product. And a frontend no longer waits on selecting one
+dialect: ADR-0040 admits only constructs that parse identically under
+PostgreSQL 16 and SQLite 3, so it needs no selection to be sound. Everything
+else here — the path-role vocabulary, the refusal to infer a dialect, the ban on
+databases, clients, migration tools, credentials, network access, and retained
+query literals, and the unused `sql_extension` rows — is unchanged.
 
 ## Context
 

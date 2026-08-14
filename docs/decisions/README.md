@@ -49,3 +49,4 @@ Current accepted ADRs:
 - ADR-0037: MATLAB R2024b+ package inventory preflight.
 - ADR-0038: Bounded GNU-as x86-64 ELF AT&T assembly substrate.
 - ADR-0039: Scratch 3 `.sb3` archive integration NO-GO.
+- ADR-0040: Dialect-invariant bounded SQL DDL frontend.
