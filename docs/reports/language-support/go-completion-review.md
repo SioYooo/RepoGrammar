@@ -12,9 +12,10 @@
   `go.work` abstention, typed malformed/conflict/resource/graph-changing
   UNKNOWNs, persistence, and incremental replacement exist without Go
   execution.
-- [x] Authoritative frontend for the declared scope — ADR-0041's bounded
-  in-process scanner reads `*_test.go` bytes only and recognizes one declaration
-  shape. It is string- and comment-aware, so prose is never a declaration. It is
+- [ ] Authoritative frontend — ADR-0041's bounded in-process scanner reads
+  `*_test.go` bytes only and recognizes one declaration shape, but a scanner is
+  not the authoritative frontend this gate means, and ADR-0021 says so for Go
+  specifically. It is auxiliary evidence, on the ADR-0038 assembly precedent. It is string- and comment-aware, so prose is never a declaration. It is
   not a Go parser, not `go/parser`, and not a type checker; the OS sandbox
   ADR-0021 requires is unreached rather than waived, because no process runs.
 - [x] RepoGrammar-owned code units and IR — a module unit per admitted file, one
@@ -25,9 +26,14 @@
   build constraint rides along as a non-blocking subclaim, because the file's
   declarations are what they are whether or not the target platform compiles it;
   the scanner limit abstains. No provider exists and none is authorized.
-- [x] `go.testing.test_function` exact family with support at least three — the
-  role, the fixed `go.testing.T` target, the owned `repogrammar-go-derived`
-  origin, and a minimum support of three rather than the shared default of two.
+- [ ] `go.testing.test_function` exact family — **closed under the current
+  constraints, not merely unstarted.** ADR-0021's evidence ladder forbids text
+  or regex matching for the claim, and the ADR-0041 scanner is exactly that; its
+  named primary evidence, a pinned standard-library worker, is unreachable under
+  the zero-external-dependency constraint. The declaration role is therefore
+  detected as auxiliary evidence only, the way React roles are in the TS/JS
+  lane, and no support fact is derived from it anywhere. Opening this needs a
+  maintainer decision: revise the evidence ladder, or lift the constraint.
 - [ ] Positive, lookalike, low-support, parse-degraded, variant, and
   unresolved/resolved fixtures — positive, lookalike, and low-support fixtures
   exercise the product CLI. The parse-degraded leg is open and is a real gap
@@ -71,11 +77,16 @@ shape.
 
 ## Completion verdict
 
-Not complete. Go now has a bounded frontend over one filename class and one
-declaration shape, owned units and IR, typed `UNKNOWN`s, and one exact family
-with support three. It has no parse-degraded fixture, no audited source-free
-readiness matrix, no final audit, and no provider. Strict gate count is `6/9`;
+Not complete. Go has a bounded scanner over one filename class and one
+declaration shape, owned units and IR, and typed `UNKNOWN`s. Its evidence is
+auxiliary by ADR-0021's evidence ladder, so it supports no family, and gates 2
+and 5 stay open by decision rather than by effort. Strict gate count is `4/9`;
 Go is `structural_substrate` and must not be counted as supported.
+
+An earlier revision of this review recorded `6/9` and a landed family. That was
+wrong: ADR-0041's first version authorized the family without checking
+ADR-0021's evidence ladder. The correction is recorded in ADR-0041 rather than
+quietly applied here.
 
 ## Final program audit fields
 
@@ -89,11 +100,11 @@ Go is `structural_substrate` and must not be counted as supported.
 | Owned source IR | Absent; config-only project units do not count as Go source IR. |
 | External symbols | Absent; imports, module graph, selected packages, and type identity are unresolved. |
 | Library Contracts | Registry infrastructure exists at `4e4d0de`, but production contract packs = 0 and no Go package version/symbol can match one. |
-| Exact-anchor family | `go.testing.test_function` over the fixed `go.testing.T` target, minimum support three, owned derived origin required. Benchmarks, fuzz targets, `TestMain`, and `t.Run` subtests are named non-members. |
+| Exact-anchor family | None, and closed rather than unstarted: ADR-0021's evidence ladder forbids text/regex matching for the claim and its primary evidence is unreachable under the zero-dependency constraint. The `go_testing.test_function` role is detected as auxiliary evidence and derives no support. |
 | Fixtures | Strong manifest/resource/incremental/no-execution coverage; no authoritative source-family positive/lookalike/degraded/resolved matrix. |
 | Primary UNKNOWN cases | Workspace selection, graph-changing directives, malformed/conflicting requirements, build constraints, generated/cgo boundaries, target profile, provider availability, and external symbols. |
 | Source-free result | Pass for inventory outputs and errors; no claim-bearing Go readiness surface exists. |
-| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `4/9`; Top-20 complete = no. |
 
 ## Four-part review
 

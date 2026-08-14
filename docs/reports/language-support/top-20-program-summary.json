@@ -296,17 +296,16 @@
       "rank": 13,
       "counted_in_top20": true,
       "status": "structural_substrate",
-      "completion_gates_passed": 6,
+      "completion_gates_passed": 4,
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
-      "blocker": "Gates 6, 7, and 9 remain: no parse-degraded fixture (this frontend is a scanner, so malformed Go yields fewer declarations rather than failing, and nothing yet detects the difference), no audited SQL-style source-free readiness matrix, and no final completion audit. None needs an external artifact.",
+      "blocker": "The family is closed rather than unstarted: ADR-0021's evidence ladder forbids text or regex matching for the claim, and its named primary evidence (a pinned go/parser worker) is unreachable under the zero-external-dependency constraint. The ADR-0041 scanner is auxiliary evidence only. Opening this needs a maintainer decision, not more implementation.",
       "framework_support": {
-        "state": "landed",
-        "framework": "Go testing",
-        "family": "go.testing.test_function",
-        "wave": "F2"
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0021 evidence ladder, under the zero-external-dependency constraint",
+        "why": "A bounded scanner exists and recognizes the exact testing declaration, but ADR-0021 forbids text or regex matching as evidence for the claim and names a pinned standard-library worker as primary evidence, which the constraint puts out of reach. The role is detected as auxiliary evidence, the way React roles are in TS/JS, and derives no support."
       },
-      "provider_status": "bounded_go_test_declaration_frontend_no_provider",
+      "provider_status": "auxiliary_go_test_scanner_no_provider",
       "library_analysis_status": "go_modules_manifest_inventory_only",
       "primary_unknowns": ["go_workspace_build_target_profile", "module_graph_types_and_external_symbols"],
       "evidence_paths": ["docs/reports/language-support/go-completion-review.md", "src/rust/adapters/languages/go.rs", "src/rust/adapters/parsing/go.rs", "src/rust/adapters/parsing/go/source.rs", "src/rust/adapters/frameworks/go.rs", "src/fixtures/go/release/v0_2/", "docs/decisions/ADR-0041-bounded-go-test-declaration-frontend.md"],

@@ -4102,31 +4102,48 @@ mod tests {
     }
 
     #[test]
-    fn go_testing_exact_tests_form_a_family_without_a_toolchain() {
+    fn go_testing_declarations_are_auxiliary_and_never_form_a_family() {
+        // ADR-0021's evidence ladder forbids text or regex matching for the
+        // claim, and this scanner is exactly that, so ADR-0041's correction
+        // demotes its output to auxiliary evidence. The declarations are still
+        // recognized as units; no family may be built on them.
         let (workspace, runtime) =
             index_go_release_v0_2_fixture("testing_exact_tests", "go-release-testing-exact");
 
-        let derived = go_derived_support_targets(&runtime, &workspace);
+        let store_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&store_request)
+            .expect("open store");
+        let units = list_code_units(&store).expect("read units").units;
         assert_eq!(
-            derived
+            units
                 .iter()
-                .filter(|target| *target == "go.testing.T")
+                .filter(|unit| unit.kind == "go_test_function")
                 .count(),
             3,
-            "TestMain, the helper, and the benchmark must not derive support: {derived:?}"
+            "TestMain, the helper, and the benchmark are not test declarations"
+        );
+        assert!(
+            go_derived_support_targets(&runtime, &workspace).is_empty(),
+            "no Go support fact may be derived from scanner evidence"
         );
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
             &runtime,
         );
         let families_json = parse_machine_output("families", &families, &workspace);
-        let family_array = families_json["families"].as_array().expect("families");
-        assert_eq!(family_array.len(), 1);
-        assert!(family_array[0]["family_id"]
-            .as_str()
-            .expect("family id")
-            .starts_with("family:go:go_test_function:framework_go_testing_test_function"));
-        assert_eq!(family_array[0]["support"], 3);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("go_test_function"))))
+                .unwrap_or(false),
+            "Go must form no family: {families_json}"
+        );
     }
 
     #[test]

@@ -479,19 +479,45 @@ language in it already had its exact family. A language crossing from
 `discovered_only` to a frontend genuinely closes gates, and the completion
 review reports which ones against delivered code.
 
-| Lane | Frontend scope | Framework | Authority | State |
-|---|---|---|---|---|
-| Go | `*_test.go` declarations only | `go.testing.test_function` | ADR-0041 | landed; review reports 6/9 |
-| Ruby | to be scoped | `ruby.minitest.test_method` | needs an ADR | not started |
-| PHP | to be scoped | `php.phpunit.test_method` | needs an ADR | not started |
-| Swift | to be scoped | `swift.xctest.test_method` | needs an ADR | not started |
+The Go lane found the boundary the hard way, and it reshapes this wave.
 
-Visual Basic .NET, Delphi/Object Pascal, Ada, Fortran, R, and MATLAB stay out of
-this table because none of them names a first framework target yet; choosing one
-is part of scoping their frontend.
+**Four preflight ADRs forbid the scanner route for the claim.** ADR-0021 (Go),
+ADR-0022 (Ruby), ADR-0024 (PHP), and ADR-0025 (Swift) each carry an evidence
+ladder whose forbidden item names "text or regex matching", and each names a
+pinned real parser as primary evidence — a Go standard-library worker, Prism,
+a sandboxed PHP frontend, SwiftSyntax. The zero-external-dependency constraint
+puts every one of those out of reach. So for these four languages the family is
+**closed under the current constraints**, not waiting on effort.
+
+The Go scanner still shipped, demoted to auxiliary evidence per ADR-0041's
+correction. That is worth keeping — it recognizes the exact declaration and
+emits typed `UNKNOWN`s — but it is not a family and must never be reported as
+one.
+
+| Lane | Scanner route | Reason | State |
+|---|---|---|---|
+| Go | closed for the claim | ADR-0021 evidence ladder item 4 | scanner landed as auxiliary evidence; no family |
+| Ruby | closed for the claim | ADR-0022 D5 item 4 | not started; Ruby's grammar is also hostile to scanning |
+| PHP | closed for the claim | ADR-0024 D6 item 4 | not started |
+| Swift | closed for the claim | ADR-0025 D7 item 5 | not started |
+
+**Six languages have no such clause.** The inventory ADRs for Visual Basic .NET
+(0031), Delphi/Object Pascal (0032), Ada (0033), Fortran (0034), R (0036), and
+MATLAB (0037) contain no evidence-ladder prohibition on text matching, so the
+bounded-scanner route is open to them in principle. None of them names a first
+framework target, so scoping one is part of the work rather than a lookup.
+
+Whether the scanner route is *sound* for a given one of those six is a separate
+question from whether it is permitted, and it must be answered per language: Go
+was a good fit because braces, mandatory parentheses, and an unambiguous `func`
+keyword make a bounded scan exact. A language whose grammar defeats scanning
+should get a source-backed refusal rather than a scanner that abstains on most
+real files.
 
 Each lane follows the ADR-first order ADR-0040 established: decide the admitted
-subset and the exact anchor in the ADR, because both decide what the code is.
+subset and the exact anchor in the ADR, because both decide what the code is —
+and read the preflight's evidence ladder before writing it, which is the
+specific mistake ADR-0041 records.
 
 ## Later waves (priority-ordered backlog)
 

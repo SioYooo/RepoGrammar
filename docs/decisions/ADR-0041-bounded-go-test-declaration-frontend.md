@@ -1,8 +1,8 @@
 # ADR-0041: Bounded Go test-declaration frontend
 
-- Status: Accepted
+- Status: Accepted, corrected 2026-08-15 (see "Correction")
 - Date: 2026-08-15
-- Scope: Go in ADR-0020; admits a family-bearing frontend over one declaration shape
+- Scope: Go in ADR-0020; admits an auxiliary frontend over one declaration shape
 - Refines: ADR-0021 (adds a route it did not consider; supersedes none of it)
 - Related: ADR-0040, ADR-0019,
   `docs/reports/language-support/go-completion-review.md`,
@@ -119,6 +119,52 @@ provider and no project model. This ADR authorizes a frontend for one
 declaration shape; whether the resulting evidence satisfies any ADR-0020 gate is
 decided by the completion review against the delivered code, not here.
 
+## Correction: this ADR's first version authorized a family it may not authorize
+
+The first version of this ADR made two arguments. One holds and one does not,
+and they are separated here rather than quietly merged.
+
+**The sandbox argument holds.** ADR-0021's containment obligation is bound to
+executing the Go toolchain, and a scanner running in this process starts nothing,
+so the obligation is unreached rather than waived. Reading `*_test.go` bytes with
+a bounded in-process scanner remains authorized.
+
+**The family argument does not hold, and was not checked.** ADR-0021 also
+specifies an evidence ladder, and its item 4 forbids, *for the claim*, "text or
+regex matching". That is precisely what this scanner is, however carefully it
+resolves import aliases and signatures. The first version of this ADR never
+mentioned that clause, which means it overrode a standing decision silently —
+the failure mode ADRs exist to prevent.
+
+The clause also cannot be read as merely cautionary. ADR-0021 item 1 names the
+primary evidence as a pinned standard-library worker over supplied bytes, and
+the zero-external-dependency constraint puts that worker out of reach. So under
+that constraint the `go.testing.test_function` family is not open pending better
+evidence — it is **closed by ADR-0021's own evidence ladder**, because the only
+evidence that could carry it is unreachable.
+
+The same prohibition appears in ADR-0022 (Ruby), ADR-0024 (PHP), and ADR-0025
+(Swift). Four preflights forbidding the same route is a policy, not an oversight:
+for these languages a family claim requires a real parser.
+
+### D7. The scanner is auxiliary evidence, not family evidence
+
+The frontend stays. Its output is demoted to what ADR-0021 item 3 permits:
+auxiliary structural candidates plus typed `UNKNOWN`s that explain context and
+uncertainty. Concretely, `go_test_function` remains an exactly identified
+declaration shape and a code-unit kind, and its anchor fact remains
+`Structural`; no Go framework role, derived support fact, or family may be
+formed from it.
+
+That is exactly the shape ADR-0038 gives the assembly scanner, and for the same
+reason: a bounded lexical route can identify candidates without being the oracle
+its language's claim requires.
+
+Opening the family needs one of two maintainer decisions, neither of which is
+mine to make: revise ADR-0021's evidence ladder, or lift the
+zero-external-dependency constraint so its named primary evidence becomes
+reachable.
+
 ## Alternatives considered
 
 - Wait for the ADR-0021 sandbox: rejected because the sandbox gates a route this
@@ -133,8 +179,8 @@ decided by the completion review against the delivered code, not here.
 
 ## Consequences
 
-- Go moves from `discovered_only` toward a frontend, owned units, typed
-  `UNKNOWN`s, and one exact family, for one declaration shape and no more.
+- Go gains a frontend, owned units, and typed `UNKNOWN`s for one declaration
+  shape. It gains no family: see the Correction above.
 - The security posture changes in one specific way: `_test.go` bytes now cross
   the source-store boundary. No process, network, toolchain, or module
   resolution is added.

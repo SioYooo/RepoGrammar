@@ -4,7 +4,6 @@ use crate::adapters::frameworks::rust_general::rust_support_target_is_role_compa
 use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
-use crate::adapters::parsing::go::source::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::python::{
     python_project_config_parser_method, MAX_PYTHON_FRONTEND_INPUT_BYTES,
@@ -16,14 +15,13 @@ use crate::application::family::{
     build_family_claims, cpp_support_target_is_role_compatible,
     csharp_support_target_is_role_compatible, family_constraint_profile_record,
     family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
-    go_support_target_is_role_compatible, java_support_target_is_role_compatible,
-    min_family_support, python_support_target_is_role_compatible,
-    sql_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
-    CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
-    CSHARP_DERIVED_SUPPORT_METHOD, GO_DERIVED_SUPPORT_ENGINE, GO_DERIVED_SUPPORT_METHOD,
-    JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD, RUST_DERIVED_SUPPORT_ENGINE,
-    RUST_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD,
-    TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
+    java_support_target_is_role_compatible, min_family_support,
+    python_support_target_is_role_compatible, sql_support_target_is_role_compatible,
+    tsjs_support_target_is_role_compatible, CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD,
+    CSHARP_DERIVED_SUPPORT_ENGINE, CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE,
+    JAVA_DERIVED_SUPPORT_METHOD, RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD,
+    SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE,
+    TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
@@ -971,25 +969,6 @@ where
             + derived_rust_support_fact_count,
         &derived_sql_support_facts,
     )?;
-    let mut derived_go_support_facts = derive_go_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_go_support_facts);
-    let derived_go_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count
-            + derived_sql_support_fact_count,
-        &derived_go_support_facts,
-    )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
@@ -998,8 +977,7 @@ where
         + derived_csharp_support_fact_count
         + derived_cpp_support_fact_count
         + derived_rust_support_fact_count
-        + derived_sql_support_fact_count
-        + derived_go_support_fact_count;
+        + derived_sql_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1104,7 +1082,6 @@ where
                 + derived_cpp_support_facts.len()
                 + derived_rust_support_facts.len()
                 + derived_sql_support_facts.len()
-                + derived_go_support_facts.len()
                 + rust_provider_facts.len()
                 + worker_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
@@ -1118,7 +1095,6 @@ where
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_sql_support_facts);
-        family_facts.extend(derived_go_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
@@ -1883,18 +1859,6 @@ where
         &derived_sql_support_facts,
     )?;
     next_fact_offset += derived_sql_support_fact_count;
-    let mut derived_go_support_facts = derive_go_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_go_support_facts);
-    let derived_go_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_go_support_facts,
-    )?;
-    next_fact_offset += derived_go_support_fact_count;
     // Recompute provider-resolved TS/JS support from the copied-forward worker
     // facts so incremental-sync family support matches a full rebuild for
     // unchanged files instead of silently dropping it.
@@ -1922,7 +1886,6 @@ where
         + derived_cpp_support_fact_count
         + derived_rust_support_fact_count
         + derived_sql_support_fact_count
-        + derived_go_support_fact_count
         + derived_tsjs_provider_support_fact_count;
     emit_progress(
         progress,
@@ -1995,7 +1958,6 @@ where
                 + derived_cpp_support_facts.len()
                 + derived_rust_support_facts.len()
                 + derived_sql_support_facts.len()
-                + derived_go_support_facts.len()
                 + rust_provider_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
         );
@@ -2008,7 +1970,6 @@ where
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_sql_support_facts);
-        family_facts.extend(derived_go_support_facts);
         family_facts.extend(rust_provider_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
         // The incremental path always resyncs from an active base generation, so
@@ -2073,7 +2034,6 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | CPP_DERIVED_SUPPORT_ENGINE
             | RUST_DERIVED_SUPPORT_ENGINE
             | SQL_DERIVED_SUPPORT_ENGINE
-            | GO_DERIVED_SUPPORT_ENGINE
     )
 }
 
@@ -4908,99 +4868,6 @@ fn derive_sql_framework_support_facts(
     }
 
     Ok(derived)
-}
-
-fn derive_go_framework_support_facts(
-    code_units: &[IndexedCodeUnitRecord],
-    parser_facts: &[SemanticFact],
-    framework_role_facts: &[SemanticFact],
-) -> Result<Vec<SemanticFact>, RepoGrammarError> {
-    let unit_by_id = code_units
-        .iter()
-        .map(|unit| (unit.id.as_str(), unit))
-        .collect::<BTreeMap<_, _>>();
-    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
-    let blocked_units =
-        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
-            language == "go"
-        });
-    let mut seen = BTreeSet::new();
-    let mut derived = Vec::new();
-
-    for fact in parser_facts {
-        if !is_go_structural_anchor_fact(fact) {
-            continue;
-        }
-        let code_unit_id = fact.evidence.code_unit_id.as_str();
-        let Some(unit) = unit_by_id.get(code_unit_id) else {
-            continue;
-        };
-        if unit.language != "go" || !parser_fact_evidence_is_within_unit(fact, unit) {
-            continue;
-        }
-        let Some(framework_role) = role_by_unit
-            .get(code_unit_id)
-            .and_then(single_framework_role)
-        else {
-            continue;
-        };
-        if blocked_units.contains(code_unit_id) {
-            continue;
-        }
-        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
-            continue;
-        };
-        if go_support_target_is_role_compatible(target, framework_role) != Some(true) {
-            continue;
-        }
-        if !seen.insert((unit.id.clone(), target.to_string())) {
-            continue;
-        }
-        derived.push(derived_go_framework_support_fact(
-            unit,
-            fact.kind.clone(),
-            target,
-            framework_role,
-            &fact.evidence.provenance.repository_revision,
-        )?);
-    }
-
-    Ok(derived)
-}
-
-fn is_go_structural_anchor_fact(fact: &SemanticFact) -> bool {
-    fact.kind == SemanticFactKind::Symbol
-        && fact.certainty == FactCertainty::Structural
-        && fact.origin.engine == GO_ANCHOR_ENGINE
-        && fact.origin.method == GO_ANCHOR_METHOD
-        && fact.target.is_some()
-}
-
-fn derived_go_framework_support_fact(
-    unit: &IndexedCodeUnitRecord,
-    kind: SemanticFactKind,
-    target: &str,
-    framework_role: &str,
-    repository_revision: &RepositoryRevision,
-) -> Result<SemanticFact, RepoGrammarError> {
-    let assumptions = vec![
-        "derived_from=bounded_go_test_anchors".to_string(),
-        format!("framework_role={framework_role}"),
-        "provider_resolved=false".to_string(),
-    ];
-
-    derived_support_fact(
-        unit,
-        kind,
-        target,
-        repository_revision,
-        DerivedSupportSpec {
-            engine: GO_DERIVED_SUPPORT_ENGINE,
-            method: GO_DERIVED_SUPPORT_METHOD,
-            note: "bounded Go testing declaration anchor support",
-            assumptions,
-        },
-    )
 }
 
 fn is_sql_structural_anchor_fact(fact: &SemanticFact) -> bool {

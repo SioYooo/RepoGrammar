@@ -1,8 +1,16 @@
-//! Conservative Go framework adapter registry (bounded preview).
+//! Go role registry (auxiliary evidence only).
 //!
-//! The only role is the `testing` package's test-function declaration, which is
-//! the one shape ADR-0041 admits. Subtests, parallelism, helper registration,
-//! skips, and fixtures are runtime behavior and carry no role.
+//! The one role marks the `testing` test-function declaration ADR-0041 admits.
+//! It is deliberately **not** a family-bearing role: ADR-0021's evidence ladder
+//! forbids text or regex matching for the claim, and the bounded scanner that
+//! produces this role is exactly that. ADR-0041's correction therefore demotes
+//! it to auxiliary evidence, so there is no support-target table, no support
+//! family, and no derived-support path anywhere for Go.
+//!
+//! This is the shape React already has in the TS/JS lane: a role may be
+//! detected without being allowed to carry a public family claim. Role facts
+//! carry `FrameworkHeuristic` certainty, which never supports membership, and
+//! nothing derives a support fact from them.
 
 use crate::core::model::CodeUnitKind;
 
@@ -20,33 +28,9 @@ pub(crate) fn role_for_code_unit_kind(kind: &CodeUnitKind) -> Option<GoFramework
         CodeUnitKind::GoTestFunction => Some(GoFrameworkRole {
             target: ROLE_GO_TESTING_TEST,
             note: "bounded Go code unit declares a testing test function",
-            assumption: "Go subtests, parallelism, helpers, and skips are runtime behavior",
+            assumption: "scanner evidence is auxiliary and supports no family claim",
         }),
         _ => None,
-    }
-}
-
-pub(crate) fn framework_role_is_known(framework_role: &str) -> bool {
-    framework_role.starts_with("framework:go_testing.")
-}
-
-pub(crate) fn support_target_is_role_compatible(
-    target: &str,
-    framework_role: &str,
-) -> Option<bool> {
-    match framework_role {
-        ROLE_GO_TESTING_TEST => {
-            Some(target == crate::adapters::parsing::go::source::GO_TEST_FUNCTION_TARGET)
-        }
-        _ if framework_role_is_known(framework_role) => Some(false),
-        _ => None,
-    }
-}
-
-pub(crate) fn support_family(target: &str, framework_role: &str) -> String {
-    match framework_role {
-        ROLE_GO_TESTING_TEST => "go.testing.test_function".to_string(),
-        _ => target.to_string(),
     }
 }
 
@@ -62,32 +46,7 @@ mod tests {
                 .target,
             ROLE_GO_TESTING_TEST
         );
-        // An ordinary declaration is inventory, so it can never join the family.
         assert!(role_for_code_unit_kind(&CodeUnitKind::GoFunction).is_none());
         assert!(role_for_code_unit_kind(&CodeUnitKind::Module).is_none());
-    }
-
-    #[test]
-    fn only_the_fixed_anchor_target_supports_the_role() {
-        assert_eq!(
-            support_target_is_role_compatible("go.testing.T", ROLE_GO_TESTING_TEST),
-            Some(true)
-        );
-        assert_eq!(
-            support_target_is_role_compatible("go.testing.B", ROLE_GO_TESTING_TEST),
-            Some(false)
-        );
-        assert_eq!(
-            support_target_is_role_compatible("go.testing.T", "framework:go_testing.other"),
-            Some(false)
-        );
-        assert_eq!(
-            support_target_is_role_compatible("go.testing.T", "framework:pytest.test"),
-            None
-        );
-        assert_eq!(
-            support_family("go.testing.T", ROLE_GO_TESTING_TEST),
-            "go.testing.test_function"
-        );
     }
 }
