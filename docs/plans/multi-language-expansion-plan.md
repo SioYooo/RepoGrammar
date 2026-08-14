@@ -218,6 +218,143 @@ engine or satisfy the Java completion gate in ADR-0020.
   surface (require package/config runner context like Jest/Vitest); Hono
   literal `app.get('/x', h)` routes. React exclusion unchanged.
 
+## Wave F1 — one common framework per existing frontend language
+
+### Why this wave exists
+
+ADR-0019 already directs RepoGrammar to "cover the mainstream framework and
+third-party-library landscape for the new languages and for the already-supported
+languages", and the priority-ordered backlog below is the researched list of what
+that means. This wave does not choose new frameworks from recollection: every
+entry is drawn from that backlog, which was compiled against the developer-survey
+and registry sources recorded under "Research sources".
+
+The wave exists because the backlog had no delivery unit. "Later waves" is a
+queue, not a scope, so nothing in it could be finished or refused. Wave F1 takes
+one entry per language and closes it.
+
+### What "all languages" can mean here
+
+A framework family needs exact, source-visible anchors in files the frontend
+already parses. Eleven Top-20 languages have no source frontend at all, so they
+can host no framework family of any kind: Go, PHP, Ruby, Swift, Visual Basic
+.NET, Delphi/Object Pascal, Ada, Fortran, R, MATLAB, and Scratch. That is not a
+scoping choice made here; it is the recorded per-language blocker partition in
+`docs/reports/language-support/top-20-program-summary.json`, which this wave
+cites rather than restates.
+
+Assembly is excluded separately: ADR-0038 caps it at non-authoritative lexical
+candidates that may never support a family. SQL already carries its one
+language-internal family from ADR-0040 and needs no framework.
+
+Six lanes remain and each gets exactly one entry: Python, TypeScript/JavaScript,
+Java, C#, C/C++, and Rust.
+
+### Feasibility filter
+
+A backlog entry is admitted into this wave only if all four hold. Any entry that
+fails one is deferred with the failing condition named, which is a result, not an
+omission.
+
+1. **Exact source-visible anchor.** The shape is written in the source the
+   existing frontend already reads. Runtime registration, DI resolution, code
+   generation, and macro expansion are not anchors; where a framework's meaning
+   depends on them, the dependence routes through an existing typed `UNKNOWN`
+   mechanism, as Lombok already does.
+2. **No new artifact.** No Rust crate, no grammar, no downloaded or bundled
+   tool. The zero-external-dependency constraint is not relaxed for frameworks.
+3. **Discovery already admits the file.** A framework whose primary artifact is
+   an extension discovery does not recognize is excluded *by discovery*, not by
+   preference. `.vue`, `.svelte`, and `.razor` are the live cases, which is also
+   why the backlog's Vue/Angular/Blazor entries stay deferred.
+4. **No silent collision.** RepoGrammar derives family support only when a code
+   unit carries exactly one framework role (`single_framework_role`,
+   `src/rust/application/indexing.rs`). A second detector firing on a unit an
+   existing detector already claims does not error — it drops the unit from the
+   support path *and* from the blocked-unit path, silently deleting a family
+   that used to form. Every entry therefore declares its overlap surface and
+   ships a regression assertion that existing fixtures still form the families
+   they formed before.
+
+### Lane assignments
+
+| Lane | Backlog entry | Exact anchor | Role / kind | Support target(s) |
+|---|---|---|---|---|
+| Rust | `tracing` `#[instrument]` | `#[instrument]` or `#[tracing::instrument]` on a function, gated by same-file `use tracing::instrument` or an inline fully-qualified path | `framework:tracing.instrument` / `tracing_instrument` | `tracing.instrument` |
+| C# | FluentValidation `AbstractValidator<T>` | class whose base is using/FQN-gated `AbstractValidator<T>` | `framework:fluentvalidation.validator` / `fluentvalidation_validator` | `fluentvalidation.AbstractValidator` |
+| Java | Jakarta Servlet (`HttpServlet` + `@WebServlet`) | class extending imported/FQN `HttpServlet` under dual `jakarta.servlet`/`javax.servlet` roots | `framework:servlet.http_servlet` / `servlet_http_servlet` | `jakarta.servlet.http.HttpServlet`, `javax.servlet.http.HttpServlet` |
+| Python | marshmallow schemas | class with exact canonical base `marshmallow.Schema` | `framework:marshmallow.schema` / `marshmallow_schema` | `marshmallow.Schema` |
+| TS/JS | Playwright test fixtures | call bound to an exact `@playwright/test` import | existing `framework:jest_vitest.test` / `.suite` roles | `playwright.test`, `playwright.describe` |
+| C/C++ | CppUnit | `CPPUNIT_TEST_SUITE_REGISTRATION(Identifier);` call-expression macro under `cppunit/` include evidence | `framework:cppunit.suite_registration` / `cppunit_suite_registration` | `cppunit.CPPUNIT_TEST_SUITE_REGISTRATION` |
+
+Two lane decisions are made here rather than at implementation time, because
+each changes what the code must be.
+
+**TS/JS adds no new role.** `jest_vitest.suite`/`.test` is already a multi-runner
+surface: `mocha.describe`, `mocha.it`, `node_test.describe`, and `node_test.test`
+are existing targets on it. Because `support_family` falls through to the exact
+target for these roles, each runner still forms its **own** family rather than
+clustering with the others. Playwright therefore joins as two new targets, gets
+its own family, needs no new role or code-unit kind, and adds no new collision
+surface. Precedence is explicit: an exact `@playwright/test` import binding wins
+over ambient jest/vitest test-file detection.
+
+**Rust must order its attribute chain.** One function can carry both
+`#[tokio::main]` and `#[instrument]`. The shipped tokio detector claims such a
+function today, so the tracing detector must not also claim it. Tokio keeps
+precedence and the regression assertion covers the both-attributes case.
+
+### Falsifiable acceptance
+
+This wave is complete when all of the following hold. Partial completion is
+reported per lane, never averaged.
+
+1. Each of the six lanes has either a landed bounded-preview family or a
+   source-backed refusal naming the failing filter condition. A refusal is an
+   acceptable completion state; a silent omission is not.
+2. Every landed lane ships the four-part fixture set through product paths: at
+   least three compatible positive members (each language's minimum support is
+   three), a lookalike/negative fixture that must not form a family, a
+   low-support fixture below the threshold, and a collision-regression assertion
+   that pre-existing fixtures still form exactly the families they formed before
+   this wave.
+3. No public surface exposes framework source text, repository identifiers, or
+   absolute paths for the new anchors.
+4. `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
+   --all-features -- -D warnings`, `cargo test --workspace --all-features`,
+   `cargo run --quiet --bin repo-guard -- check`, and the `check-diff` gate all
+   pass, and `AGENTS.md`/`CLAUDE.md` remain byte-identical.
+5. The official v0.1 scope sentence in the mirrored agent contract is unchanged.
+   Every Wave F1 family is a bounded preview and none of them widens the
+   FastAPI/pytest/SQLAlchemy/Pydantic v0.1 target.
+6. No language's ADR-0020 gate count changes. Gate 5 needs one exact family per
+   language and every lane here already had one; this wave widens framework
+   coverage, and recording it as gate movement would be a false claim.
+
+### Per-slice touch points
+
+The engineering template above applies with items 1 and 3 omitted (no new
+language, no new discovery extension). Four of the remaining touch points fail
+*silently* when missed, so each slice asserts them rather than relying on review:
+
+- `family_eligible_kind` in `src/rust/application/family.rs` — a kind absent
+  here never enters family feature extraction, so the family simply never
+  appears.
+- the derived-support assumption-prefix filter in
+  `src/rust/application/indexing.rs` — a new framework's variation assumptions
+  are dropped without a diagnostic if its prefix is missing.
+- the `repo_shape_*_where` kind whitelists in
+  `src/rust/adapters/persistence/sqlite.rs` — untyped SQL string literals, so a
+  missing kind silently undercounts eligible units.
+- `is_class_like` / `is_method_like` in `src/rust/adapters/parsing/mod.rs` — a
+  missing kind silently drops IR containment edges.
+
+Each slice lands as one atomic Conventional Commit carrying its parser anchor,
+role registry, family wiring, fixtures, and documentation together. Lanes are
+implemented serially because all six edit the same core-model, family, indexing,
+query-vocabulary, and persistence files; parallel worktrees would conflict in
+every one of them.
+
 ## Later waves (priority-ordered backlog)
 
 - C#: SignalR `Hub` bases + `MapHub<T>`, FluentValidation
