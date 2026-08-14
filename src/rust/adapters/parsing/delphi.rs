@@ -19,6 +19,8 @@ use crate::ports::parser::{
 };
 use std::collections::BTreeMap;
 
+pub mod dunitx;
+
 const DELPHI_CONFIG_ENGINE: &str = "repogrammar-delphi-project-config";
 const DELPHI_CONFIG_METHOD: &str = "bounded_dproj_runtime_package_inventory_v1";
 const DELPHI_DEPENDENCY_LIMIT: usize = 2_000;

@@ -3,9 +3,10 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{cpp, csharp, java, r, sql, tsjs, visual_basic};
+use crate::adapters::frameworks::{cpp, csharp, delphi, java, r, sql, tsjs, visual_basic};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
+use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
 use crate::adapters::parsing::go::source::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::python::PYTHON_ANCHOR_ENGINE;
@@ -55,6 +56,8 @@ pub(crate) const CPP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_c_cpp_a
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
 pub(crate) const VB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-vbnet-derived";
 pub(crate) const VB_DERIVED_SUPPORT_METHOD: &str = "bounded_vbnet_mstest_anchor_v1";
+pub(crate) const DELPHI_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-delphi-derived";
+pub(crate) const DELPHI_DERIVED_SUPPORT_METHOD: &str = "bounded_delphi_dunitx_anchor_v1";
 pub(crate) const R_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-r-derived";
 pub(crate) const R_DERIVED_SUPPORT_METHOD: &str = "bounded_r_testthat_anchor_v1";
 pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
@@ -2430,6 +2433,7 @@ enum FamilyUnknownDomain {
     Go,
     R,
     VisualBasic,
+    Delphi,
 }
 
 impl FamilyUnknownDomain {
@@ -2476,6 +2480,11 @@ impl FamilyUnknownDomain {
             return (origin_engine == VB_ANCHOR_ENGINE && origin_method == VB_ANCHOR_METHOD)
                 .then_some(Self::VisualBasic);
         }
+        if language == "object-pascal" {
+            return (origin_engine == DELPHI_ANCHOR_ENGINE
+                && origin_method == DELPHI_ANCHOR_METHOD)
+                .then_some(Self::Delphi);
+        }
         None
     }
 
@@ -2491,6 +2500,7 @@ impl FamilyUnknownDomain {
             Self::Go => "go_test_declaration",
             Self::R => "r_testthat_identity",
             Self::VisualBasic => "vb_mstest_attribute_binding",
+            Self::Delphi => "delphi_dunitx_attribute_binding",
         }
     }
 
@@ -2506,6 +2516,7 @@ impl FamilyUnknownDomain {
             Self::Go => "Go",
             Self::R => "R",
             Self::VisualBasic => "VB.NET",
+            Self::Delphi => "Delphi",
         }
     }
 
@@ -2542,6 +2553,7 @@ impl FamilyUnknownDomain {
             Self::Go => go_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::R => r_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::VisualBasic => vb_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Delphi => delphi_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2578,6 +2590,7 @@ impl FamilyUnknownDomain {
             Self::Go => go_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
             Self::R => r_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
             Self::VisualBasic => false,
+            Self::Delphi => false,
         }
     }
 }
@@ -2614,6 +2627,21 @@ fn vb_unknown_reason_blocks_family_membership(
     match reason {
         UnknownReasonCode::UnresolvedImport => {
             affected_claim == "vb_mstest_attribute_binding" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// An unbound DUnitX attribute blocks the anchor: without the import the
+/// framework, and with it the dialect, are unproven.
+fn delphi_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "delphi_dunitx_attribute_binding"
+                || affected_claim.starts_with("family:")
         }
         _ => false,
     }
@@ -4123,6 +4151,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if visual_basic::framework_role_is_known(framework_role) => {
             visual_basic::support_family(target, framework_role)
         }
+        framework_role if delphi::framework_role_is_known(framework_role) => {
+            delphi::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4402,6 +4433,9 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if visual_basic::framework_role_is_known(framework_role) {
         return vb_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if delphi::framework_role_is_known(framework_role) {
+        return delphi_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     // Go has no arm on purpose. ADR-0021's evidence ladder forbids text or
     // regex matching for the claim, and ADR-0041's correction demotes the
     // scanner to auxiliary evidence: its role is detected, and no support fact
@@ -4423,6 +4457,25 @@ fn vb_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) ->
         VB_DERIVED_SUPPORT_METHOD,
         framework_role,
         &["derived_from=bounded_vbnet_mstest_anchors".to_string()],
+    )
+}
+
+fn delphi_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = delphi::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && delphi_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn delphi_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        DELPHI_DERIVED_SUPPORT_ENGINE,
+        DELPHI_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_delphi_dunitx_anchors".to_string()],
     )
 }
 
@@ -4656,6 +4709,13 @@ pub(crate) fn vb_support_target_is_role_compatible(
     framework_role: &str,
 ) -> Option<bool> {
     visual_basic::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn delphi_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    delphi::support_target_is_role_compatible(target, framework_role)
 }
 
 pub(crate) fn cpp_framework_role_is_known(framework_role: &str) -> bool {
@@ -4894,6 +4954,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "sql_table_definition"
             | "r_test_that_block"
             | "vb_test_method"
+            | "delphi_test_procedure"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -4917,6 +4978,10 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "object-pascal" {
+        // The Delphi completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
         3
     } else if language == "visual-basic" {
         // The VB completion review requires support at least three, matching
@@ -5413,6 +5478,7 @@ mod tests {
         // `framework:mstest.` before it was renamed.
         let roles = [
             crate::adapters::frameworks::visual_basic::ROLE_MSTEST_TEST,
+            crate::adapters::frameworks::delphi::ROLE_DUNITX_TEST,
             crate::adapters::frameworks::r::ROLE_TESTTHAT_TEST,
             crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION,
         ];
@@ -5427,6 +5493,7 @@ mod tests {
                 ("sql", sql::framework_role_is_known(role)),
                 ("r", r::framework_role_is_known(role)),
                 ("visual_basic", visual_basic::framework_role_is_known(role)),
+                ("delphi", delphi::framework_role_is_known(role)),
             ]
             .into_iter()
             .filter(|(_, claimed)| *claimed)

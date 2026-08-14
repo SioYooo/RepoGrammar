@@ -48,6 +48,7 @@ pub struct RepoGrammarSourceParser {
     go_source: go::source::GoTestSourceParser,
     r_testthat: r::testthat::RTestThatParser,
     visual_basic_mstest: visual_basic::mstest::VisualBasicMsTestParser,
+    delphi_dunitx: delphi::dunitx::DelphiDUnitXParser,
     rust: rust::RustSyntaxParser,
     sql: sql::SqlDdlParser,
     swift: swift::SwiftProjectConfigParser,
@@ -108,7 +109,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::SwiftConfig => self.swift.parse(document),
             crate::core::model::Language::VisualBasicConfig => self.visual_basic.parse(document),
             crate::core::model::Language::VisualBasic => self.visual_basic_mstest.parse(document),
-            crate::core::model::Language::ObjectPascal => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::ObjectPascal => self.delphi_dunitx.parse(document),
             crate::core::model::Language::DelphiConfig => self.delphi.parse(document),
             crate::core::model::Language::Ada => Err(ParseError::UnsupportedLanguage),
             crate::core::model::Language::AdaConfig => self.ada.parse(document),
@@ -177,7 +178,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::VisualBasic => self
                 .visual_basic_mstest
                 .parse_with_context(document, context),
-            crate::core::model::Language::ObjectPascal => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::ObjectPascal => {
+                self.delphi_dunitx.parse_with_context(document, context)
+            }
             crate::core::model::Language::DelphiConfig => {
                 self.delphi.parse_with_context(document, context)
             }
@@ -246,6 +249,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::VisualBasicConfig => self
                 .visual_basic
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::ObjectPascal => self
+                .delphi_dunitx
                 .parse_with_context_output(document, context),
             crate::core::model::Language::DelphiConfig => {
                 self.delphi.parse_with_context_output(document, context)
@@ -376,6 +382,7 @@ fn is_class_like(kind: &str) -> bool {
             | "jaxrs_resource_class"
             | "servlet_http_servlet"
             | "vb_test_class"
+            | "delphi_test_fixture"
             | "marshmallow_schema"
             | "aspnet_controller"
             | "efcore_db_context"
@@ -406,6 +413,7 @@ fn is_method_like(kind: &str) -> bool {
             | "boost_test_suite"
             | "cppunit_suite_registration"
             | "vb_test_method"
+            | "delphi_test_procedure"
             | "junit5_test_method"
             | "junit4_test_method"
             | "testng_test_method"

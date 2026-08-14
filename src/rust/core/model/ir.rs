@@ -158,6 +158,8 @@ impl IrNodeKind {
             CodeUnitKind::RTestThatBlock => Self::Unknown,
             CodeUnitKind::VbTestClass => Self::Class,
             CodeUnitKind::VbTestMethod => Self::Method,
+            CodeUnitKind::DelphiTestFixture => Self::Class,
+            CodeUnitKind::DelphiTestProcedure => Self::Method,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,

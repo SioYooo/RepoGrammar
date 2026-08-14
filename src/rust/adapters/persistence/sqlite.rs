@@ -3263,6 +3263,7 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "sql",
     "r",
     "visual-basic",
+    "object-pascal",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3390,6 +3391,9 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         "visual-basic" => {
             "code_units.language = 'visual-basic' AND code_units.kind = 'vb_test_method'"
         }
+        "object-pascal" => {
+            "code_units.language = 'object-pascal' AND code_units.kind = 'delphi_test_procedure'"
+        }
         _ => "0",
     }
 }
@@ -3408,6 +3412,7 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "sql" => "indexed_files.language IN ('sql', 'sql-migration', 'sql-schema', 'sql-catalog')",
         "r" => "indexed_files.language IN ('r', 'r-config')",
         "visual-basic" => "indexed_files.language IN ('visual-basic', 'visual-basic-config')",
+        "object-pascal" => "indexed_files.language IN ('object-pascal', 'delphi-config')",
         _ => "0",
     }
 }
@@ -3426,6 +3431,7 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "sql" => "code_units.language = 'sql'",
         "r" => "code_units.language = 'r'",
         "visual-basic" => "code_units.language = 'visual-basic'",
+        "object-pascal" => "code_units.language = 'object-pascal'",
         _ => "0",
     }
 }
@@ -3450,6 +3456,7 @@ fn repo_shape_family_where(language: &str) -> &'static str {
         "sql" => "families.family_id GLOB 'family:sql:*'",
         "r" => "families.family_id GLOB 'family:r:*'",
         "visual-basic" => "families.family_id GLOB 'family:visual_basic:*'",
+        "object-pascal" => "families.family_id GLOB 'family:object_pascal:*'",
         _ => "0",
     }
 }

@@ -1,9 +1,9 @@
 # Delphi/Object Pascal language completion review
 
-- Status: Incomplete — `discovered_only`
-- Authority: ADR-0020, ADR-0030, and ADR-0032
+- Status: Incomplete — `structural_substrate`
+- Authority: ADR-0020, ADR-0030, ADR-0032, and ADR-0044
 - Dependency prerequisite: `2b5fd6d1bf32e8805798e26e53ff9f090ec22d3e`
-- Last updated: 2026-08-01
+- Last updated: 2026-08-15
 
 ## ADR-0020 gate
 
@@ -12,11 +12,20 @@
   runtime-package metadata is retained.
 - [ ] Evidence-pinned Delphi frontend and version/project profile; Free
   Pascal/Lazarus requires a separate qualification and is not equivalent.
-- [ ] RepoGrammar-owned source code units and IR.
-- [ ] Typed source-semantic `UNKNOWN` registry and provider fallback.
-- [ ] First exact framework family with support at least three.
-- [ ] Positive, lookalike, low-support, degraded, and resolved/unresolved
-  fixtures for that family.
+  ADR-0044's scanner is bounded to one attribute shape and pins no version, so
+  this gate stays open.
+- [x] RepoGrammar-owned source code units and IR — ADR-0044 emits a module
+  unit per decoded `.pas`, a fixture unit, and a test-procedure unit, each
+  projected into the shared IR.
+- [x] Typed source-semantic `UNKNOWN` registry and provider fallback — an
+  unbound DUnitX attribute name yields `UnresolvedImport` under
+  `delphi_dunitx_attribute_binding`, and it blocks family membership.
+- [x] First exact framework family with support at least three —
+  `framework:dunitx.test_procedure` over the `dunitx.Test` anchor, gated at
+  support three.
+- [ ] Positive, lookalike, and low-support fixtures exist for that family;
+  degraded and resolved/unresolved do not, because a scanner has no parse
+  failure and there is no Delphi provider to resolve against.
 - [ ] Complete source-free readiness and leakage matrix.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
@@ -50,11 +59,20 @@ repository program, child process, or network operation is used.
 
 ## Completion verdict
 
-Not complete. The Delphi-qualified metadata slice and generic Object Pascal
-inventory remain `discovered_only`. They are not source semantics, compiler
-compatibility, resolved package relationships, framework evidence, or support.
-Free Pascal/Lazarus remains separately deferred and must not be counted as
-implemented by this lane.
+Not complete. Delphi/Object Pascal has a bounded scanner over one attribute
+shape, owned units and IR, a typed attribute-binding `UNKNOWN`, and one exact
+family with support three under ADR-0044. The `.dproj` metadata inventory
+remains auxiliary and is not compiler, build, or package-resolution evidence.
+Strict gate count is `5/9`; it must not be counted as a supported language.
+
+Two limitations are stated rather than left to inference. This frontend is a
+scanner, so malformed Object Pascal does not fail — it yields fewer admitted
+declarations, which is indistinguishable from a file with fewer declarations;
+the parse-degraded gate stays open for that reason. And the dialect evidence is
+`uses DUnitX.TestFramework`, never the `.pas` suffix, which ADR-0032 forbids as
+a dialect oracle: a `.pas` unit that does not import DUnitX is still
+dialect-neutral Object Pascal, and Free Pascal/Lazarus remains separately
+deferred and must not be counted as implemented by this lane.
 
 ## Final program audit fields
 

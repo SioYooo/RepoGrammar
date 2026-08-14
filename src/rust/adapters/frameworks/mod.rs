@@ -9,6 +9,7 @@ use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 
 pub mod cpp;
 pub mod csharp;
+pub mod delphi;
 pub mod express;
 pub mod go;
 pub mod java;
@@ -88,6 +89,14 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
         });
     }
     if let Some(role) = go::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = delphi::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,

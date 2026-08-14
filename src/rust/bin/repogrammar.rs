@@ -4156,6 +4156,126 @@ mod tests {
         }
     }
 
+    fn delphi_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("delphi")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_delphi_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &delphi_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn delphi_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-delphi-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn delphi_dunitx_exact_attributes_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) =
+            index_delphi_release_v0_2_fixture("dunitx_exact_tests", "delphi-release-dunitx-exact");
+
+        let derived = delphi_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "dunitx.Test")
+                .count(),
+            3,
+            "the helper procedure, the attributed function, and the plain class's \
+             attributed procedure are not tests: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:object_pascal:delphi_test_procedure:framework_dunitx_test_procedure"
+            ));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn delphi_unbound_attributes_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("dunitx_unbound_attributes", "delphi-release-dunitx-unbound"),
+            ("dunitx_low_support", "delphi-release-dunitx-low-support"),
+        ] {
+            let (workspace, runtime) = index_delphi_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("delphi_test_procedure"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Delphi DUnitX family: {families_json}"
+            );
+            if fixture == "dunitx_unbound_attributes" {
+                assert!(
+                    delphi_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "an unbound attribute name must derive no support"
+                );
+            }
+        }
+    }
+
     fn r_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
@@ -12969,7 +13089,7 @@ class User(Base):
     }
 
     #[test]
-    fn product_runtime_dproj_reports_syntax_inventory_without_reading_pascal_source() {
+    fn product_runtime_dproj_reports_syntax_inventory_beside_an_undecodable_pascal_unit() {
         let workspace = TempWorkspace::new("product-runtime-delphi-inventory-index");
         let mut source = vec![0xff, 0xfe, 0xfd];
         source.extend_from_slice(b"pascal-source-must-not-be-read");
@@ -12999,7 +13119,7 @@ class User(Base):
         assert_eq!(value["indexed_units"], 1);
         assert_eq!(
             value["warnings"],
-            serde_json::json!(["parser skipped unsupported language token: object-pascal"])
+            serde_json::json!(["parser skipped non-UTF-8 source: Unit1.pas"])
         );
         assert!(!index.stdout.contains("pascal-source-must-not-be-read"));
         assert!(!index.stdout.contains("PrivateRuntime"));

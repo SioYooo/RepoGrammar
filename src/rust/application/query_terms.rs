@@ -404,6 +404,7 @@ pub const ROLE_CONCEPTS: &[(&str, Concept)] = &[
     ("framework:cppunit.suite_registration", Concept::Test),
     ("framework:testthat.test", Concept::Test),
     ("framework:vb_mstest.test_method", Concept::Test),
+    ("framework:dunitx.test_procedure", Concept::Test),
     ("framework:junit5.test", Concept::Test),
     ("framework:tokio.test", Concept::Test),
     ("framework:repogrammar.rust_product_test", Concept::Test),
@@ -462,6 +463,7 @@ pub const KNOWN_FRAMEWORK_TOKENS: &[&str] = &[
     "unittest",
     "xunit",
     "vb_mstest",
+    "dunitx",
     "zod",
 ];
 
