@@ -40,6 +40,12 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Gates 4, 6, and 7 need an executing Pyrefly or Pyright provider, which is an external artifact this program excludes; the port now types every provider abstention but no provider answers. Gate 9 additionally needs a linked atomic audit, which no dependency blocks.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "marshmallow",
+        "family": "marshmallow.schema",
+        "wave": "F1"
+      },
       "provider_status": "python_type_provider_not_integrated",
       "library_analysis_status": "pypi_manifest_inventory_only",
       "primary_unknowns": ["python_import_graph", "framework_semantic_provider"],
@@ -56,6 +62,10 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Gate 2 needs a translation-unit profile and a preprocessed frontend; a hand-written bounded scanner cannot be authoritative for C because the preprocessor decides what the tokens mean, so clang or an equivalent external frontend is required and excluded.",
+      "framework_support": {
+        "state": "no_qualifying_candidate_yet",
+        "why": "C has a frontend, but every C/C++ backlog entry that passed the Wave F1 filter is a C++ framework. The C-native candidate, GLib/GObject G_DEFINE_TYPE, was assessed and deferred: its GNOME-style macro spelling has no proving test in this repository, so admitting it would rest on an unverified substrate. CppUnit's detector is reachable from the C language token because the frontend is shared, which is a property of that frontend and not a claim that C code uses CppUnit."
+      },
       "provider_status": "no_clang_provider_slot",
       "library_analysis_status": "shared_vcpkg_conan_manifest_inventory_only",
       "primary_unknowns": ["translation_unit_profile", "header_language_and_external_symbols"],
@@ -72,6 +82,12 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Same as C, plus template instantiation and include resolution: no bounded in-process scanner can be the semantic oracle, and clang is excluded.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "CppUnit",
+        "family": "cppunit.suite_registration",
+        "wave": "F1"
+      },
       "provider_status": "no_clang_provider_slot",
       "library_analysis_status": "vcpkg_conan_manifest_inventory_only",
       "primary_unknowns": ["translation_unit_profile", "include_template_and_external_symbol_resolution"],
@@ -88,6 +104,12 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Gate 2 needs the effective Maven model and a resolved classpath before any symbol is package-qualified; javac or JDT is required and excluded. Tree-sitter structure alone cannot discharge it.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "Jakarta Servlet",
+        "family": "servlet.web_servlet",
+        "wave": "F1"
+      },
       "provider_status": "no_javac_or_jdt_provider_slot",
       "library_analysis_status": "maven_manifest_inventory_only",
       "primary_unknowns": ["maven_effective_model", "classpath_and_external_symbols"],
@@ -104,6 +126,12 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Gate 2 needs the MSBuild effective project and assembly resolution; Roslyn is required and excluded. No csproj or NuGet inventory exists yet either.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "FluentValidation",
+        "family": "fluentvalidation.validator",
+        "wave": "F1"
+      },
       "provider_status": "no_roslyn_provider_slot",
       "library_analysis_status": "no_csproj_or_nuget_inventory",
       "primary_unknowns": ["msbuild_project_profile", "assembly_and_external_symbols"],
@@ -120,6 +148,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "The TypeScript compiler worker already ships with the package, so deepening the JavaScript project model, fixtures, and readiness needs no new artifact. It is a separate multi-module effort this program did not attempt.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "Playwright",
+        "family": "playwright.test",
+        "wave": "F1"
+      },
       "provider_status": "typescript_compiler_integrated_partial_project_model",
       "library_analysis_status": "npm_manifest_inventory_only",
       "primary_unknowns": ["javascript_project_profile", "package_exports_and_external_symbols"],
@@ -136,6 +170,12 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Gate 2 needs the MSBuild effective project and the Roslyn VB frontend; both are excluded. The lane is still discovery plus NuGet manifest inventory.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": null,
+        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+      },
       "provider_status": "no_roslyn_vb_provider_slot",
       "library_analysis_status": "nuget_manifest_inventory_only",
       "primary_unknowns": ["msbuild_effective_project", "vb_source_and_external_symbols"],
@@ -152,6 +192,11 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Gate 9 alone: the prerequisite chain is four independently coherent commits, but ADR-0020 G9 lists frontend/IR and UNKNOWN/provider as separate submodules and they landed together because for SQL they are inseparable -- a semantic UNKNOWN needs code-unit evidence, and no provider exists. Whether that satisfies G9 is a maintainer ruling, not a self-grant.",
+      "framework_support": {
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0035 and ADR-0040",
+        "why": "SQL's framework surface is migration tooling, and both ADRs refuse to infer a migration tool or ordering from filenames. The bounded DDL frontend reads statement shapes only, and no other framework surface exists inside a .sql file."
+      },
       "provider_status": "bounded_dialect_invariant_ddl_frontend_no_provider",
       "library_analysis_status": "no_sql_extension_inventory",
       "primary_unknowns": ["sql_dialect_and_version", "catalog_migration_and_extension_identity"],
@@ -168,6 +213,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "R source is still unread. A bounded pure-Rust frontend over a declared R subset is possible in principle, but non-standard evaluation bounds how far it can go, and the lane was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": null,
+        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+      },
       "provider_status": "no_r_provider",
       "library_analysis_status": "cran_bioconductor_manifest_and_lock_inventory",
       "primary_unknowns": ["r_project_and_repository_profile", "nse_dispatch_native_and_external_symbols"],
@@ -184,6 +235,12 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "Gate 4's recoverable type and trait obligations need rust-analyzer, which is excluded. Cargo project-model facts already exist; the remaining fixture, readiness, and audit gates need no dependency.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "tracing",
+        "family": "tracing.instrument",
+        "wave": "F1"
+      },
       "provider_status": "rust_analyzer_not_integrated_cargo_metadata_project_model_only",
       "library_analysis_status": "cargo_manifest_inventory_only",
       "primary_unknowns": ["rust_module_trait_and_macro_semantics", "features_cfg_and_external_symbols"],
@@ -200,6 +257,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Object Pascal source is unread and no compiler is authorized. A bounded pure-Rust frontend over a declared Delphi dialect subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": null,
+        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+      },
       "provider_status": "no_delphi_or_fpc_provider",
       "library_analysis_status": "delphi_package_manifest_inventory_only",
       "primary_unknowns": ["compiler_dialect_and_project_profile", "package_directness_version_and_external_symbols"],
@@ -216,6 +279,11 @@
       "top20_complete": false,
       "blocker_class": "no_go",
       "blocker": "ADR-0039 records a NO-GO: common .sb3 projects are deflated ZIP archives, and reading them needs a vetted deflate implementation the zero-dependency constraint excludes. A stored-entry JSON test is not evidence that ordinary archives work.",
+      "framework_support": {
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0039",
+        "why": "Product integration is a recorded NO-GO over the deflate dependency, so no source is read and no framework family is reachable."
+      },
       "provider_status": "product_integration_no_go_binary_port_missing",
       "library_analysis_status": "security_prerequisite_only_no_product_inventory",
       "primary_unknowns": ["binary_document_and_deflate_qualification", "scratch_extension_and_block_semantics"],
@@ -232,6 +300,11 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0021's route -- a Go standard-library worker in an OS sandbox -- is excluded, both as an external binary and because the sandbox is unqualified. A bounded pure-Rust frontend over a declared Go subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": "go.testing.test_function"
+      },
       "provider_status": "no_go_frontend_sandbox_not_qualified",
       "library_analysis_status": "go_modules_manifest_inventory_only",
       "primary_unknowns": ["go_workspace_build_target_profile", "module_graph_types_and_external_symbols"],
@@ -248,6 +321,11 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0024's sandboxed PHP frontend is excluded. A bounded pure-Rust frontend over a declared PHP subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": "php.phpunit.test_method"
+      },
       "provider_status": "frontend_qualification_incomplete",
       "library_analysis_status": "composer_manifest_and_lock_inventory",
       "primary_unknowns": ["composer_phpunit_project_profile", "autoload_and_external_symbols"],
@@ -264,6 +342,11 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0025's SwiftSyntax and SourceKit route is excluded. A bounded pure-Rust frontend over a declared Swift subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": "swift.xctest.test_method"
+      },
       "provider_status": "frontend_qualification_incomplete",
       "library_analysis_status": "swiftpm_lock_inventory_only",
       "primary_unknowns": ["swift_toolchain_sdk_project_profile", "module_macro_xctest_and_external_symbols"],
@@ -280,6 +363,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Libadalang is already NO-GO for this lane and stays excluded. A bounded pure-Rust frontend over a declared Ada subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": null,
+        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+      },
       "provider_status": "libadalang_no_go_for_current_lane",
       "library_analysis_status": "alire_manifest_inventory_only",
       "primary_unknowns": ["gpr_project_toolchain_and_naming", "generic_overload_dispatch_and_external_symbols"],
@@ -296,6 +385,11 @@
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
       "blocker": "ADR-0038 caps this lane at non-authoritative lexical candidates, and its exact labeled-procedure family needs LLVM MC or an equivalent external assembler frontend, which is excluded. Held at structural_substrate by explicit maintainer direction; the cap must not be worked around.",
+      "framework_support": {
+        "state": "closed_by_decision",
+        "closing_decision": "ADR-0038",
+        "why": "The lane is capped at non-authoritative lexical candidates that may never support a family, so no framework family is reachable without a superseding ADR."
+      },
       "provider_status": "bounded_non_authoritative_gas_lexical_scanner",
       "library_analysis_status": "no_native_system_dependency_inventory",
       "primary_unknowns": ["target_dialect_object_format_profile", "macro_include_symbol_and_control_flow_resolution"],
@@ -312,6 +406,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "A MATLAB or Octave runtime is excluded. A bounded pure-Rust frontend over a declared MATLAB source subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": null,
+        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+      },
       "provider_status": "no_matlab_or_octave_frontend",
       "library_analysis_status": "matlab_add_on_manifest_inventory_only",
       "primary_unknowns": ["matlab_release_project_and_source_dialect", "toolbox_installation_and_external_symbols"],
@@ -328,6 +428,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "Flang is already NO-GO for this lane and stays excluded. A bounded pure-Rust frontend over a declared free-form Fortran subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": null,
+        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+      },
       "provider_status": "flang_no_go_for_current_lane",
       "library_analysis_status": "fpm_manifest_inventory_only",
       "primary_unknowns": ["standard_source_form_preprocessing_and_project", "module_interface_abi_and_external_symbols"],
@@ -344,6 +450,11 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "ADR-0022's Prism route is excluded as an external native artifact. A bounded pure-Rust frontend over a declared Ruby subset is possible in principle and was not attempted here.",
+      "framework_support": {
+        "state": "blocked_on_frontend",
+        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
+        "first_candidate_family": "ruby.minitest.test_method"
+      },
       "provider_status": "prism_qualification_incomplete",
       "library_analysis_status": "rubygems_manifest_inventory_only",
       "primary_unknowns": ["ruby_engine_version_and_project_profile", "require_constant_dynamic_and_external_symbols"],
@@ -360,6 +471,12 @@
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
       "blocker": "The TypeScript compiler worker already ships with the package, so the pinned full project model, fixture closure, and linked audit need no new artifact. They are a separate effort this program did not attempt.",
+      "framework_support": {
+        "state": "landed",
+        "framework": "Playwright",
+        "family": "playwright.test",
+        "wave": "F1"
+      },
       "provider_status": "typescript_compiler_integrated_partial_project_model",
       "library_analysis_status": "npm_manifest_inventory_only",
       "primary_unknowns": ["typescript_project_references_options_and_profile", "package_exports_lock_graph_and_external_symbols"],

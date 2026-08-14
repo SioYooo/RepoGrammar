@@ -317,7 +317,9 @@ reported per lane, never averaged.
 
 1. Each of the six lanes has either a landed bounded-preview family or a
    source-backed refusal naming the failing filter condition. A refusal is an
-   acceptable completion state; a silent omission is not.
+   acceptable completion state; a silent omission is not. Every entry outside
+   the six lanes carries a `framework_support` state in the program summary, so
+   no language is silently absent from the answer.
 2. Every landed lane ships the four-part fixture set through product paths: at
    least three compatible positive members (each language's minimum support is
    three), a lookalike/negative fixture that must not form a family, a
@@ -389,6 +391,50 @@ resolve:
   and SQLAlchemy behaviour and is deliberately conservative.
 - CppUnit registration is anchored; the suite's `CPPUNIT_TEST` entries are not,
   because enumerating them is registry construction at runtime.
+
+### The other fourteen entries, archived
+
+Wave F1 landed a framework family for seven of the twenty-one tracked entries.
+"Add common framework support for all languages" cannot be satisfied further
+than that today, and the reason differs per language, so each is recorded in
+`top-20-program-summary.json` under `framework_support` rather than left to be
+re-derived. Four states, and only one of them is a queue:
+
+**Landed (7).** Python, C++, Java, C#, JavaScript, TypeScript, Rust.
+
+**Closed by decision (3).** These will not gain a framework family without a
+superseding ADR, so they are answers, not backlog:
+
+- Assembly — ADR-0038 caps the lane at non-authoritative lexical candidates that
+  may never support a family.
+- Scratch — ADR-0039 records product integration as a NO-GO over the deflate
+  dependency, so no source is read at all.
+- SQL — SQL's framework surface is migration tooling, and ADR-0035 and ADR-0040
+  both refuse to infer a migration tool or an ordering from filenames. The
+  bounded DDL frontend reads statement shapes; a `.sql` file contains no other
+  framework surface. SQL already carries its language-internal family instead.
+
+**No qualifying candidate yet (1).** C has a frontend, but every C/C++ backlog
+entry that passed the Wave F1 filter is a C++ framework. The C-native candidate,
+GLib/GObject `G_DEFINE_TYPE`, was assessed and deferred because its GNOME-style
+macro spelling has no proving test here. CppUnit's detector is reachable from
+the C language token because the frontend is shared — a property of that
+frontend, not a claim that C code uses CppUnit.
+
+**Blocked on a frontend (10).** Visual Basic .NET, Delphi/Object Pascal, Ada,
+Fortran, R, MATLAB, Go, PHP, Swift, Ruby. These have no source frontend, so no
+framework anchor of any kind is visible. Framework support is *downstream* of a
+bounded frontend, which is its own multi-module effort under ADR-0020 gate 2 —
+sequencing, not infeasibility. Four already name their first framework target in
+their completion review: `go.testing.test_function`,
+`php.phpunit.test_method`, `ruby.minitest.test_method`,
+`swift.xctest.test_method`. The other six name none, so choosing one is part of
+the frontend effort rather than a separate framework decision.
+
+The practical consequence: a future "all languages" request is bounded by ten
+frontends, not by framework work. Building one bounded frontend and then adding
+its first family is the unit of progress, and Wave F1's per-slice checklist is
+what the second half of that unit costs.
 
 ### Per-slice touch points
 
