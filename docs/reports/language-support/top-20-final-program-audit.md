@@ -1,12 +1,22 @@
 # Top-20 language and third-party-library final program audit
 
-- Date: 2026-08-01
+- Date: 2026-08-01; continuation audited 2026-08-14
 - Branch: `feat/top-20-language-library-support`
 - Protected baseline: `86dba38ada7fe5646b5ab8770e2ad4183e8d22d7`
 - Verdict: `PARTIAL_AUDITED_PROGRESS`
 - Strict Top-20 completion: **0/20**
 - TypeScript extra completion: **incomplete; excluded from the denominator**
 - Third-party-library platform completion: **incomplete**
+
+The 2026-08-14 continuation ran under an added hard constraint: no new Rust
+crate and no downloaded or bundled external artifact. That excludes every
+provider route the earlier rounds had left as follow-up work -- Pyrefly and
+Pyright, clang, Roslyn, rust-analyzer, a Go worker binary, Prism, SwiftSyntax,
+libadalang, flang, LLVM MC, a MATLAB runtime, any Tree-sitter grammar, and
+`sqlparser-rs`. What remained admissible was a hand-written bounded frontend in
+the existing Rust core, and deepening the Python and TypeScript workers that
+already ship with the package. Every per-language conclusion below is now
+partitioned by whether its binding gate needs one of the excluded artifacts.
 
 This audit closes the bounded five-round implementation campaign without
 claiming that the original all-language objective was achieved. The branch
@@ -36,39 +46,50 @@ The accepted terminal label is partial audited progress. `COMPLETE`,
 | 0 — repository and branch preflight | protected baseline, dirty-state audit, authority/skill review, dedicated branch | isolation gate passed |
 | 1 — shared dependency foundation | language-neutral evidence ladder, schema-v13 persistence, npm, Python, C/C++, SwiftPM, Composer, Bundler, Go Modules, and Maven bounded inventory | useful infrastructure; no semantic-support promotion |
 | 2 — N2 compiled inventory | VB.NET/NuGet, Delphi package, Ada/Alire, and Fortran/fpm discovery/configuration slices | `discovered_only`; providers and families remain open |
-| 3 — data/scientific inventory | SQL metadata plus R CRAN/Bioconductor/renv inventory | `discovered_only`; dialect/project/provider gates remain open |
+| 3 — data/scientific inventory | SQL metadata plus R CRAN/Bioconductor/renv inventory | `discovered_only` at the time; SQL was later advanced by ADR-0040, R still open |
 | 4 — shared contract and convergence audit | exact-version reviewed-contract registry with overlap rejection; core and compiled language four-part reviews | registry has zero production packs; all reviewed languages remain incomplete |
 | 5 — tail-language bounded slice | MATLAB add-on inventory, Assembly lexical candidate substrate, disconnected Scratch archive prerequisite | MATLAB incomplete; Assembly incomplete; Scratch product integration `NO_GO` |
 | Final consolidation | 21 completion reviews, machine-readable summary, ecosystem/provider/manifest/UNKNOWN matrices, source-free security/performance review | `PARTIAL_AUDITED_PROGRESS` |
+| 2026-08-14 R1 — Python provider abstention | one typed decision for absent/stale/conflicting provider answers, with the fixture matrix | contract only; no provider executes, Python stays 4/9 |
+| 2026-08-14 R2 — SQL frontend | ADR-0040 dialect-invariance decision, bounded DDL frontend, owned units/IR, typed `UNKNOWN`s | SQL gates 2, 3, 4 close; 5/9 |
+| 2026-08-14 R3 — SQL family | role registry, owned derived support, `sql.schema.table_definition`, adversarial fixture corpus | SQL gates 5, 6 close; 7/9 |
+| 2026-08-14 R4 — blocker partition | per-language `blocker_class`/`blocker` in the summary JSON, stale-document sweep | every lane has a source-backed conclusion |
 
 ## Strict language matrix
 
 “Gates” is the number of ADR-0020 gates currently evidenced out of nine. It is
 not a percentage or support score.
 
-| Rank | Language | Program state | Gates | Third-party-library boundary | Complete |
-|---:|---|---|---:|---|---|
-| 1 | Python | `structural_substrate` | 4/9 | bounded PyPI manifest declarations only | no |
-| 2 | C | `structural_substrate` | 2/9 | shared vcpkg/Conan manifest declarations only | no |
-| 3 | C++ | `structural_substrate` | 3/9 | vcpkg/Conan manifest declarations only | no |
-| 4 | Java | `structural_substrate` | 3/9 | direct literal Maven declarations only | no |
-| 5 | C# | `structural_substrate` | 3/9 | no C# project/NuGet inventory | no |
-| 6 | JavaScript | `structural_substrate` | 3/9 | root npm manifest declarations only | no |
-| 7 | Visual Basic .NET | `discovered_only` | 2/9 | literal `.vbproj` NuGet declarations only | no |
-| 8 | SQL | `discovered_only` | 2/9 | no SQL extension dependency consumer | no |
-| 9 | R | `discovered_only` | 2/9 | bounded CRAN/Bioconductor manifest/renv evidence | no |
-| 10 | Rust | `structural_substrate` | 3/9 | Cargo manifest/project-model declarations only | no |
-| 11 | Delphi/Object Pascal | `discovered_only` | 2/9 | literal Delphi package declarations only | no |
-| 12 | Scratch | `not_started`; prerequisite `NO_GO` | 1/9 | no product dependency inventory | no |
-| 13 | Go | `discovered_only` | 2/9 | bounded `go.mod` declarations only | no |
-| 14 | PHP | `discovered_only` | 1/9 | Composer manifest plus lock rows, without coherence | no |
-| 15 | Swift | `discovered_only` | 1/9 | SwiftPM schema-2/3 lock pins only | no |
-| 16 | Ada | `discovered_only` | 2/9 | unconditional literal Alire declarations only | no |
-| 17 | Assembly | `structural_substrate` | 1/9 | no native/system dependency consumer | no |
-| 18 | MATLAB | `discovered_only` | 1/9 | bounded R2024b+ add-on manifest declarations only | no |
-| 19 | Fortran | `discovered_only` | 2/9 | literal root fpm declarations only | no |
-| 20 | Ruby | `discovered_only` | 2/9 | direct `Gemfile.lock` declaration inventory only | no |
-| extra | TypeScript | `structural_substrate` | 3/9 | root npm manifest declarations only | no |
+“Blocked by” partitions the remaining work under the zero-external-dependency
+constraint. `zero_dependency_excluded` means the binding gate needs an artifact
+the constraint forbids, named in the JSON blocker text.
+`open_under_zero_dependency` means no artifact is required and the remaining
+work is a separate multi-module effort this program did not attempt. `no_go`
+means a recorded ADR decision closed the lane.
+
+| Rank | Language | Program state | Gates | Blocked by | Third-party-library boundary | Complete |
+|---:|---|---|---:|---|---|---|
+| 1 | Python | `structural_substrate` | 4/9 | `zero_dependency_excluded` | bounded PyPI manifest declarations only | no |
+| 2 | C | `structural_substrate` | 2/9 | `zero_dependency_excluded` | shared vcpkg/Conan manifest declarations only | no |
+| 3 | C++ | `structural_substrate` | 3/9 | `zero_dependency_excluded` | vcpkg/Conan manifest declarations only | no |
+| 4 | Java | `structural_substrate` | 3/9 | `zero_dependency_excluded` | direct literal Maven declarations only | no |
+| 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | no C# project/NuGet inventory | no |
+| 6 | JavaScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
+| 7 | Visual Basic .NET | `discovered_only` | 2/9 | `zero_dependency_excluded` | literal `.vbproj` NuGet declarations only | no |
+| 8 | SQL | `structural_substrate` | 7/9 | `open_under_zero_dependency` | no SQL extension dependency consumer | no |
+| 9 | R | `discovered_only` | 2/9 | `open_under_zero_dependency` | bounded CRAN/Bioconductor manifest/renv evidence | no |
+| 10 | Rust | `structural_substrate` | 3/9 | `zero_dependency_excluded` | Cargo manifest/project-model declarations only | no |
+| 11 | Delphi/Object Pascal | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal Delphi package declarations only | no |
+| 12 | Scratch | `not_started`; prerequisite `NO_GO` | 1/9 | `no_go` | no product dependency inventory | no |
+| 13 | Go | `discovered_only` | 2/9 | `open_under_zero_dependency` | bounded `go.mod` declarations only | no |
+| 14 | PHP | `discovered_only` | 1/9 | `open_under_zero_dependency` | Composer manifest plus lock rows, without coherence | no |
+| 15 | Swift | `discovered_only` | 1/9 | `open_under_zero_dependency` | SwiftPM schema-2/3 lock pins only | no |
+| 16 | Ada | `discovered_only` | 2/9 | `open_under_zero_dependency` | unconditional literal Alire declarations only | no |
+| 17 | Assembly | `structural_substrate` | 1/9 | `zero_dependency_excluded` | no native/system dependency consumer | no |
+| 18 | MATLAB | `discovered_only` | 1/9 | `open_under_zero_dependency` | bounded R2024b+ add-on manifest declarations only | no |
+| 19 | Fortran | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal root fpm declarations only | no |
+| 20 | Ruby | `discovered_only` | 2/9 | `open_under_zero_dependency` | direct `Gemfile.lock` declaration inventory only | no |
+| extra | TypeScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
 
 The machine-readable authority for these rows is
 `top-20-program-summary.json`. Each row links its own completion review,
@@ -143,8 +164,11 @@ agent workstreams were reviewed and integrated without rewriting history.
 
 Language-specific reviews also link older prerequisite SHAs already contained
 in the baseline when they are necessary to interpret existing structural paths.
-Every SHA in `top-20-program-summary.json` was checked as an ancestor of the
-audit branch.
+Every SHA in the ledger above was checked as an ancestor of the branch head at
+the 2026-08-01 audit. That check has not been rerun for the 2026-08-14
+continuation commits, which are recorded in the delivery summary of the session
+that produced them rather than here, because a commit cannot contain its own
+SHA.
 
 ## Correctness, security, completeness, and performance decision
 
@@ -209,7 +233,23 @@ language-specific family evidence. Native, licensed, compiler, archive, and
 runtime-provider lanes also require separate supply-chain and OS-sandbox
 qualification before admission.
 
-The single highest-EV next action is to finish one end-to-end Python vertical:
+Under the zero-external-dependency constraint the partition above is the
+operative risk statement. Eight lanes are excluded outright: Python, C, C++,
+Java, C#, Visual Basic .NET, Rust, and Assembly each need an artifact the
+constraint forbids, so no amount of in-repo work closes their binding gate.
+Scratch is a recorded `NO_GO`. The twelve remaining lanes are open in principle
+and unattempted, and SQL is the only one this continuation advanced -- from
+`discovered_only` 2/9 to `structural_substrate` 7/9 -- which is also the
+evidence that the open-lane label is not merely optimistic.
+
+The single highest-EV next action under the constraint is to close SQL's
+remaining two gates: audit its source-free readiness across `status`, `doctor`,
+`stats`, `unknowns`, CLI, and MCP, then land the linked completion audit. That
+would make SQL the first language at 9/9 and would establish, on a real lane,
+what a completion chain looks like -- which every other open lane can then copy.
+
+If the constraint is lifted, the single highest-EV next action reverts to
+finishing one end-to-end Python vertical:
 select and pin the authoritative Python project/type provider under an isolated
 supplied-input boundary, join one PyPI distribution and exact external symbol to
 a reviewed exact-version FastAPI/pytest/Pydantic/SQLAlchemy contract, preserve

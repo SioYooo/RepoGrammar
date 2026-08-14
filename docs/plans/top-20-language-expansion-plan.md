@@ -441,7 +441,7 @@ substitutes an exact language-internal recurring-pattern family.
 
 | Language | Frontend/format decision to pin | Candidate first family | Scope/non-claim requirement |
 |---|---|---|---|
-| SQL | One initial SQL dialect and its authoritative/maintained dialect parser; migration/config discovery | DDL migration/table definitions or compatible query-shape families | One dialect never implies universal SQL; dynamic SQL and stored-language bodies remain typed |
+| SQL | Delivered as ADR-0040: a bounded in-process frontend over the PostgreSQL 16 / SQLite 3 dialect-invariance set instead of one selected dialect, so no external grammar is needed and no selection is claimed | `sql.schema.table_definition` from exact `CREATE TABLE` definition lists, minimum support three | The admitted subset never implies universal SQL; a dialect-divergent construct degrades its whole file; dynamic SQL, stored-language bodies, migration order, and catalog state remain typed |
 | R | R-native parser/frontend and package/project metadata | `testthat::test_that` tests or exact Shiny declarations | Non-standard evaluation, formula semantics, dynamic package loading and native extensions remain typed |
 | MATLAB | Version-profiled MATLAB parser/frontend and project/package metadata | `matlab.unittest` tests or function/class method families | Dynamic workspace/eval, path mutation, toolboxes, code generation and Simulink are separate claims |
 

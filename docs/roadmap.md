@@ -466,7 +466,12 @@ discovery may change.
 The 2026-08-01 five-round checkpoint is audited as
 `PARTIAL_AUDITED_PROGRESS`: strict completion remains `0/20`, TypeScript extra
 is incomplete, 17 of 20 dependency-ecosystem tokens have bounded consumers,
-and the exact-version reviewed-contract registry has zero production packs.
+and the exact-version reviewed-contract registry has zero production packs. A
+2026-08-14 continuation ran under an added zero-external-dependency constraint;
+it advanced SQL from `discovered_only` to `structural_substrate` at 7/9 through
+ADR-0040's bounded frontend, and partitioned every other lane by whether its
+binding gate needs an artifact that constraint forbids. Strict completion is
+still `0/20`.
 `docs/reports/language-support/top-20-final-program-audit.md` and
 `docs/reports/language-support/top-20-program-summary.json` are the consolidated
 human- and machine-readable snapshots. These additions do not change the

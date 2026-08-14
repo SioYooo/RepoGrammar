@@ -326,12 +326,17 @@ formats are not aliases for Delphi metadata and remain deferred. Dynamic,
 malformed, conflicting, or over-limit claims remain scoped
 `delphi_dependency_inventory` `UNKNOWN`s.
 SQL discovery is implemented by the pure normalized-path classifier in
-`adapters/languages/sql.rs`. All SQL tokens remain inventory-only: application
-indexing must not read SQL source, invoke a parser/client/database/migration
-tool, retain statement literals, select a dialect, or emit `sql_extension`
-rows. ADR-0035 records why PostgreSQL/SQLite ambiguity keeps dialect UNKNOWN.
-Any future dialect frontend or extension manifest requires a separate pinned,
-source-backed dependency and sandbox qualification.
+`adapters/languages/sql.rs`; the bounded DDL frontend belongs in
+`adapters/parsing/sql.rs` and its role registry in `adapters/frameworks/sql.rs`.
+Under ADR-0040 application indexing reads SQL source, but the frontend may scan
+only constructs PostgreSQL 16 and SQLite 3 lex identically, so it still selects
+no dialect and keeps dialect `UNKNOWN` for the reason ADR-0035 records. It must
+not invoke a parser generator, client, database, driver, or migration tool,
+retain statement literals or repository names in any output, or emit
+`sql_extension` rows. Admitting a construct the declared dialects lex
+differently, widening the invariance set, or adding an extension manifest each
+require a superseding ADR; an external grammar or database artifact additionally
+requires pinned, source-backed dependency and sandbox qualification.
 
 R discovery belongs in `adapters/languages/r.rs`; bounded metadata parsing
 belongs in `adapters/parsing/r.rs`. `.R` and `.r` source is inventory-only. The

@@ -4082,6 +4082,15 @@ mod tests {
         (workspace, runtime)
     }
 
+    fn sql_family_status(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> String {
+        let families =
+            run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+        parse_machine_output("families", &families, workspace)["status"]
+            .as_str()
+            .expect("families status")
+            .to_string()
+    }
+
     fn sql_family_support(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> Option<u64> {
         let families =
             run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
@@ -4091,9 +4100,11 @@ mod tests {
             .expect("families")
             .iter()
             .find(|family| {
+                // Match the SQL role token, not the substring "sql", which any
+                // SQLAlchemy family id would also satisfy.
                 family["family_id"]
                     .as_str()
-                    .is_some_and(|id| id.contains("sql"))
+                    .is_some_and(|id| id.contains("sql_table_definition"))
             })
             .and_then(|family| family["support"].as_u64())
     }
@@ -4116,6 +4127,7 @@ mod tests {
         let (workspace, runtime) =
             index_sql_release_v0_1_fixture("exact_table_definitions", "sql-release-exact");
 
+        assert_eq!(sql_family_status(&runtime, &workspace), "ok");
         assert_eq!(
             sql_family_support(&runtime, &workspace),
             Some(3),
@@ -4133,6 +4145,13 @@ mod tests {
         ] {
             let (workspace, runtime) = index_sql_release_v0_1_fixture(fixture, prefix);
 
+            // Abstention, not an empty success: a repository whose SQL forms no
+            // family reports UNKNOWN rather than "no families here".
+            assert_eq!(
+                sql_family_status(&runtime, &workspace),
+                "UNKNOWN",
+                "{fixture} must abstain rather than report a clean empty result"
+            );
             assert_eq!(
                 sql_family_support(&runtime, &workspace),
                 None,
