@@ -40,7 +40,9 @@
   because the divergence unproves every boundary in it. No unresolved-to-
   resolved pair exists, since no provider can resolve a SQL claim.
 - [x] Complete source-free readiness and leakage matrix across required public
-  surfaces — `status`, `doctor`, `stats`, `unknowns`, `families`, `files`, and
+  surfaces — SQL is registered in the repo-shape language scopes, so its units
+  and families are counted rather than silently reported as zero; `status`,
+  `doctor`, `stats`, `unknowns`, `families`, `files`, and
   the MCP `inspect_readiness` and `find_analogues` payloads are each asserted
   over an indexed SQL repository to expose no table, column, literal, or SQL
   keyword text and no absolute path. The assertions are non-vacuous: each

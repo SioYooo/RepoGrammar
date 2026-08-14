@@ -3260,6 +3260,7 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "java",
     "csharp",
     "c/cpp",
+    "sql",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3382,6 +3383,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
              'gtest_test_case', 'gtest_test_fixture', 'catch2_test_case', \
              'doctest_test_case', 'boost_test_case', 'boost_test_suite', 'cppunit_suite_registration')"
         }
+        "sql" => "code_units.language = 'sql' AND code_units.kind = 'sql_table_definition'",
         _ => "0",
     }
 }
@@ -3397,6 +3399,7 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "java" => "indexed_files.language = 'java'",
         "csharp" => "indexed_files.language = 'csharp'",
         "c/cpp" => "indexed_files.language IN ('c', 'cpp', 'cpp-config')",
+        "sql" => "indexed_files.language IN ('sql', 'sql-migration', 'sql-schema', 'sql-catalog')",
         _ => "0",
     }
 }
@@ -3412,6 +3415,7 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "java" => "code_units.language = 'java'",
         "csharp" => "code_units.language = 'csharp'",
         "c/cpp" => "code_units.language IN ('c', 'cpp')",
+        "sql" => "code_units.language = 'sql'",
         _ => "0",
     }
 }
@@ -3433,6 +3437,7 @@ fn repo_shape_family_where(language: &str) -> &'static str {
         "c/cpp" => {
             "(families.family_id GLOB 'family:c:*' OR families.family_id GLOB 'family:cpp:*')"
         }
+        "sql" => "families.family_id GLOB 'family:sql:*'",
         _ => "0",
     }
 }
@@ -6935,6 +6940,32 @@ mod tests {
         assert_eq!(tsjs.indexed_code_unit_count, 1);
         assert_eq!(tsjs.eligible_code_units, 0);
         assert_eq!(tsjs.family_count, 0);
+    }
+
+    #[test]
+    fn every_repo_shape_scope_has_all_four_predicates() {
+        // Each `_ => "0"` arm is a valid SQL predicate that matches nothing, so
+        // a language listed in the scopes but missing from a `where` function
+        // reports zero instead of failing. That is how SQL's units and families
+        // were excluded from repo-shape stats for a whole session after its
+        // family landed: the family commit never touched this file, and nothing
+        // failed. This invariant is cheaper than remembering.
+        for scope in REPO_SHAPE_LANGUAGE_SCOPES {
+            for (name, predicate) in [
+                ("unit", repo_shape_unit_where(scope)),
+                ("indexed_file", repo_shape_indexed_file_where(scope)),
+                (
+                    "indexed_code_unit",
+                    repo_shape_indexed_code_unit_where(scope),
+                ),
+                ("family", repo_shape_family_where(scope)),
+            ] {
+                assert_ne!(
+                    predicate, "0",
+                    "repo-shape scope {scope} has no {name} predicate, so it silently counts zero"
+                );
+            }
+        }
     }
 
     #[test]
