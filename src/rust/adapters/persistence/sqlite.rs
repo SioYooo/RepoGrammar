@@ -3380,7 +3380,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         "c/cpp" => {
             "code_units.language IN ('c', 'cpp') AND code_units.kind IN (\
              'gtest_test_case', 'gtest_test_fixture', 'catch2_test_case', \
-             'doctest_test_case', 'boost_test_case', 'boost_test_suite')"
+             'doctest_test_case', 'boost_test_case', 'boost_test_suite', 'cppunit_suite_registration')"
         }
         _ => "0",
     }

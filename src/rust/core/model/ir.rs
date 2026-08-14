@@ -132,7 +132,8 @@ impl IrNodeKind {
             | CodeUnitKind::Catch2TestCase
             | CodeUnitKind::DoctestTestCase
             | CodeUnitKind::BoostTestCase
-            | CodeUnitKind::BoostTestSuite => Self::Method,
+            | CodeUnitKind::BoostTestSuite
+            | CodeUnitKind::CppUnitSuiteRegistration => Self::Method,
             CodeUnitKind::JpaEntity
             | CodeUnitKind::JpaMappedSuperclass
             | CodeUnitKind::JpaEmbeddable

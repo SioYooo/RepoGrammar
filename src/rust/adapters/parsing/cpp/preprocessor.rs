@@ -14,6 +14,7 @@ pub(super) struct IncludeEvidence {
     pub(super) catch2: bool,
     pub(super) doctest: bool,
     pub(super) boost_test: bool,
+    pub(super) cppunit: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,6 +280,12 @@ fn record_framework_include(evidence: &mut IncludeEvidence, path: &str) {
         {
             evidence.boost_test = true;
         }
+        _ if path
+            .strip_prefix("cppunit/")
+            .is_some_and(|rest| !rest.is_empty()) =>
+        {
+            evidence.cppunit = true;
+        }
         _ => {}
     }
 }
@@ -345,7 +352,8 @@ mod tests {
             "#include <gtest/gtest.h>\n\
              #include \"catch2/catch_test_macros.hpp\"\n\
              #include <doctest/doctest.h>\n\
-             #include <boost/test/unit_test.hpp>\n",
+             #include <boost/test/unit_test.hpp>\n\
+             #include <cppunit/extensions/HelperMacros.h>\n",
         );
         assert_eq!(
             analysis.includes,
@@ -354,6 +362,7 @@ mod tests {
                 catch2: true,
                 doctest: true,
                 boost_test: true,
+                cppunit: true,
             }
         );
         assert!(analysis.conditional_regions.is_empty());

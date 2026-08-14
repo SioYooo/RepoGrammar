@@ -24,7 +24,7 @@ matrix, or linked nine-gate audit.
 | Project model | Exact-root `compile_commands.json` records entry count and at most 100 safe repository-relative translation-unit paths. | Commands, arguments, directories, flags, dialects, target, staleness, and configuration selection are discarded; headers are not assigned to authoritative translation units. |
 | Package metadata | Exact-root `vcpkg.json` and `conanfile.txt` yield bounded direct declarations. | No lockfile/installed/transitive graph, profiles, options, features, toolchain selection, binary identity, or selected package version. |
 | Third-party analysis | vcpkg/Conan declarations are auxiliary `manifest_declared` evidence. | No package manager is run; no external symbol, API, header ownership, ABI, or reviewed library contract is resolved. |
-| Exact families | Exact include-gated GoogleTest/gMock, Catch2, doctest, and Boost.Test structural evidence; product tests prove GoogleTest and Catch2 families with support at least three. | Family membership remains source/config scoped and cannot establish compilation, template expansion, generated registration, runtime discovery, or external library compatibility. |
+| Exact families | Exact include-gated GoogleTest/gMock, Catch2, doctest, Boost.Test, and CppUnit structural evidence; product tests prove GoogleTest and Catch2 families with support at least three. | Family membership remains source/config scoped and cannot establish compilation, template expansion, generated registration, runtime discovery, or external library compatibility. |
 | Typed `UNKNOWN` | Parse degradation, macro contracts, conditional/preprocessor variants, lookalikes, and low support abstain conservatively. | Translation-unit selection, templates/overloads, include resolution, generated sources, stale/conflicting configs, and provider fallbacks are not a complete registry. |
 | Source-free readiness | Family detail can omit snippets; product tests cover exact, lookalike, low-support, macro, and preprocessor-variant outcomes. | The full CLI/MCP/status/doctor/stats/unknowns/persistence/leakage matrix is incomplete. |
 
@@ -94,7 +94,7 @@ linked final audit.
 | G2 Authoritative frontend/provider | Open | Tree-sitter only; no admitted clangd/libclang/Clang provider or translation-unit authority. |
 | G3 RepoGrammar-owned units/IR | Satisfied | Structural C++ code/test units and IR are RepoGrammar-owned. |
 | G4 Typed `UNKNOWN` / fallback | Partial | Parse/macro/preprocessor uncertainty exists; template, include, generated, config-conflict/staleness, and provider obligations are incomplete. |
-| G5 Exact recurring family | Satisfied | Exact include-gated GoogleTest and Catch2 families have product evidence with support at least three; doctest and Boost.Test structural support is also present. |
+| G5 Exact recurring family | Satisfied | Exact include-gated GoogleTest, Catch2, and CppUnit families have product evidence with support at least three; doctest and Boost.Test structural support is also present. |
 | G6 Completion fixture matrix | Partial | Exact, lookalike, low-support, macro, preprocessor, and unknown-reduction fixtures exist; the full variant/stale/conflict/provider resolved-unresolved matrix does not. |
 | G7 Source-free readiness | Partial | Conservative product tests and snippet-free family detail exist; the complete public-surface leakage matrix is not closed. |
 | G8 Four-part review | Satisfied by this snapshot | This document records findings and bounds; open findings remain blockers/risks and require tests. |

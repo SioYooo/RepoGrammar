@@ -18,6 +18,7 @@ pub(super) enum TestMacroKind {
     BoostFixtureCase,
     BoostSuite,
     BoostSuiteEnd,
+    CppUnitSuiteRegistration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +103,7 @@ pub(super) fn classify(name: &str) -> Option<TestMacroKind> {
         "BOOST_FIXTURE_TEST_CASE" => Some(TestMacroKind::BoostFixtureCase),
         "BOOST_AUTO_TEST_SUITE" => Some(TestMacroKind::BoostSuite),
         "BOOST_AUTO_TEST_SUITE_END" => Some(TestMacroKind::BoostSuiteEnd),
+        "CPPUNIT_TEST_SUITE_REGISTRATION" => Some(TestMacroKind::CppUnitSuiteRegistration),
         _ => None,
     }
 }
@@ -137,6 +139,11 @@ pub(super) fn contract_is_supported(
             }
         }
         TestMacroKind::Scenario => shape.is_catch2_test_contract(),
+        // `CPPUNIT_TEST_SUITE_REGISTRATION(Fixture);` takes exactly one type
+        // name. Anything else is a different macro wearing the same name.
+        TestMacroKind::CppUnitSuiteRegistration => {
+            shape.argument_count() == 1 && shape.prefix_is_identifiers(1)
+        }
         TestMacroKind::BoostAutoCase
         | TestMacroKind::BoostFixtureCase
         | TestMacroKind::BoostSuite

@@ -4718,6 +4718,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "doctest_test_case"
             | "boost_test_case"
             | "boost_test_suite"
+            | "cppunit_suite_registration"
             | "serde_model"
             | "thiserror_error_enum"
             | "tokio_entry"

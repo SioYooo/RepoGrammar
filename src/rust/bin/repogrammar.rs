@@ -8185,6 +8185,80 @@ mod tests {
     }
 
     #[test]
+    fn cpp_cppunit_registrations_form_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_cpp_release_v0_2_fixture(
+            "cppunit_exact_registrations",
+            "cpp-release-cppunit-exact",
+        );
+
+        let derived = cpp_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "cppunit.CPPUNIT_TEST_SUITE_REGISTRATION")
+                .count(),
+            3,
+            "derived CppUnit support facts: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:cpp:cppunit_suite_registration:framework_cppunit_suite_registration"
+            ));
+        assert_eq!(family_array[0]["support"], 3);
+
+        // Without the cppunit include the macro spelling proves nothing.
+        let (workspace, runtime) =
+            index_cpp_release_v0_2_fixture("cppunit_lookalikes", "cpp-release-cppunit-lookalikes");
+        let derived = cpp_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target.starts_with("cppunit.")),
+            "an uncorroborated CppUnit macro must not derive support: {derived:?}"
+        );
+    }
+
+    #[test]
+    fn cpp_cppunit_detector_leaves_the_shipped_test_families_intact() {
+        for (fixture, family_prefix) in [
+            (
+                "gtest_exact_tests",
+                "family:cpp:gtest_test_case:framework_gtest_test",
+            ),
+            (
+                "catch2_exact_tests",
+                "family:cpp:catch2_test_case:framework_catch2_test",
+            ),
+        ] {
+            let (workspace, runtime) = index_cpp_release_v0_2_fixture(
+                fixture,
+                &format!("cpp-release-cppunit-regression-{fixture}"),
+            );
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            let family_array = families_json["families"].as_array().expect("families");
+            assert_eq!(family_array.len(), 1, "{fixture}");
+            assert!(family_array[0]["family_id"]
+                .as_str()
+                .expect("family id")
+                .starts_with(family_prefix));
+            assert_eq!(family_array[0]["support"], 3, "{fixture}");
+        }
+    }
+
+    #[test]
     fn cpp_test_macro_lookalikes_stay_unknown_without_family() {
         let (workspace, runtime) =
             index_cpp_release_v0_2_fixture("test_macro_lookalikes", "cpp-release-lookalikes");

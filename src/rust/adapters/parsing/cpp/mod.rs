@@ -461,6 +461,24 @@ impl<'a> CppTreeScanner<'a> {
                     }
                 }
             }
+            TestMacroKind::CppUnitSuiteRegistration => {
+                if self.includes.cppunit {
+                    TestOutcome::Anchor(AnchorSpec {
+                        unit_kind: CodeUnitKind::CppUnitSuiteRegistration,
+                        target: "cppunit.CPPUNIT_TEST_SUITE_REGISTRATION",
+                        framework: "cppunit",
+                        record_name_shape: false,
+                        fixture_shape: None,
+                        suite_shape: None,
+                    })
+                } else {
+                    TestOutcome::Blocked {
+                        reason: UnknownReasonCode::UnresolvedImport,
+                        kind: "cppunit_macro_without_include",
+                        note: "CppUnit macro lacks a cppunit include corroboration",
+                    }
+                }
+            }
             TestMacroKind::BoostSuiteEnd => {
                 unreachable!("validated Boost suite terminators are handled before resolution")
             }
