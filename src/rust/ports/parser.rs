@@ -148,15 +148,20 @@ pub trait SourceParser {
         PythonInterfaceProbe::Unverified
     }
 
-    /// The host interpreter version that bounds which Python syntax this frontend
-    /// can parse at all, as `major.minor.patch`.
+    /// The Python language version the host interpreter implements, as
+    /// `major.minor.patch`. It bounds which Python syntax this frontend can parse
+    /// at all.
     ///
     /// The Python worker is a checked-in script executed by the host interpreter,
     /// so the frontend can only parse grammar that interpreter already knows: a
-    /// CPython 3.9 host rejects `match`, `except*`, and PEP 695 generics as plain
-    /// syntax errors. That makes the version a real analysis boundary rather than
-    /// environment trivia, and reporting it is what turns an unexplained degraded
-    /// file into an actionable one.
+    /// host implementing Python 3.9 rejects `match`, `except*`, and PEP 695
+    /// generics as plain syntax errors. That makes the version a real analysis
+    /// boundary rather than environment trivia, and reporting it is what turns an
+    /// unexplained degraded file into an actionable one.
+    ///
+    /// This is a language version, not an implementation identity: implementations
+    /// other than CPython accept the same grammar for the version they report, so
+    /// callers must not describe it as a CPython version.
     ///
     /// `None` for any parser that does not analyze Python and whenever the version
     /// cannot be established; callers must report the boundary as unknown rather

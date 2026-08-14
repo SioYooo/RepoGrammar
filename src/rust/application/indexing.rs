@@ -5553,11 +5553,15 @@ fn indexing_generation_mode(report: &FileDiscoveryReport) -> IndexingGenerationM
 /// that most often causes it.
 ///
 /// The Python worker is a checked-in script executed by the host interpreter, so
-/// the frontend can only parse grammar that interpreter already knows: on a
-/// CPython 3.9 host, `match`, `except*`, and PEP 695 generics are ordinary syntax
-/// errors, and every file using them degrades. Without this the operator sees a
-/// list of degraded files and no way to tell "unparseable by this host" from
-/// "genuinely broken source".
+/// the frontend can only parse grammar that interpreter already knows: on a host
+/// implementing Python 3.9, `match`, `except*`, and PEP 695 generics are ordinary
+/// syntax errors, and every file using them degrades. Without this the operator
+/// sees a list of degraded files and no way to tell "unparseable by this host"
+/// from "genuinely broken source".
+///
+/// The probe reads `sys.version_info`, which every conforming implementation
+/// supplies, so the warning names the Python language version the host
+/// interpreter implements and never asserts which implementation it is.
 ///
 /// This reports a fact and deliberately defines no minimum version and refuses
 /// no input: choosing a supported-version floor is a product decision, not one
@@ -5566,8 +5570,8 @@ fn indexing_generation_mode(report: &FileDiscoveryReport) -> IndexingGenerationM
 fn extend_python_frontend_version_warning(warnings: &mut Vec<String>, parser: &impl SourceParser) {
     let warning = match parser.python_frontend_version() {
         Some(version) => format!(
-            "python frontend syntax boundary: the host interpreter is CPython {version}, \
-             which cannot parse syntax introduced after that version"
+            "python frontend syntax boundary: the host Python interpreter implements \
+             Python {version}, which cannot parse syntax introduced after that version"
         ),
         None => {
             "python frontend syntax boundary: the host interpreter version is UNKNOWN".to_string()
@@ -17694,11 +17698,21 @@ extraPaths = ["src/lib", "C:/secret"]
         );
         // A degraded Python file is only actionable once the run says which
         // interpreter bounded it: on an older host, modern syntax degrades here
-        // and nowhere else explains why.
+        // and nowhere else explains why. The probe reads `sys.version_info`, so
+        // the boundary names a Python language version, never an implementation.
         assert!(
-            outcome.warnings.iter().any(|warning| warning
-                .starts_with("python frontend syntax boundary: the host interpreter is CPython")),
+            outcome.warnings.iter().any(|warning| warning.starts_with(
+                "python frontend syntax boundary: the host Python interpreter implements Python"
+            )),
             "warnings={:?}",
+            outcome.warnings
+        );
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("CPython")),
+            "the syntax boundary must not assert an interpreter implementation: {:?}",
             outcome.warnings
         );
         for warning in &outcome.warnings {

@@ -18,13 +18,17 @@ gate. The current implementation is substantial, reusable evidence; it is not a
 ## Scope and dialect boundary
 
 The implemented source scope is exact lowercase `.py` files interpreted by the
-available CPython 3 worker. Root `pyproject.toml`, `setup.cfg`, and `setup.py`
-are the bounded project-configuration inputs. The worker's CPython version is
-provenance-significant because AST shapes differ by Python release; this review
-does not claim one universal Python-language-version model. Stub files, compiled
-extensions, notebooks, generated code, runtime import hooks, arbitrary packaging
-frontends, and environment-specific import behavior are outside the completed
-scope.
+available Python 3 worker. Root `pyproject.toml`, `setup.cfg`, and `setup.py`
+are the bounded project-configuration inputs. The Python language version the
+host interpreter implements is provenance-significant because AST shapes differ
+by Python release; this review does not claim one universal
+Python-language-version model. The worker uses the CPython standard-library
+`ast`/`symtable` API, but the reported syntax boundary is read from
+`sys.version_info` and therefore names a language version only — the product
+never asserts that the host implementation is CPython rather than another
+conforming implementation. Stub files, compiled extensions, notebooks, generated
+code, runtime import hooks, arbitrary packaging frontends, and
+environment-specific import behavior are outside the completed scope.
 
 The official v0.1 framework focus remains FastAPI, pytest, SQLAlchemy, and
 Pydantic. Django, Flask, unittest, click/typer, and Celery are separate bounded
