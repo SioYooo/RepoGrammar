@@ -9810,6 +9810,80 @@ mod tests {
     }
 
     #[test]
+    fn tsjs_playwright_exact_tests_form_their_own_runner_family() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "playwright_exact_tests",
+            "tsjs-release-playwright-exact-tests",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "playwright.test")
+                .count(),
+            3,
+            "Playwright fixture should derive three exact test cases: {derived:?}"
+        );
+        // Playwright never adopts a jest/vitest target, which is what keeps it
+        // in its own family rather than clustering with unit tests.
+        assert!(!derived
+            .iter()
+            .any(|(_, target, _)| target.starts_with("jest_vitest.")));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(
+            facts.facts.iter().any(|fact| {
+                fact.origin_engine == "repogrammar-tsjs-derived"
+                    && fact.target.as_deref() == Some("playwright.test")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "runner_kind=playwright")
+            }),
+            "Playwright support facts must carry runner_kind=playwright"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:jest_vitest.test");
+    }
+
+    #[test]
+    fn tsjs_playwright_detector_leaves_the_shipped_runner_families_intact() {
+        // runner_kind is a required-equal family feature, so adding a runner
+        // must not merge or displace the existing ones.
+        for (fixture, target) in [
+            ("jest_vitest_exact_tests", "jest_vitest.it"),
+            ("mocha_exact_tests", "mocha.it"),
+        ] {
+            let (workspace, runtime) = index_release_v0_2_fixture(
+                fixture,
+                &format!("tsjs-release-playwright-regression-{fixture}"),
+            );
+            let derived = tsjs_derived_support_facts(&runtime, &workspace);
+            assert!(
+                derived.iter().any(|(_, found, _)| found == target),
+                "{fixture} must still derive {target}: {derived:?}"
+            );
+            assert!(
+                !derived
+                    .iter()
+                    .any(|(_, found, _)| found.starts_with("playwright.")),
+                "{fixture} must not acquire a Playwright target: {derived:?}"
+            );
+        }
+    }
+
+    #[test]
     fn tsjs_new_framework_lookalikes_do_not_form_public_families() {
         let (workspace, runtime) = index_release_v0_2_fixture(
             "tsjs_new_framework_lookalikes",

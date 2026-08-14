@@ -284,7 +284,7 @@ omission.
 | C# | FluentValidation `AbstractValidator<T>` | class whose base is using/FQN-gated `AbstractValidator<T>` | `framework:fluentvalidation.validator` / `fluentvalidation_validator` | `fluentvalidation.AbstractValidator` |
 | Java | Jakarta Servlet (`HttpServlet` + `@WebServlet`) | class extending imported/FQN `HttpServlet` under dual `jakarta.servlet`/`javax.servlet` roots | `framework:servlet.http_servlet` / `servlet_http_servlet` | `jakarta.servlet.http.HttpServlet`, `javax.servlet.http.HttpServlet` |
 | Python | marshmallow schemas | class with exact canonical base `marshmallow.Schema` | `framework:marshmallow.schema` / `marshmallow_schema` | `marshmallow.Schema` |
-| TS/JS | Playwright test fixtures | call bound to an exact `@playwright/test` import | existing `framework:jest_vitest.test` / `.suite` roles | `playwright.test`, `playwright.describe` |
+| TS/JS | Playwright test fixtures | call bound to an exact `@playwright/test` import | existing `framework:jest_vitest.test` role | `playwright.test` |
 | C/C++ | CppUnit | `CPPUNIT_TEST_SUITE_REGISTRATION(Identifier);` call-expression macro under `cppunit/` include evidence | `framework:cppunit.suite_registration` / `cppunit_suite_registration` | `cppunit.CPPUNIT_TEST_SUITE_REGISTRATION` |
 
 Two lane decisions are made here rather than at implementation time, because
@@ -294,10 +294,16 @@ each changes what the code must be.
 surface: `mocha.describe`, `mocha.it`, `node_test.describe`, and `node_test.test`
 are existing targets on it. Because `support_family` falls through to the exact
 target for these roles, each runner still forms its **own** family rather than
-clustering with the others. Playwright therefore joins as two new targets, gets
-its own family, needs no new role or code-unit kind, and adds no new collision
-surface. Precedence is explicit: an exact `@playwright/test` import binding wins
-over ambient jest/vitest test-file detection.
+clustering with the others. Playwright therefore joins as a new target, gets its
+own family, needs no new role or code-unit kind, and adds no new collision
+surface.
+
+Implementation narrowed this to the test case only. Playwright exports `test`
+but no bare `describe`: its suites are written `test.describe(...)`, a member
+call the detector does not anchor because it requires the identifier to be
+followed directly by `(`. That is the conservative outcome — a Playwright suite
+stays `UNKNOWN` rather than being mistaken for a test case — and it is recorded
+here rather than left as a silent gap between plan and code.
 
 **Rust must order its attribute chain.** One function can carry both
 `#[tokio::main]` and `#[instrument]`. The shipped tokio detector claims such a

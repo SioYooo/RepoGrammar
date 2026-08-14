@@ -5,6 +5,7 @@ pub(crate) const SUITE_TARGETS: &[&str] = &[
     "jest_vitest.describe",
     "mocha.describe",
     "node_test.describe",
+    "playwright.describe",
 ];
 
 pub(crate) const TEST_TARGETS: &[&str] = &[
@@ -12,4 +13,5 @@ pub(crate) const TEST_TARGETS: &[&str] = &[
     "jest_vitest.test",
     "mocha.it",
     "node_test.test",
+    "playwright.test",
 ];

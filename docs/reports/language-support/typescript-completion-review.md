@@ -78,7 +78,8 @@ future reviewed evidence agree.
 ### Exact families and typed `UNKNOWN`
 
 TypeScript units participate in the conservative TS/JS families for Express,
-Jest/Vitest, Next.js, Fastify, Prisma, Drizzle, Zod, NestJS, Hono, and Mocha.
+Jest/Vitest, Next.js, Fastify, Prisma, Drizzle, Zod, NestJS, Hono, Mocha, and
+Playwright.
 Families require support at least three, complete-link compatibility, exact
 bindings/conventions, and owned `repogrammar-tsjs-derived` support. Optional
 worker facts can cross-check bounded Next/Express/Fastify/Prisma/Drizzle binding
