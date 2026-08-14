@@ -1555,9 +1555,11 @@ fn rust_variation_feature_prefixes(
         // `anchor_kind:axum_route`, so no dimension may legally differ. The arm is
         // explicit so axum never falls through to the self-dogfood dimensions.
         "framework:axum.route" => &[],
-        // The tokio anchors emit only the role-constant `anchor_kind:` beyond the
-        // pinned support family, so they likewise have no variation dimension.
-        "framework:tokio.entry" | "framework:tokio.test" => &[],
+        // The tokio and tracing anchors emit only the role-constant `anchor_kind:`
+        // beyond the pinned support family, so they likewise have no variation
+        // dimension. The arms are explicit so none of them falls through to the
+        // self-dogfood dimensions below, which describe a different thing.
+        "framework:tokio.entry" | "framework:tokio.test" | "framework:tracing.instrument" => &[],
         // Self-dogfood roles pin their structural-shape profile, leaving the body
         // call/control shape and the crate-layer path context (`rust_path_context`,
         // e.g. `application` vs `adapters`) as the dimensions that may differ.

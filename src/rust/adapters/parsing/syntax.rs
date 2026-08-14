@@ -2297,15 +2297,31 @@ fn exact_call_head(rhs: &str, head: &str) -> bool {
     rhs.starts_with(head) && rhs[head.len()..].trim_start().starts_with('(')
 }
 
+/// Offset of a bare call to `function_name` on this line, if any.
+///
+/// A member call is not a bare call. `test.describe(...)`, `suite.it(...)`, and
+/// `runner?.test(...)` all read the runner name off some object, and this
+/// scanner's whole gate is the import binding of a bare identifier -- so
+/// matching a member access would attribute another object's method to the
+/// imported runner. Playwright makes that concrete: its suites are written
+/// `test.describe(...)`, which must not be read as an ambient `describe`.
 fn call_offset(line: &str, function_name: &str) -> Option<usize> {
     line.match_indices(function_name)
         .find(|(offset, _)| {
             has_identifier_boundaries(line, *offset, function_name.len())
+                && !is_member_access(line, *offset)
                 && line[*offset + function_name.len()..]
                     .trim_start()
                     .starts_with('(')
         })
         .map(|(offset, _)| offset)
+}
+
+fn is_member_access(line: &str, offset: usize) -> bool {
+    offset
+        .checked_sub(1)
+        .and_then(|index| line.as_bytes().get(index))
+        .is_some_and(|byte| *byte == b'.')
 }
 
 fn classify_callable(

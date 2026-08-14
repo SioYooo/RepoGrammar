@@ -9900,7 +9900,9 @@ mod tests {
             "Playwright fixture should derive three exact test cases: {derived:?}"
         );
         // Playwright never adopts a jest/vitest target, which is what keeps it
-        // in its own family rather than clustering with unit tests.
+        // in its own family rather than clustering with unit tests. The fixture
+        // uses a real `test.describe(...)` suite, so this also pins that a
+        // member call is not read as a bare ambient `describe`.
         assert!(!derived
             .iter()
             .any(|(_, target, _)| target.starts_with("jest_vitest.")));

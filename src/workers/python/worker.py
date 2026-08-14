@@ -152,7 +152,8 @@ PYDANTIC_MODEL_BASES = {
     "pydantic.BaseSettings",
     "pydantic_settings.BaseSettings",
 }
-MARSHMALLOW_SCHEMA_BASES = {"marshmallow.Schema"}
+# Both the package re-export and the defining module are the same class.
+MARSHMALLOW_SCHEMA_BASES = {"marshmallow.Schema", "marshmallow.schema.Schema"}
 SQLALCHEMY_MODEL_BASES = {
     "sqlalchemy.orm.DeclarativeBase",
     "sqlalchemy.orm.declarative_base",

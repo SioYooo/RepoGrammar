@@ -337,6 +337,59 @@ reported per lane, never averaged.
    language and every lane here already had one; this wave widens framework
    coverage, and recording it as gate movement would be a false claim.
 
+### Outcome and audit findings
+
+All six lanes landed a bounded-preview family, so the wave's first acceptance
+condition is met per lane with no refusals. An adversarial audit then refuted
+every one of the six on first pass, which is the result worth recording: the
+slices were correct about what they anchored and wrong about what they excluded.
+
+Four real defects were found and fixed. Three of them were mine and one was
+pre-existing and newly exposed:
+
+1. **Rust attribute detection read the function body.** The attribute needle was
+   matched against `unit_slice_with_attributes`, which spans the leading
+   attributes *through the closing brace*. A function whose body merely
+   mentioned `#[instrument]` or `#[tokio::main]` -- in a string, a comment, or a
+   macro template -- was claimed as that framework. Because a unit gets exactly
+   one kind, this both invented a role and stole the unit from the role it had.
+   Detection now uses an attribute-only slice. The tokio half of this was
+   pre-existing; adding tracing is what made it fire, including inside this
+   wave's own test file.
+2. **`is_class_like`/`is_method_like` were never extended.** This wave's own
+   touch-point list names them as a silent-failure point, and all six lanes
+   missed them anyway, dropping IR containment edges for four of the five new
+   class-like and method-like kinds. Fixed for every new kind. A pre-existing
+   gap remains for `django_model` and `django_test`, which is recorded here
+   rather than fixed, because closing it changes edges this wave did not create.
+3. **A member call was read as a bare runner call.** The TS/JS runner scanner is
+   line-based, and `call_offset` accepted `describe(` inside `test.describe(`.
+   Playwright suites are written exactly that way, so a real Playwright file
+   could mint an ambient `jest_vitest.describe` anchor. `call_offset` now
+   rejects member access, and the Playwright fixture uses a real
+   `test.describe(...)` so the guard is pinned by product evidence.
+4. **`tracing.instrument` fell through to the self-dogfood variation
+   dimensions**, and the `playwright` query token was registered as producible
+   when no role produces it. Both are documented-invariant violations rather
+   than wrong answers; both are corrected.
+
+Bounded limitations the audit surfaced that are *not* defects, and are non-claims
+rather than todos. Each is the same fidelity boundary the shipped gate beside it
+already has, and narrowing them means resolving bindings this product does not
+resolve:
+
+- C# `base_is_exact`, Java's annotation import gate, and the C/C++ include gate
+  are all lexical. A file with the right `using`/`import`/`#include` plus a
+  locally declared type of the same name is claimed, and a wildcard import can
+  blur the jakarta/javax split. The shipped ASP.NET, EF Core, JPA, Catch2, and
+  Boost gates have this property today; it is the price of not running a
+  compiler.
+- Only direct bases anchor. A project's own `BaseSchema(marshmallow.Schema)`
+  with N children yields one member, not N. That matches the shipped Pydantic
+  and SQLAlchemy behaviour and is deliberately conservative.
+- CppUnit registration is anchored; the suite's `CPPUNIT_TEST` entries are not,
+  because enumerating them is registry construction at runtime.
+
 ### Per-slice touch points
 
 The engineering template above applies with items 1 and 3 omitted (no new

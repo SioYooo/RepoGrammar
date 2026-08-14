@@ -262,10 +262,27 @@ impl<'a> RustTreeScanner<'a> {
     }
 
     /// Slice covering a node's leading attributes plus its body, used for
-    /// bounded framework-attribute detection.
+    /// bounded shape derivation.
     fn unit_slice_with_attributes<'b>(&'b self, node: Node<'_>) -> &'b str {
         let start = leading_attribute_start_byte(node).unwrap_or_else(|| node.start_byte());
         self.document.text.get(start..node.end_byte()).unwrap_or("")
+    }
+
+    /// Slice covering only a node's leading attributes.
+    ///
+    /// Attribute detection must never see the body. A body may legitimately
+    /// contain an attribute's own spelling -- inside a string, a comment, or a
+    /// macro template -- and matching there would both invent a framework role
+    /// and steal the unit from the role it actually had, which is silent
+    /// because a unit is only ever assigned one kind.
+    fn attribute_prefix_slice<'b>(&'b self, node: Node<'_>) -> &'b str {
+        let Some(start) = leading_attribute_start_byte(node) else {
+            return "";
+        };
+        self.document
+            .text
+            .get(start..node.start_byte())
+            .unwrap_or("")
     }
 
     /// Decide a struct/enum kind, promoting to a general framework kind when the
@@ -279,17 +296,17 @@ impl<'a> RustTreeScanner<'a> {
     /// exact `#[tokio::main]`/`#[tokio::test]` attribute (or a bare `#[main]`
     /// with `use tokio::main`) is present.
     fn function_item_kind(&self, node: Node<'_>, context: VisitContext) -> CodeUnitKind {
-        let slice = self.unit_slice_with_attributes(node);
-        if let Some(kind) = framework_anchors::tokio_function_kind(slice) {
+        let attributes = self.attribute_prefix_slice(node);
+        if let Some(kind) = framework_anchors::tokio_function_kind(attributes) {
             return kind;
         }
-        if let Some(kind) = framework_anchors::tokio_bare_main_kind(slice, &self.use_ctx) {
+        if let Some(kind) = framework_anchors::tokio_bare_main_kind(attributes, &self.use_ctx) {
             return kind;
         }
         // Ordered after tokio on purpose: a function may carry both attributes,
         // and a unit with two framework roles is dropped from family support
         // without a diagnostic rather than reported as a conflict.
-        if let Some(kind) = framework_anchors::tracing_instrument_kind(slice, &self.use_ctx) {
+        if let Some(kind) = framework_anchors::tracing_instrument_kind(attributes, &self.use_ctx) {
             return kind;
         }
         self.function_kind(node, context)
@@ -1597,6 +1614,42 @@ pub enum CatalogError {
             SemanticFactKind::Symbol,
             "thiserror.Error"
         ));
+    }
+
+    #[test]
+    fn attribute_text_inside_a_function_body_is_not_an_attribute() {
+        // The needle must be matched against the attribute region only. A body
+        // may legitimately contain the attribute's own spelling -- in a string,
+        // a comment, or a macro template -- and claiming the enclosing function
+        // would both invent a role and steal the unit from the role it had.
+        let text = "\nuse tracing::instrument;\n\nfn renders_docs() -> &'static str {\n    // #[instrument] appears here only as prose\n    \"#[tracing::instrument(level = \\\"debug\\\")]\"\n}\n\nfn tokio_prose() -> &'static str {\n    \"#[tokio::main]\"\n}\n";
+        let report = RustSyntaxParser
+            .parse(document("src/lib.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TracingInstrument),
+            "body text must not anchor tracing: {:?}",
+            report
+                .units
+                .iter()
+                .map(|unit| unit.kind.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TokioEntry),
+            "body text must not anchor tokio either: {:?}",
+            report
+                .units
+                .iter()
+                .map(|unit| unit.kind.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
