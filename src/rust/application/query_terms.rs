@@ -277,6 +277,7 @@ pub const FRAMEWORK_ALIASES: &[(&str, &[&str])] = &[
     ("serde", &["serde"]),
     ("thiserror", &["thiserror"]),
     ("tokio", &["tokio"]),
+    ("tracing", &["tracing"]),
 ];
 
 /// Concept aliases (`term` -> [`Concept`]). Follows the committed vocabulary:
@@ -437,6 +438,7 @@ pub const KNOWN_FRAMEWORK_TOKENS: &[&str] = &[
     "testng",
     "thiserror",
     "tokio",
+    "tracing",
     "typer",
     "unittest",
     "xunit",

@@ -17,6 +17,7 @@ pub(crate) const ROLE_TOKIO_ENTRY: &str = "framework:tokio.entry";
 pub(crate) const ROLE_TOKIO_TEST: &str = "framework:tokio.test";
 pub(crate) const ROLE_CLAP_PARSER: &str = "framework:clap.parser";
 pub(crate) const ROLE_AXUM_ROUTE: &str = "framework:axum.route";
+pub(crate) const ROLE_TRACING_INSTRUMENT: &str = "framework:tracing.instrument";
 
 pub(crate) const SERDE_MODEL_TARGETS: &[&str] = &["serde.Serialize", "serde.Deserialize"];
 pub(crate) const CLAP_PARSER_TARGETS: &[&str] = &["clap.Parser", "clap.Subcommand", "clap.Args"];
@@ -63,6 +64,11 @@ pub(crate) fn role_for_code_unit_kind(kind: &CodeUnitKind) -> Option<RustGeneral
             note: "Tree-sitter Rust code unit indicates exact axum literal route role",
             assumption: "axum extractor trait resolution is not performed",
         }),
+        CodeUnitKind::TracingInstrument => Some(RustGeneralFrameworkRole {
+            target: ROLE_TRACING_INSTRUMENT,
+            note: "Tree-sitter Rust code unit indicates exact tracing instrument attribute role",
+            assumption: "tracing span construction and subscriber behavior are not evaluated",
+        }),
         _ => None,
     }
 }
@@ -78,6 +84,7 @@ pub(crate) fn general_framework_role_is_known(framework_role: &str) -> bool {
             | ROLE_TOKIO_TEST
             | ROLE_CLAP_PARSER
             | ROLE_AXUM_ROUTE
+            | ROLE_TRACING_INSTRUMENT
     )
 }
 
@@ -94,6 +101,7 @@ pub(crate) fn general_support_target_is_role_compatible(
         ROLE_TOKIO_TEST => Some(target == "tokio.test"),
         ROLE_CLAP_PARSER => Some(CLAP_PARSER_TARGETS.contains(&target)),
         ROLE_AXUM_ROUTE => Some(target == "axum.routing.route"),
+        ROLE_TRACING_INSTRUMENT => Some(target == "tracing.instrument"),
         _ => None,
     }
 }
@@ -110,6 +118,7 @@ pub(crate) fn general_support_family(_target: &str, framework_role: &str) -> Str
         ROLE_TOKIO_TEST => "tokio.test".to_string(),
         ROLE_CLAP_PARSER => "clap.derive_parser".to_string(),
         ROLE_AXUM_ROUTE => "axum.route".to_string(),
+        ROLE_TRACING_INSTRUMENT => "tracing.instrument".to_string(),
         _ => framework_role.to_string(),
     }
 }

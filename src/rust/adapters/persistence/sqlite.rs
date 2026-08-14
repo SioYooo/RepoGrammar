@@ -3361,7 +3361,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
              'rust_enum', 'rust_trait', 'rust_impl_block', 'rust_function', 'rust_method', \
              'rust_trait_method', 'rust_associated_function', 'rust_test_function', \
              'serde_model', 'thiserror_error_enum', 'tokio_entry', 'tokio_test', \
-             'clap_parser', 'axum_route')"
+             'clap_parser', 'axum_route', 'tracing_instrument')"
         }
         "java" => {
             "code_units.language = 'java' AND code_units.kind IN (\

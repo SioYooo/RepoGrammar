@@ -25,8 +25,9 @@ source, macro-expanded source, target-specific compilation, rustdoc JSON, and
 IDE state are not authoritative source inputs for current families.
 
 The family scope includes RepoGrammar-internal module roles plus exact use/FQN
-gated serde, thiserror, tokio, clap, and literal axum route shapes. This does not
-claim arbitrary Rust libraries or frameworks.
+gated serde, thiserror, tokio, clap, literal axum route, and `tracing`
+`#[instrument]` shapes. This does not claim arbitrary Rust libraries or
+frameworks.
 
 ## Current implementation evidence
 
@@ -82,7 +83,14 @@ gate applies before every rule, so the previously path-independent rules (any
 `#[test]` function, any name containing `mcp`/`tools_call`, any `handle_*` name)
 can no longer brand a third-party Rust repository. General preview families use
 exact same-file imports or FQNs for serde derive models,
-thiserror error enums, tokio entry/tests, clap derives, and literal axum routes.
+thiserror error enums, tokio entry/tests, clap derives, literal axum routes, and
+`tracing` `#[instrument]` functions. The instrument anchor accepts the bare
+attribute only with same-file `use tracing::instrument` evidence, or the fully
+qualified path, in either case with or without configuration arguments, because
+those arguments configure a runtime span this frontend never builds. Tokio keeps
+precedence when a function carries both attributes: a code unit with two
+framework roles is dropped from family support without a diagnostic, so the
+ordered chain must yield exactly one.
 The shared family gate requires support at least three and compatible profiles;
 `repogrammar-rust-derived`/`bounded_tree_sitter_anchor_v1` is structural derived
 support, not provider-backed semantics.

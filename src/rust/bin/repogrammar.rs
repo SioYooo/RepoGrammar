@@ -8381,6 +8381,69 @@ mod tests {
     }
 
     #[test]
+    fn rust_tracing_instrument_fixture_forms_a_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_rust_release_v0_2_fixture(
+            "tracing_instrumented",
+            "rust-release-tracing-instrumented",
+        );
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "tracing.instrument")
+                .count(),
+            3,
+            "three instrument anchors should derive three support facts: {derived:?}"
+        );
+        let families_json = rust_family_json(&runtime, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        assert_rust_family_role(&families_json, "framework_tracing_instrument", 3);
+
+        let (workspace, runtime) = index_rust_release_v0_2_fixture(
+            "tracing_lookalikes",
+            "rust-release-tracing-lookalikes",
+        );
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target == "tracing.instrument"),
+            "no lookalike may derive tracing support: {derived:?}"
+        );
+        let families_json = rust_family_json(&runtime, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("framework_tracing_instrument"))),
+            "lookalikes must not form a tracing family: {families_json}"
+        );
+    }
+
+    #[test]
+    fn rust_tracing_detector_does_not_disturb_the_shipped_framework_families() {
+        // A second detector firing on an already-claimed unit does not error --
+        // it silently drops that unit from family support. These are the
+        // families that existed before tracing was added, asserted unchanged.
+        for (fixture, role_token, support) in [
+            ("serde_exact_models", "framework_serde_model", 3),
+            ("thiserror_exact_errors", "framework_thiserror_error", 3),
+            ("axum_exact_routes", "framework_axum_route", 3),
+        ] {
+            let (workspace, runtime) = index_rust_release_v0_2_fixture(
+                fixture,
+                &format!("rust-release-tracing-regression-{fixture}"),
+            );
+            let families_json = rust_family_json(&runtime, &workspace);
+            assert_eq!(families_json["status"], "ok", "{fixture}");
+            assert_rust_family_role(&families_json, role_token, support);
+        }
+    }
+
+    #[test]
     fn rust_low_support_stays_unknown_without_family_rows() {
         let (workspace, runtime) =
             index_rust_release_v0_2_fixture("low_support_family", "rust-release-low-support");

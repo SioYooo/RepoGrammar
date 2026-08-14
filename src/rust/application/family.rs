@@ -3449,7 +3449,8 @@ fn rust_evidence_pair_is_compatible(
         "framework_thiserror_error"
         | "framework_clap_parser"
         | "framework_tokio_entry"
-        | "framework_tokio_test" => {
+        | "framework_tokio_test"
+        | "framework_tracing_instrument" => {
             equal_feature_profiles(left, right, features_by_unit, &["support_family:"])
         }
         // Self-dogfood roles keep their structural-shape profile equality.
@@ -3793,7 +3794,8 @@ fn rust_characteristic_prefixes(framework_role: &str) -> &'static [&'static str]
         "framework_thiserror_error"
         | "framework_clap_parser"
         | "framework_tokio_entry"
-        | "framework_tokio_test" => &["support_family:"],
+        | "framework_tokio_test"
+        | "framework_tracing_instrument" => &["support_family:"],
         // Self-dogfood roles keep their structural-shape profile equality.
         _ => &[
             "anchor_kind:",
@@ -4701,6 +4703,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "tokio_test"
             | "clap_parser"
             | "axum_route"
+            | "tracing_instrument"
             | "sql_table_definition"
     ) || rust_family_eligible_kind(kind)
 }

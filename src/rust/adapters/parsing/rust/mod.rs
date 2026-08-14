@@ -286,6 +286,12 @@ impl<'a> RustTreeScanner<'a> {
         if let Some(kind) = framework_anchors::tokio_bare_main_kind(slice, &self.use_ctx) {
             return kind;
         }
+        // Ordered after tokio on purpose: a function may carry both attributes,
+        // and a unit with two framework roles is dropped from family support
+        // without a diagnostic rather than reported as a conflict.
+        if let Some(kind) = framework_anchors::tracing_instrument_kind(slice, &self.use_ctx) {
+            return kind;
+        }
         self.function_kind(node, context)
     }
 
@@ -1591,6 +1597,90 @@ pub enum CatalogError {
             SemanticFactKind::Symbol,
             "thiserror.Error"
         ));
+    }
+
+    #[test]
+    fn tracing_instrument_attribute_anchors_only_with_use_or_qualified_path() {
+        let text = r#"
+use tracing::instrument;
+
+#[instrument]
+fn bare(id: u64) -> u64 { id }
+
+#[instrument(skip(secret))]
+fn with_arguments(id: u64, secret: &str) -> u64 { let _ = secret; id }
+
+#[tracing::instrument(level = "debug")]
+fn qualified(id: u64) -> u64 { id }
+"#;
+        let report = RustSyntaxParser
+            .parse(document("src/lib.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert_eq!(
+            report
+                .units
+                .iter()
+                .filter(|unit| unit.kind == CodeUnitKind::TracingInstrument)
+                .count(),
+            3,
+            "bare, argument-carrying, and qualified spellings all anchor"
+        );
+        assert!(has_fact_target(
+            &report,
+            SemanticFactKind::Symbol,
+            "tracing.instrument"
+        ));
+    }
+
+    #[test]
+    fn bare_instrument_without_use_evidence_does_not_anchor() {
+        let text = r#"
+#[instrument]
+fn borrowed_from_another_crate(id: u64) -> u64 { id }
+"#;
+        let report = RustSyntaxParser
+            .parse(document("src/lib.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TracingInstrument),
+            "a bare attribute with no same-file use evidence is some other crate's"
+        );
+        assert!(!has_fact_target(
+            &report,
+            SemanticFactKind::Symbol,
+            "tracing.instrument"
+        ));
+    }
+
+    #[test]
+    fn tokio_keeps_precedence_when_a_function_carries_both_attributes() {
+        // A unit with two framework roles is dropped from family support
+        // without any diagnostic, so the ordered chain must yield exactly one
+        // kind here. Tokio is first and stays first.
+        let text = r#"
+use tracing::instrument;
+
+#[tokio::main]
+#[instrument]
+async fn main() {}
+"#;
+        let report = RustSyntaxParser
+            .parse(document("src/main.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind == CodeUnitKind::TokioEntry));
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TracingInstrument),
+            "tracing must not also claim a unit tokio already claims"
+        );
     }
 
     #[test]

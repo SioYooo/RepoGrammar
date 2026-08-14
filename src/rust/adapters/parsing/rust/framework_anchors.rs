@@ -21,6 +21,7 @@ pub(super) struct FrameworkUseContext {
     thiserror_root: bool,
     clap_root: bool,
     tokio_main_import: bool,
+    tracing_instrument_import: bool,
     axum_routing_helpers: BTreeSet<String>,
     axum_routing_module: bool,
 }
@@ -56,6 +57,11 @@ fn record_use_path(use_text: &str, context: &mut FrameworkUseContext) {
         "tokio" => {
             if use_leaf_names(&path, "tokio").contains("main") {
                 context.tokio_main_import = true;
+            }
+        }
+        "tracing" => {
+            if use_leaf_names(&path, "tracing").contains("instrument") {
+                context.tracing_instrument_import = true;
             }
         }
         "axum" => record_axum_use(&path, context),
@@ -199,6 +205,23 @@ pub(super) fn tokio_bare_main_kind(
     }
 }
 
+/// Decide whether a function carries the exact `tracing` instrument attribute.
+///
+/// Callers must consult this AFTER the tokio attributes. One function can carry
+/// both `#[tokio::main]` and `#[instrument]`, and the tokio detector already
+/// claims such a function; letting tracing claim it too would give the unit two
+/// framework roles, which silently drops it from family support entirely rather
+/// than reporting a conflict.
+pub(super) fn tracing_instrument_kind(
+    slice: &str,
+    context: &FrameworkUseContext,
+) -> Option<CodeUnitKind> {
+    let qualified = has_attribute_with_optional_arguments(slice, "tracing::instrument");
+    let bare = context.tracing_instrument_import
+        && has_attribute_with_optional_arguments(slice, "instrument");
+    (qualified || bare).then_some(CodeUnitKind::TracingInstrument)
+}
+
 fn classify_type_item(slice: &str, is_enum: bool, context: &FrameworkUseContext) -> TypeFramework {
     let derives = derive_tokens(slice);
     // thiserror is enum-only and must carry at least one `#[error(...)]` variant.
@@ -254,6 +277,7 @@ pub(super) fn framework_facts_for_unit(
         CodeUnitKind::ClapParser => clap_facts(document, unit, slice),
         CodeUnitKind::TokioEntry => tokio_facts(document, unit, "tokio.main"),
         CodeUnitKind::TokioTest => tokio_facts(document, unit, "tokio.test"),
+        CodeUnitKind::TracingInstrument => tracing_instrument_facts(document, unit),
         CodeUnitKind::RustStruct => unresolved_binding_facts(document, unit, slice, false, context),
         CodeUnitKind::RustEnum => unresolved_binding_facts(document, unit, slice, true, context),
         _ => Ok(Vec::new()),
@@ -372,6 +396,26 @@ fn tokio_facts(
     Ok(facts)
 }
 
+fn tracing_instrument_facts(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+) -> Result<Vec<SemanticFact>, ParseError> {
+    Ok(vec![
+        anchors::structural_anchor_fact(
+            document,
+            unit,
+            "tracing.instrument",
+            vec![
+                "provider_resolved=false".to_string(),
+                "rust_anchor_kind=tracing_instrument".to_string(),
+            ],
+            "bounded Rust tracing instrument attribute anchor",
+        )?,
+        // The attribute is source-visible; the span it builds at runtime is not.
+        derive_expansion_unknown(document, unit)?,
+    ])
+}
+
 fn unresolved_binding_facts(
     document: &SourceDocument<'_>,
     unit: &CodeUnit,
@@ -487,6 +531,15 @@ fn error_message_shape(slice: &str) -> &'static str {
 fn has_bare_attribute(slice: &str, name: &str) -> bool {
     let needle = format!("#[{name}]");
     slice.contains(&needle)
+}
+
+/// True for `#[name]` and for `#[name(...)]`.
+///
+/// Attribute macros that take configuration, such as `#[instrument(skip(db))]`,
+/// are the same anchor as the bare form: the arguments configure a runtime span
+/// this frontend never builds, so they change no claim made here.
+fn has_attribute_with_optional_arguments(slice: &str, name: &str) -> bool {
+    has_bare_attribute(slice, name) || slice.contains(&format!("#[{name}("))
 }
 
 // ---------------------------------------------------------------------------

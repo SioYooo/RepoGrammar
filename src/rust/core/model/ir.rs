@@ -152,7 +152,9 @@ impl IrNodeKind {
             CodeUnitKind::SerdeModel
             | CodeUnitKind::ThiserrorErrorEnum
             | CodeUnitKind::ClapParser => Self::Class,
-            CodeUnitKind::TokioEntry | CodeUnitKind::TokioTest => Self::Function,
+            CodeUnitKind::TokioEntry
+            | CodeUnitKind::TokioTest
+            | CodeUnitKind::TracingInstrument => Self::Function,
             CodeUnitKind::AxumRoute => Self::Method,
             // A SQL statement is not a function, class, or method, and this IR
             // vocabulary names no statement concept. The node keeps its range,
