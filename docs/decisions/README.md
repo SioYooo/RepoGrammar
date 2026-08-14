@@ -52,3 +52,4 @@ Current accepted ADRs:
 - ADR-0040: Dialect-invariant bounded SQL DDL frontend.
 - ADR-0041: Bounded Go test-declaration frontend.
 - ADR-0042: Bounded R testthat frontend.
+- ADR-0043: Bounded VB.NET MSTest frontend.

@@ -5,6 +5,8 @@
 //! declarations in an exact `.vbproj`, and never evaluates MSBuild, imports,
 //! properties, conditions, targets, SDKs, NuGet restore, or project code.
 
+pub(crate) mod mstest;
+
 use super::bounded_xml::{parse_bounded_xml, BoundedXmlError, BoundedXmlLimits, XmlDocument};
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{

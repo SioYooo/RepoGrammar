@@ -4037,6 +4037,125 @@ mod tests {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
     }
 
+    fn visual_basic_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("visual_basic")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_visual_basic_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &visual_basic_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn visual_basic_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-vbnet-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn visual_basic_mstest_exact_attributes_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(
+            "mstest_exact_tests",
+            "vb-release-mstest-exact",
+        );
+
+        let derived = visual_basic_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "mstest.TestMethod")
+                .count(),
+            3,
+            "the helper Sub and the attributed Function are not tests: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:visual_basic:vb_test_method:framework_vb_mstest_test_method"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn visual_basic_unbound_attributes_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("mstest_unbound_attributes", "vb-release-mstest-unbound"),
+            ("mstest_low_support", "vb-release-mstest-low-support"),
+        ] {
+            let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("vb_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a VB MSTest family: {families_json}"
+            );
+            if fixture == "mstest_unbound_attributes" {
+                assert!(
+                    visual_basic_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "an unbound attribute name must derive no support"
+                );
+            }
+        }
+    }
+
     fn r_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
@@ -12792,7 +12911,7 @@ class User(Base):
     }
 
     #[test]
-    fn product_runtime_vbproj_reports_syntax_inventory_without_reading_vb_source() {
+    fn product_runtime_vbproj_reports_syntax_inventory_and_skips_undecodable_vb_source() {
         let workspace = TempWorkspace::new("product-runtime-vbnet-inventory-index");
         let mut source = vec![0xff, 0xfe, 0xfd];
         source.extend_from_slice(b"vb-source-must-not-be-read");
@@ -12819,9 +12938,12 @@ class User(Base):
         assert_eq!(value["parser"], "syntax_only");
         assert_eq!(value["parser_attempted_files"], 1);
         assert_eq!(value["indexed_units"], 1);
+        // ADR-0043 admits `.vb` to the bounded MSTest scanner, so the file is
+        // read rather than deferred. These bytes are not UTF-8, so it is
+        // skipped with a warning and its content still never reaches output.
         assert_eq!(
             value["warnings"],
-            serde_json::json!(["parser skipped unsupported language token: visual-basic"])
+            serde_json::json!(["parser skipped non-UTF-8 source: Program.vb"])
         );
         assert!(!index.stdout.contains("vb-source-must-not-be-read"));
         assert!(!index.stdout.contains("Private.Package"));

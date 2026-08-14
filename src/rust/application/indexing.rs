@@ -12,6 +12,7 @@ use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
+use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::family::{
     build_family_claims, cpp_support_target_is_role_compatible,
     csharp_support_target_is_role_compatible, family_constraint_profile_record,
@@ -19,11 +20,12 @@ use crate::application::family::{
     java_support_target_is_role_compatible, min_family_support,
     python_support_target_is_role_compatible, r_support_target_is_role_compatible,
     sql_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
-    CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
-    CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
-    RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD, R_DERIVED_SUPPORT_ENGINE,
-    R_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD,
-    TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
+    vb_support_target_is_role_compatible, CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD,
+    CSHARP_DERIVED_SUPPORT_ENGINE, CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE,
+    JAVA_DERIVED_SUPPORT_METHOD, RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD,
+    R_DERIVED_SUPPORT_ENGINE, R_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE,
+    SQL_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
+    VB_DERIVED_SUPPORT_ENGINE, VB_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
@@ -990,6 +992,26 @@ where
             + derived_sql_support_fact_count,
         &derived_r_support_facts,
     )?;
+    let mut derived_vb_support_facts = derive_vb_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_vb_support_facts);
+    let derived_vb_support_fact_count = record_semantic_facts(
+        session.as_mut(),
+        parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + derived_tsjs_support_fact_count
+            + derived_java_support_fact_count
+            + derived_csharp_support_fact_count
+            + derived_cpp_support_fact_count
+            + derived_rust_support_fact_count
+            + derived_sql_support_fact_count
+            + derived_r_support_fact_count,
+        &derived_vb_support_facts,
+    )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
@@ -999,7 +1021,8 @@ where
         + derived_cpp_support_fact_count
         + derived_rust_support_fact_count
         + derived_sql_support_fact_count
-        + derived_r_support_fact_count;
+        + derived_r_support_fact_count
+        + derived_vb_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1105,6 +1128,7 @@ where
                 + derived_rust_support_facts.len()
                 + derived_sql_support_facts.len()
                 + derived_r_support_facts.len()
+                + derived_vb_support_facts.len()
                 + rust_provider_facts.len()
                 + worker_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
@@ -1119,6 +1143,7 @@ where
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_sql_support_facts);
         family_facts.extend(derived_r_support_facts);
+        family_facts.extend(derived_vb_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
@@ -1892,6 +1917,18 @@ where
     let derived_r_support_fact_count =
         record_semantic_facts(session.as_mut(), next_fact_offset, &derived_r_support_facts)?;
     next_fact_offset += derived_r_support_fact_count;
+    let mut derived_vb_support_facts = derive_vb_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_vb_support_facts);
+    let derived_vb_support_fact_count = record_semantic_facts(
+        session.as_mut(),
+        next_fact_offset,
+        &derived_vb_support_facts,
+    )?;
+    next_fact_offset += derived_vb_support_fact_count;
     // Recompute provider-resolved TS/JS support from the copied-forward worker
     // facts so incremental-sync family support matches a full rebuild for
     // unchanged files instead of silently dropping it.
@@ -1920,6 +1957,7 @@ where
         + derived_rust_support_fact_count
         + derived_sql_support_fact_count
         + derived_r_support_fact_count
+        + derived_vb_support_fact_count
         + derived_tsjs_provider_support_fact_count;
     emit_progress(
         progress,
@@ -1993,6 +2031,7 @@ where
                 + derived_rust_support_facts.len()
                 + derived_sql_support_facts.len()
                 + derived_r_support_facts.len()
+                + derived_vb_support_facts.len()
                 + rust_provider_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
         );
@@ -2006,6 +2045,7 @@ where
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_sql_support_facts);
         family_facts.extend(derived_r_support_facts);
+        family_facts.extend(derived_vb_support_facts);
         family_facts.extend(rust_provider_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
         // The incremental path always resyncs from an active base generation, so
@@ -2071,6 +2111,7 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | RUST_DERIVED_SUPPORT_ENGINE
             | SQL_DERIVED_SUPPORT_ENGINE
             | R_DERIVED_SUPPORT_ENGINE
+            | VB_DERIVED_SUPPORT_ENGINE
     )
 }
 
@@ -4973,6 +5014,99 @@ fn derive_sql_framework_support_facts(
     Ok(derived)
 }
 
+fn derive_vb_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "visual-basic"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_vb_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "visual-basic" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if vb_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_vb_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_vb_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == VB_ANCHOR_ENGINE
+        && fact.origin.method == VB_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_vb_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_vbnet_mstest_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: VB_DERIVED_SUPPORT_ENGINE,
+            method: VB_DERIVED_SUPPORT_METHOD,
+            note: "bounded VB.NET MSTest attribute anchor support",
+            assumptions,
+        },
+    )
+}
+
 fn derive_r_framework_support_facts(
     code_units: &[IndexedCodeUnitRecord],
     parser_facts: &[SemanticFact],
@@ -5865,7 +5999,6 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "ruby-config"
             | "swift"
             | "swift-config"
-            | "visual-basic"
             | "object-pascal"
             | "ada"
             | "ada-config"
@@ -6246,7 +6379,7 @@ mod tests {
             (DiscoveredLanguage::GoConfig, "go.mod", false),
             (DiscoveredLanguage::Ruby, "app/models/user.rb", true),
             (DiscoveredLanguage::Swift, "Sources/App/main.swift", true),
-            (DiscoveredLanguage::VisualBasic, "src/Program.vb", true),
+            (DiscoveredLanguage::VisualBasic, "src/Program.vb", false),
             (DiscoveredLanguage::ObjectPascal, "src/Unit1.pas", true),
             (DiscoveredLanguage::Ada, "ada/main.adb", true),
             (DiscoveredLanguage::Fortran, "fortran/free.f90", true),
@@ -14421,7 +14554,7 @@ mod tests {
     }
 
     #[test]
-    fn vbproj_dependencies_persist_incrementally_while_vb_source_stays_unread() {
+    fn vbproj_dependencies_persist_incrementally_while_undecodable_vb_source_is_skipped() {
         let workspace = TempWorkspace::new("indexing-vbproj-dependencies");
         fs::write(
             workspace.path().join("App.vbproj"),
@@ -14450,12 +14583,18 @@ mod tests {
             outcome.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
+        // ADR-0043 admits `.vb` source to the bounded MSTest scanner, so this
+        // file is now read instead of deferred. Its bytes are not UTF-8, so it
+        // is skipped with a warning and contributes no unit.
         assert_eq!(outcome.parser_attempted_files, 1);
         assert_eq!(outcome.indexed_units, 1);
-        assert_eq!(source_store.paths(), vec!["App.vbproj".to_string()]);
+        assert_eq!(
+            source_store.paths(),
+            vec!["App.vbproj".to_string(), "Program.vb".to_string()]
+        );
         assert_eq!(
             outcome.warnings,
-            vec!["parser skipped unsupported language token: visual-basic".to_string()]
+            vec!["parser skipped non-UTF-8 source: Program.vb".to_string()]
         );
         let dependencies = crate::application::storage::list_active_dependencies(&store)
             .expect("read NuGet dependency inventory");
@@ -14489,7 +14628,16 @@ mod tests {
         assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(source_report.modified_files, 1);
         assert_eq!(source_report.reparsed_files, 0);
-        assert_eq!(source_store.paths(), vec!["App.vbproj".to_string()]);
+        // The edited `.vb` is read again and skipped again, so it is recorded
+        // twice overall and still reparses nothing.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "App.vbproj".to_string(),
+                "Program.vb".to_string(),
+                "Program.vb".to_string()
+            ]
+        );
         assert_eq!(
             crate::application::storage::list_active_dependencies(&store)
                 .expect("read copied NuGet dependency")
@@ -14536,8 +14684,10 @@ mod tests {
         assert_eq!(remove_report.removed_files, 1);
         assert_eq!(remove_report.reparsed_files, 0);
         assert_eq!(
+            // `.vb` is no longer inventory-only, so the generation reports the mode
+            // it attempted rather than the units an undecodable file happened to yield.
             removed.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
         assert!(
             crate::application::storage::list_active_dependencies(&store)

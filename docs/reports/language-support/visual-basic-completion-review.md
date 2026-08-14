@@ -1,6 +1,6 @@
 # Visual Basic .NET language completion review
 
-- Status: Incomplete — `discovered_only`
+- Status: Incomplete — `structural_substrate`
 - Authority: ADR-0020, ADR-0030, and ADR-0031
 - Dependency prerequisite: `2b5fd6d1bf32e8805798e26e53ff9f090ec22d3e`
 - Last updated: 2026-08-01
@@ -48,9 +48,16 @@ framework-specific family evidence.
 
 ## Completion verdict
 
-Not complete. Visual Basic .NET remains `discovered_only`; the current metadata
-inventory is not compiler, framework, build, dependency-resolution, or support
-evidence. It must not be counted as a supported language.
+Not complete. Visual Basic .NET has a bounded scanner over one attribute shape,
+owned units and IR, a typed attribute-binding `UNKNOWN`, and one exact family
+with support three under ADR-0043. The `.vbproj` metadata inventory remains
+auxiliary and is not compiler, build, or dependency-resolution evidence. Strict
+gate count is `5/9`; it must not be counted as a supported language.
+
+One limitation is stated rather than left to inference: this frontend is a
+scanner, so malformed VB does not fail — it yields fewer admitted declarations,
+which is indistinguishable from a file with fewer declarations. The
+parse-degraded gate stays open for that reason.
 
 ## Final program audit fields
 
@@ -65,7 +72,7 @@ evidence. It must not be counted as a supported language.
 | Exact family / fixtures | No exact family. Strong discovery/XML/resource/leakage/incremental tests exist, but no source-family matrix. |
 | Primary UNKNOWN cases | SDK imports, properties, conditions, item transforms, central versions, analyzers/generators, target framework, assembly graph, source recovery, and provider availability. |
 | Source-free / security | Inventory outputs are source-free; XML is bounded and DTD/entity-free; no compiler, `dotnet`, MSBuild, NuGet, analyzer, child, project code, or network runs. |
-| Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `2/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only literal direct declarations;
 security fails closed on dynamic XML/MSBuild semantics; completeness lacks every

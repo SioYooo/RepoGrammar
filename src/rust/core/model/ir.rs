@@ -156,6 +156,8 @@ impl IrNodeKind {
             // class, or method; this IR vocabulary names no such concept, so the
             // kind projection abstains the way Rust use items already do.
             CodeUnitKind::RTestThatBlock => Self::Unknown,
+            CodeUnitKind::VbTestClass => Self::Class,
+            CodeUnitKind::VbTestMethod => Self::Method,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,

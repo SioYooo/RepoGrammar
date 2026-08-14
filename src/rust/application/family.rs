@@ -3,7 +3,7 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{cpp, csharp, java, r, sql, tsjs};
+use crate::adapters::frameworks::{cpp, csharp, java, r, sql, tsjs, visual_basic};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::go::source::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
@@ -13,6 +13,7 @@ use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::TSJS_ANCHOR_ENGINE;
+use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
 };
@@ -52,6 +53,8 @@ pub(crate) const CSHARP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_csha
 pub(crate) const CPP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-cpp-derived";
 pub(crate) const CPP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_c_cpp_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
+pub(crate) const VB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-vbnet-derived";
+pub(crate) const VB_DERIVED_SUPPORT_METHOD: &str = "bounded_vbnet_mstest_anchor_v1";
 pub(crate) const R_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-r-derived";
 pub(crate) const R_DERIVED_SUPPORT_METHOD: &str = "bounded_r_testthat_anchor_v1";
 pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
@@ -2426,6 +2429,7 @@ enum FamilyUnknownDomain {
     Sql,
     Go,
     R,
+    VisualBasic,
 }
 
 impl FamilyUnknownDomain {
@@ -2468,6 +2472,10 @@ impl FamilyUnknownDomain {
             return (origin_engine == R_ANCHOR_ENGINE && origin_method == R_ANCHOR_METHOD)
                 .then_some(Self::R);
         }
+        if language == "visual-basic" {
+            return (origin_engine == VB_ANCHOR_ENGINE && origin_method == VB_ANCHOR_METHOD)
+                .then_some(Self::VisualBasic);
+        }
         None
     }
 
@@ -2482,6 +2490,7 @@ impl FamilyUnknownDomain {
             Self::Sql => "sql_statement_boundary",
             Self::Go => "go_test_declaration",
             Self::R => "r_testthat_identity",
+            Self::VisualBasic => "vb_mstest_attribute_binding",
         }
     }
 
@@ -2496,6 +2505,7 @@ impl FamilyUnknownDomain {
             Self::Sql => "SQL",
             Self::Go => "Go",
             Self::R => "R",
+            Self::VisualBasic => "VB.NET",
         }
     }
 
@@ -2531,6 +2541,7 @@ impl FamilyUnknownDomain {
             Self::Sql => sql_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::Go => go_unknown_reason_blocks_family_membership(reason, affected_claim),
             Self::R => r_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::VisualBasic => vb_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2566,6 +2577,7 @@ impl FamilyUnknownDomain {
             Self::Sql => sql_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
             Self::Go => go_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
             Self::R => r_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
+            Self::VisualBasic => false,
         }
     }
 }
@@ -2586,6 +2598,22 @@ fn sql_unknown_reason_blocks_family_membership(
     match reason {
         UnknownReasonCode::ConflictingFacts | UnknownReasonCode::StaleEvidence => {
             affected_claim == "sql_statement_boundary" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// An MSTest attribute without an import or qualification blocks the binding.
+///
+/// The attribute name alone does not identify MSTest, so a file that uses it
+/// unresolved leaves the claim unproven rather than absent.
+fn vb_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "vb_mstest_attribute_binding" || affected_claim.starts_with("family:")
         }
         _ => false,
     }
@@ -4092,6 +4120,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if r::framework_role_is_known(framework_role) => {
             r::support_family(target, framework_role)
         }
+        framework_role if visual_basic::framework_role_is_known(framework_role) => {
+            visual_basic::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4368,11 +4399,31 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if r::framework_role_is_known(framework_role) {
         return r_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if visual_basic::framework_role_is_known(framework_role) {
+        return vb_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     // Go has no arm on purpose. ADR-0021's evidence ladder forbids text or
     // regex matching for the claim, and ADR-0041's correction demotes the
     // scanner to auxiliary evidence: its role is detected, and no support fact
     // may ever be derived from it, so no Go family can form.
     false
+}
+
+fn vb_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible =
+        visual_basic::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && vb_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn vb_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        VB_DERIVED_SUPPORT_ENGINE,
+        VB_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_vbnet_mstest_anchors".to_string()],
+    )
 }
 
 fn r_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -4598,6 +4649,13 @@ pub(crate) fn r_support_target_is_role_compatible(
     framework_role: &str,
 ) -> Option<bool> {
     r::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn vb_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    visual_basic::support_target_is_role_compatible(target, framework_role)
 }
 
 pub(crate) fn cpp_framework_role_is_known(framework_role: &str) -> bool {
@@ -4835,6 +4893,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "tracing_instrument"
             | "sql_table_definition"
             | "r_test_that_block"
+            | "vb_test_method"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -4858,6 +4917,10 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "visual-basic" {
+        // The VB completion review requires support at least three, matching
+        // every other exact-anchor language rather than the shared default.
         3
     } else if language == "r" {
         // The r completion review requires support at least three; the shared
@@ -5340,6 +5403,41 @@ mod tests {
             SQL_DERIVED_SUPPORT_ENGINE,
             "derived_from=guesswork"
         ));
+    }
+
+    #[test]
+    fn language_role_prefixes_do_not_claim_each_other() {
+        // The role-known chain is first-match-wins, so a role that falls under
+        // another language's prefix is answered by that language and silently
+        // never forms a family. The VB MSTest role hit exactly that against
+        // `framework:mstest.` before it was renamed.
+        let roles = [
+            crate::adapters::frameworks::visual_basic::ROLE_MSTEST_TEST,
+            crate::adapters::frameworks::r::ROLE_TESTTHAT_TEST,
+            crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION,
+        ];
+        for role in roles {
+            let claimants = [
+                ("python", python_framework_role_is_known(role)),
+                ("tsjs", tsjs_framework_role_is_known(role)),
+                ("java", java_framework_role_is_known(role)),
+                ("csharp", csharp_framework_role_is_known(role)),
+                ("cpp", cpp_framework_role_is_known(role)),
+                ("rust", rust_role_is_known(role)),
+                ("sql", sql::framework_role_is_known(role)),
+                ("r", r::framework_role_is_known(role)),
+                ("visual_basic", visual_basic::framework_role_is_known(role)),
+            ]
+            .into_iter()
+            .filter(|(_, claimed)| *claimed)
+            .map(|(language, _)| language)
+            .collect::<Vec<_>>();
+            assert_eq!(
+                claimants.len(),
+                1,
+                "role {role} is claimed by {claimants:?}"
+            );
+        }
     }
 
     #[test]

@@ -3262,6 +3262,7 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "c/cpp",
     "sql",
     "r",
+    "visual-basic",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3386,6 +3387,9 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         }
         "sql" => "code_units.language = 'sql' AND code_units.kind = 'sql_table_definition'",
         "r" => "code_units.language = 'r' AND code_units.kind = 'r_test_that_block'",
+        "visual-basic" => {
+            "code_units.language = 'visual-basic' AND code_units.kind = 'vb_test_method'"
+        }
         _ => "0",
     }
 }
@@ -3403,6 +3407,7 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "c/cpp" => "indexed_files.language IN ('c', 'cpp', 'cpp-config')",
         "sql" => "indexed_files.language IN ('sql', 'sql-migration', 'sql-schema', 'sql-catalog')",
         "r" => "indexed_files.language IN ('r', 'r-config')",
+        "visual-basic" => "indexed_files.language IN ('visual-basic', 'visual-basic-config')",
         _ => "0",
     }
 }
@@ -3420,6 +3425,7 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "c/cpp" => "code_units.language IN ('c', 'cpp')",
         "sql" => "code_units.language = 'sql'",
         "r" => "code_units.language = 'r'",
+        "visual-basic" => "code_units.language = 'visual-basic'",
         _ => "0",
     }
 }
@@ -3443,6 +3449,7 @@ fn repo_shape_family_where(language: &str) -> &'static str {
         }
         "sql" => "families.family_id GLOB 'family:sql:*'",
         "r" => "families.family_id GLOB 'family:r:*'",
+        "visual-basic" => "families.family_id GLOB 'family:visual_basic:*'",
         _ => "0",
     }
 }

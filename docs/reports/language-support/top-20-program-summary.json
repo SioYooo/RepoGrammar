@@ -165,21 +165,21 @@
       "slug": "visual-basic",
       "rank": 7,
       "counted_in_top20": true,
-      "status": "discovered_only",
-      "completion_gates_passed": 2,
+      "status": "structural_substrate",
+      "completion_gates_passed": 5,
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
-      "blocker": "Gate 2 needs the MSBuild effective project and the Roslyn VB frontend; both are excluded. The lane is still discovery plus NuGet manifest inventory.",
+      "blocker": "Gates 6, 7, and 9 remain: no parse-degraded fixture (this frontend is a scanner, so malformed VB yields fewer admitted declarations rather than failing), no audited source-free readiness matrix, and no final completion audit. None needs an external artifact.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": null,
-        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+        "state": "landed",
+        "framework": "MSTest",
+        "family": "mstest.vb_test_method",
+        "wave": "F2"
       },
-      "provider_status": "no_roslyn_vb_provider_slot",
+      "provider_status": "bounded_mstest_attribute_scanner_no_provider",
       "library_analysis_status": "nuget_manifest_inventory_only",
       "primary_unknowns": ["msbuild_effective_project", "vb_source_and_external_symbols"],
-      "evidence_paths": ["docs/reports/language-support/visual-basic-completion-review.md", "src/rust/adapters/languages/visual_basic.rs", "src/rust/adapters/parsing/visual_basic.rs"],
+      "evidence_paths": ["docs/reports/language-support/visual-basic-completion-review.md", "src/rust/adapters/languages/visual_basic.rs", "src/rust/adapters/parsing/visual_basic.rs", "src/rust/adapters/parsing/visual_basic/mstest.rs", "src/rust/adapters/frameworks/visual_basic.rs", "src/fixtures/visual_basic/release/v0_2/", "docs/decisions/ADR-0043-bounded-vbnet-mstest-frontend.md"],
       "prerequisite_commits": ["2b5fd6d1bf32e8805798e26e53ff9f090ec22d3e"]
     },
     {

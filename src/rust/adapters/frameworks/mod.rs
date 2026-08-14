@@ -19,6 +19,7 @@ pub mod react;
 pub mod rust_general;
 pub mod sql;
 pub mod tsjs;
+pub mod visual_basic;
 pub mod vitest;
 
 pub trait FrameworkAdapter {
@@ -87,6 +88,14 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
         });
     }
     if let Some(role) = go::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = visual_basic::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,
