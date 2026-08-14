@@ -605,6 +605,21 @@ missing code units are not evidence that a construct is absent. Neither warning
 carries the diagnostic message or the frontend-reported path, both of which are
 frontend free text that can quote source or absolute host paths.
 
+When a run degrades at least one Python file, it also reports the interpreter
+that bounds Python syntax coverage. The Python worker is a checked-in script
+executed by the host interpreter, so the frontend can only parse grammar that
+interpreter already knows: a CPython 3.9 host rejects `match`, `except*`, and
+PEP 695 generics as ordinary syntax errors, and every file using them degrades.
+The version is read once per run by asking the same resolved executable that
+runs the worker, never a separately looked-up `python3`, because a version from
+a different interpreter would be worse than none. That executable is
+host-supplied and `REPOGRAMMAR_PYTHON_EXECUTABLE` can redirect it, so the probe
+bounds its read and its wait, discards a non-zero exit, and accepts only an
+exact numeric `major.minor.patch` triple; anything else is reported as
+`UNKNOWN` rather than guessed. This reports a boundary and defines no minimum
+version: selecting a supported-version floor is a product decision and no input
+is refused on version grounds.
+
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
 facts.

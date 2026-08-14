@@ -150,7 +150,7 @@ performance limits therefore remain an open gate, not an inferred success.
 
 | Gate | Result | Audited evidence and blocker |
 |---|---|---|
-| 1. Discovery/config | Partial | `.py` plus bounded root Python config, skips, size/symlink tests, and project inventory exist; version/dialect and wider packaging-profile qualification are not closed as one completion module. |
+| 1. Discovery/config | Partial | `.py` plus bounded root Python config, skips, size/symlink tests, and project inventory exist. The syntax-version boundary is now explicit rather than implicit: because the worker runs on the host interpreter, parseable grammar is capped by that interpreter's version, and a run that degrades a Python file reports the version that bounded it, or `UNKNOWN`. Dialect selection and wider packaging-profile qualification are still not closed as one completion module. |
 | 2. Authoritative frontend | Pass for the implemented syntax slice | CPython `ast`/`symtable` is authoritative and bounded; this does not supply the missing type/import provider or implemented Tree-sitter fallback. |
 | 3. Owned code units/IR | Pass | Worker output is validated and translated to owned units, IR, facts, evidence, provenance, and deterministic storage records. |
 | 4. Typed `UNKNOWN` | Partial | Broad claim-scoped classes and recovery codes exist. The degraded parse path is no longer silent: an error diagnostic now emits a distinct file-level `parse degraded` token stating that missing code units are not evidence of absence, proven end to end against the real CPython frontend. Pyrefly/Pyright remains `not_integrated` and provider conflict/freshness closure is still absent. |
@@ -224,6 +224,13 @@ prerequisite chain:
   execution of target Python code.
 - PyPI inventory does not prove a dependency is installed, selected, imported,
   compatible, or behaviorally understood.
+- The frontend cannot parse Python grammar newer than the host interpreter,
+  because the worker is a script that interpreter executes. On an older host,
+  valid modern syntax such as `match`, `except*`, and PEP 695 generics is a
+  plain syntax error and those files degrade to zero code units. The run now
+  reports the bounding version, but no minimum version is defined or enforced,
+  and Python coverage on a given machine is therefore not a fixed property of
+  the release.
 - Test-only injected semantic facts are not Pyrefly/Pyright support.
 - Framework exact anchors are bounded source-visible evidence, not universal
   framework coverage.

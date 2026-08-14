@@ -35,6 +35,9 @@ const PYTHON_PROJECT_CONFIG_CONTRACT_REVISION: u64 = 1;
 // input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
 // bounded, but leave enough room for the bundled worker to analyze itself.
 const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+/// A version triple needs a handful of bytes; anything longer is not a version
+/// and the probe must not read an unbounded amount from a host-supplied program.
+const MAX_PYTHON_VERSION_PROBE_BYTES: u64 = 64;
 /// Per-request byte cap for a `parse_document` payload. When the whole-project
 /// context (every `.py` text) pushes the serialized request past this cap,
 /// `serialize_parse_request` silently drops the context and the worker parses the
@@ -153,6 +156,10 @@ impl SourceParser for PythonAstParser {
 
     fn extract_python_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
         self.extract_interface(path, text)
+    }
+
+    fn python_frontend_version(&self) -> Option<String> {
+        self.probe_interpreter_version()
     }
 }
 
@@ -295,6 +302,70 @@ impl PythonAstParser {
             Ok(response) => parse_extract_interface_response(path, &response),
             Err(_) => PythonInterfaceProbe::Unverified,
         }
+    }
+
+    /// Ask the same interpreter that runs the worker which version it is.
+    ///
+    /// This deliberately re-uses `self.executable` rather than looking up
+    /// `python3` again: `REPOGRAMMAR_PYTHON_EXECUTABLE` can redirect the frontend,
+    /// and a version read from a different interpreter than the one doing the
+    /// parsing would be worse than no version at all.
+    ///
+    /// The interpreter is host-supplied and that variable can point at any
+    /// program, so its output is untrusted: the read is bounded, the wait is
+    /// bounded, a non-zero exit is discarded, and only an exact numeric
+    /// `major.minor.patch` triple is accepted. Every failure yields `None`, which
+    /// callers must report as an unknown boundary rather than a guessed version.
+    fn probe_interpreter_version(&self) -> Option<String> {
+        let deadline = Instant::now() + self.timeout;
+        let mut child = Command::new(&self.executable)
+            .arg("-c")
+            .arg("import sys;print('%d.%d.%d' % sys.version_info[:3])")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let Some(stdout) = child.stdout.take() else {
+            terminate_python_frontend(&mut child);
+            return None;
+        };
+        let (sender, receiver) = mpsc::channel();
+        if thread::Builder::new()
+            .name("repogrammar-python-version".to_string())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let _ = stdout
+                    .take(MAX_PYTHON_VERSION_PROBE_BYTES)
+                    .read_to_end(&mut output);
+                let _ = sender.send(output);
+            })
+            .is_err()
+        {
+            terminate_python_frontend(&mut child);
+            return None;
+        }
+        let status = wait_for_python_frontend(&mut child, deadline).ok()?;
+        if !status.success() {
+            return None;
+        }
+        let output = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()?;
+        let text = String::from_utf8(output).ok()?;
+        let version = text.trim();
+        let mut parts = version.split('.');
+        let (Some(major), Some(minor), Some(patch), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return None;
+        };
+        if ![major, minor, patch].iter().all(|part| {
+            !part.is_empty() && part.len() <= 4 && part.bytes().all(|byte| byte.is_ascii_digit())
+        }) {
+            return None;
+        }
+        Some(version.to_string())
     }
 
     fn run_worker_request(
@@ -2134,6 +2205,41 @@ mod tests {
                 PythonInterfaceProbe::Computed(hash) => Some(hash),
                 PythonInterfaceProbe::Unverified => panic!("expected verified interface probe"),
             }
+        );
+    }
+
+    #[test]
+    fn interpreter_version_probe_reports_a_triple_and_refuses_anything_else() {
+        let version = PythonAstParser::default()
+            .python_frontend_version()
+            .expect("the interpreter that runs the worker reports its version");
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(parts.len(), 3, "version={version}");
+        assert!(
+            parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+            "version={version}"
+        );
+
+        // A missing program cannot produce a guessed version.
+        assert_eq!(
+            PythonAstParser::with_worker(
+                "repogrammar-nonexistent-python-interpreter",
+                PathBuf::from("missing-worker.py"),
+            )
+            .python_frontend_version(),
+            None
+        );
+
+        // `REPOGRAMMAR_PYTHON_EXECUTABLE` can point at any program, so a
+        // zero-exit program that prints something other than a version triple
+        // must be refused rather than reported as the syntax boundary.
+        #[cfg(unix)]
+        assert_eq!(
+            PythonAstParser::with_worker("/bin/echo", PathBuf::from("missing-worker.py"))
+                .python_frontend_version(),
+            None
         );
     }
 

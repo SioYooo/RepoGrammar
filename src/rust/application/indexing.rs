@@ -746,6 +746,7 @@ where
     let mut indexed_code_units = Vec::new();
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
+    let mut degraded_python = false;
     let mut warnings = report.warnings.clone();
     extend_inventory_only_language_warnings(&mut warnings, &report);
     emit_progress(
@@ -836,12 +837,17 @@ where
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
+        degraded_python |=
+            parse_outcome.parse_degraded && file.language == DiscoveredLanguage::Python;
         emit_progress(
             progress,
             ProgressStage::SyntaxParsing,
             "parsed source files",
             known_work_units(index + 1, report.files.len()),
         );
+    }
+    if degraded_python {
+        extend_python_frontend_version_warning(&mut warnings, parser);
     }
     emit_progress(
         progress,
@@ -1621,6 +1627,7 @@ where
     let mut parser_attempted_files = 0usize;
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
+    let mut degraded_python = false;
     for (index, file) in changed_files.iter().enumerate() {
         if discovered_file_is_inventory_only(file) {
             emit_progress(
@@ -1705,12 +1712,17 @@ where
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
+        degraded_python |=
+            parse_outcome.parse_degraded && file.language == DiscoveredLanguage::Python;
         emit_progress(
             progress,
             ProgressStage::SyntaxParsing,
             "parsed source files",
             known_work_units(index + 1, changed_files.len()),
         );
+    }
+    if degraded_python {
+        extend_python_frontend_version_warning(&mut warnings, parser);
     }
     emit_progress(
         progress,
@@ -2402,6 +2414,10 @@ struct ParseStorageOutcome {
     code_units: Vec<IndexedCodeUnitRecord>,
     semantic_facts: Vec<SemanticFact>,
     framework_role_facts: Vec<SemanticFact>,
+    /// The frontend reported an error diagnostic for this file, so its unit set
+    /// is incomplete. Carried on the outcome so the run can explain the cause
+    /// once at the end instead of per file.
+    parse_degraded: bool,
 }
 
 fn parser_project_context(
@@ -2991,6 +3007,7 @@ fn record_parse_report(
         code_units,
         semantic_facts: parse_report.semantic_facts,
         framework_role_facts,
+        parse_degraded: reported_degraded,
     })
 }
 
@@ -5529,6 +5546,35 @@ fn indexing_generation_mode(report: &FileDiscoveryReport) -> IndexingGenerationM
         IndexingGenerationMode::FileManifestOnly
     } else {
         IndexingGenerationMode::SyntaxOnlyCodeUnits
+    }
+}
+
+/// Explain a degraded Python parse once per run by naming the syntax boundary
+/// that most often causes it.
+///
+/// The Python worker is a checked-in script executed by the host interpreter, so
+/// the frontend can only parse grammar that interpreter already knows: on a
+/// CPython 3.9 host, `match`, `except*`, and PEP 695 generics are ordinary syntax
+/// errors, and every file using them degrades. Without this the operator sees a
+/// list of degraded files and no way to tell "unparseable by this host" from
+/// "genuinely broken source".
+///
+/// This reports a fact and deliberately defines no minimum version and refuses
+/// no input: choosing a supported-version floor is a product decision, not one
+/// this warning may make. An unavailable version is reported as `UNKNOWN` rather
+/// than guessed.
+fn extend_python_frontend_version_warning(warnings: &mut Vec<String>, parser: &impl SourceParser) {
+    let warning = match parser.python_frontend_version() {
+        Some(version) => format!(
+            "python frontend syntax boundary: the host interpreter is CPython {version}, \
+             which cannot parse syntax introduced after that version"
+        ),
+        None => {
+            "python frontend syntax boundary: the host interpreter version is UNKNOWN".to_string()
+        }
+    };
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
     }
 }
 
@@ -17598,6 +17644,12 @@ extraPaths = ["src/lib", "C:/secret"]
             .warnings
             .iter()
             .any(|warning| warning.starts_with("parse diagnostic for a.ts")));
+        // The interpreter boundary explains Python degradation only; a degraded
+        // TypeScript file must not drag it in.
+        assert!(!outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("python frontend syntax boundary")));
         for warning in &outcome.warnings {
             assert!(!warning.contains("UNIQUE_SOURCE_SENTINEL"));
             assert!(!warning.contains("/tmp/absolute"));
@@ -17640,8 +17692,65 @@ extraPaths = ["src/lib", "C:/secret"]
             "warnings={:?}",
             outcome.warnings
         );
+        // A degraded Python file is only actionable once the run says which
+        // interpreter bounded it: on an older host, modern syntax degrades here
+        // and nowhere else explains why.
+        assert!(
+            outcome.warnings.iter().any(|warning| warning
+                .starts_with("python frontend syntax boundary: the host interpreter is CPython")),
+            "warnings={:?}",
+            outcome.warnings
+        );
         for warning in &outcome.warnings {
             assert!(!warning.contains(workspace.path().to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn modern_python_syntax_degrades_on_an_older_host_interpreter() {
+        // This is the case the boundary warning exists for: the file is valid
+        // Python, but the host interpreter predates the grammar. Assert the pair
+        // that must always travel together — a degraded file plus the version
+        // that explains it — without hardcoding a host version, so the test still
+        // holds on a newer interpreter that parses this source cleanly.
+        let workspace = TempWorkspace::new("indexing-python-modern-syntax");
+        fs::write(
+            workspace.path().join("modern.py"),
+            "match command:\n    case 1:\n        pass\n",
+        )
+        .expect("write modern python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &PythonAstParser::default(),
+            &store,
+        )
+        .expect("index modern python");
+
+        let degraded = outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("parse degraded for modern.py"));
+        let boundary = outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("python frontend syntax boundary"));
+        assert_eq!(
+            degraded, boundary,
+            "a degraded Python file and its interpreter boundary must be reported together: {:?}",
+            outcome.warnings
+        );
+        if !degraded {
+            assert!(
+                outcome.indexed_units > 0,
+                "a host that parses this syntax must produce units: {:?}",
+                outcome.warnings
+            );
         }
     }
 
