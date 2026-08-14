@@ -4037,6 +4037,111 @@ mod tests {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
     }
 
+    fn sql_release_fixture_v0_1_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("sql")
+            .join("release")
+            .join("v0_1")
+    }
+
+    fn copy_sql_release_v0_1_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&sql_release_fixture_v0_1_root().join(name), destination);
+    }
+
+    fn index_sql_release_v0_1_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_sql_release_v0_1_fixture(fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "SQL fixture should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    fn sql_family_support(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> Option<u64> {
+        let families =
+            run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+        let value = parse_machine_output("families", &families, workspace);
+        value["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("sql"))
+            })
+            .and_then(|family| family["support"].as_u64())
+    }
+
+    fn assert_no_sql_fixture_marker_leaks(runtime: &ProductCliRuntime, workspace: &TempWorkspace) {
+        for command in ["families", "unknowns", "files"] {
+            let output =
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), runtime);
+            for marker in ["fixture_", "FixtureItems", "fixture-default-label"] {
+                assert!(
+                    !output.stdout.contains(marker),
+                    "{command} leaked SQL fixture marker {marker}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sql_release_fixture_exact_table_definitions_form_one_family() {
+        let (workspace, runtime) =
+            index_sql_release_v0_1_fixture("exact_table_definitions", "sql-release-exact");
+
+        assert_eq!(
+            sql_family_support(&runtime, &workspace),
+            Some(3),
+            "three admitted CREATE TABLE definitions must reach the SQL support threshold"
+        );
+        assert_no_sql_fixture_marker_leaks(&runtime, &workspace);
+    }
+
+    #[test]
+    fn sql_release_fixture_low_support_and_lookalikes_form_no_family() {
+        for (fixture, prefix) in [
+            ("low_support_tables", "sql-release-low-support"),
+            ("statement_lookalikes", "sql-release-lookalikes"),
+            ("dialect_divergence", "sql-release-divergence"),
+        ] {
+            let (workspace, runtime) = index_sql_release_v0_1_fixture(fixture, prefix);
+
+            assert_eq!(
+                sql_family_support(&runtime, &workspace),
+                None,
+                "{fixture} must not form a SQL family"
+            );
+            assert_no_sql_fixture_marker_leaks(&runtime, &workspace);
+        }
+    }
+
     fn copy_rust_release_v0_2_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&rust_release_fixture_v0_2_root().join(name), destination);
     }

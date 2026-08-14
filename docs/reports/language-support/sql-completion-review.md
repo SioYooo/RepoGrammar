@@ -25,15 +25,23 @@
   `unadmitted_statement_shape`, the six named lexical-divergence classes, and
   the scanner resource limit all carry code-unit evidence with a source range,
   which is what ADR-0035 could not do when no unit existed.
-- [ ] Exact family with support at least three — `sql.schema.table_definition`
-  has its frontend anchor but no framework-role registry, derived-support
-  engine, or family wiring yet.
-- [ ] Positive, lookalike, low-support, parse-degraded, dialect, and
-  unresolved/resolved family fixtures — frontend-level positive, lookalike,
-  divergence, limit, and leakage fixtures exist; the family-level matrix does
-  not.
+- [x] Exact family with support at least three —
+  `sql.schema.table_definition` forms from the `framework:sql.table_definition`
+  role over the fixed `sql.ddl.create_table` anchor target, with a minimum
+  support of three rather than the shared default of two. Support must carry the
+  owned `repogrammar-sql-derived` origin; no other engine naming the same target
+  can supply it.
+- [x] Positive, lookalike, low-support, parse-degraded, and dialect fixtures —
+  a committed corpus under `src/fixtures/sql/release/v0_1/` exercises the
+  product CLI: three admitted definitions form exactly one family; two do not;
+  comment, string-literal, `CREATE TEMP TABLE`, `CREATE TABLE … AS SELECT`,
+  `CREATE VIEW`, and `CREATE INDEX` lookalikes form none; and a file whose
+  three admitted definitions precede a dollar-quoted construct forms none,
+  because the divergence unproves every boundary in it. No unresolved-to-
+  resolved pair exists, since no provider can resolve a SQL claim.
 - [ ] Complete source-free readiness and leakage matrix across required public
-  surfaces.
+  surfaces — fixture-level leakage assertions cover `families`, `unknowns`, and
+  `files`; `status`, `doctor`, `stats`, and MCP have not been audited for SQL.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
 - [ ] Linked atomic prerequisites and final completion audit.
@@ -55,17 +63,32 @@ a nested block comment — degrades the whole file to its module unit plus a
 `ConflictingFacts` `UNKNOWN`, because a diverged token stream leaves every later
 statement boundary unproven.
 
-The remaining blocker is the family lane: no role registry, derived-support
-engine, family key, or support threshold exists for SQL, so no family can form
-and gate 5 cannot be claimed. Migration order, catalog state, extension
-identity, cross-statement table identity, dynamic SQL, procedures, and triggers
-remain `UNKNOWN` by decision, not by omission.
+The family lane encodes the same argument in the type system. SQL's typed
+`UNKNOWN`s are scoped to three claims, not one: `sql_statement_boundary`
+blocks, because a diverged token stream unproves the boundaries a claim rests
+on; `sql_dialect_profile` is a standing non-blocking subclaim, because the
+admitted parse is invariant across the declared set and so the dialect cannot
+change the anchor; and `sql_statement_shape` is inventory. Widening the admitted
+subset to a construct the members lex differently would falsify the middle one,
+which is why ADR-0040 makes widening a decision rather than an implementation
+detail.
+
+The remaining blockers are gate 7 and gate 9. No source-free readiness matrix
+has been audited across `status`, `doctor`, `stats`, `unknowns`, CLI, and MCP
+for SQL specifically, and no final completion audit links the prerequisite
+chain. Migration order, catalog state, extension identity, cross-statement table
+identity, dynamic SQL, procedures, and triggers remain `UNKNOWN` by decision,
+not by omission. Family variation slots and context features, which other
+languages carry, are absent for SQL: the family forms without them, and adding
+them is a separate decision about which statement shapes are meaningfully
+distinct.
 
 ## Completion verdict
 
-Not complete. SQL has a frontend, owned code units, IR, and typed `UNKNOWN`s,
-and it has no family, support, provider, or readiness. Do not count SQL as
-supported.
+Not complete. SQL has a frontend, owned code units, IR, typed `UNKNOWN`s, one
+exact family, and an adversarial fixture corpus. It has no audited source-free
+readiness matrix and no final completion audit, and no provider exists or is
+authorized. Do not count SQL as supported.
 
 ## Final program audit fields
 
@@ -77,10 +100,10 @@ supported.
 | Discovery/config / manifests | Exact `.sql` with path-role labels, now dispatched to the frontend. No extension manifest, migration ordering model, schema catalog, lockfile, or database connection. |
 | Owned source IR / external symbols | Owned units, ranges, hashes, IR nodes, and containment edges exist. External symbols remain absent: tables, routines, extensions, schemas, and cross-file references are unresolved by decision. |
 | Library Contracts | Registry exists, production packs = 0; no `sql_extension` rows are emitted. |
-| Exact family / fixtures | Frontend anchor exists; family does not. Fixtures cover admitted anchors, comment/string lookalikes, all six divergence classes, unadmitted `CREATE TABLE` spellings, semicolons inside strings/comments/parens, resource limits, IR edges, and name/literal leakage. The family-level positive/low-support/resolved matrix is absent. |
+| Exact family / fixtures | `sql.schema.table_definition` over the fixed `sql.ddl.create_table` target, minimum support three, owned derived origin required. Fixtures cover admitted anchors, comment/string lookalikes, all six divergence classes, unadmitted `CREATE TABLE` spellings, semicolons inside strings/comments/parens, resource limits, IR edges, name/literal leakage at the parser, and a product-CLI corpus for positive, low-support, lookalike, and divergence cases. No unresolved-to-resolved pair exists, because no provider can resolve a SQL claim. |
 | Primary UNKNOWN cases | Dialect/version, lexical divergence, unadmitted statement shape, migration ordering/tool, extension identity, search path, catalog state, cross-statement table identity, dynamic SQL, procedures/triggers, and provider availability. |
 | Source-free / security | No table, column, index, or literal text reaches a unit id, fact target, note, assumption, or public surface, proven by leakage fixtures at both the frontend and the product CLI. No database, client, driver, migration tool, credential, child process, or network access exists, and nothing is executed, prepared, planned, or validated. |
-| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
+| Completion state / counted | `bounded_preview` is not claimed; `structural_substrate` with strict gate count `7/9`; Top-20 complete = no. |
 
 Four-part review: correctness rests on the dialect-invariance argument — the
 admitted parse cannot change with the unproven dialect, which is exactly why
@@ -90,12 +113,14 @@ one property and kept the rest: SQL bytes now reach the frontend and source
 store, while execution, database, credential, child-process, and network
 boundaries are unchanged, and a non-UTF-8 file is skipped with a warning rather
 than failing the run or reading as a clean empty parse. Completeness has a
-frontend, units, IR, and typed `UNKNOWN`s but no family, support, provider, or
-readiness. Performance is a single bounded pass under input-byte, statement,
+frontend, units, IR, typed `UNKNOWN`s, one exact family, and fixtures, and lacks
+an audited readiness matrix, a final audit, and any provider. Performance is a single bounded pass under input-byte, statement,
 and fact ceilings; no representative large-dump or migration-corpus benchmark
 exists. Evidence: `src/rust/adapters/languages/sql.rs`,
-`src/rust/adapters/parsing/sql.rs`, `src/rust/application/indexing.rs`,
-`src/rust/bin/repogrammar.rs`, ADR-0035, ADR-0040, and
+`src/rust/adapters/parsing/sql.rs`, `src/rust/adapters/frameworks/sql.rs`,
+`src/rust/application/family.rs`, `src/rust/application/indexing.rs`,
+`src/rust/bin/repogrammar.rs`, `src/fixtures/sql/release/v0_1/`, ADR-0035,
+ADR-0040, and
 `82ced893f81a954b64e20546dfc4ad81043b28e5`. Exact non-claim: parsing a
 `CREATE TABLE` shape proves neither dialect, order, validity, idempotence,
 extension availability, table identity, nor database behavior.

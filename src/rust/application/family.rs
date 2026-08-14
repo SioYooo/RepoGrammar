@@ -3,12 +3,13 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
+use crate::adapters::frameworks::{cpp, csharp, java, sql, tsjs};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::python::PYTHON_ANCHOR_ENGINE;
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
+use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::TSJS_ANCHOR_ENGINE;
 use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
@@ -49,6 +50,8 @@ pub(crate) const CSHARP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_csha
 pub(crate) const CPP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-cpp-derived";
 pub(crate) const CPP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_c_cpp_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
+pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
+pub(crate) const SQL_DERIVED_SUPPORT_METHOD: &str = "bounded_sql_ddl_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_anchor_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2414,6 +2417,7 @@ enum FamilyUnknownDomain {
     CSharp,
     Cpp,
     Rust,
+    Sql,
 }
 
 impl FamilyUnknownDomain {
@@ -2444,6 +2448,10 @@ impl FamilyUnknownDomain {
         if language == "rust" {
             return (origin_engine == RUST_ANCHOR_ENGINE).then_some(Self::Rust);
         }
+        if language == "sql" {
+            return (origin_engine == SQL_ANCHOR_ENGINE && origin_method == SQL_ANCHOR_METHOD)
+                .then_some(Self::Sql);
+        }
         None
     }
 
@@ -2455,6 +2463,7 @@ impl FamilyUnknownDomain {
             Self::CSharp => "csharp_family_membership",
             Self::Cpp => "cpp_family_membership",
             Self::Rust => "rust_family_membership",
+            Self::Sql => "sql_statement_boundary",
         }
     }
 
@@ -2466,6 +2475,7 @@ impl FamilyUnknownDomain {
             Self::CSharp => "C#",
             Self::Cpp => "C/C++",
             Self::Rust => "Rust",
+            Self::Sql => "SQL",
         }
     }
 
@@ -2498,6 +2508,7 @@ impl FamilyUnknownDomain {
             Self::Rust => {
                 rust_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
             }
+            Self::Sql => sql_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2530,8 +2541,42 @@ impl FamilyUnknownDomain {
             Self::Rust => {
                 rust_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
             }
+            Self::Sql => sql_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
         }
     }
+}
+
+/// Only an unproven statement boundary blocks a SQL family claim.
+///
+/// This is ADR-0040's argument as a rule. Once the token stream diverges, every
+/// later boundary in the file is unproven, so any claim resting on one is
+/// unproven with it. The unproven dialect is a different matter: the admitted
+/// parse is invariant across the declared set, so it cannot change the anchor
+/// and must not veto it. Widening the admitted subset to a construct the
+/// members lex differently would break that reasoning, which is why the ADR
+/// makes widening a decision rather than an implementation detail.
+fn sql_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::ConflictingFacts | UnknownReasonCode::StaleEvidence => {
+            affected_claim == "sql_statement_boundary" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// The unproven dialect is recorded, never silently dropped.
+///
+/// It bounds catalog state, execution semantics, migration order, and extension
+/// identity, none of which this frontend claims, so it rides along as a
+/// standing subclaim instead of blocking the shape anchor.
+fn sql_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    reason == UnknownReasonCode::MissingProjectConfig && affected_claim == "sql_dialect_profile"
 }
 
 fn classify_family_unknown_with_domain(
@@ -3949,6 +3994,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if rust_role_is_known(framework_role) => {
             rust_support_family(target, framework_role)
         }
+        framework_role if sql::framework_role_is_known(framework_role) => {
+            sql::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4219,7 +4267,26 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if rust_role_is_known(framework_role) {
         return rust_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if sql::framework_role_is_known(framework_role) {
+        return sql_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     false
+}
+
+fn sql_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = sql::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && sql_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn sql_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        SQL_DERIVED_SUPPORT_ENGINE,
+        SQL_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_sql_ddl_anchors".to_string()],
+    )
 }
 
 fn rust_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -4399,6 +4466,13 @@ pub(crate) fn cpp_support_target_is_role_compatible(
     framework_role: &str,
 ) -> Option<bool> {
     cpp::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn sql_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    sql::support_target_is_role_compatible(target, framework_role)
 }
 
 pub(crate) fn cpp_framework_role_is_known(framework_role: &str) -> bool {
@@ -4627,6 +4701,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "tokio_test"
             | "clap_parser"
             | "axum_route"
+            | "sql_table_definition"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -4650,6 +4725,10 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "sql" {
+        // ADR-0020 requires SQL to reach support three; the shared default of
+        // two would let a pair of CREATE TABLE statements form a family.
         3
     } else {
         DEFAULT_MIN_FAMILY_SUPPORT
@@ -5029,6 +5108,105 @@ mod tests {
             .expect("valid evidence"),
             assumptions: vec![format!("affected_claim={affected_claim}")],
         }
+    }
+
+    #[test]
+    fn sql_unproven_dialect_rides_along_while_a_diverged_boundary_blocks() {
+        let effect = |reason, claim| {
+            classify_unknown_family_effect(
+                "sql",
+                reason,
+                claim,
+                Some(crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION),
+                SQL_ANCHOR_ENGINE,
+                SQL_ANCHOR_METHOD,
+            )
+        };
+
+        // The whole ADR-0040 argument: the admitted parse is invariant across
+        // the declared dialects, so an unproven dialect cannot veto the anchor.
+        // It is still recorded, as a non-blocking subclaim.
+        let dialect = effect(
+            UnknownReasonCode::MissingProjectConfig,
+            "sql_dialect_profile",
+        )
+        .expect("the unproven dialect must still be reported");
+        assert_eq!(dialect.claim_impact(), Some(ClaimImpact::NonBlocking));
+
+        // A diverged token stream leaves later boundaries unproven, so anything
+        // resting on one is unproven with it.
+        let boundary = effect(
+            UnknownReasonCode::ConflictingFacts,
+            "sql_statement_boundary",
+        )
+        .expect("a diverged boundary must block");
+        assert_eq!(boundary.claim_impact(), Some(ClaimImpact::Blocking));
+
+        // An unadmitted statement is inventory, not a defect in the anchors
+        // around it.
+        assert!(effect(
+            UnknownReasonCode::InsufficientSupport,
+            "sql_statement_shape",
+        )
+        .is_none());
+
+        // Another language's engine cannot mint SQL family effects.
+        assert!(classify_unknown_family_effect(
+            "sql",
+            UnknownReasonCode::ConflictingFacts,
+            "sql_statement_boundary",
+            Some(crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION),
+            RUST_ANCHOR_ENGINE,
+            RUST_ANCHOR_METHOD,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn sql_support_requires_the_owned_derived_origin_and_the_exact_anchor_target() {
+        let role = crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION;
+        let unit = unit_with_language("db/schema.sql", "sql", "sql_table_definition", 0);
+        let safe = |target: &str, engine: &str, assumption: &str| {
+            let mut fact = semantic_support_fact_with_target(&unit, target);
+            fact.certainty = FactCertainty::DataflowDerived;
+            fact.origin.engine = engine.to_string();
+            fact.origin.method = SQL_DERIVED_SUPPORT_METHOD.to_string();
+            fact.assumptions = vec![
+                "provider_resolved=false".to_string(),
+                assumption.to_string(),
+                format!("framework_role={role}"),
+            ];
+            support_fact_is_role_compatible(&fact, role)
+        };
+
+        assert!(safe(
+            "sql.ddl.create_table",
+            SQL_DERIVED_SUPPORT_ENGINE,
+            "derived_from=bounded_sql_ddl_anchors"
+        ));
+        // A neighbouring DDL target is not this family's anchor.
+        assert!(!safe(
+            "sql.ddl.create_index",
+            SQL_DERIVED_SUPPORT_ENGINE,
+            "derived_from=bounded_sql_ddl_anchors"
+        ));
+        // Support must come from the owned derivation, not from any engine that
+        // happens to name the same target.
+        assert!(!safe(
+            "sql.ddl.create_table",
+            "some-other-engine",
+            "derived_from=bounded_sql_ddl_anchors"
+        ));
+        assert!(!safe(
+            "sql.ddl.create_table",
+            SQL_DERIVED_SUPPORT_ENGINE,
+            "derived_from=guesswork"
+        ));
+    }
+
+    #[test]
+    fn sql_requires_three_members_like_the_adr_gate_says() {
+        assert_eq!(min_family_support("sql"), 3);
     }
 
     #[test]

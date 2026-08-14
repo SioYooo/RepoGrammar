@@ -133,12 +133,12 @@
       "rank": 8,
       "counted_in_top20": true,
       "status": "structural_substrate",
-      "completion_gates_passed": 5,
+      "completion_gates_passed": 7,
       "top20_complete": false,
       "provider_status": "bounded_dialect_invariant_ddl_frontend_no_provider",
       "library_analysis_status": "no_sql_extension_inventory",
       "primary_unknowns": ["sql_dialect_and_version", "catalog_migration_and_extension_identity"],
-      "evidence_paths": ["docs/reports/language-support/sql-completion-review.md", "src/rust/adapters/languages/sql.rs", "src/rust/adapters/parsing/sql.rs", "docs/decisions/ADR-0040-dialect-invariant-sql-ddl-frontend.md"],
+      "evidence_paths": ["docs/reports/language-support/sql-completion-review.md", "src/rust/adapters/languages/sql.rs", "src/rust/adapters/parsing/sql.rs", "src/rust/adapters/frameworks/sql.rs", "src/fixtures/sql/release/v0_1/", "docs/decisions/ADR-0040-dialect-invariant-sql-ddl-frontend.md"],
       "prerequisite_commits": ["82ced893f81a954b64e20546dfc4ad81043b28e5"]
     },
     {

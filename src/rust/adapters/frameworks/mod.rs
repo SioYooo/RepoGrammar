@@ -15,6 +15,7 @@ pub mod jest;
 pub mod nestjs;
 pub mod react;
 pub mod rust_general;
+pub mod sql;
 pub mod tsjs;
 pub mod vitest;
 
@@ -76,6 +77,14 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
         });
     }
     if let Some(role) = rust_general::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = sql::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,

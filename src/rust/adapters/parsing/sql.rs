@@ -145,6 +145,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
     let mut facts = vec![unknown_fact(
         &module,
         UnknownReasonCode::MissingProjectConfig,
+        CLAIM_DIALECT_PROFILE,
         "unproven_dialect_profile",
         full_range.clone(),
         "a .sql path does not select a dialect; only constructs invariant across PostgreSQL 16 and SQLite 3 are scanned",
@@ -155,6 +156,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         facts.push(unknown_fact(
             &module,
             UnknownReasonCode::InsufficientSupport,
+            CLAIM_STATEMENT_BOUNDARY,
             "source_byte_limit",
             full_range,
             "SQL source exceeded the bounded input-byte limit",
@@ -168,6 +170,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             facts.push(unknown_fact(
                 &module,
                 UnknownReasonCode::ConflictingFacts,
+                CLAIM_STATEMENT_BOUNDARY,
                 divergence.as_kind(),
                 full_range,
                 divergence.note(),
@@ -216,6 +219,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             facts.push(unknown_fact(
                 &unit,
                 UnknownReasonCode::InsufficientSupport,
+                CLAIM_STATEMENT_SHAPE,
                 "unadmitted_statement_shape",
                 range,
                 "statement is bounded inventory only; its shape is outside the admitted exact-anchor subset",
@@ -228,6 +232,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         facts.push(unknown_fact(
             &module,
             UnknownReasonCode::InsufficientSupport,
+            CLAIM_STATEMENT_BOUNDARY,
             "scanner_resource_limit",
             module.range.clone(),
             "SQL scanner exceeded a bounded statement or fact limit",
@@ -553,9 +558,21 @@ fn anchor_fact(
     })
 }
 
+/// The claim one typed `UNKNOWN` scopes itself to.
+///
+/// The split is the ADR-0040 argument in the type system. A diverged token
+/// stream leaves later statement boundaries unproven, so it blocks any claim
+/// built on those boundaries. An unproven dialect does not: the admitted parse
+/// is invariant across the declared set, so the dialect is recorded as a
+/// standing subclaim rather than as a veto over the anchor it cannot change.
+const CLAIM_STATEMENT_BOUNDARY: &str = "sql_statement_boundary";
+const CLAIM_DIALECT_PROFILE: &str = "sql_dialect_profile";
+const CLAIM_STATEMENT_SHAPE: &str = "sql_statement_shape";
+
 fn unknown_fact(
     unit: &CodeUnit,
     reason: UnknownReasonCode,
+    affected_claim: &str,
     kind: &str,
     range: SourceRange,
     note: &str,
@@ -569,7 +586,7 @@ fn unknown_fact(
         evidence: Evidence::new(unit.id.clone(), range, unit.provenance.clone(), note)
             .map_err(ParseError::Internal)?,
         assumptions: vec![
-            "affected_claim=sql_family_membership".to_string(),
+            format!("affected_claim={affected_claim}"),
             format!("sql_unknown_kind={kind}"),
         ],
     })
