@@ -152,6 +152,10 @@ impl IrNodeKind {
             CodeUnitKind::RustImplBlock => Self::Class,
             CodeUnitKind::RustFunction | CodeUnitKind::RustTestFunction => Self::Function,
             CodeUnitKind::GoFunction | CodeUnitKind::GoTestFunction => Self::Function,
+            // A testthat block is a call with a body, not a declared function,
+            // class, or method; this IR vocabulary names no such concept, so the
+            // kind projection abstains the way Rust use items already do.
+            CodeUnitKind::RTestThatBlock => Self::Unknown,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,

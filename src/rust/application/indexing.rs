@@ -8,6 +8,7 @@ use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::python::{
     python_project_config_parser_method, MAX_PYTHON_FRONTEND_INPUT_BYTES,
 };
+use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
@@ -16,12 +17,13 @@ use crate::application::family::{
     csharp_support_target_is_role_compatible, family_constraint_profile_record,
     family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
     java_support_target_is_role_compatible, min_family_support,
-    python_support_target_is_role_compatible, sql_support_target_is_role_compatible,
-    tsjs_support_target_is_role_compatible, CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD,
-    CSHARP_DERIVED_SUPPORT_ENGINE, CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE,
-    JAVA_DERIVED_SUPPORT_METHOD, RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD,
-    SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE,
-    TSJS_DERIVED_SUPPORT_METHOD,
+    python_support_target_is_role_compatible, r_support_target_is_role_compatible,
+    sql_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
+    CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
+    CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
+    RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD, R_DERIVED_SUPPORT_ENGINE,
+    R_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD,
+    TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
@@ -969,6 +971,25 @@ where
             + derived_rust_support_fact_count,
         &derived_sql_support_facts,
     )?;
+    let mut derived_r_support_facts = derive_r_framework_support_facts(
+        &indexed_code_units,
+        &parser_semantic_facts,
+        &framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_r_support_facts);
+    let derived_r_support_fact_count = record_semantic_facts(
+        session.as_mut(),
+        parser_fact_count
+            + framework_fact_count
+            + derived_python_support_fact_count
+            + derived_tsjs_support_fact_count
+            + derived_java_support_fact_count
+            + derived_csharp_support_fact_count
+            + derived_cpp_support_fact_count
+            + derived_rust_support_fact_count
+            + derived_sql_support_fact_count,
+        &derived_r_support_facts,
+    )?;
     let local_support_fact_count = parser_fact_count
         + framework_fact_count
         + derived_python_support_fact_count
@@ -977,7 +998,8 @@ where
         + derived_csharp_support_fact_count
         + derived_cpp_support_fact_count
         + derived_rust_support_fact_count
-        + derived_sql_support_fact_count;
+        + derived_sql_support_fact_count
+        + derived_r_support_fact_count;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1082,6 +1104,7 @@ where
                 + derived_cpp_support_facts.len()
                 + derived_rust_support_facts.len()
                 + derived_sql_support_facts.len()
+                + derived_r_support_facts.len()
                 + rust_provider_facts.len()
                 + worker_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
@@ -1095,6 +1118,7 @@ where
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_sql_support_facts);
+        family_facts.extend(derived_r_support_facts);
         family_facts.extend(rust_provider_facts.iter().cloned());
         family_facts.extend(worker_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
@@ -1859,6 +1883,15 @@ where
         &derived_sql_support_facts,
     )?;
     next_fact_offset += derived_sql_support_fact_count;
+    let mut derived_r_support_facts = derive_r_framework_support_facts(
+        &indexed_code_units,
+        &all_parser_facts,
+        &all_framework_role_facts,
+    )?;
+    sort_semantic_facts(&mut derived_r_support_facts);
+    let derived_r_support_fact_count =
+        record_semantic_facts(session.as_mut(), next_fact_offset, &derived_r_support_facts)?;
+    next_fact_offset += derived_r_support_fact_count;
     // Recompute provider-resolved TS/JS support from the copied-forward worker
     // facts so incremental-sync family support matches a full rebuild for
     // unchanged files instead of silently dropping it.
@@ -1886,6 +1919,7 @@ where
         + derived_cpp_support_fact_count
         + derived_rust_support_fact_count
         + derived_sql_support_fact_count
+        + derived_r_support_fact_count
         + derived_tsjs_provider_support_fact_count;
     emit_progress(
         progress,
@@ -1958,6 +1992,7 @@ where
                 + derived_cpp_support_facts.len()
                 + derived_rust_support_facts.len()
                 + derived_sql_support_facts.len()
+                + derived_r_support_facts.len()
                 + rust_provider_facts.len()
                 + derived_tsjs_provider_support_facts.len(),
         );
@@ -1970,6 +2005,7 @@ where
         family_facts.extend(derived_cpp_support_facts);
         family_facts.extend(derived_rust_support_facts);
         family_facts.extend(derived_sql_support_facts);
+        family_facts.extend(derived_r_support_facts);
         family_facts.extend(rust_provider_facts);
         family_facts.extend(derived_tsjs_provider_support_facts);
         // The incremental path always resyncs from an active base generation, so
@@ -2034,6 +2070,7 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | CPP_DERIVED_SUPPORT_ENGINE
             | RUST_DERIVED_SUPPORT_ENGINE
             | SQL_DERIVED_SUPPORT_ENGINE
+            | R_DERIVED_SUPPORT_ENGINE
     )
 }
 
@@ -2406,7 +2443,11 @@ fn sync_path_requires_full_project_context(path: &str) -> bool {
             | "setup.cfg"
             | "Cargo.toml"
             | "Cargo.lock"
+            // ADR-0042 reads DESCRIPTION into the parser project context, so a
+            // change to it changes how every admitted R file parses.
+            | "DESCRIPTION"
     ) || path == "conftest.py"
+        || path.ends_with("/DESCRIPTION")
         || path.ends_with("/conftest.py")
         || path.ends_with("/Cargo.toml")
         || path.ends_with("/Cargo.lock")
@@ -2504,6 +2545,7 @@ fn parser_project_context(
     let tsjs_package_dependencies =
         tsjs_package_dependencies_from_project_config(request, report, source_store)?;
     let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
+    let r_declares_testthat = r_declares_testthat(report, source_store, request)?;
     let rust_module_paths = rust_module_paths(report);
     let mut rust_cargo_files = Vec::new();
     for file in &report.files {
@@ -2553,6 +2595,7 @@ fn parser_project_context(
         tsjs_root_dirs,
         tsjs_package_dependencies,
         tsjs_has_test_runner_context,
+        r_declares_testthat,
         rust_module_paths,
         rust_cargo_files,
     })
@@ -2764,6 +2807,66 @@ fn tsjs_project_config_root_dir(root_dir: &str) -> Option<String> {
         return None;
     }
     Some(normalized.to_string())
+}
+
+/// True when any discovered `DESCRIPTION` declares `testthat` in one of the
+/// official dependency fields ADR-0036 already parses.
+///
+/// ADR-0042 makes this a precondition for every R test anchor: a directory
+/// named `tests/testthat` in a project that does not depend on testthat
+/// establishes nothing.
+fn r_declares_testthat(
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+    request: &IndexingRequest,
+) -> Result<bool, RepoGrammarError> {
+    for file in report.files.iter().filter(|file| {
+        file.language == DiscoveredLanguage::RConfig
+            && file.path.rsplit('/').next() == Some("DESCRIPTION")
+    }) {
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        if description_declares_testthat(&source.text) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether a DCF `DESCRIPTION` names `testthat` in a dependency field.
+///
+/// Field bodies continue on indented lines, so the scan tracks whether it is
+/// inside one of the five official fields rather than matching the package name
+/// anywhere in the file.
+fn description_declares_testthat(text: &str) -> bool {
+    const DEPENDENCY_FIELDS: [&str; 5] =
+        ["Depends", "Imports", "Suggests", "Enhances", "LinkingTo"];
+    let mut in_dependency_field = false;
+    for line in text.lines() {
+        let continues = line.starts_with(' ') || line.starts_with('\t');
+        if !continues {
+            in_dependency_field = line
+                .split_once(':')
+                .is_some_and(|(field, _)| DEPENDENCY_FIELDS.contains(&field.trim()));
+        }
+        if !in_dependency_field {
+            continue;
+        }
+        let body = line.split_once(':').map_or(line, |(_, rest)| rest);
+        if body
+            .split(',')
+            .any(|entry| entry.split('(').next().unwrap_or(entry).trim() == "testthat")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn tsjs_has_test_runner_context(
@@ -4870,6 +4973,99 @@ fn derive_sql_framework_support_facts(
     Ok(derived)
 }
 
+fn derive_r_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "r"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_r_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "r" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if r_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_r_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_r_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == R_ANCHOR_ENGINE
+        && fact.origin.method == R_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_r_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_r_testthat_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: R_DERIVED_SUPPORT_ENGINE,
+            method: R_DERIVED_SUPPORT_METHOD,
+            note: "bounded R testthat block anchor support",
+            assumptions,
+        },
+    )
+}
+
 fn is_sql_structural_anchor_fact(fact: &SemanticFact) -> bool {
     fact.kind == SemanticFactKind::Symbol
         && fact.certainty == FactCertainty::Structural
@@ -5613,6 +5809,11 @@ fn file_is_inventory_only(language: &str, path: &str) -> bool {
     if language == DiscoveredLanguage::RConfig.as_str() {
         return !is_r_dependency_config_path(path);
     }
+    if language == DiscoveredLanguage::R.as_str() {
+        // ADR-0042 admits only testthat's own runner paths; every other R byte
+        // stays inventory.
+        return !crate::adapters::parsing::r::testthat::is_testthat_path(path);
+    }
     if language == DiscoveredLanguage::Go.as_str() {
         // ADR-0041 admits only `*_test.go`. The filename is part of the anchor's
         // meaning, not a convenience filter: `go test` compiles only those files
@@ -5670,7 +5871,6 @@ fn language_token_is_inventory_only(language: &str) -> bool {
             | "ada-config"
             | "fortran"
             | "fortran-config"
-            | "r"
             | "matlab"
     )
 }
@@ -7484,12 +7684,16 @@ mod tests {
             "db/migrations/001.sql",
             "schema.sql",
             "main.R",
-            "DESCRIPTION",
             "NAMESPACE",
             "renv.lock",
             "nested/renv.lock",
         ] {
             assert!(!sync_path_requires_full_project_context(path), "{path}");
+        }
+        // ADR-0042 reads DESCRIPTION into the parser project context, so it
+        // decides how every admitted R file parses and cannot be file-local.
+        for path in ["DESCRIPTION", "pkg/DESCRIPTION"] {
+            assert!(sync_path_requires_full_project_context(path), "{path}");
         }
     }
 
@@ -7725,6 +7929,10 @@ mod tests {
         assert_eq!(
             source_store.paths(),
             vec![
+                // Read once for the parser project context (ADR-0042's testthat
+                // gate) and once by the r-config parser, the same way
+                // package.json is read for the TS/JS runner context.
+                "DESCRIPTION".to_string(),
                 "DESCRIPTION".to_string(),
                 "NAMESPACE".to_string(),
                 "db/migrations/001_init.sql".to_string(),

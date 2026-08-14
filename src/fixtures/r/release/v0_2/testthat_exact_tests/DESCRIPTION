@@ -1,0 +1,6 @@
+Package: catalog
+Version: 0.1.0
+Title: Catalog fixture
+Description: Fixture package for the RepoGrammar testthat anchor.
+Suggests:
+    testthat (>= 3.0.0)

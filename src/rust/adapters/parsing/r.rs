@@ -6,6 +6,8 @@
 //! loads profiles, restores packages, connects to repositories, or retains
 //! URLs, local paths, credentials, or arbitrary source literals in output.
 
+pub(crate) mod testthat;
+
 use super::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{

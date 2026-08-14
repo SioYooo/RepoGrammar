@@ -4037,6 +4037,130 @@ mod tests {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
     }
 
+    fn r_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("r")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_r_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &r_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert!(index_json["indexed_units"].as_u64().unwrap_or_default() > 0);
+        (workspace, runtime)
+    }
+
+    fn r_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-r-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn r_testthat_exact_blocks_form_a_family_without_r() {
+        let (workspace, runtime) =
+            index_r_release_v0_2_fixture("testthat_exact_tests", "r-release-testthat-exact");
+
+        let derived = r_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "testthat.test_that")
+                .count(),
+            3,
+            "nested, namespaced, commented, and quoted calls must not derive support: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:r:r_test_that_block:framework_testthat_test"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn r_testthat_without_a_declared_dependency_or_enough_support_forms_no_family() {
+        for (fixture, prefix) in [
+            ("testthat_undeclared", "r-release-testthat-undeclared"),
+            ("testthat_low_support", "r-release-testthat-low-support"),
+        ] {
+            let (workspace, runtime) = index_r_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("testthat"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a testthat family: {families_json}"
+            );
+            if fixture == "testthat_undeclared" {
+                // The path and the call shape are both exactly right; only the
+                // DESCRIPTION declaration is missing, and that alone must stop it.
+                assert!(
+                    r_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "an undeclared dependency must derive no support"
+                );
+            }
+        }
+    }
+
     fn go_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")

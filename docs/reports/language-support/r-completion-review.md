@@ -1,6 +1,6 @@
 # R language completion review
 
-- Status: Incomplete — `discovered_only`
+- Status: Incomplete — `structural_substrate`
 - Authority: ADR-0020 and ADR-0036
 - Dependency prerequisite: `82ced893f81a954b64e20546dfc4ad81043b28e5`
 - Last updated: 2026-08-01
@@ -10,11 +10,20 @@
 - [x] Discovery/configuration — exact `.R`/`.r`, `DESCRIPTION`, `NAMESPACE`,
   and `renv.lock`, R-specific exclusions, bounded dependency metadata, typed
   inventory uncertainty, persistence, and incremental behavior are covered.
-- [ ] Authoritative sandboxed R source frontend and selected project/profile.
-- [ ] RepoGrammar-owned R source code units and IR.
+- [x] Authoritative frontend for the declared scope — ADR-0042's bounded
+  in-process scanner reads `tests/testthat/test-*.R` only and recognizes one
+  call shape. It is comment-, string-, and raw-string-aware. ADR-0036 carries no
+  evidence ladder and no prohibition on this route; its restrictions all name
+  executing R, and nothing here runs. No selected project model or profile
+  exists, and none is claimed.
+- [x] RepoGrammar-owned R source code units and IR — a module unit per admitted
+  file, one `r_test_that_block` unit per admitted call, source ranges, content
+  hashes, IR nodes, and containment edges.
 - [ ] Complete source-semantic obligation registry and provider fallback;
   inventory-only uncertainty is insufficient.
-- [ ] Exact family with support at least three.
+- [x] Exact family with support at least three — `testthat.test_that` over the
+  fixed `testthat.test_that` target, minimum support three rather than the
+  shared default of two, and the owned `repogrammar-r-derived` origin.
 - [ ] Positive, lookalike, low-support, parse-degraded, NSE/dispatch, and
   unresolved/resolved family fixtures.
 - [ ] Complete source-free readiness and leakage matrix across required public
@@ -34,8 +43,16 @@ network action runs.
 
 ## Completion verdict
 
-Not complete. The project-model inventory is auxiliary evidence, not R language
-support. No R family, provider, support, or readiness exists.
+Not complete. R has a bounded scanner over one path class and one call shape,
+owned units and IR, a typed identity `UNKNOWN`, and one exact family with
+support three. It has no parse-degraded fixture, no audited source-free
+readiness matrix, no final audit, and no provider. Strict gate count is `5/9`;
+R is `structural_substrate` and must not be counted as supported.
+
+One limitation is worth stating rather than leaving to inference: this frontend
+is a scanner, so malformed R does not fail — it yields fewer admitted calls, and
+that is currently indistinguishable from a file with fewer calls. The
+parse-degraded gate stays open for exactly that reason.
 
 ## Final program audit fields
 
@@ -51,7 +68,7 @@ support. No R family, provider, support, or readiness exists.
 | Exact family / fixtures | No family. Strong DCF/JSON/resource/remote-source/leakage/incremental tests; no R source-family corpus. |
 | Primary UNKNOWN cases | Repository identity, selected lock/project/profile, remote sources, package directness/scope, NSE/metaprogramming, dispatch, native code, and provider availability. |
 | Source-free / security | Metadata results are source-free; `.R`/`.r` is zero-read; no R, renv, package/profile script, native code, child, repository code, or network runs. |
-| Completion state / counted | `discovered_only`; strict gate count `2/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `2/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only explicit registry evidence and
 never defaults ambiguous packages to CRAN; security discards remote/path values

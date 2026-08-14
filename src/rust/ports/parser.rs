@@ -26,6 +26,10 @@ pub struct ParserProjectContext {
     pub tsjs_root_dirs: Vec<String>,
     pub tsjs_package_dependencies: Vec<String>,
     pub tsjs_has_test_runner_context: bool,
+    /// The repository's `DESCRIPTION` declares `testthat`. ADR-0042 makes this
+    /// a precondition for any R test anchor, so a change to `DESCRIPTION` must
+    /// force a full rebuild rather than a file-local reparse.
+    pub r_declares_testthat: bool,
     pub rust_module_paths: Vec<String>,
     pub rust_cargo_files: Vec<ParserProjectFileContext>,
 }

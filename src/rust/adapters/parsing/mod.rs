@@ -46,6 +46,7 @@ pub struct RepoGrammarSourceParser {
     ruby: RubyConfigParser,
     r: r::RProjectConfigParser,
     go_source: go::source::GoTestSourceParser,
+    r_testthat: r::testthat::RTestThatParser,
     rust: rust::RustSyntaxParser,
     sql: sql::SqlDdlParser,
     swift: swift::SwiftProjectConfigParser,
@@ -115,7 +116,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::RConfig => self.r.parse(document),
             crate::core::model::Language::Sql => self.sql.parse(document),
-            crate::core::model::Language::R => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::R => self.r_testthat.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -190,7 +191,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::RConfig => self.r.parse_with_context(document, context),
             crate::core::model::Language::Sql => self.sql.parse_with_context(document, context),
-            crate::core::model::Language::R => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::R => {
+                self.r_testthat.parse_with_context(document, context)
+            }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -258,6 +261,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::Sql => {
                 self.sql.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::R => {
+                self.r_testthat.parse_with_context_output(document, context)
             }
             _ => self
                 .parse_with_context(document, context)

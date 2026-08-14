@@ -208,21 +208,21 @@
       "slug": "r",
       "rank": 9,
       "counted_in_top20": true,
-      "status": "discovered_only",
-      "completion_gates_passed": 2,
+      "status": "structural_substrate",
+      "completion_gates_passed": 5,
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
-      "blocker": "R source is still unread. A bounded pure-Rust frontend over a declared R subset is possible in principle, but non-standard evaluation bounds how far it can go, and the lane was not attempted here.",
+      "blocker": "Gates 6, 7, and 9 remain: no parse-degraded fixture (this frontend is a scanner, so malformed R yields fewer admitted calls rather than failing, and nothing yet detects the difference), no audited source-free readiness matrix, and no final completion audit. None needs an external artifact.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": null,
-        "note": "No first framework target is named in this language's completion review yet; choosing one is part of the frontend effort."
+        "state": "landed",
+        "framework": "testthat",
+        "family": "testthat.test_that",
+        "wave": "F2"
       },
-      "provider_status": "no_r_provider",
+      "provider_status": "bounded_testthat_scanner_no_provider",
       "library_analysis_status": "cran_bioconductor_manifest_and_lock_inventory",
       "primary_unknowns": ["r_project_and_repository_profile", "nse_dispatch_native_and_external_symbols"],
-      "evidence_paths": ["docs/reports/language-support/r-completion-review.md", "src/rust/adapters/languages/r.rs", "src/rust/adapters/parsing/r.rs"],
+      "evidence_paths": ["docs/reports/language-support/r-completion-review.md", "src/rust/adapters/languages/r.rs", "src/rust/adapters/parsing/r.rs", "src/rust/adapters/parsing/r/testthat.rs", "src/rust/adapters/frameworks/r.rs", "src/fixtures/r/release/v0_2/", "docs/decisions/ADR-0042-bounded-r-testthat-frontend.md"],
       "prerequisite_commits": ["82ced893f81a954b64e20546dfc4ad81043b28e5"]
     },
     {
