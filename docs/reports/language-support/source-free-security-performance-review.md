@@ -42,6 +42,14 @@ catalogs, generated code, or third-party provider SDKs.
 - Static package/config readers consume supplied bytes only. They do not run
   package managers, build systems, plugins, generators, compilers, tests,
   repository code, dependency code, child processes, or network resolution.
+- Every Git subprocess run against an analyzed repository is built by one
+  hardened constructor that passes `--no-optional-locks
+  -c core.fsmonitor=false -c core.hooksPath=/dev/null`. Git executes the
+  program named by `core.fsmonitor` from index-reading commands, so without
+  this override a directory tree carrying its own `.git/config` obtained code
+  execution simply by being indexed. Command-line `-c` outranks every
+  configuration file, including anything reached through `include.path`, and a
+  committed regression test asserts the payload does not run.
 - Optional process providers enforce request/output/time/version/provenance
   contracts where implemented. Provider failure never upgrades a structural
   candidate.

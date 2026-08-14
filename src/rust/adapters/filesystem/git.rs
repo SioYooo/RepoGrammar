@@ -14,6 +14,35 @@ use std::thread;
 /// discovery visited-entry and accepted-file ceilings allow.
 const CHECK_IGNORE_MAX_STDIN_BYTES: usize = 16 * 1024 * 1024;
 
+/// The single constructor for every Git subprocess this adapter runs.
+///
+/// Git resolves configuration from the repository it is pointed at, and an
+/// analyzed repository is untrusted input. Several config keys name a program
+/// that Git then executes; `core.fsmonitor` is executed by index-reading
+/// commands such as `check-ignore` and `ls-files`, which is exactly what this
+/// adapter runs. A directory tree carrying its own `.git/config` — a downloaded
+/// archive, an extracted artifact, a CI workspace, a vendored copy — would
+/// therefore get code execution inside the user's session merely by being
+/// indexed, contradicting RepoGrammar's contract that it never executes
+/// target-repository code.
+///
+/// Command-line `-c` has the highest precedence in Git's configuration order,
+/// above repository, global, and system files and above anything they pull in
+/// through `include.path`/`includeIf`, so these overrides cannot be re-enabled
+/// by the repository being analyzed.
+///
+/// `--no-optional-locks` additionally keeps a read-only analysis from taking
+/// the index lock or refreshing the index of a repository the user only asked
+/// us to read.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command
+        .arg("--no-optional-locks")
+        .args(["-c", "core.fsmonitor=false"])
+        .args(["-c", "core.hooksPath=/dev/null"]);
+    command
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitContext {
     worktree_root: PathBuf,
@@ -31,7 +60,7 @@ impl GitContext {
     pub(crate) fn resolve(project_root: &Path) -> Result<Self, GitContextResolution> {
         let canonical_project_root =
             fs::canonicalize(project_root).map_err(|_| GitContextResolution::Unavailable)?;
-        let output = match Command::new("git")
+        let output = match git_command()
             .arg("-C")
             .arg(project_root)
             .args(["rev-parse", "--show-toplevel", "--absolute-git-dir"])
@@ -91,7 +120,7 @@ impl GitContext {
 
     pub(crate) fn check_ignore(&self, project_relative_path: &str) -> Result<bool, ()> {
         let git_relative_path = self.git_relative_path(project_relative_path);
-        match Command::new("git")
+        match git_command()
             .arg("-C")
             .arg(&self.worktree_root)
             .args(["check-ignore", "-q", "--"])
@@ -136,7 +165,7 @@ impl GitContext {
             git_to_project.insert(git_relative, project_relative.clone());
         }
 
-        let mut child = Command::new("git")
+        let mut child = git_command()
             .arg("-C")
             .arg(&self.worktree_root)
             .args(["check-ignore", "-z", "--stdin"])
@@ -175,7 +204,7 @@ impl GitContext {
 
     pub(crate) fn check_ignore_policy(&self, project_relative_path: &str) -> Result<bool, ()> {
         let git_relative_path = self.git_relative_path(project_relative_path);
-        match Command::new("git")
+        match git_command()
             .arg("-C")
             .arg(&self.worktree_root)
             .args(["check-ignore", "-q", "--no-index", "--"])
@@ -193,7 +222,7 @@ impl GitContext {
         project_relative_path: &str,
     ) -> Result<bool, ()> {
         let git_relative_path = self.git_relative_path(project_relative_path);
-        match Command::new("git")
+        match git_command()
             .arg("-C")
             .arg(&self.worktree_root)
             .args(["ls-files", "--"])
@@ -254,6 +283,63 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_configured_fsmonitor_program_is_never_executed() {
+        // A directory tree that carries its own `.git/config` is untrusted
+        // input. `core.fsmonitor` names a program that Git executes from
+        // index-reading commands, and `check-ignore`/`ls-files` are exactly
+        // what this adapter runs against an analyzed repository. Without the
+        // command-line override, indexing such a tree executes the payload.
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = TempWorkspace::new("git-context-hostile-fsmonitor");
+        if !git_init(&workspace) {
+            return;
+        }
+        let marker = workspace.path().join("FSMONITOR_EXECUTED");
+        let payload = workspace.path().join("fsmonitor-payload.sh");
+        fs::write(
+            &payload,
+            format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.to_string_lossy()),
+        )
+        .expect("write fsmonitor payload");
+        fs::set_permissions(&payload, fs::Permissions::from_mode(0o755))
+            .expect("make payload executable");
+        assert!(
+            Command::new("git")
+                .args(["config", "core.fsmonitor"])
+                .arg(&payload)
+                .current_dir(workspace.path())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false),
+            "the hostile repository must be able to set core.fsmonitor"
+        );
+        fs::write(workspace.path().join(".gitignore"), "ignored.ts\n").expect("write gitignore");
+        for path in ["ignored.ts", "kept.ts"] {
+            fs::write(workspace.path().join(path), "content").expect("write candidate");
+        }
+
+        let context = GitContext::resolve(workspace.path()).expect("resolve git context");
+        let candidates: Vec<String> = ["ignored.ts", "kept.ts"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let _ = context.check_ignore("ignored.ts");
+        let _ = context.check_ignore_batch(&candidates);
+        let _ = context.check_ignore_policy("ignored.ts");
+        let _ = context.has_tracked_entries_under("");
+
+        assert!(
+            !marker.exists(),
+            "indexing a repository must never execute a program named by its own Git config"
+        );
+        // The guard must not cost correctness: ignore answers stay index-aware.
+        assert_eq!(context.check_ignore("ignored.ts"), Ok(true));
+        assert_eq!(context.check_ignore("kept.ts"), Ok(false));
     }
 
     #[test]

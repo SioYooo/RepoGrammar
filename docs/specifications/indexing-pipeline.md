@@ -1404,7 +1404,21 @@ poll cheap, one fingerprint pass batches every supported candidate through a
 single `git check-ignore -z --stdin` subprocess (measured at roughly 10 ms for a
 few hundred paths, about one percent of the default 1000 ms poll) instead of one
 process per file; when Git is absent or errors, the pass applies the same safe
-no-ignore warning fallback discovery uses and reports `unavailable`. Because
+no-ignore warning fallback discovery uses and reports `unavailable`.
+
+Every Git subprocess RepoGrammar runs against an analyzed repository is
+constructed through one hardened entrypoint. An analyzed repository is
+untrusted input, and Git reads configuration from the repository it is pointed
+at; `core.fsmonitor` in particular names a program that Git executes from
+index-reading commands such as `check-ignore` and `ls-files`. Every invocation
+therefore passes `--no-optional-locks -c core.fsmonitor=false
+-c core.hooksPath=/dev/null` ahead of the subcommand. Command-line `-c` is the
+highest-precedence configuration source in Git, above the repository, global,
+and system files and above anything they pull in through `include.path` or
+`includeIf`, so an analyzed repository cannot re-enable these. This is what
+makes the no-execution guarantee hold for directory trees that carry their own
+`.git/config` — archives, extracted artifacts, CI workspaces, vendored copies —
+rather than only for repositories the user cloned themselves. Because
 Git-ignored supported files are excluded before accepted-file/byte charging,
 they no longer count toward the fingerprint budgets, so `autosync run` and manual
 `sync` no longer disagree about whether the same repository is within accepted
