@@ -45,6 +45,7 @@ pub struct RepoGrammarSourceParser {
     php: php::PhpConfigParser,
     ruby: RubyConfigParser,
     r: r::RProjectConfigParser,
+    go_source: go::source::GoTestSourceParser,
     rust: rust::RustSyntaxParser,
     sql: sql::SqlDdlParser,
     swift: swift::SwiftProjectConfigParser,
@@ -96,7 +97,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => self.cpp.parse(document),
-            crate::core::model::Language::Go => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Go => self.go_source.parse(document),
             crate::core::model::Language::GoConfig => self.go.parse(document),
             crate::core::model::Language::PhpConfig => self.php.parse(document),
             crate::core::model::Language::Php
@@ -155,7 +156,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context(document, context)
             }
-            crate::core::model::Language::Go => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Go => {
+                self.go_source.parse_with_context(document, context)
+            }
             crate::core::model::Language::GoConfig => self.go.parse_with_context(document, context),
             crate::core::model::Language::PhpConfig => {
                 self.php.parse_with_context(document, context)
@@ -222,6 +225,9 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Go => {
+                self.go_source.parse_with_context_output(document, context)
             }
             crate::core::model::Language::GoConfig => {
                 self.go.parse_with_context_output(document, context)

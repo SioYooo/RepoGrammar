@@ -3,9 +3,10 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{cpp, csharp, java, sql, tsjs};
+use crate::adapters::frameworks::{cpp, csharp, go, java, sql, tsjs};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
+use crate::adapters::parsing::go::source::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::python::PYTHON_ANCHOR_ENGINE;
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
@@ -50,6 +51,8 @@ pub(crate) const CSHARP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_csha
 pub(crate) const CPP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-cpp-derived";
 pub(crate) const CPP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_c_cpp_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
+pub(crate) const GO_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-go-derived";
+pub(crate) const GO_DERIVED_SUPPORT_METHOD: &str = "bounded_go_test_anchor_v1";
 pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
 pub(crate) const SQL_DERIVED_SUPPORT_METHOD: &str = "bounded_sql_ddl_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_anchor_v1";
@@ -2420,6 +2423,7 @@ enum FamilyUnknownDomain {
     Cpp,
     Rust,
     Sql,
+    Go,
 }
 
 impl FamilyUnknownDomain {
@@ -2454,6 +2458,10 @@ impl FamilyUnknownDomain {
             return (origin_engine == SQL_ANCHOR_ENGINE && origin_method == SQL_ANCHOR_METHOD)
                 .then_some(Self::Sql);
         }
+        if language == "go" {
+            return (origin_engine == GO_ANCHOR_ENGINE && origin_method == GO_ANCHOR_METHOD)
+                .then_some(Self::Go);
+        }
         None
     }
 
@@ -2466,6 +2474,7 @@ impl FamilyUnknownDomain {
             Self::Cpp => "cpp_family_membership",
             Self::Rust => "rust_family_membership",
             Self::Sql => "sql_statement_boundary",
+            Self::Go => "go_test_declaration",
         }
     }
 
@@ -2478,6 +2487,7 @@ impl FamilyUnknownDomain {
             Self::Cpp => "C/C++",
             Self::Rust => "Rust",
             Self::Sql => "SQL",
+            Self::Go => "Go",
         }
     }
 
@@ -2511,6 +2521,7 @@ impl FamilyUnknownDomain {
                 rust_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
             }
             Self::Sql => sql_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Go => go_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2544,6 +2555,7 @@ impl FamilyUnknownDomain {
                 rust_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
             }
             Self::Sql => sql_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
+            Self::Go => go_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
         }
     }
 }
@@ -2567,6 +2579,31 @@ fn sql_unknown_reason_blocks_family_membership(
         }
         _ => false,
     }
+}
+
+/// An unresolvable testing import blocks the declaration claim it scopes.
+///
+/// A dot or blank import means no test signature in that file resolves, so
+/// anything built on one is unproven. A build constraint does not: the file's
+/// declarations are what they are whether or not the target platform compiles
+/// it, so that rides along as a subclaim instead.
+fn go_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "go_test_declaration" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+fn go_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    reason == UnknownReasonCode::BuildVariantAmbiguity && affected_claim == "go_build_constraint"
 }
 
 /// The unproven dialect is recorded, never silently dropped.
@@ -4017,6 +4054,9 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if sql::framework_role_is_known(framework_role) => {
             sql::support_family(target, framework_role)
         }
+        framework_role if go::framework_role_is_known(framework_role) => {
+            go::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4290,7 +4330,26 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if sql::framework_role_is_known(framework_role) {
         return sql_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if go::framework_role_is_known(framework_role) {
+        return go_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     false
+}
+
+fn go_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = go::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && go_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn go_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        GO_DERIVED_SUPPORT_ENGINE,
+        GO_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_go_test_anchors".to_string()],
+    )
 }
 
 fn sql_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -4493,6 +4552,13 @@ pub(crate) fn sql_support_target_is_role_compatible(
     framework_role: &str,
 ) -> Option<bool> {
     sql::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn go_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    go::support_target_is_role_compatible(target, framework_role)
 }
 
 pub(crate) fn cpp_framework_role_is_known(framework_role: &str) -> bool {
@@ -4729,6 +4795,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "axum_route"
             | "tracing_instrument"
             | "sql_table_definition"
+            | "go_test_function"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -4752,6 +4819,10 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "go" {
+        // The go completion review requires support at least three; the shared
+        // default of two would let a pair of test functions form a family.
         3
     } else if language == "sql" {
         // ADR-0020 requires SQL to reach support three; the shared default of

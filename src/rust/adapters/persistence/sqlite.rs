@@ -3261,6 +3261,7 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "csharp",
     "c/cpp",
     "sql",
+    "go",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3384,6 +3385,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
              'doctest_test_case', 'boost_test_case', 'boost_test_suite', 'cppunit_suite_registration')"
         }
         "sql" => "code_units.language = 'sql' AND code_units.kind = 'sql_table_definition'",
+        "go" => "code_units.language = 'go' AND code_units.kind = 'go_test_function'",
         _ => "0",
     }
 }
@@ -3400,6 +3402,7 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "csharp" => "indexed_files.language = 'csharp'",
         "c/cpp" => "indexed_files.language IN ('c', 'cpp', 'cpp-config')",
         "sql" => "indexed_files.language IN ('sql', 'sql-migration', 'sql-schema', 'sql-catalog')",
+        "go" => "indexed_files.language IN ('go', 'go-config')",
         _ => "0",
     }
 }
@@ -3416,6 +3419,7 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "csharp" => "code_units.language = 'csharp'",
         "c/cpp" => "code_units.language IN ('c', 'cpp')",
         "sql" => "code_units.language = 'sql'",
+        "go" => "code_units.language = 'go'",
         _ => "0",
     }
 }
@@ -3438,6 +3442,7 @@ fn repo_shape_family_where(language: &str) -> &'static str {
             "(families.family_id GLOB 'family:c:*' OR families.family_id GLOB 'family:cpp:*')"
         }
         "sql" => "families.family_id GLOB 'family:sql:*'",
+        "go" => "families.family_id GLOB 'family:go:*'",
         _ => "0",
     }
 }

@@ -295,20 +295,21 @@
       "slug": "go",
       "rank": 13,
       "counted_in_top20": true,
-      "status": "discovered_only",
-      "completion_gates_passed": 2,
+      "status": "structural_substrate",
+      "completion_gates_passed": 6,
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
-      "blocker": "ADR-0021's route -- a Go standard-library worker in an OS sandbox -- is excluded, both as an external binary and because the sandbox is unqualified. A bounded pure-Rust frontend over a declared Go subset is possible in principle and was not attempted here.",
+      "blocker": "Gates 6, 7, and 9 remain: no parse-degraded fixture (this frontend is a scanner, so malformed Go yields fewer declarations rather than failing, and nothing yet detects the difference), no audited SQL-style source-free readiness matrix, and no final completion audit. None needs an external artifact.",
       "framework_support": {
-        "state": "blocked_on_frontend",
-        "prerequisite": "This language has no source frontend, so no framework anchor of any kind can be seen. Framework support is downstream of a bounded frontend, which is its own multi-module effort under its ADR-0020 gate 2, not a framework task.",
-        "first_candidate_family": "go.testing.test_function"
+        "state": "landed",
+        "framework": "Go testing",
+        "family": "go.testing.test_function",
+        "wave": "F2"
       },
-      "provider_status": "no_go_frontend_sandbox_not_qualified",
+      "provider_status": "bounded_go_test_declaration_frontend_no_provider",
       "library_analysis_status": "go_modules_manifest_inventory_only",
       "primary_unknowns": ["go_workspace_build_target_profile", "module_graph_types_and_external_symbols"],
-      "evidence_paths": ["docs/reports/language-support/go-completion-review.md", "src/rust/adapters/languages/go.rs", "src/rust/adapters/parsing/go.rs"],
+      "evidence_paths": ["docs/reports/language-support/go-completion-review.md", "src/rust/adapters/languages/go.rs", "src/rust/adapters/parsing/go.rs", "src/rust/adapters/parsing/go/source.rs", "src/rust/adapters/frameworks/go.rs", "src/fixtures/go/release/v0_2/", "docs/decisions/ADR-0041-bounded-go-test-declaration-frontend.md"],
       "prerequisite_commits": ["abda602fe38db8549e4f318bd4638ddb94df7282"]
     },
     {

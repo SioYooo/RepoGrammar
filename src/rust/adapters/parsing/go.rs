@@ -5,6 +5,8 @@
 //! environment, or turns dependency declarations into language/framework
 //! support evidence.
 
+pub(crate) mod source;
+
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,

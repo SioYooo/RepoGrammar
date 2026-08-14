@@ -4037,6 +4037,160 @@ mod tests {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
     }
 
+    fn go_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("go")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_go_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &go_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert!(index_json["indexed_units"].as_u64().unwrap_or_default() > 0);
+        (workspace, runtime)
+    }
+
+    fn go_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-go-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn go_testing_exact_tests_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) =
+            index_go_release_v0_2_fixture("testing_exact_tests", "go-release-testing-exact");
+
+        let derived = go_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "go.testing.T")
+                .count(),
+            3,
+            "TestMain, the helper, and the benchmark must not derive support: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:go:go_test_function:framework_go_testing_test_function"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn go_testing_lookalikes_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("testing_lookalikes", "go-release-testing-lookalikes"),
+            ("testing_low_support", "go-release-testing-low-support"),
+        ] {
+            let (workspace, runtime) = index_go_release_v0_2_fixture(fixture, prefix);
+            let derived = go_derived_support_targets(&runtime, &workspace);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("go_test_function"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Go family: {families_json}"
+            );
+            if fixture == "testing_lookalikes" {
+                assert!(
+                    derived.is_empty(),
+                    "prose and an unimported T must derive nothing: {derived:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn go_source_outside_test_filenames_is_never_read() {
+        let workspace = TempWorkspace::new("go-release-non-test-source");
+        fs::write(
+            workspace.path().join("go.mod"),
+            "module example.test/x\n\ngo 1.22\n",
+        )
+        .expect("write go.mod");
+        fs::write(
+            workspace.path().join("catalog.go"),
+            "package catalog\n\nimport \"testing\"\n\nfunc TestLoads(t *testing.T) {}\n",
+        )
+        .expect("write ordinary Go source");
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        // The signature is exact, but `go test` would not compile this file as a
+        // test, so the frontend must never see it.
+        assert!(go_derived_support_targets(&runtime, &workspace).is_empty());
+    }
+
     fn sql_release_fixture_v0_1_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")

@@ -481,7 +481,7 @@ review reports which ones against delivered code.
 
 | Lane | Frontend scope | Framework | Authority | State |
 |---|---|---|---|---|
-| Go | `*_test.go` declarations only | `go.testing.test_function` | ADR-0041 | in progress |
+| Go | `*_test.go` declarations only | `go.testing.test_function` | ADR-0041 | landed; review reports 6/9 |
 | Ruby | to be scoped | `ruby.minitest.test_method` | needs an ADR | not started |
 | PHP | to be scoped | `php.phpunit.test_method` | needs an ADR | not started |
 | Swift | to be scoped | `swift.xctest.test_method` | needs an ADR | not started |

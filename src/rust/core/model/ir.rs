@@ -151,6 +151,7 @@ impl IrNodeKind {
             }
             CodeUnitKind::RustImplBlock => Self::Class,
             CodeUnitKind::RustFunction | CodeUnitKind::RustTestFunction => Self::Function,
+            CodeUnitKind::GoFunction | CodeUnitKind::GoTestFunction => Self::Function,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,
