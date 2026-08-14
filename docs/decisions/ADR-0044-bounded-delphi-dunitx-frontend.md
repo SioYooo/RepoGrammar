@@ -66,10 +66,18 @@ clause. A `[TestFixture]` attribute stands on its own line immediately before a
 class declaration. A `[Test]` attribute stands on its own line immediately
 before a `procedure` declaration inside that fixture's declaration block.
 
-Attribution is positional and bounded: a `[Test]` belongs to the most recent
-class declaration, and a class declaration without `[TestFixture]` clears the
-fixture state. So a `[Test]` in a plain class that follows a fixture does not
-anchor.
+Attribution is positional and bounded. A `[Test]` belongs to the most recent
+class declaration, and three things clear the fixture state: a class declaration
+without `[TestFixture]`, the `implementation` keyword, and an `end` closing the
+declaration block. So neither a `[Test]` in a plain class that follows a fixture
+nor a unit-level procedure after the fixture's `end` anchors — DUnitX discovers
+methods of a fixture class, not free procedures.
+
+The `end` rule is deliberately blunt: a nested type declared inside the fixture
+closes with its own `end`, which ends the block early and misses any later
+`[Test]`. That trade is chosen rather than tolerated. A missed test is a smaller
+error than an invented one, and this repository's `UNKNOWN` policy already
+prefers absent evidence to asserted evidence.
 
 Object Pascal is case-insensitive, so keyword and attribute matching is
 case-insensitive.
@@ -112,8 +120,9 @@ No Rust crate, no grammar, no toolchain, no downloaded artifact.
   the `.dpk` `requires` clause unread.
 - Track the fixture's class body by keyword depth: rejected because `class`
   appears in `class procedure`, `class var`, and forward declarations, so a
-  depth model would be wrong in ordinary code. Positional attribution with an
-  explicit clearing rule is smaller and states its own boundary.
+  depth model would be wrong in ordinary code. Positional attribution with
+  explicit clearing rules is smaller and states its own boundary, at the cost of
+  the nested-type false negative recorded in D2.
 - Support DUnit as well as DUnitX: rejected for the first slice because DUnit
   fixtures derive from `TTestCase` without attributes, which is a different
   anchor shape and a separate decision.

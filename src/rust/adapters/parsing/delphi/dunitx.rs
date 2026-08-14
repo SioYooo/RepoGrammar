@@ -384,7 +384,12 @@ fn admitted_anchors(lines: &[SourceLine]) -> Vec<Anchor> {
             index += 1;
             continue;
         }
-        if code.eq_ignore_ascii_case("implementation") {
+        // `end` closes the fixture's declaration block, and DUnitX discovers
+        // methods of a fixture class -- never a unit-level procedure that merely
+        // follows one. A nested type inside the fixture closes with its own
+        // `end`, so this can end the block early and miss a later `[Test]`; a
+        // missed test is a smaller error than an invented one.
+        if code.eq_ignore_ascii_case("implementation") || strip_word(code, "end").is_some() {
             fixture_active = false;
             fixture_class_line = None;
             index += 1;
@@ -639,6 +644,20 @@ mod tests {
             tests(&parsed),
             1,
             "the plain class clears the fixture state"
+        );
+    }
+
+    #[test]
+    fn the_fixtures_end_closes_it_so_a_later_bare_procedure_is_not_a_test() {
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog;\n  end;\n\n\
+               [Test]\n  procedure NotInAnyClass;\nimplementation\nend.\n"
+        ));
+        assert_eq!(
+            tests(&parsed),
+            1,
+            "DUnitX discovers methods of a fixture class, not unit-level procedures"
         );
     }
 
