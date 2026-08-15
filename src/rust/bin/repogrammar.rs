@@ -4156,6 +4156,74 @@ mod tests {
         }
     }
 
+    /// ADR-0020 gate 6's build-variant and parse-degraded cases.
+    ///
+    /// Both fixtures carry enough attributed declarations to clear the support
+    /// threshold of three if they were read naively: four in opposite `#If`
+    /// branches, and three in a file whose parse fails. Neither may form a
+    /// family, and neither may derive support.
+    #[test]
+    fn visual_basic_build_variant_and_degraded_fixtures_form_no_family() {
+        for (fixture, prefix) in [
+            ("mstest_build_variant", "vb-release-mstest-build-variant"),
+            ("mstest_parse_degraded", "vb-release-mstest-degraded"),
+        ] {
+            let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(fixture, prefix);
+            assert!(
+                visual_basic_derived_support_targets(&runtime, &workspace).is_empty(),
+                "{fixture} must derive no support"
+            );
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("vb_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a VB MSTest family: {families_json}"
+            );
+        }
+    }
+
+    /// The property the VB scanner could not have. A file the parser cannot
+    /// admit now says so, instead of contributing fewer anchors in a way that
+    /// reads exactly like a file with fewer declarations.
+    #[test]
+    fn a_malformed_visual_basic_source_reports_a_degraded_parse_to_the_operator() {
+        let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(
+            "mstest_parse_degraded",
+            "vb-release-degraded-warning",
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let warnings = index_json["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .map(|warning| warning.as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.starts_with("parse degraded for CatalogTests.vb")
+                    && warning
+                        .contains("missing code units are not evidence that a construct is absent")
+            }),
+            "{warnings:?}"
+        );
+    }
+
     /// A scanner has no parse failure, so a malformed file used to yield fewer
     /// anchors with no signal -- indistinguishable from a file that simply has
     /// fewer declarations. Each scanner now checks its own well-formedness
