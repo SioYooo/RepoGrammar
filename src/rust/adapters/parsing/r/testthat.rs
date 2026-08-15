@@ -22,7 +22,8 @@ use crate::core::model::{
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 
 pub const R_ANCHOR_ENGINE: &str = "repogrammar-r-testthat-scanner";
@@ -114,7 +115,7 @@ pub(crate) fn parse_output(
             full_range,
             "R source exceeded the bounded input-byte limit",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
     if !context.r_declares_testthat {
@@ -128,10 +129,20 @@ pub(crate) fn parse_output(
             full_range,
             "no DESCRIPTION in this repository declares testthat, so the framework identity is unproven",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
     let code = CodeMask::new(document.text);
+    // A scanner cannot fail on malformed R the way a parser does, but a quote
+    // or bracket left open at end of file is a decidable well-formedness
+    // violation, and it makes a missing anchor uninformative.
+    let mut diagnostics = Vec::new();
+    if code.unbalanced {
+        diagnostics.push(degraded(
+            document.path,
+            "an R quote or bracket is left open at end of file, so the scanned block extents are unreliable",
+        ));
+    }
     let mut limit_hit = false;
     for (ordinal, block) in test_that_blocks(document.text, &code)
         .into_iter()
@@ -168,12 +179,22 @@ pub(crate) fn parse_output(
         )?);
     }
 
-    finish(units, facts)
+    finish(units, facts, diagnostics)
+}
+
+fn degraded(path: &str, message: &str) -> ParseDiagnostic {
+    ParseDiagnostic {
+        path: path.to_string(),
+        range: None,
+        severity: ParseDiagnosticSeverity::Error,
+        message: message.to_string(),
+    }
 }
 
 fn finish(
     mut units: Vec<CodeUnit>,
     mut facts: Vec<SemanticFact>,
+    diagnostics: Vec<ParseDiagnostic>,
 ) -> Result<SourceParseOutput, ParseError> {
     units.sort_by(|left, right| {
         (left.range.start_byte, left.range.end_byte, left.id.as_str()).cmp(&(
@@ -204,7 +225,7 @@ fn finish(
             ir_nodes,
             ir_edges,
             semantic_facts: facts,
-            diagnostics: Vec::new(),
+            diagnostics,
         },
         python_interface_hash: None,
         dependencies: Vec::new(),
@@ -218,6 +239,10 @@ struct CodeMask {
     is_code: Vec<bool>,
     paren_depth: Vec<u32>,
     brace_depth: Vec<u32>,
+    /// A quote or bracket left open at end of file. Either one makes the
+    /// scanned extents unreliable, so a missing anchor stops being evidence
+    /// that the construct is absent.
+    unbalanced: bool,
 }
 
 impl CodeMask {
@@ -229,6 +254,7 @@ impl CodeMask {
         let mut index = 0usize;
         let mut parens = 0u32;
         let mut braces = 0u32;
+        let mut unbalanced = false;
         while index < bytes.len() {
             paren_depth[index] = parens;
             brace_depth[index] = braces;
@@ -238,7 +264,11 @@ impl CodeMask {
             }
             match bytes[index] {
                 b'#' => index = line_end(bytes, index),
-                b'"' | b'\'' | b'`' => index = quoted_end(bytes, index, bytes[index]),
+                b'"' | b'\'' | b'`' => {
+                    let (end, closed) = quoted_end(bytes, index, bytes[index]);
+                    unbalanced |= !closed;
+                    index = end;
+                }
                 byte => {
                     match byte {
                         b'(' => parens = parens.saturating_add(1),
@@ -256,6 +286,7 @@ impl CodeMask {
             is_code,
             paren_depth,
             brace_depth,
+            unbalanced: unbalanced || parens != 0 || braces != 0,
         }
     }
 
@@ -277,16 +308,17 @@ fn line_end(bytes: &[u8], start: usize) -> usize {
     index
 }
 
-fn quoted_end(bytes: &[u8], start: usize, delimiter: u8) -> usize {
+/// End of a quoted run, and whether it closed before end of file.
+fn quoted_end(bytes: &[u8], start: usize, delimiter: u8) -> (usize, bool) {
     let mut index = start + 1;
     while index < bytes.len() {
         match bytes[index] {
             b'\\' => index += 2,
-            byte if byte == delimiter => return index + 1,
+            byte if byte == delimiter => return (index + 1, true),
             _ => index += 1,
         }
     }
-    bytes.len()
+    (bytes.len(), false)
 }
 
 /// End of an R 4.0 raw string starting at `start`, if one starts there.
@@ -376,7 +408,11 @@ fn admitted_call_end(bytes: &[u8], code: &CodeMask, open: usize) -> Option<usize
     if quote != b'"' && quote != b'\'' {
         return None;
     }
-    let description_end = quoted_end(bytes, description, quote);
+    let (description_end, closed) = quoted_end(bytes, description, quote);
+    if !closed {
+        // An unterminated description is not a literal description.
+        return None;
+    }
     if description_end <= description + 2 {
         // An empty description distinguishes nothing.
         return None;
@@ -638,6 +674,25 @@ mod tests {
             .semantic_facts
             .iter()
             .all(|fact| !fact.certainty.supports_family_membership()));
+    }
+
+    #[test]
+    fn an_unclosed_quote_or_brace_reports_a_degraded_parse() {
+        let parsed =
+            output("test_that(\"loads\", {\n  expect_true(TRUE)\n})\ntest_that(\"unclosed\", {\n");
+        assert_eq!(parsed.report.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.report.diagnostics[0].severity,
+            ParseDiagnosticSeverity::Error
+        );
+        // The anchor found before the violation is still real.
+        assert_eq!(anchors(&parsed), 1);
+    }
+
+    #[test]
+    fn a_well_formed_test_file_reports_no_diagnostic() {
+        let parsed = output("test_that(\"loads\", {\n  expect_true(TRUE)\n})\n");
+        assert!(parsed.report.diagnostics.is_empty());
     }
 
     #[test]

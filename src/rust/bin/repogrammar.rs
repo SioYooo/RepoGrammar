@@ -4156,6 +4156,39 @@ mod tests {
         }
     }
 
+    /// A scanner has no parse failure, so a malformed file used to yield fewer
+    /// anchors with no signal -- indistinguishable from a file that simply has
+    /// fewer declarations. Each scanner now checks its own well-formedness
+    /// invariant and reports a degraded parse when it is violated.
+    #[test]
+    fn a_malformed_scanned_source_reports_a_degraded_parse_to_the_operator() {
+        let (workspace, runtime) =
+            index_matlab_release_v0_2_fixture("unittest_degraded", "matlab-release-degraded");
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let warnings = index_json["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .map(|warning| warning.as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.starts_with("parse degraded for CatalogTest.m")
+                    && warning
+                        .contains("missing code units are not evidence that a construct is absent")
+            }),
+            "{warnings:?}"
+        );
+    }
+
     /// `index` and every later query must answer "what does this generation
     /// hold" identically. They used to decide it separately -- `index` from the
     /// discovery report, queries from the recorded unit count -- so they

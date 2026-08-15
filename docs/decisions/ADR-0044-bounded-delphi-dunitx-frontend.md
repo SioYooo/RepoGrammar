@@ -99,6 +99,13 @@ that a file has no code — the same bound ADR-0043 sets for VB.NET.
 anchor, and block comments carry across lines. This is a decision because the
 repository has shipped the opposite defect three times.
 
+The scanner also reports a degraded parse when its own well-formedness
+invariant is violated. A scanner has no syntax failure, but an unclosed `{` or
+`(*` at end of file is decidable, and without that signal a malformed file
+silently yields fewer anchors -- which is indistinguishable from a file that
+simply has fewer declarations. The units already found are kept; the diagnostic
+states that the ones not found prove nothing.
+
 ### D5. What the anchor claims
 
 It claims that a unit importing DUnitX declares a fixture class and a procedure

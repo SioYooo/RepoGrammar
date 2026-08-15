@@ -21,7 +21,8 @@ use crate::core::model::{
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 
 pub const GO_ANCHOR_ENGINE: &str = "repogrammar-go-test-scanner";
@@ -113,10 +114,20 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             full_range,
             "Go source exceeded the bounded input-byte limit",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
     let code = CodeMask::new(document.text);
+    // A scanner cannot fail on malformed Go the way a parser does, but Go
+    // braces must balance, so an imbalance at end of file is a decidable
+    // well-formedness violation and makes a missing anchor uninformative.
+    let mut diagnostics = Vec::new();
+    if code.unbalanced_braces {
+        diagnostics.push(degraded(
+            document.path,
+            "Go braces do not balance at end of file, so the scanned declaration extents are unreliable",
+        ));
+    }
     let binding = testing_binding(document.text, &code);
 
     match &binding {
@@ -200,12 +211,22 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         )?);
     }
 
-    finish(units, facts)
+    finish(units, facts, diagnostics)
+}
+
+fn degraded(path: &str, message: &str) -> ParseDiagnostic {
+    ParseDiagnostic {
+        path: path.to_string(),
+        range: None,
+        severity: ParseDiagnosticSeverity::Error,
+        message: message.to_string(),
+    }
 }
 
 fn finish(
     mut units: Vec<CodeUnit>,
     mut facts: Vec<SemanticFact>,
+    diagnostics: Vec<ParseDiagnostic>,
 ) -> Result<SourceParseOutput, ParseError> {
     units.sort_by(|left, right| {
         (left.range.start_byte, left.range.end_byte, left.id.as_str()).cmp(&(
@@ -236,7 +257,7 @@ fn finish(
             ir_nodes,
             ir_edges,
             semantic_facts: facts,
-            diagnostics: Vec::new(),
+            diagnostics,
         },
         python_interface_hash: None,
         dependencies: Vec::new(),
@@ -250,6 +271,9 @@ struct CodeMask {
     /// Brace depth immediately before each byte, counting only code braces.
     depth: Vec<u32>,
     has_build_directive: bool,
+    /// Go braces must balance, so an imbalance at end of file means the scan
+    /// lost track -- typically to an unterminated string or block comment.
+    unbalanced_braces: bool,
 }
 
 impl CodeMask {
@@ -298,6 +322,7 @@ impl CodeMask {
             is_code,
             depth,
             has_build_directive,
+            unbalanced_braces: brace_depth != 0,
         }
     }
 
@@ -899,6 +924,24 @@ mod tests {
         }
         assert!(is_go_test_path("pkg/catalog_test.go"));
         assert!(!is_go_test_path("pkg/_test.go"));
+    }
+
+    #[test]
+    fn unbalanced_braces_report_a_degraded_parse() {
+        let parsed =
+            output("package demo\n\nimport \"testing\"\n\nfunc TestLoads(t *testing.T) {\n");
+        assert_eq!(parsed.report.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.report.diagnostics[0].severity,
+            ParseDiagnosticSeverity::Error
+        );
+    }
+
+    #[test]
+    fn a_well_formed_test_file_reports_no_diagnostic() {
+        let parsed =
+            output("package demo\n\nimport \"testing\"\n\nfunc TestLoads(t *testing.T) {\n}\n");
+        assert!(parsed.report.diagnostics.is_empty());
     }
 
     #[test]

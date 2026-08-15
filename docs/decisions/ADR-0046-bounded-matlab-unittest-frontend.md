@@ -123,6 +123,13 @@ MATLAB ignores everything after an ellipsis to end of line, so a bare `end`
 written there is prose, not a block terminator, and counting it would close the
 `methods (Test)` block early.
 
+The scanner also reports a degraded parse when its own well-formedness
+invariant is violated. A scanner has no syntax failure, but an unbalanced block
+keyword or an unclosed `%{` is decidable, and without that signal a malformed
+file silently yields fewer anchors -- which is indistinguishable from a file
+that simply has fewer declarations. The units already found are kept; the
+diagnostic states that the ones not found prove nothing.
+
 ### D5. What the anchor claims
 
 It claims that a class derived from `matlab.unittest.TestCase` declares a method

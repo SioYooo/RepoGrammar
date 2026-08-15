@@ -19,7 +19,7 @@
 | Owned IR | One `project_config` unit/IR node per parsed package definition, plus owned units and IR for the ADR-0046 anchor: a module unit per decoded `.m`, a test-class unit, and a test-method unit. |
 | External symbols | None. Imports, packages, class/function binding, Java/MEX, path precedence, and dynamic dispatch are unresolved. |
 | Library contracts | None. Package presence proves no toolbox or runtime behavior. |
-| Exact-anchor family | One: `framework:matlab_unittest.test_method` over `matlab_unittest.TestMethod`, gated at support three. Function-based and script-based tests are not implemented. |
+| Exact-anchor family | One: `framework:matlab_unittest.test_method` over `matlab_unittest.TestMethod`, gated at support three, with positive, lookalike, low-support, and parse-degraded fixtures. Function-based and script-based tests are not implemented. |
 | Fixtures/tests | Inline real-shape manifest, malformed/duplicate/conflict/unsafe-value/resource tests, discovery, routing, persistence/incremental removal, zero-family, and public leakage tests under `src/rust/`. |
 | Typed UNKNOWN | `matlab_dependency_inventory` covers malformed identity/schema/container, forward schema, partial/conflicting declarations, and resource limits. Source semantics have no frontend and remain unsupported rather than guessed. |
 | Source-free | Public index/status tests reject package names/UUID fragments and assembly source text. Provider/contact URLs are discarded. |
@@ -74,9 +74,10 @@ one second after compilation on the recorded development host.
   `matlab_unittest_class_binding`, and it blocks family membership.
 - [x] 5. Exact-anchor family — `framework:matlab_unittest.test_method` with
   support at least three.
-- [ ] 6. Fixture proof — positive, lookalike, and low-support fixtures exist;
-  parse-degraded and resolved/unresolved do not, because a scanner has no parse
-  failure and there is no MATLAB provider to resolve against.
+- [x] 6. Fixture proof — positive, lookalike, low-support, and parse-degraded
+  fixtures exist. An unbalanced block or an unclosed `%{` is a decidable
+  well-formedness violation and reports a degraded parse. Resolved/unresolved
+  fixtures do not exist: there is no MATLAB provider to resolve against.
 - [ ] 7. Source-free readiness — tested for this inventory path, not all
   required MATLAB readiness/unknown surfaces.
 - [x] 8. Four-part review — this record.
@@ -85,7 +86,7 @@ one second after compilation on the recorded development host.
 
 ## Completion verdict and exact non-claims
 
-`PARTIAL_AUDITED_PROGRESS`; strict gate count `4/9`; Top-20 counted `no`.
+`PARTIAL_AUDITED_PROGRESS`; strict gate count `5/9`; Top-20 counted `no`.
 Beyond the bounded static R2024b+ package declarations, RepoGrammar now proves
 one exact class-based `matlab.unittest` declaration shape under ADR-0046. It
 still cannot prove a MATLAB release, toolbox installation, dependency
@@ -93,9 +94,10 @@ resolution, external symbols, runtime behavior, or any Simulink fact. No
 `LICENSE_BLOCKED` claim is made because no licensed provider was probed.
 
 Two limitations are stated rather than left to inference. This frontend is a
-scanner, so malformed MATLAB does not fail — it yields fewer admitted
-declarations, which is indistinguishable from a file with fewer declarations.
-And it never interprets a statement: MATLAB's command syntax cannot be
+scanner, so malformed MATLAB does not fail the way a parsed language does; it
+reports a degraded parse when its own well-formedness invariant is violated, and
+outside that invariant fewer admitted declarations remain indistinguishable from
+a file with fewer declarations. And it never interprets a statement: MATLAB's command syntax cannot be
 distinguished from an expression without the workspace (`a -1` is a subtraction
 or the call `a('-1')` depending on runtime binding), and that ambiguity is left
 outside the claim surface rather than resolved. It does not reach the scanner,

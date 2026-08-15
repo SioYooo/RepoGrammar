@@ -24,10 +24,11 @@
 - [x] One exact Ada family with support at least three —
   `framework:aunit.test_registration` over the `aunit.Register_Routine` anchor,
   gated at support three.
-- [ ] Positive, lookalike, and low-support fixtures exist for that family;
-  parse-degraded, conditional, generic, overload, dispatch, and
-  resolved/unresolved do not, because a scanner has no parse failure and there
-  is no Ada provider to resolve against.
+- [x] Positive, lookalike, low-support, and parse-degraded fixtures exist for
+  that family. An unterminated string literal is a decidable well-formedness
+  violation and reports a degraded parse. Conditional, generic, overload,
+  dispatch, and resolved/unresolved fixtures do not exist: there is no Ada
+  provider to resolve against.
 - [ ] Source-free readiness and leakage review for claim-bearing analysis.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
@@ -61,12 +62,13 @@ Not complete. Ada has a bounded scanner over one call shape, owned units and
 IR, a typed registration-binding `UNKNOWN`, and one exact family with support
 three under ADR-0045. Alire dependency presence remains auxiliary and is not
 source, library, framework, family, or readiness support. Strict gate count is
-`5/9`; it must not be counted as a supported language.
+`6/9`; it must not be counted as a supported language.
 
 Two limitations are stated rather than left to inference. This frontend is a
-scanner, so malformed Ada does not fail — it yields fewer admitted calls, which
-is indistinguishable from a body with fewer calls; the parse-degraded gate stays
-open for that reason. And the AUnit `with` clause must be in the same file: a
+scanner, so malformed Ada does not fail the way a parsed language does; it
+reports a degraded parse when its own well-formedness invariant is violated, and
+outside that invariant fewer admitted calls remain indistinguishable from a body
+with fewer calls. And the AUnit `with` clause must be in the same file: a
 package body inherits its spec's context clause, so a body that uses AUnit
 without naming it is a real shape this frontend does not admit. That false
 negative is chosen over asserting an import it cannot see.
@@ -84,7 +86,7 @@ negative is chosen over asserting an import it cannot see.
 | Exact family / fixtures | One exact family, `framework:aunit.test_registration` over `aunit.Register_Routine`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded, generic, overload, dispatch, and resolved/unresolved do not, because a scanner has no parse failure and there is no Ada provider. |
 | Primary UNKNOWN cases | GPR selection, naming, edition/toolchain/target, conditional Alire data, pins, generic instantiation, overload/dispatch, generated code, and provider availability. |
 | Source-free / security | Source/GPR is zero-read; config parsing is bounded; no GNAT, Libadalang, gprbuild, alr, child, repository/dependency code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
 
 Four-part review: correctness covers only unconditional literal declarations;
 security preserves the zero-read/non-execution boundary; completeness lacks a

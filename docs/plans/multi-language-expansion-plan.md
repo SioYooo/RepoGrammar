@@ -520,11 +520,11 @@ real files.
 
 | Open lane | First framework | Scanner soundness | Authority | State |
 |---|---|---|---|---|
-| R | testthat `test_that` | sound: line comments, quoted and raw strings, unambiguous nesting; no heredocs, regex literals, or transpose ambiguity | ADR-0042 | landed; review reports 5/9 |
-| MATLAB | `matlab.unittest` class-based tests | sound, and the earlier prediction is retracted: ADR-0045 shows an overloaded tick is decidable by a local rule, so "one character has two jobs" is a hazard, not a proof. MATLAB's rule is whitespace-sensitive — `[a' b']` is two transposes, `[a 'b']` is a concatenation. Its genuinely undecidable construct is command syntax, which never reaches the scanner | ADR-0046 | landed; review reports 4/9 |
-| Visual Basic .NET | MSTest attributes | sound: `'`/`REM` comments and double-quoted-only strings mean the comment character is never a delimiter | ADR-0043 | landed; review reports 5/9 |
-| Delphi/Object Pascal | DUnitX `[TestFixture]` | sound: `//`, `{ }`, `(* *)` comments and single-quoted strings are disjoint delimiter sets, so no character serves two purposes | ADR-0044 | landed; review reports 5/9 |
-| Ada | AUnit `Register_Routine` | sound: one comment form, one string form, and the overloaded tick resolved by the same local rule real Ada lexers use — a tick after an identifier character or `)` is an attribute, otherwise a three-byte character literal | ADR-0045 | landed; review reports 5/9 |
+| R | testthat `test_that` | sound: line comments, quoted and raw strings, unambiguous nesting; no heredocs, regex literals, or transpose ambiguity | ADR-0042 | landed; review reports 6/9 |
+| MATLAB | `matlab.unittest` class-based tests | sound, and the earlier prediction is retracted: ADR-0045 shows an overloaded tick is decidable by a local rule, so "one character has two jobs" is a hazard, not a proof. MATLAB's rule is whitespace-sensitive — `[a' b']` is two transposes, `[a 'b']` is a concatenation. Its genuinely undecidable construct is command syntax, which never reaches the scanner | ADR-0046 | landed; review reports 5/9 |
+| Visual Basic .NET | MSTest attributes | sound: `'`/`REM` comments and double-quoted-only strings mean the comment character is never a delimiter | ADR-0043 | landed; review reports 6/9 |
+| Delphi/Object Pascal | DUnitX `[TestFixture]` | sound: `//`, `{ }`, `(* *)` comments and single-quoted strings are disjoint delimiter sets, so no character serves two purposes | ADR-0044 | landed; review reports 6/9 |
+| Ada | AUnit `Register_Routine` | sound: one comment form, one string form, and the overloaded tick resolved by the same local rule real Ada lexers use — a tick after an identifier character or `)` is an attribute, otherwise a three-byte character literal | ADR-0045 | landed; review reports 6/9 |
 | Fortran | none in the backlog | blocked on target selection, not on route | none available | closed as `no_qualifying_candidate_yet` |
 
 R is taken first because testthat is the only entry among the six that is
@@ -553,6 +553,14 @@ this needs a backlog entry first, not an ADR first.
 Wave F2 closes the question the goal asked. Every tracked entry now has a state
 in `top-20-program-summary.json` under `framework_support`, and none of them is
 an open queue item waiting on framework work.
+
+Every Wave F2 scanner also closes ADR-0020's parse-degraded gate. A scanner has
+no syntax failure, so a malformed file used to yield fewer anchors silently;
+each one now checks its own well-formedness invariant — an unclosed block
+comment, an unterminated string, an unbalanced block or bracket — and reports a
+degraded parse when it is violated. The units already found are kept, and the
+operator is told that the ones not found prove nothing. The same invariant was
+added to the Go scanner, which stays auxiliary evidence.
 
 **Landed (12).** Python/marshmallow, C++/CppUnit, Java/Jakarta Servlet,
 C#/FluentValidation, JavaScript/Playwright, TypeScript/Playwright,

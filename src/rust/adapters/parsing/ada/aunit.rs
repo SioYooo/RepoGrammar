@@ -17,7 +17,8 @@ use crate::core::model::{
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 
 pub const ADA_ANCHOR_ENGINE: &str = "repogrammar-ada-aunit-scanner";
@@ -98,10 +99,20 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             full_range,
             "Ada source exceeded the bounded input-byte limit",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
     let mask = CodeMask::new(document.text);
+    // A scanner cannot fail on malformed Ada the way a parser does, but an
+    // unterminated string literal is a decidable well-formedness violation,
+    // and it makes a missing anchor uninformative rather than meaningful.
+    let mut diagnostics = Vec::new();
+    if mask.unterminated_string {
+        diagnostics.push(degraded(
+            document.path,
+            "an Ada string literal is left open at end of file, so any registration after it was read as string",
+        ));
+    }
     let calls = register_routine_calls(document.text, &mask);
     let mut unresolved_registration = false;
 
@@ -147,12 +158,22 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         )?);
     }
 
-    finish(units, facts)
+    finish(units, facts, diagnostics)
+}
+
+fn degraded(path: &str, message: &str) -> ParseDiagnostic {
+    ParseDiagnostic {
+        path: path.to_string(),
+        range: None,
+        severity: ParseDiagnosticSeverity::Error,
+        message: message.to_string(),
+    }
 }
 
 fn finish(
     mut units: Vec<CodeUnit>,
     mut facts: Vec<SemanticFact>,
+    diagnostics: Vec<ParseDiagnostic>,
 ) -> Result<SourceParseOutput, ParseError> {
     units.sort_by(|left, right| {
         (left.range.start_byte, left.range.end_byte, left.id.as_str()).cmp(&(
@@ -181,7 +202,7 @@ fn finish(
             ir_nodes,
             ir_edges,
             semantic_facts: facts,
-            diagnostics: Vec::new(),
+            diagnostics,
         },
         python_interface_hash: None,
         dependencies: Vec::new(),
@@ -192,12 +213,16 @@ fn finish(
 /// character literals.
 struct CodeMask {
     is_code: Vec<bool>,
+    /// A string literal that runs to end of file without closing. Everything
+    /// after it was read as string, so any anchor beyond it is invisible.
+    unterminated_string: bool,
 }
 
 impl CodeMask {
     fn new(text: &str) -> Self {
         let bytes = text.as_bytes();
         let mut is_code = vec![false; bytes.len()];
+        let mut unterminated_string = false;
         let mut index = 0usize;
         // The previous non-blank code byte decides what a tick means, and it may
         // sit on an earlier line, so it is tracked across the whole document.
@@ -211,6 +236,7 @@ impl CodeMask {
                 }
                 b'"' => {
                     index += 1;
+                    let mut closed = false;
                     while index < bytes.len() {
                         if bytes[index] == b'"' {
                             if bytes.get(index + 1) == Some(&b'"') {
@@ -218,10 +244,12 @@ impl CodeMask {
                                 continue;
                             }
                             index += 1;
+                            closed = true;
                             break;
                         }
                         index += 1;
                     }
+                    unterminated_string |= !closed;
                     previous_code_byte = Some(b'"');
                 }
                 b'\''
@@ -242,7 +270,10 @@ impl CodeMask {
                 }
             }
         }
-        Self { is_code }
+        Self {
+            is_code,
+            unterminated_string,
+        }
     }
 
     fn is_code(&self, index: usize) -> bool {
@@ -675,6 +706,28 @@ mod tests {
             .semantic_facts
             .iter()
             .all(|fact| !fact.certainty.supports_family_membership()));
+    }
+
+    #[test]
+    fn an_unterminated_string_reports_a_degraded_parse() {
+        let parsed = output(&format!(
+            "{HEAD}   Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
+                  Note : constant String := \"never closed\nend Catalog_Tests;\n"
+        ));
+        assert_eq!(parsed.report.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.report.diagnostics[0].severity,
+            ParseDiagnosticSeverity::Error
+        );
+        assert_eq!(registrations(&parsed), 1);
+    }
+
+    #[test]
+    fn a_well_formed_body_reports_no_diagnostic() {
+        let parsed = output(&format!(
+            "{HEAD}   Register_Routine (T, Loads_Catalog'Access, \"loads\");\nend Catalog_Tests;\n"
+        ));
+        assert!(parsed.report.diagnostics.is_empty());
     }
 
     #[test]

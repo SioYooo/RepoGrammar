@@ -110,6 +110,13 @@ an anchor, and the tick rule in the context section is implemented exactly as
 stated. This is a decision because the repository has shipped the opposite
 defect four times.
 
+The scanner also reports a degraded parse when its own well-formedness
+invariant is violated. A scanner has no syntax failure, but a string literal
+left open at end of file is decidable, and without that signal a malformed file
+silently yields fewer anchors -- which is indistinguishable from a file that
+simply has fewer declarations. The units already found are kept; the diagnostic
+states that the ones not found prove nothing.
+
 ### D5. What the anchor claims
 
 It claims that a body importing AUnit registers a named routine with a literal

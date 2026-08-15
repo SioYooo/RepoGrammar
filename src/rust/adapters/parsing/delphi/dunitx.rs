@@ -20,7 +20,8 @@ use crate::core::model::{
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 
 pub const DELPHI_ANCHOR_ENGINE: &str = "repogrammar-delphi-dunitx-scanner";
@@ -101,10 +102,21 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             full_range,
             "Object Pascal source exceeded the bounded input-byte limit",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
-    let lines = source_lines(document.text);
+    let (lines, unterminated_block_comment) = source_lines(document.text);
+    let mut diagnostics = Vec::new();
+    if unterminated_block_comment {
+        // The scanner cannot fail on malformed Object Pascal the way a parser
+        // does, but an unclosed `{` or `(*` is a decidable well-formedness
+        // violation: everything after it was read as comment, so any anchor
+        // beyond that point is invisible.
+        diagnostics.push(degraded(
+            document.path,
+            "an Object Pascal block comment is left open at end of file, so any declaration after it was read as comment",
+        ));
+    }
     let uses_dunitx = lines.iter().any(|line| mentions_dunitx(&line.code));
     let mut unresolved_attribute = false;
 
@@ -172,12 +184,22 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         )?);
     }
 
-    finish(units, facts)
+    finish(units, facts, diagnostics)
+}
+
+fn degraded(path: &str, message: &str) -> ParseDiagnostic {
+    ParseDiagnostic {
+        path: path.to_string(),
+        range: None,
+        severity: ParseDiagnosticSeverity::Error,
+        message: message.to_string(),
+    }
 }
 
 fn finish(
     mut units: Vec<CodeUnit>,
     mut facts: Vec<SemanticFact>,
+    diagnostics: Vec<ParseDiagnostic>,
 ) -> Result<SourceParseOutput, ParseError> {
     units.sort_by(|left, right| {
         (left.range.start_byte, left.range.end_byte, left.id.as_str()).cmp(&(
@@ -208,7 +230,7 @@ fn finish(
             ir_nodes,
             ir_edges,
             semantic_facts: facts,
-            diagnostics: Vec::new(),
+            diagnostics,
         },
         python_interface_hash: None,
         dependencies: Vec::new(),
@@ -223,7 +245,7 @@ struct SourceLine {
 
 /// Split into lines and strip what is not code, carrying block-comment state
 /// across line boundaries.
-fn source_lines(text: &str) -> Vec<SourceLine> {
+fn source_lines(text: &str) -> (Vec<SourceLine>, bool) {
     let mut lines = Vec::new();
     let mut start = 0usize;
     let mut block = BlockState::None;
@@ -238,7 +260,7 @@ fn source_lines(text: &str) -> Vec<SourceLine> {
         });
         start = end;
     }
-    lines
+    (lines, block != BlockState::None)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -703,6 +725,35 @@ mod tests {
             .semantic_facts
             .iter()
             .all(|fact| !fact.certainty.supports_family_membership()));
+    }
+
+    #[test]
+    fn an_unclosed_block_comment_reports_a_degraded_parse() {
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog;\n  end;\n  {{ never closed\n"
+        ));
+        assert_eq!(
+            parsed.report.diagnostics.len(),
+            1,
+            "an open block comment is a decidable well-formedness violation"
+        );
+        assert_eq!(
+            parsed.report.diagnostics[0].severity,
+            ParseDiagnosticSeverity::Error
+        );
+        // The anchors that were found are still real; the diagnostic says the
+        // ones that were not found prove nothing.
+        assert_eq!(tests(&parsed), 1);
+    }
+
+    #[test]
+    fn a_well_formed_unit_reports_no_diagnostic() {
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog;\n  end;\nimplementation\nend.\n"
+        ));
+        assert!(parsed.report.diagnostics.is_empty());
     }
 
     #[test]

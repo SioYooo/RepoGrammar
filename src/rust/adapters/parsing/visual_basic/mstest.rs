@@ -22,7 +22,8 @@ use crate::core::model::{
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 
 pub const VB_ANCHOR_ENGINE: &str = "repogrammar-vbnet-mstest-scanner";
@@ -94,10 +95,20 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             full_range,
             "VB.NET source exceeded the bounded input-byte limit",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
-    let lines = source_lines(document.text);
+    let (lines, unterminated_string) = source_lines(document.text);
+    // A scanner cannot fail on malformed VB the way a parser does, but an
+    // unterminated string is decidable per line and hides that line's
+    // declarations, so a missing anchor stops being informative.
+    let mut diagnostics = Vec::new();
+    if unterminated_string {
+        diagnostics.push(degraded(
+            document.path,
+            "a VB.NET string literal is left open at end of line, so that line's declarations were read as string",
+        ));
+    }
     let imports_mstest = lines.iter().any(|line| line_imports_mstest(&line.code));
 
     let mut unresolved_attribute = false;
@@ -159,7 +170,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         )?);
     }
 
-    finish(units, facts)
+    finish(units, facts, diagnostics)
 }
 
 fn declaration_unit(
@@ -185,9 +196,19 @@ fn declaration_unit(
     })
 }
 
+fn degraded(path: &str, message: &str) -> ParseDiagnostic {
+    ParseDiagnostic {
+        path: path.to_string(),
+        range: None,
+        severity: ParseDiagnosticSeverity::Error,
+        message: message.to_string(),
+    }
+}
+
 fn finish(
     mut units: Vec<CodeUnit>,
     mut facts: Vec<SemanticFact>,
+    diagnostics: Vec<ParseDiagnostic>,
 ) -> Result<SourceParseOutput, ParseError> {
     units.sort_by(|left, right| {
         (left.range.start_byte, left.range.end_byte, left.id.as_str()).cmp(&(
@@ -218,7 +239,7 @@ fn finish(
             ir_nodes,
             ir_edges,
             semantic_facts: facts,
-            diagnostics: Vec::new(),
+            diagnostics,
         },
         python_interface_hash: None,
         dependencies: Vec::new(),
@@ -237,32 +258,35 @@ struct SourceLine {
 /// `'` and `REM` open comments and VB has no single-quoted string, so a comment
 /// can never be mistaken for a delimiter. Double-quoted strings escape by
 /// doubling the quote, which the scan handles by consuming the pair.
-fn source_lines(text: &str) -> Vec<SourceLine> {
+fn source_lines(text: &str) -> (Vec<SourceLine>, bool) {
     let mut lines = Vec::new();
     let mut start = 0usize;
+    // VB strings do not span lines, so an unterminated quote is decidable per
+    // line and makes that line's declarations invisible to the scan.
+    let mut unterminated_string = false;
     for raw in text.split_inclusive('\n') {
         let end = start + raw.len();
         let body = raw.strip_suffix('\n').unwrap_or(raw);
         let body = body.strip_suffix('\r').unwrap_or(body);
-        lines.push(SourceLine {
-            start,
-            end,
-            code: strip_comment_and_strings(body),
-        });
+        let (code, closed) = strip_comment_and_strings(body);
+        unterminated_string |= !closed;
+        lines.push(SourceLine { start, end, code });
         start = end;
     }
-    lines
+    (lines, unterminated_string)
 }
 
-fn strip_comment_and_strings(line: &str) -> String {
+fn strip_comment_and_strings(line: &str) -> (String, bool) {
     let bytes = line.as_bytes();
     let mut code = String::with_capacity(line.len());
     let mut index = 0usize;
+    let mut closed = true;
     while index < bytes.len() {
         match bytes[index] {
             b'\'' => break,
             b'"' => {
                 index += 1;
+                let mut closed_here = false;
                 while index < bytes.len() {
                     if bytes[index] == b'"' {
                         if bytes.get(index + 1) == Some(&b'"') {
@@ -270,10 +294,12 @@ fn strip_comment_and_strings(line: &str) -> String {
                             continue;
                         }
                         index += 1;
+                        closed_here = true;
                         break;
                     }
                     index += 1;
                 }
+                closed &= closed_here;
                 // A consumed string still separates tokens.
                 code.push(' ');
             }
@@ -287,10 +313,10 @@ fn strip_comment_and_strings(line: &str) -> String {
     if trimmed.len() >= 3 && trimmed[..3].eq_ignore_ascii_case("rem") {
         let rest = &trimmed[3..];
         if rest.is_empty() || rest.starts_with(|character: char| character.is_whitespace()) {
-            return String::new();
+            return (String::new(), closed);
         }
     }
-    code
+    (code, closed)
 }
 
 fn line_imports_mstest(code: &str) -> bool {
@@ -715,6 +741,29 @@ mod tests {
             .semantic_facts
             .iter()
             .all(|fact| !fact.certainty.supports_family_membership()));
+    }
+
+    #[test]
+    fn an_unterminated_string_reports_a_degraded_parse() {
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n\
+             \x20       Dim note As String = \"never closed\n    End Sub\nEnd Class\n"
+        ));
+        assert_eq!(parsed.report.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.report.diagnostics[0].severity,
+            ParseDiagnosticSeverity::Error
+        );
+    }
+
+    #[test]
+    fn a_well_formed_class_reports_no_diagnostic() {
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\nEnd Class\n"
+        ));
+        assert!(parsed.report.diagnostics.is_empty());
     }
 
     #[test]

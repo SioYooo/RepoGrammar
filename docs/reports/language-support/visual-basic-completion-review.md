@@ -13,8 +13,10 @@
 - [ ] RepoGrammar-owned source code units and IR.
 - [ ] Typed source-semantic `UNKNOWN` registry and provider fallback.
 - [ ] First exact framework family with support at least three.
-- [ ] Positive, lookalike, low-support, degraded, and resolved/unresolved
-  fixtures for that family.
+- [x] Positive, lookalike, low-support, and parse-degraded fixtures exist for
+  that family. An unterminated string literal is a decidable well-formedness
+  violation and reports a degraded parse. Resolved/unresolved fixtures do not
+  exist: there is no VB provider to resolve against.
 - [ ] Complete source-free readiness and leakage matrix.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
@@ -52,12 +54,13 @@ Not complete. Visual Basic .NET has a bounded scanner over one attribute shape,
 owned units and IR, a typed attribute-binding `UNKNOWN`, and one exact family
 with support three under ADR-0043. The `.vbproj` metadata inventory remains
 auxiliary and is not compiler, build, or dependency-resolution evidence. Strict
-gate count is `5/9`; it must not be counted as a supported language.
+gate count is `6/9`; it must not be counted as a supported language.
 
 One limitation is stated rather than left to inference: this frontend is a
-scanner, so malformed VB does not fail — it yields fewer admitted declarations,
-which is indistinguishable from a file with fewer declarations. The
-parse-degraded gate stays open for that reason.
+scanner, so malformed VB does not fail the way a parsed language does. It
+reports a degraded parse when its own well-formedness invariant is violated, and
+outside that invariant fewer admitted declarations remain indistinguishable from
+a file with fewer declarations.
 
 ## Final program audit fields
 
@@ -69,10 +72,10 @@ parse-degraded gate stays open for that reason.
 | Manifest/lockfile | Bounded direct literal NuGet `PackageReference` declarations from `.vbproj`; no restore graph, central versioning, assets lock, or resolved assembly. |
 | Owned source IR / external symbols | Owned units and IR exist for the ADR-0043 anchor only; external symbols stay absent, and types, members, and assemblies are unresolved. |
 | Library Contracts | Exact-version registry exists, production packs = 0; manifest-only NuGet rows are insufficient for lookup. |
-| Exact family / fixtures | One exact family, `framework:vb_mstest.test_method` over `mstest.TestMethod`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded and resolved/unresolved do not, because a scanner has no parse failure and there is no VB provider. |
+| Exact family / fixtures | One exact family, `framework:vb_mstest.test_method` over `mstest.TestMethod`, gated at support three. Positive, lookalike, low-support, and parse-degraded fixtures exist; resolved/unresolved do not, because there is no VB provider. |
 | Primary UNKNOWN cases | SDK imports, properties, conditions, item transforms, central versions, analyzers/generators, target framework, assembly graph, source recovery, and provider availability. |
 | Source-free / security | Inventory outputs are source-free; XML is bounded and DTD/entity-free; no compiler, `dotnet`, MSBuild, NuGet, analyzer, child, project code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only literal direct declarations;
 security fails closed on dynamic XML/MSBuild semantics; completeness lacks every

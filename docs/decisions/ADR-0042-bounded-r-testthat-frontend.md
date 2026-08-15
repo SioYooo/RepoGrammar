@@ -115,6 +115,13 @@ function body, a TS/JS runner matched inside a member call, and a Go
 declaration matched inside a string. Each came from asking whether text appears
 instead of whether a construct exists.
 
+The scanner also reports a degraded parse when its own well-formedness
+invariant is violated. A scanner has no syntax failure, but a quote or bracket
+left open at end of file is decidable, and without that signal a malformed file
+silently yields fewer anchors -- which is indistinguishable from a file that
+simply has fewer declarations. The units already found are kept; the diagnostic
+states that the ones not found prove nothing.
+
 ### D5. What the anchor claims
 
 It claims that a file testthat's runner would execute contains a top-level

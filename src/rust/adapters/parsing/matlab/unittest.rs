@@ -22,7 +22,8 @@ use crate::core::model::{
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 
 pub const MATLAB_ANCHOR_ENGINE: &str = "repogrammar-matlab-unittest-scanner";
@@ -121,11 +122,27 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             full_range,
             "MATLAB source exceeded the bounded input-byte limit",
         )?);
-        return finish(units, facts);
+        return finish(units, facts, Vec::new());
     }
 
-    let lines = source_lines(document.text);
+    let (lines, unterminated_block_comment) = source_lines(document.text);
     let scan = admitted_anchors(&lines);
+    // A scanner cannot fail on malformed MATLAB the way a parser does, but
+    // both of these are decidable well-formedness violations, and each one
+    // makes a missing anchor uninformative rather than meaningful.
+    let mut diagnostics = Vec::new();
+    if unterminated_block_comment {
+        diagnostics.push(degraded(
+            document.path,
+            "a MATLAB `%{` block comment is left open at end of file, so any declaration after it was read as comment",
+        ));
+    }
+    if scan.residual_depth != 0 {
+        diagnostics.push(degraded(
+            document.path,
+            "MATLAB block keywords do not balance their `end` terminators, so the scanned block extents are unreliable",
+        ));
+    }
 
     for anchor in scan.anchors {
         if units.len() >= MAX_UNITS {
@@ -182,12 +199,22 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         )?);
     }
 
-    finish(units, facts)
+    finish(units, facts, diagnostics)
+}
+
+fn degraded(path: &str, message: &str) -> ParseDiagnostic {
+    ParseDiagnostic {
+        path: path.to_string(),
+        range: None,
+        severity: ParseDiagnosticSeverity::Error,
+        message: message.to_string(),
+    }
 }
 
 fn finish(
     mut units: Vec<CodeUnit>,
     mut facts: Vec<SemanticFact>,
+    diagnostics: Vec<ParseDiagnostic>,
 ) -> Result<SourceParseOutput, ParseError> {
     units.sort_by(|left, right| {
         (left.range.start_byte, left.range.end_byte, left.id.as_str()).cmp(&(
@@ -218,7 +245,7 @@ fn finish(
             ir_nodes,
             ir_edges,
             semantic_facts: facts,
-            diagnostics: Vec::new(),
+            diagnostics,
         },
         python_interface_hash: None,
         dependencies: Vec::new(),
@@ -231,7 +258,7 @@ struct SourceLine {
     code: String,
 }
 
-fn source_lines(text: &str) -> Vec<SourceLine> {
+fn source_lines(text: &str) -> (Vec<SourceLine>, bool) {
     let mut lines = Vec::new();
     let mut start = 0usize;
     let mut in_block_comment = false;
@@ -270,7 +297,7 @@ fn source_lines(text: &str) -> Vec<SourceLine> {
         });
         start = end;
     }
-    lines
+    (lines, in_block_comment)
 }
 
 /// Drop `%` comments, character arrays, and strings, keeping byte positions
@@ -372,6 +399,9 @@ struct Anchor {
 struct Scan {
     anchors: Vec<Anchor>,
     unbound_test_block: bool,
+    /// Block depth left over at end of file. Nonzero means the keyword
+    /// structure did not close, so the scanned extents are not trustworthy.
+    residual_depth: usize,
 }
 
 /// Depth is exact for MATLAB because every block keyword is closed by `end`,
@@ -434,6 +464,7 @@ fn admitted_anchors(lines: &[SourceLine]) -> Scan {
             }
         }
     }
+    scan.residual_depth = depth;
     scan
 }
 
@@ -795,6 +826,40 @@ mod tests {
             .semantic_facts
             .iter()
             .all(|fact| !fact.certainty.supports_family_membership()));
+    }
+
+    #[test]
+    fn unbalanced_blocks_and_an_open_block_comment_report_a_degraded_parse() {
+        let unbalanced = output(
+            "classdef CatalogTest < matlab.unittest.TestCase\n    methods (Test)\n\
+             \x20       function loadsCatalog(testCase)\n            if true\n        end\n    end\nend\n",
+        );
+        assert_eq!(unbalanced.report.diagnostics.len(), 1);
+        assert_eq!(
+            unbalanced.report.diagnostics[0].severity,
+            ParseDiagnosticSeverity::Error
+        );
+
+        let open_comment = output(
+            "classdef CatalogTest < matlab.unittest.TestCase\n    methods (Test)\n\
+             \x20       function loadsCatalog(testCase)\n        end\n    end\nend\n%{\nnever closed\n",
+        );
+        assert!(open_comment
+            .report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == ParseDiagnosticSeverity::Error));
+        // The anchor found before the violation is still real.
+        assert_eq!(tests_found(&open_comment), 1);
+    }
+
+    #[test]
+    fn a_well_formed_class_reports_no_diagnostic() {
+        let parsed = output(
+            "classdef CatalogTest < matlab.unittest.TestCase\n    methods (Test)\n\
+             \x20       function loadsCatalog(testCase)\n        end\n    end\nend\n",
+        );
+        assert!(parsed.report.diagnostics.is_empty());
     }
 
     #[test]

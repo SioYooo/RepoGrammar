@@ -23,9 +23,11 @@
 - [x] First exact framework family with support at least three —
   `framework:dunitx.test_procedure` over the `dunitx.Test` anchor, gated at
   support three.
-- [ ] Positive, lookalike, and low-support fixtures exist for that family;
-  degraded and resolved/unresolved do not, because a scanner has no parse
-  failure and there is no Delphi provider to resolve against.
+- [x] Positive, lookalike, low-support, and parse-degraded fixtures exist for
+  that family. An unclosed `{` or `(*` is a decidable well-formedness violation
+  and reports a degraded parse, so a missing anchor stops being silent.
+  Resolved/unresolved fixtures do not exist: there is no Delphi provider to
+  resolve against.
 - [ ] Complete source-free readiness and leakage matrix.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
@@ -63,12 +65,13 @@ Not complete. Delphi/Object Pascal has a bounded scanner over one attribute
 shape, owned units and IR, a typed attribute-binding `UNKNOWN`, and one exact
 family with support three under ADR-0044. The `.dproj` metadata inventory
 remains auxiliary and is not compiler, build, or package-resolution evidence.
-Strict gate count is `5/9`; it must not be counted as a supported language.
+Strict gate count is `6/9`; it must not be counted as a supported language.
 
 Two limitations are stated rather than left to inference. This frontend is a
-scanner, so malformed Object Pascal does not fail — it yields fewer admitted
-declarations, which is indistinguishable from a file with fewer declarations;
-the parse-degraded gate stays open for that reason. And the dialect evidence is
+scanner, so malformed Object Pascal does not fail the way a parsed language
+does; it reports a degraded parse when its own well-formedness invariant is
+violated, and outside that invariant fewer admitted declarations remain
+indistinguishable from a file with fewer declarations. And the dialect evidence is
 `uses DUnitX.TestFramework`, never the `.pas` suffix, which ADR-0032 forbids as
 a dialect oracle: a `.pas` unit that does not import DUnitX is still
 dialect-neutral Object Pascal, and Free Pascal/Lazarus remains separately
@@ -87,7 +90,7 @@ deferred and must not be counted as implemented by this lane.
 | Exact family / fixtures | One exact family, `framework:dunitx.test_procedure` over `dunitx.Test`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded and resolved/unresolved do not, because a scanner has no parse failure and there is no Delphi provider. |
 | Primary UNKNOWN cases | Compiler dialect, project selection, MSBuild properties/conditions/imports, automatically added packages, version suffixes, unit search paths, generated forms/resources, and provider availability. |
 | Source-free / security | Source/config outputs are source-free; bounded XML rejects active constructs; no compiler, IDE, MSBuild, package loader, child, repository code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `5/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
 
 Four-part review: correctness retains explicit direct-root text while preserving
 unknown directness; security is non-executing and fail-closed; completeness has
