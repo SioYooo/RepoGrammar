@@ -106,6 +106,27 @@ silently yields fewer anchors -- which is indistinguishable from a file that
 simply has fewer declarations. The units already found are kept; the diagnostic
 states that the ones not found prove nothing.
 
+### D4a. Conditional compilation and dialect directives bound the claim
+
+Two compiler directives decide what may be claimed, and both are read even
+though the text they sit in is not code.
+
+`{$IFDEF}`, `{$IFNDEF}`, `{$IF}`, and `{$IFOPT}` select one branch at compile
+time from a define this frontend does not evaluate. **No declaration inside a
+conditional region anchors**, in either branch, and the file records
+`BuildVariantAmbiguity` under `delphi_conditional_compilation`. Admitting both
+branches would invent a member that never compiles; admitting one would assert a
+define we do not know. Declarations in unconditional code are unaffected — the
+skipped branch understates support, it does not unprove what is proven.
+
+`{$MODE}` and `{$MODESWITCH}` re-select the language dialect, which is precisely
+what this frontend does not evaluate, so their presence reports a degraded
+parse.
+
+This is the first half of the argument ADR-0020 gate 2 asks for: the admitted
+parse must not depend on what cannot be determined. Where it would, the frontend
+abstains and says so rather than choosing.
+
 ### D5. What the anchor claims
 
 It claims that a unit importing DUnitX declares a fixture class and a procedure

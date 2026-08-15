@@ -105,9 +105,18 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         return finish(units, facts, Vec::new());
     }
 
-    let (lines, unterminated_block_comment) = source_lines(document.text);
+    let (lines, flags) = source_lines(document.text);
     let mut diagnostics = Vec::new();
-    if unterminated_block_comment {
+    if flags.dialect_selector {
+        // ADR-0044's invariance argument holds only while the dialect is the one
+        // the import implies. A `{$MODE}` / `{$MODESWITCH}` directive re-selects
+        // it, and this frontend cannot evaluate the selection.
+        diagnostics.push(degraded(
+            document.path,
+            "an Object Pascal dialect directive re-selects the language mode, which this frontend does not evaluate",
+        ));
+    }
+    if flags.unterminated_block_comment {
         // The scanner cannot fail on malformed Object Pascal the way a parser
         // does, but an unclosed `{` or `(*` is a decidable well-formedness
         // violation: everything after it was read as comment, so any anchor
@@ -128,7 +137,20 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             unresolved_attribute = true;
         }
     } else {
-        for anchor in admitted_anchors(&lines) {
+        let scan = admitted_anchors(&lines);
+        if scan.skipped_conditional {
+            // Both branches of a `{$IFDEF}` cannot compile, and RepoGrammar
+            // cannot evaluate the define, so neither branch may anchor.
+            facts.push(unknown_fact(
+                &module,
+                UnknownReasonCode::BuildVariantAmbiguity,
+                "delphi_conditional_compilation",
+                "declaration_under_conditional_compilation",
+                module.range.clone(),
+                "an admitted declaration sits inside conditional compilation, so the define that selects it is unevaluated",
+            )?);
+        }
+        for anchor in scan.anchors {
             if units.len() >= MAX_UNITS {
                 facts.push(unknown_fact(
                     &module,
@@ -241,26 +263,81 @@ struct SourceLine {
     start: usize,
     end: usize,
     code: String,
+    /// Conditional-compilation depth after this line's own directives. A
+    /// declaration at depth greater than zero is compiled only for a define
+    /// RepoGrammar cannot evaluate.
+    conditional_depth: usize,
+}
+
+/// The compiler directives that decide what this frontend may claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Directive {
+    ConditionalOpen,
+    ConditionalClose,
+    /// `{$MODE}` / `{$MODESWITCH}` re-selects the dialect, and the dialect is
+    /// exactly what this frontend does not evaluate.
+    DialectSelector,
+    Other,
+}
+
+fn classify_directive(body: &str) -> Directive {
+    let name = body
+        .trim_start()
+        .split(|character: char| character.is_whitespace() || character == '}')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('+')
+        .trim_end_matches('-')
+        .to_ascii_uppercase();
+    match name.as_str() {
+        "IFDEF" | "IFNDEF" | "IF" | "IFOPT" => Directive::ConditionalOpen,
+        "ENDIF" | "IFEND" => Directive::ConditionalClose,
+        "MODE" | "MODESWITCH" => Directive::DialectSelector,
+        _ => Directive::Other,
+    }
+}
+
+/// What the scan learned about the file as a whole.
+#[derive(Default)]
+struct ScanFlags {
+    unterminated_block_comment: bool,
+    dialect_selector: bool,
 }
 
 /// Split into lines and strip what is not code, carrying block-comment state
 /// across line boundaries.
-fn source_lines(text: &str) -> (Vec<SourceLine>, bool) {
+fn source_lines(text: &str) -> (Vec<SourceLine>, ScanFlags) {
     let mut lines = Vec::new();
     let mut start = 0usize;
     let mut block = BlockState::None;
+    let mut flags = ScanFlags::default();
+    let mut conditional_depth = 0usize;
     for raw in text.split_inclusive('\n') {
         let end = start + raw.len();
         let body = raw.strip_suffix('\n').unwrap_or(raw);
         let body = body.strip_suffix('\r').unwrap_or(body);
+        let mut directives = Vec::new();
+        let code = strip_line(body, &mut block, &mut directives);
+        for directive in directives {
+            match directive {
+                Directive::ConditionalOpen => conditional_depth += 1,
+                Directive::ConditionalClose => {
+                    conditional_depth = conditional_depth.saturating_sub(1)
+                }
+                Directive::DialectSelector => flags.dialect_selector = true,
+                Directive::Other => {}
+            }
+        }
         lines.push(SourceLine {
             start,
             end,
-            code: strip_line(body, &mut block),
+            code,
+            conditional_depth,
         });
         start = end;
     }
-    (lines, block != BlockState::None)
+    flags.unterminated_block_comment = block != BlockState::None;
+    (lines, flags)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,7 +349,7 @@ enum BlockState {
     Paren,
 }
 
-fn strip_line(line: &str, block: &mut BlockState) -> String {
+fn strip_line(line: &str, block: &mut BlockState, directives: &mut Vec<Directive>) -> String {
     let bytes = line.as_bytes();
     let mut code = String::with_capacity(line.len());
     let mut index = 0usize;
@@ -297,6 +374,17 @@ fn strip_line(line: &str, block: &mut BlockState) -> String {
             BlockState::None => match bytes[index] {
                 b'/' if bytes.get(index + 1) == Some(&b'/') => break,
                 b'{' => {
+                    // `{$...}` is a compiler directive, not prose. It is still
+                    // not code, but which directive it is decides what may be
+                    // claimed about the lines around it.
+                    if bytes.get(index + 1) == Some(&b'$') {
+                        let body_start = index + 2;
+                        let body_end = line[body_start..]
+                            .find('}')
+                            .map(|offset| body_start + offset)
+                            .unwrap_or(bytes.len());
+                        directives.push(classify_directive(&line[body_start..body_end]));
+                    }
                     *block = BlockState::Brace;
                     index += 1;
                 }
@@ -366,6 +454,14 @@ struct Anchor {
     end: usize,
 }
 
+#[derive(Default)]
+struct AnchorScan {
+    anchors: Vec<Anchor>,
+    /// An admitted shape was found inside conditional compilation and was
+    /// not anchored.
+    skipped_conditional: bool,
+}
+
 /// Positional attribution: a `[Test]` belongs to the most recent class
 /// declaration, and a class declaration without `[TestFixture]` clears the
 /// fixture state.
@@ -373,8 +469,8 @@ struct Anchor {
 /// A keyword-depth model of the class body would be wrong in ordinary code,
 /// because `class` also appears in `class procedure`, `class var`, and forward
 /// declarations. This rule is smaller and states its own boundary.
-fn admitted_anchors(lines: &[SourceLine]) -> Vec<Anchor> {
-    let mut anchors = Vec::new();
+fn admitted_anchors(lines: &[SourceLine]) -> AnchorScan {
+    let mut scan = AnchorScan::default();
     // The exact line the attribute applies to, never merely "a class is coming".
     // A `[TestFixture]` standing before `TFoo = class of TBar;` applies to that
     // metaclass, and must not leak onto the next real class declaration.
@@ -391,7 +487,7 @@ fn admitted_anchors(lines: &[SourceLine]) -> Vec<Anchor> {
             fixture_class_line = next_class_declaration(lines, index + 1);
             // The fixture unit spans the attribute and its class declaration.
             if let Some(class_line) = fixture_class_line {
-                anchors.push(Anchor {
+                scan.anchors.push(Anchor {
                     kind: AnchorKind::Fixture,
                     start: lines[index].start,
                     end: lines[class_line].end,
@@ -419,7 +515,13 @@ fn admitted_anchors(lines: &[SourceLine]) -> Vec<Anchor> {
         }
         if attribute_is(code, "test") && fixture_active {
             if let Some(procedure_line) = next_procedure_declaration(lines, index + 1) {
-                anchors.push(Anchor {
+                if lines[index].conditional_depth > 0 || lines[procedure_line].conditional_depth > 0
+                {
+                    scan.skipped_conditional = true;
+                    index = procedure_line + 1;
+                    continue;
+                }
+                scan.anchors.push(Anchor {
                     kind: AnchorKind::Test,
                     start: lines[index].start,
                     end: lines[procedure_line].end,
@@ -430,7 +532,7 @@ fn admitted_anchors(lines: &[SourceLine]) -> Vec<Anchor> {
         }
         index += 1;
     }
-    anchors
+    scan
 }
 
 /// A `Name = class` declaration, with or without a parent list.
@@ -754,6 +856,62 @@ mod tests {
                  [Test]\n    procedure LoadsCatalog;\n  end;\nimplementation\nend.\n"
         ));
         assert!(parsed.report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn conditional_compilation_branches_must_not_both_anchor() {
+        // `{$IFDEF}` selects one branch at compile time. RepoGrammar cannot
+        // evaluate the define, so admitting both branches invents a member that
+        // never compiles -- and admitting either one asserts a define we do not
+        // know.
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+             {{$IFDEF DEBUG}}\n\
+                 [Test]\n    procedure LoadsCatalogDebug;\n\
+             {{$ELSE}}\n\
+                 [Test]\n    procedure LoadsCatalogRelease;\n\
+             {{$ENDIF}}\n  end;\nimplementation\nend.\n"
+        ));
+        assert_eq!(
+            tests(&parsed),
+            0,
+            "neither branch may anchor: the define that selects one is unevaluated"
+        );
+        assert!(unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn declarations_outside_a_conditional_still_anchor() {
+        // The skipped branch understates support; it does not unprove what sits
+        // in unconditional code.
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog;\n\
+             {{$IFDEF DEBUG}}\n\
+                 [Test]\n    procedure OnlyInDebug;\n\
+             {{$ENDIF}}\n\
+                 [Test]\n    procedure FiltersCatalog;\n  end;\nimplementation\nend.\n"
+        ));
+        assert_eq!(tests(&parsed), 2);
+        assert!(unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn a_dialect_directive_reports_a_degraded_parse() {
+        // `{$MODE}` re-selects the language, and ADR-0044's invariance argument
+        // only holds for the dialect the import implies.
+        let parsed = output(
+            "unit Tests.Catalog;\n{$MODE OBJFPC}\ninterface\nuses DUnitX.TestFramework;\ntype\n\
+               [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog;\n  end;\nimplementation\nend.\n",
+        );
+        assert!(parsed
+            .report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == ParseDiagnosticSeverity::Error));
     }
 
     #[test]
