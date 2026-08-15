@@ -32,9 +32,10 @@ pub(crate) enum Refusal {
     /// A string literal left open at end of line. VB strings do not span
     /// lines, so this is a decidable well-formedness violation.
     UnterminatedString,
-    /// `$"…"`. Interpolated strings are VB 14 and later; under VB 10 to 13 the
-    /// same characters lex as an operator followed by an ordinary string, so
-    /// the token stream is not invariant across the declared set.
+    /// `$"…"`. Interpolated strings are VB 14 and later. In VB 10 to 13 a `$`
+    /// is solely a legacy type character on an identifier, so `$"` is not legal
+    /// at all and a file using one is not a program in every member of the
+    /// declared set.
     InterpolatedString,
     /// `<` opening an XML literal outside attribute position. An XML literal
     /// may contain any text at all, including lines that read exactly like a
@@ -75,7 +76,7 @@ impl Refusal {
                 "a VB.NET string literal is left open at end of line, so that line's declarations were not read"
             }
             Self::InterpolatedString => {
-                "an interpolated string is not lexed the same way by every VB.NET version this frontend admits"
+                "an interpolated string is not legal in every VB.NET version this frontend admits"
             }
             Self::XmlLiteral => {
                 "an XML literal may contain text that reads as a declaration, so the token stream is not decidable"

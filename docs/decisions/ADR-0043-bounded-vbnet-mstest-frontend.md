@@ -184,11 +184,15 @@ attribute an inner `End` to an outer declaration.
 Refused, each as a **whole-file** abstention with a typed `UNKNOWN` and a
 degraded-parse diagnostic:
 
-- **Interpolated strings, `$"…"`.** VB 14 and later only; under VB 10 to 13 the
-  same characters lex as an operator followed by an ordinary string. The token
-  stream is therefore not invariant across the declared set. This is ADR-0040's
-  refusal of `$` for the same reason, with a version divergence rather than a
-  dialect one.
+- **Interpolated strings, `$"…"`.** VB 14 and later only. In VB 10 to 13 a `$`
+  is solely a legacy type character on an identifier, so `$"` is not legal at
+  all: a file using one is not a program in every member of the declared set,
+  which is the same exclusion shape as VB 9 itself. Lexing it would also mean
+  tracking interpolation holes, which nest arbitrary expressions and their own
+  string literals and brace escapes, so the frontend refuses the character
+  rather than carrying a second and harder lexer for a construct the declared
+  set does not share. This is ADR-0040's refusal of `$` in a different
+  language, for a version divergence rather than a dialect one.
 - **XML literals.** A `<` that begins an XML name outside attribute position is
   refused. An XML literal may contain any text at all, including lines that read
   exactly like a declaration, so once one opens the token stream stops being
@@ -198,6 +202,14 @@ degraded-parse diagnostic:
 - **A `#` directive this frontend does not read, or a `#If` that never closes.**
 - **Anything else outside the grammar** — an unclosed block, a mismatched `End`,
   an attribute list split across lines without a continuation.
+
+The continuation rule has one consequence worth naming, because it is not
+obvious from the rule itself. VB 10 also continues a line implicitly between
+LINQ query operators, which this frontend does not admit: a query written across
+several lines splits into separate statements, its `Select` clause reads as the
+start of a `Select` block, and the file abstains. That is the safe direction and
+it is decidable, but it is real lost recall on real code, so it is stated rather
+than discovered.
 
 A refusal is file-level rather than declaration-level for ADR-0040 D3's reason:
 once the token stream diverges, every later boundary in the file is unproven, so

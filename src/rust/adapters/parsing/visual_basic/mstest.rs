@@ -96,7 +96,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         facts.push(unknown_fact(
             &module,
             UnknownReasonCode::InsufficientSupport,
-            "vb_declaration_scan",
+            "vb_syntax_admission",
             "source_byte_limit",
             full_range,
             "VB.NET source exceeded the bounded input-byte limit",
@@ -1130,6 +1130,24 @@ mod tests {
              \x20   End Sub\nEnd Class\n"
         ));
         assert_eq!(methods(&implicit), 1);
+    }
+
+    /// A named abstention rather than a discovered one. VB 10 continues a line
+    /// implicitly between LINQ query operators; this frontend does not admit
+    /// that, so the query splits into statements, its `Select` clause reads as
+    /// a `Select` block, and the file abstains. Safe, decidable, and a real
+    /// recall cost.
+    #[test]
+    fn a_multi_line_query_expression_abstains() {
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n\
+             \x20       Dim result = From item In items\n\
+             \x20                    Where item > 1\n\
+             \x20                    Select item\n    End Sub\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 0);
+        assert!(unknown_kinds(&parsed).contains(&"unadmitted_declaration_shape".to_string()));
     }
 
     #[test]

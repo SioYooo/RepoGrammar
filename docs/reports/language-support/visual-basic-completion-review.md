@@ -33,13 +33,15 @@
 - [x] First exact framework family with support at least three —
   `framework:vb_mstest.test_method` over the `mstest.TestMethod` anchor, gated
   at support three.
-- [x] Positive, lookalike, low-support, and parse-degraded fixtures exist for
-  that family. Malformed VB now fails the way a parsed language does: an
-  unterminated literal, an unclosed block, a mismatched `End`, or any construct
-  outside the declared subset abstains for the whole file and says so. A
-  build-variant fixture case exists too — no declaration inside a `#If` region
-  anchors, in any branch. Resolved/unresolved fixtures do not exist: there is no
-  VB provider to resolve against.
+- [x] Positive, lookalike, low-support, build-variant, and parse-degraded
+  fixtures exist for that family, each exercised through the product CLI.
+  `mstest_build_variant` puts four attributed declarations in opposite `#If`
+  branches and `mstest_parse_degraded` puts three in a file whose parse fails;
+  both carry enough declarations to clear the support threshold of three if read
+  naively, and both must form no family and derive no support. The degraded one
+  must also surface a `parse degraded for CatalogTests.vb` index warning, which
+  is the signal a scanner could not produce. Resolved/unresolved fixtures do not
+  exist: there is no VB provider to resolve against.
 - [x] Complete source-free readiness and leakage matrix — Visual Basic .NET is registered
   in the repo-shape language scopes, so its units and families are counted
   rather than silently reported as zero; `status`, `doctor`, `stats`,

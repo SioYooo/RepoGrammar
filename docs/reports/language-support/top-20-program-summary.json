@@ -166,20 +166,20 @@
       "rank": 7,
       "counted_in_top20": true,
       "status": "structural_substrate",
-      "completion_gates_passed": 5,
+      "completion_gates_passed": 8,
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
-      "blocker": "Gates 6, 7, and 9 remain: no parse-degraded fixture (this frontend is a scanner, so malformed VB yields fewer admitted declarations rather than failing), no audited source-free readiness matrix, and no final completion audit. None needs an external artifact.",
+      "blocker": "Gate 9 remains: the linked semantic prerequisite commits and the final completion audit. ADR-0043 D4b replaced the line scanner with a bounded recursive-descent parser over a declared VB.NET 10-17 invariance set, so malformed VB now abstains for the whole file and reports a degraded parse instead of yielding fewer admitted declarations. It needs no external artifact.",
       "framework_support": {
         "state": "landed",
         "framework": "MSTest",
         "family": "mstest.vb_test_method",
         "wave": "F2"
       },
-      "provider_status": "bounded_mstest_attribute_scanner_no_provider",
+      "provider_status": "bounded_mstest_declaration_parser_no_provider",
       "library_analysis_status": "nuget_manifest_inventory_only",
       "primary_unknowns": ["msbuild_effective_project", "vb_source_and_external_symbols"],
-      "evidence_paths": ["docs/reports/language-support/visual-basic-completion-review.md", "src/rust/adapters/languages/visual_basic.rs", "src/rust/adapters/parsing/visual_basic.rs", "src/rust/adapters/parsing/visual_basic/mstest.rs", "src/rust/adapters/frameworks/visual_basic.rs", "src/fixtures/visual_basic/release/v0_2/", "docs/decisions/ADR-0043-bounded-vbnet-mstest-frontend.md"],
+      "evidence_paths": ["docs/reports/language-support/visual-basic-completion-review.md", "src/rust/adapters/languages/visual_basic.rs", "src/rust/adapters/parsing/visual_basic.rs", "src/rust/adapters/parsing/visual_basic/syntax.rs", "src/rust/adapters/parsing/visual_basic/mstest.rs", "src/rust/adapters/frameworks/visual_basic.rs", "src/fixtures/visual_basic/release/v0_2/", "docs/decisions/ADR-0043-bounded-vbnet-mstest-frontend.md"],
       "prerequisite_commits": ["2b5fd6d1bf32e8805798e26e53ff9f090ec22d3e"]
     },
     {
