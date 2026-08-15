@@ -10,10 +10,17 @@
 - [x] Discovery/configuration — `.pas`/`.dpr`/`.dpk` remain generic
   `object-pascal`, only `.dproj` is Delphi-qualified, and bounded literal
   runtime-package metadata is retained.
-- [ ] Evidence-pinned Delphi frontend and version/project profile; Free
-  Pascal/Lazarus requires a separate qualification and is not equivalent.
-  ADR-0044's scanner is bounded to one attribute shape and pins no version, so
-  this gate stays open.
+- [x] Authoritative frontend for the declared scope — ADR-0044 D2b/D2c: a
+  RepoGrammar-owned bounded lexer and declaration parser reads only constructs
+  Delphi and Free Pascal in Delphi mode parse identically, so the parse it
+  admits does not depend on the dialect it cannot select. `{$MODE}`/
+  `{$MODESWITCH}` re-selects that dialect and reports a degraded parse;
+  conditional compilation selects a branch from an unevaluated define and
+  anchors neither; a class body outside the subset yields no anchor at all.
+  Types are never interpreted. This is not a versioned Object Pascal grammar
+  and not a compiler frontend, and the ADR forbids widening either bound
+  without a superseding decision. Free Pascal/Lazarus still requires its own
+  qualification and is not equated.
 - [x] RepoGrammar-owned source code units and IR — ADR-0044 emits a module
   unit per decoded `.pas`, a fixture unit, and a test-procedure unit, each
   projected into the shared IR.
@@ -74,7 +81,7 @@ Not complete. Delphi/Object Pascal has a bounded scanner over one attribute
 shape, owned units and IR, a typed attribute-binding `UNKNOWN`, and one exact
 family with support three under ADR-0044. The `.dproj` metadata inventory
 remains auxiliary and is not compiler, build, or package-resolution evidence.
-Strict gate count is `7/9`; it must not be counted as a supported language.
+Strict gate count is `8/9`; it must not be counted as a supported language.
 
 Two limitations are stated rather than left to inference. This frontend is a
 scanner, so malformed Object Pascal does not fail the way a parsed language
@@ -92,14 +99,14 @@ deferred and must not be counted as implemented by this lane.
 |---|---|
 | Language / rank | Delphi/Object Pascal / 11 |
 | Dialect/version | Source suffixes remain dialect-neutral Object Pascal; only `.dproj` metadata is Delphi-qualified. No RAD Studio/Delphi version or Free Pascal equivalence is selected. |
-| Provider/frontend/version | None; no Delphi/FPC parser, compiler, LSP, or version. |
+| Provider/frontend/version | A RepoGrammar-owned bounded Object Pascal lexer and declaration parser, authoritative for the ADR-0044 D2b subset over the Delphi / Free-Pascal-in-Delphi-mode invariance set. No Delphi or FPC compiler, LSP, or toolchain, and no version is pinned or claimed. |
 | Manifest/lockfile | Bounded literal `.dproj` `DCC_UsePackage` rows with runtime scope, unknown directness, and no version; `.lpi`/`.lpk`/`fpmake` remain deferred. |
 | Owned source IR / external symbols | Owned units and IR exist for the ADR-0044 anchor only; external symbols stay absent, and package, unit, class, and member identity is unresolved. |
 | Library Contracts | Registry exists, production packs = 0; versionless unknown-directness rows cannot match a reviewed contract. |
 | Exact family / fixtures | One exact family, `framework:dunitx.test_procedure` over `dunitx.Test`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded and resolved/unresolved do not, because a scanner has no parse failure and there is no Delphi provider. |
 | Primary UNKNOWN cases | Compiler dialect, project selection, MSBuild properties/conditions/imports, automatically added packages, version suffixes, unit search paths, generated forms/resources, and provider availability. |
 | Source-free / security | Source/config outputs are source-free; bounded XML rejects active constructs; no compiler, IDE, MSBuild, package loader, child, repository code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `7/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `8/9`; Top-20 complete = no. |
 
 Four-part review: correctness retains explicit direct-root text while preserving
 unknown directness; security is non-executing and fail-closed; completeness has

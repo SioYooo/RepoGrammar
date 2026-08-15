@@ -123,9 +123,26 @@ skipped branch understates support, it does not unprove what is proven.
 what this frontend does not evaluate, so their presence reports a degraded
 parse.
 
-This is the first half of the argument ADR-0020 gate 2 asks for: the admitted
-parse must not depend on what cannot be determined. Where it would, the frontend
-abstains and says so rather than choosing.
+### D2c. Why this is authoritative for the declared scope
+
+ADR-0020 gate 2 asks for a frontend that produces the primary syntax evidence.
+This one is RepoGrammar-owned rather than language-native, so it earns that
+standing the way ADR-0040 earned it for SQL: by showing the admitted parse does
+not depend on what cannot be determined, and abstaining wherever it would.
+
+What cannot be determined here is the dialect and the build variant. The
+invariance set is Object Pascal as accepted by Delphi and by Free Pascal in
+Delphi mode. Every construct in D2b's subset — `unit`, `uses`, `type`, `class`
+with a parent list, visibility sections, field, property and method
+declarations, attribute brackets — is lexed and parsed identically by both, and
+none of them changes shape with a compiler version. The two things that *would*
+move the parse are handled rather than assumed: `{$MODE}`/`{$MODESWITCH}`
+re-selects the dialect and reports a degraded parse, and conditional compilation
+selects a branch from an unevaluated define and anchors neither.
+
+The claim is therefore bounded twice over: to the subset the parser admits, and
+to the dialect set over which that subset is invariant. Widening either needs a
+superseding decision.
 
 ### D5. What the anchor claims
 

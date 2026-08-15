@@ -14,6 +14,7 @@
 //! delimiter serves two purposes and a bounded scan stays exact.
 
 use super::super::{ir_edges_for_units, ir_nodes_for_units};
+use super::pascal;
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -30,7 +31,6 @@ pub const DELPHI_ANCHOR_METHOD: &str = "bounded_delphi_dunitx_attribute_v1";
 /// Fixed support target for the one admitted exact anchor.
 pub const DELPHI_TEST_TARGET: &str = "dunitx.Test";
 
-const DUNITX_UNIT: &str = "dunitx.testframework";
 const MAX_UNITS: usize = 4_096;
 
 /// True for the only suffix this frontend may read.
@@ -105,7 +105,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         return finish(units, facts, Vec::new());
     }
 
-    let (lines, flags) = source_lines(document.text);
+    let (tokens, flags) = pascal::lex(document.text);
     let mut diagnostics = Vec::new();
     if flags.dialect_selector {
         // ADR-0044's invariance argument holds only while the dialect is the one
@@ -117,77 +117,77 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         ));
     }
     if flags.unterminated_block_comment {
-        // The scanner cannot fail on malformed Object Pascal the way a parser
-        // does, but an unclosed `{` or `(*` is a decidable well-formedness
-        // violation: everything after it was read as comment, so any anchor
-        // beyond that point is invisible.
         diagnostics.push(degraded(
             document.path,
             "an Object Pascal block comment is left open at end of file, so any declaration after it was read as comment",
         ));
     }
-    let uses_dunitx = lines.iter().any(|line| mentions_dunitx(&line.code));
-    let mut unresolved_attribute = false;
 
-    if !uses_dunitx {
-        if lines
-            .iter()
-            .any(|line| attribute_is(&line.code, "testfixture") || attribute_is(&line.code, "test"))
-        {
-            unresolved_attribute = true;
-        }
-    } else {
-        let scan = admitted_anchors(&lines);
-        if scan.skipped_conditional {
-            // Both branches of a `{$IFDEF}` cannot compile, and RepoGrammar
-            // cannot evaluate the define, so neither branch may anchor.
-            facts.push(unknown_fact(
-                &module,
-                UnknownReasonCode::BuildVariantAmbiguity,
-                "delphi_conditional_compilation",
-                "declaration_under_conditional_compilation",
-                module.range.clone(),
-                "an admitted declaration sits inside conditional compilation, so the define that selects it is unevaluated",
-            )?);
-        }
-        for anchor in scan.anchors {
+    let parsed = pascal::parse_unit(document.text, &tokens);
+    let unresolved_attribute = parsed.attributed_without_uses;
+
+    if parsed.abstained {
+        // A class body held a construct outside the declared subset, so that
+        // class yielded no anchor at all. Saying so is the difference between a
+        // parser and a scanner: the absence is reported, not silent.
+        diagnostics.push(degraded(
+            document.path,
+            "an Object Pascal class body holds a declaration outside the admitted subset, so that class was not read",
+        ));
+    }
+    if parsed.skipped_conditional {
+        // Both branches of a `{$IFDEF}` cannot compile, and RepoGrammar cannot
+        // evaluate the define, so neither branch may anchor.
+        facts.push(unknown_fact(
+            &module,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "delphi_conditional_compilation",
+            "declaration_under_conditional_compilation",
+            module.range.clone(),
+            "an admitted declaration sits inside conditional compilation, so the define that selects it is unevaluated",
+        )?);
+    }
+
+    for fixture in &parsed.fixtures {
+        for (kind, target, assumption, note, range) in std::iter::once((
+            CodeUnitKind::DelphiTestFixture,
+            "dunitx.TestFixture",
+            "delphi_anchor_kind=dunitx_test_fixture",
+            "bounded Delphi DUnitX TestFixture class declaration",
+            (fixture.start, fixture.end),
+        ))
+        .chain(fixture.tests.iter().map(|test| {
+            (
+                CodeUnitKind::DelphiTestProcedure,
+                DELPHI_TEST_TARGET,
+                "delphi_anchor_kind=dunitx_test_procedure",
+                "bounded Delphi DUnitX Test procedure declaration",
+                (test.start, test.end),
+            )
+        })) {
             if units.len() >= MAX_UNITS {
                 facts.push(unknown_fact(
                     &module,
                     UnknownReasonCode::InsufficientSupport,
                     "delphi_declaration_scan",
-                    "scanner_resource_limit",
+                    "parser_resource_limit",
                     module.range.clone(),
-                    "Object Pascal scanner exceeded the bounded unit limit",
+                    "Object Pascal parser exceeded the bounded unit limit",
                 )?);
                 break;
             }
-            let (kind, target, assumption, note) = match anchor.kind {
-                AnchorKind::Fixture => (
-                    CodeUnitKind::DelphiTestFixture,
-                    "dunitx.TestFixture",
-                    "delphi_anchor_kind=dunitx_test_fixture",
-                    "bounded Delphi DUnitX TestFixture attribute anchor",
-                ),
-                AnchorKind::Test => (
-                    CodeUnitKind::DelphiTestProcedure,
-                    DELPHI_TEST_TARGET,
-                    "delphi_anchor_kind=dunitx_test_procedure",
-                    "bounded Delphi DUnitX Test attribute anchor",
-                ),
-            };
             let unit = CodeUnit {
                 id: CodeUnitId::new(format!(
                     "unit:{}#{}:{}-{}",
                     document.path,
                     kind.as_str(),
-                    anchor.start,
-                    anchor.end
+                    range.0,
+                    range.1
                 ))
                 .map_err(ParseError::Internal)?,
                 language: Language::ObjectPascal,
                 kind,
-                range: SourceRange::new(anchor.start, anchor.end).map_err(ParseError::Internal)?,
+                range: SourceRange::new(range.0, range.1).map_err(ParseError::Internal)?,
                 provenance: provenance.clone(),
             };
             facts.push(anchor_fact(&unit, target, assumption, note)?);
@@ -257,340 +257,6 @@ fn finish(
         python_interface_hash: None,
         dependencies: Vec::new(),
     })
-}
-
-struct SourceLine {
-    start: usize,
-    end: usize,
-    code: String,
-    /// Conditional-compilation depth after this line's own directives. A
-    /// declaration at depth greater than zero is compiled only for a define
-    /// RepoGrammar cannot evaluate.
-    conditional_depth: usize,
-}
-
-/// The compiler directives that decide what this frontend may claim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Directive {
-    ConditionalOpen,
-    ConditionalClose,
-    /// `{$MODE}` / `{$MODESWITCH}` re-selects the dialect, and the dialect is
-    /// exactly what this frontend does not evaluate.
-    DialectSelector,
-    Other,
-}
-
-fn classify_directive(body: &str) -> Directive {
-    let name = body
-        .trim_start()
-        .split(|character: char| character.is_whitespace() || character == '}')
-        .next()
-        .unwrap_or("")
-        .trim_end_matches('+')
-        .trim_end_matches('-')
-        .to_ascii_uppercase();
-    match name.as_str() {
-        "IFDEF" | "IFNDEF" | "IF" | "IFOPT" => Directive::ConditionalOpen,
-        "ENDIF" | "IFEND" => Directive::ConditionalClose,
-        "MODE" | "MODESWITCH" => Directive::DialectSelector,
-        _ => Directive::Other,
-    }
-}
-
-/// What the scan learned about the file as a whole.
-#[derive(Default)]
-struct ScanFlags {
-    unterminated_block_comment: bool,
-    dialect_selector: bool,
-}
-
-/// Split into lines and strip what is not code, carrying block-comment state
-/// across line boundaries.
-fn source_lines(text: &str) -> (Vec<SourceLine>, ScanFlags) {
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    let mut block = BlockState::None;
-    let mut flags = ScanFlags::default();
-    let mut conditional_depth = 0usize;
-    for raw in text.split_inclusive('\n') {
-        let end = start + raw.len();
-        let body = raw.strip_suffix('\n').unwrap_or(raw);
-        let body = body.strip_suffix('\r').unwrap_or(body);
-        let mut directives = Vec::new();
-        let code = strip_line(body, &mut block, &mut directives);
-        for directive in directives {
-            match directive {
-                Directive::ConditionalOpen => conditional_depth += 1,
-                Directive::ConditionalClose => {
-                    conditional_depth = conditional_depth.saturating_sub(1)
-                }
-                Directive::DialectSelector => flags.dialect_selector = true,
-                Directive::Other => {}
-            }
-        }
-        lines.push(SourceLine {
-            start,
-            end,
-            code,
-            conditional_depth,
-        });
-        start = end;
-    }
-    flags.unterminated_block_comment = block != BlockState::None;
-    (lines, flags)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BlockState {
-    None,
-    /// Inside `{ … }`, which also covers `{$…}` compiler directives.
-    Brace,
-    /// Inside `(* … *)`.
-    Paren,
-}
-
-fn strip_line(line: &str, block: &mut BlockState, directives: &mut Vec<Directive>) -> String {
-    let bytes = line.as_bytes();
-    let mut code = String::with_capacity(line.len());
-    let mut index = 0usize;
-    while index < bytes.len() {
-        match *block {
-            BlockState::Brace => {
-                if bytes[index] == b'}' {
-                    *block = BlockState::None;
-                    code.push(' ');
-                }
-                index += 1;
-            }
-            BlockState::Paren => {
-                if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b')') {
-                    *block = BlockState::None;
-                    code.push(' ');
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-            }
-            BlockState::None => match bytes[index] {
-                b'/' if bytes.get(index + 1) == Some(&b'/') => break,
-                b'{' => {
-                    // `{$...}` is a compiler directive, not prose. It is still
-                    // not code, but which directive it is decides what may be
-                    // claimed about the lines around it.
-                    if bytes.get(index + 1) == Some(&b'$') {
-                        let body_start = index + 2;
-                        let body_end = line[body_start..]
-                            .find('}')
-                            .map(|offset| body_start + offset)
-                            .unwrap_or(bytes.len());
-                        directives.push(classify_directive(&line[body_start..body_end]));
-                    }
-                    *block = BlockState::Brace;
-                    index += 1;
-                }
-                b'(' if bytes.get(index + 1) == Some(&b'*') => {
-                    *block = BlockState::Paren;
-                    index += 2;
-                }
-                b'\'' => {
-                    index += 1;
-                    while index < bytes.len() {
-                        if bytes[index] == b'\'' {
-                            if bytes.get(index + 1) == Some(&b'\'') {
-                                index += 2;
-                                continue;
-                            }
-                            index += 1;
-                            break;
-                        }
-                        index += 1;
-                    }
-                    code.push(' ');
-                }
-                byte => {
-                    code.push(byte as char);
-                    index += 1;
-                }
-            },
-        }
-    }
-    code
-}
-
-fn mentions_dunitx(code: &str) -> bool {
-    code.to_ascii_lowercase()
-        .split(|character: char| {
-            !(character.is_alphanumeric() || character == '.' || character == '_')
-        })
-        .any(|token| token == DUNITX_UNIT)
-}
-
-/// True when the line is exactly the named attribute, with optional arguments.
-fn attribute_is(code: &str, name: &str) -> bool {
-    let trimmed = code.trim();
-    let Some(inner) = trimmed
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-    else {
-        return false;
-    };
-    let inner = inner.trim();
-    let inner = inner
-        .split_once('(')
-        .map_or(inner, |(before, _)| before)
-        .trim();
-    inner.eq_ignore_ascii_case(name)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnchorKind {
-    Fixture,
-    Test,
-}
-
-struct Anchor {
-    kind: AnchorKind,
-    start: usize,
-    end: usize,
-}
-
-#[derive(Default)]
-struct AnchorScan {
-    anchors: Vec<Anchor>,
-    /// An admitted shape was found inside conditional compilation and was
-    /// not anchored.
-    skipped_conditional: bool,
-}
-
-/// Positional attribution: a `[Test]` belongs to the most recent class
-/// declaration, and a class declaration without `[TestFixture]` clears the
-/// fixture state.
-///
-/// A keyword-depth model of the class body would be wrong in ordinary code,
-/// because `class` also appears in `class procedure`, `class var`, and forward
-/// declarations. This rule is smaller and states its own boundary.
-fn admitted_anchors(lines: &[SourceLine]) -> AnchorScan {
-    let mut scan = AnchorScan::default();
-    // The exact line the attribute applies to, never merely "a class is coming".
-    // A `[TestFixture]` standing before `TFoo = class of TBar;` applies to that
-    // metaclass, and must not leak onto the next real class declaration.
-    let mut fixture_class_line: Option<usize> = None;
-    let mut fixture_active = false;
-    let mut index = 0usize;
-    while index < lines.len() {
-        let code = lines[index].code.trim();
-        if code.is_empty() {
-            index += 1;
-            continue;
-        }
-        if attribute_is(code, "testfixture") {
-            fixture_class_line = next_class_declaration(lines, index + 1);
-            // The fixture unit spans the attribute and its class declaration.
-            if let Some(class_line) = fixture_class_line {
-                scan.anchors.push(Anchor {
-                    kind: AnchorKind::Fixture,
-                    start: lines[index].start,
-                    end: lines[class_line].end,
-                });
-            }
-            index += 1;
-            continue;
-        }
-        if is_class_declaration(code) {
-            fixture_active = fixture_class_line == Some(index);
-            fixture_class_line = None;
-            index += 1;
-            continue;
-        }
-        // `end` closes the fixture's declaration block, and DUnitX discovers
-        // methods of a fixture class -- never a unit-level procedure that merely
-        // follows one. A nested type inside the fixture closes with its own
-        // `end`, so this can end the block early and miss a later `[Test]`; a
-        // missed test is a smaller error than an invented one.
-        if code.eq_ignore_ascii_case("implementation") || strip_word(code, "end").is_some() {
-            fixture_active = false;
-            fixture_class_line = None;
-            index += 1;
-            continue;
-        }
-        if attribute_is(code, "test") && fixture_active {
-            if let Some(procedure_line) = next_procedure_declaration(lines, index + 1) {
-                if lines[index].conditional_depth > 0 || lines[procedure_line].conditional_depth > 0
-                {
-                    scan.skipped_conditional = true;
-                    index = procedure_line + 1;
-                    continue;
-                }
-                scan.anchors.push(Anchor {
-                    kind: AnchorKind::Test,
-                    start: lines[index].start,
-                    end: lines[procedure_line].end,
-                });
-                index = procedure_line + 1;
-                continue;
-            }
-        }
-        index += 1;
-    }
-    scan
-}
-
-/// A `Name = class` declaration, with or without a parent list.
-fn is_class_declaration(code: &str) -> bool {
-    let Some((_, rest)) = code.split_once('=') else {
-        return false;
-    };
-    let rest = rest.trim();
-    let Some(after) = strip_word(rest, "class") else {
-        return false;
-    };
-    let after = after.trim();
-    // `class of TFoo;` is a metaclass, not a class declaration.
-    strip_word(after, "of").is_none()
-}
-
-fn next_class_declaration(lines: &[SourceLine], from: usize) -> Option<usize> {
-    let mut index = from;
-    while index < lines.len() {
-        let code = lines[index].code.trim();
-        if code.is_empty() || code.starts_with('[') {
-            index += 1;
-            continue;
-        }
-        return is_class_declaration(code).then_some(index);
-    }
-    None
-}
-
-fn next_procedure_declaration(lines: &[SourceLine], from: usize) -> Option<usize> {
-    let mut index = from;
-    while index < lines.len() {
-        let code = lines[index].code.trim();
-        if code.is_empty() || code.starts_with('[') {
-            index += 1;
-            continue;
-        }
-        let body = strip_word(code, "class").map_or(code, str::trim);
-        return strip_word(body, "procedure").is_some().then_some(index);
-    }
-    None
-}
-
-fn strip_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
-    let trimmed = text.trim_start();
-    if trimmed.len() < word.len() || !trimmed[..word.len()].eq_ignore_ascii_case(word) {
-        return None;
-    }
-    let rest = &trimmed[word.len()..];
-    if rest.is_empty()
-        || rest.starts_with(|character: char| {
-            character.is_whitespace() || character == '(' || character == ';'
-        })
-    {
-        Some(rest)
-    } else {
-        None
-    }
 }
 
 fn anchor_fact(
@@ -912,6 +578,71 @@ mod tests {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == ParseDiagnosticSeverity::Error));
+    }
+
+    #[test]
+    fn a_nested_type_no_longer_closes_the_fixture_early() {
+        // ADR-0044 D2 had to record this as a chosen false negative while the
+        // frontend was line-oriented: a nested type inside the fixture closes
+        // with its own `end`, which ended the block early and dropped every
+        // later `[Test]`. The grammar closes the nested type instead.
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog;\n\
+             \x20   type\n      TInner = class\n      public\n        procedure Helper;\n      end;\n\
+                 [Test]\n    procedure FiltersCatalog;\n  end;\nimplementation\nend.\n"
+        ));
+        assert_eq!(
+            tests(&parsed),
+            2,
+            "the nested type's own end must not close the fixture"
+        );
+    }
+
+    #[test]
+    fn ordinary_members_do_not_stop_the_fixture_being_read() {
+        // Fields, properties, visibility sections, class methods and method
+        // directives are structure the parser must understand well enough to
+        // keep going -- the type each of them names is never interpreted.
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class(TObject)\n\
+             \x20 strict private\n    FCount: Integer;\n\
+             \x20   FNames: array[0..3] of string;\n\
+             \x20 public\n    property Count: Integer read FCount;\n\
+             \x20   class procedure Prepare; static;\n\
+             \x20   constructor Create; overload; virtual;\n\
+                 [Test]\n    procedure LoadsCatalog;\n\
+                 [Test]\n    procedure FiltersCatalog(const Name: string); overload;\n  end;\n\
+             implementation\nend.\n"
+        ));
+        assert_eq!(tests(&parsed), 2);
+        assert!(
+            parsed.report.diagnostics.is_empty(),
+            "these are all in the declared subset: {:?}",
+            parsed.report.diagnostics
+        );
+    }
+
+    #[test]
+    fn an_attribute_binds_to_the_declaration_the_grammar_gives_it() {
+        // A `[Test]` sitting before a field binds to that field, not to a
+        // procedure further down. Line-oriented attribution could not tell.
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    FMisplaced: Integer;\n\
+             \x20   procedure NotAttributed;\n  end;\nimplementation\nend.\n"
+        ));
+        assert_eq!(tests(&parsed), 0);
+    }
+
+    #[test]
+    fn a_declaration_spanning_lines_is_one_declaration() {
+        let parsed = output(&format!(
+            "{UNIT_HEAD}  [TestFixture]\n  TCatalogTests = class\n  public\n\
+                 [Test]\n    procedure LoadsCatalog(\n      const Name: string;\n\
+             \x20     Count: Integer\n    );\n  end;\nimplementation\nend.\n"
+        ));
+        assert_eq!(tests(&parsed), 1);
     }
 
     #[test]
