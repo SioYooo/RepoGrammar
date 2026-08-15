@@ -2661,6 +2661,13 @@ fn vb_unknown_reason_blocks_family_membership(
 
 /// A `Test` methods block in a class that does not derive from
 /// `matlab.unittest.TestCase` blocks the anchor: the framework is unproven.
+///
+/// ADR-0046 D4b and D4c block it for a second reason. When a statement reads as
+/// either command syntax or an expression, or when the file mixes MATLAB with
+/// Octave-only lexemes, the two readings disagree about where a block closes.
+/// The frontend already withholds every anchor in such a file; recording the
+/// same conclusion here keeps one authoritative answer to "may this file support
+/// a family" rather than leaving it to the absence of a fact.
 fn matlab_unknown_reason_blocks_family_membership(
     reason: UnknownReasonCode,
     affected_claim: &str,
@@ -2668,6 +2675,11 @@ fn matlab_unknown_reason_blocks_family_membership(
     match reason {
         UnknownReasonCode::UnresolvedImport => {
             affected_claim == "matlab_unittest_class_binding"
+                || affected_claim.starts_with("family:")
+        }
+        UnknownReasonCode::ConflictingFacts => {
+            affected_claim == "matlab_block_structure"
+                || affected_claim == "matlab_dialect_invariance"
                 || affected_claim.starts_with("family:")
         }
         _ => false,
@@ -5550,6 +5562,67 @@ mod tests {
             UnknownReasonCode::ConflictingFacts,
             "sql_statement_boundary",
             Some(crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION),
+            RUST_ANCHOR_ENGINE,
+            RUST_ANCHOR_METHOD,
+        )
+        .is_none());
+    }
+
+    /// ADR-0046 D4b and D4c. The MATLAB frontend already withholds every anchor
+    /// in a file whose block extents are unproven, but the classifier is the
+    /// authoritative answer to "may this file support a family", so it has to
+    /// reach the same conclusion from the fact alone.
+    #[test]
+    fn an_undecidable_matlab_block_extent_blocks_while_an_unadmitted_shape_does_not() {
+        let effect = |reason, claim| {
+            classify_unknown_family_effect(
+                "matlab",
+                reason,
+                claim,
+                Some(crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST),
+                MATLAB_ANCHOR_ENGINE,
+                MATLAB_ANCHOR_METHOD,
+            )
+        };
+
+        for claim in ["matlab_block_structure", "matlab_dialect_invariance"] {
+            let diverged = effect(UnknownReasonCode::ConflictingFacts, claim)
+                .unwrap_or_else(|| panic!("{claim} must be classified"));
+            assert_eq!(
+                diverged.claim_impact(),
+                Some(ClaimImpact::Blocking),
+                "{claim}"
+            );
+        }
+
+        // The framework binding keeps blocking for its own, separate reason.
+        let unbound = effect(
+            UnknownReasonCode::UnresolvedImport,
+            "matlab_unittest_class_binding",
+        )
+        .expect("an unbound Test block must block");
+        assert_eq!(unbound.claim_impact(), Some(ClaimImpact::Blocking));
+
+        // Leaving the declared subset understates what a file declares; it does
+        // not unprove the declarations that were parsed.
+        for claim in [
+            "matlab_classdef_body_shape",
+            "matlab_abstract_test_methods",
+            "matlab_test_attribute_value",
+        ] {
+            assert!(
+                effect(UnknownReasonCode::InsufficientSupport, claim)
+                    .is_none_or(|unknown| unknown.claim_impact() != Some(ClaimImpact::Blocking)),
+                "{claim}"
+            );
+        }
+
+        // Another language's engine cannot mint MATLAB family effects.
+        assert!(classify_unknown_family_effect(
+            "matlab",
+            UnknownReasonCode::ConflictingFacts,
+            "matlab_block_structure",
+            Some(crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST),
             RUST_ANCHOR_ENGINE,
             RUST_ANCHOR_METHOD,
         )
