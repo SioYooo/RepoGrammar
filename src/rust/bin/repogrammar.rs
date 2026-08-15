@@ -4551,6 +4551,56 @@ mod tests {
         }
     }
 
+    /// ADR-0046 D4b at the product surface. The fixture is the exact-tests class
+    /// with one extra statement: `format end` reads as the command `format('end')`
+    /// or as an expression closing the enclosing block, and nothing in the file
+    /// decides which. The family that would otherwise form at support three must
+    /// not form, and the abstention must be visible as a typed `UNKNOWN` rather
+    /// than as silence.
+    #[test]
+    fn an_undecidable_matlab_block_extent_withholds_the_family_it_would_otherwise_form() {
+        let (workspace, runtime) = index_matlab_release_v0_2_fixture(
+            "unittest_command_ambiguity",
+            "matlab-release-command-ambiguity",
+        );
+
+        assert!(
+            matlab_derived_support_targets(&runtime, &workspace).is_empty(),
+            "an undecidable block extent must derive no support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("matlab_test_method"))))
+                .unwrap_or(false),
+            "{families_json}"
+        );
+
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, &workspace);
+        assert!(
+            unknowns_json["unknown_inventory"]["by_language"]
+                .as_array()
+                .expect("by_language")
+                .iter()
+                .any(|row| row["language"] == "matlab"
+                    && row["count"].as_u64().unwrap_or_default() >= 1),
+            "the abstention must reach the unknowns surface: {unknowns_json}"
+        );
+        // The divergent statement is named by class, never quoted.
+        assert!(!unknowns.stdout.contains("format"), "{}", unknowns.stdout);
+    }
+
     fn ada_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
