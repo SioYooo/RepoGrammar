@@ -209,19 +209,19 @@
       "rank": 9,
       "counted_in_top20": true,
       "status": "structural_substrate",
-      "completion_gates_passed": 5,
+      "completion_gates_passed": 7,
       "top20_complete": false,
       "blocker_class": "open_under_zero_dependency",
-      "blocker": "Gates 6, 7, and 9 remain: no parse-degraded fixture (this frontend is a scanner, so malformed R yields fewer admitted calls rather than failing, and nothing yet detects the difference), no audited source-free readiness matrix, and no final completion audit. None needs an external artifact.",
+      "blocker": "Gates 4 and 9 remain: no complete source-semantic obligation registry with a provider fallback, and no final completion audit. Neither needs an external artifact. Gate 2 is satisfied by ADR-0042's bounded recursive-descent parser over a declared R subset, whose invariance argument rests on R having no dialect, preprocessor, or configuration that could change an admitted parse.",
       "framework_support": {
         "state": "landed",
         "framework": "testthat",
         "family": "testthat.test_that",
         "wave": "F2"
       },
-      "provider_status": "bounded_testthat_scanner_no_provider",
+      "provider_status": "bounded_testthat_parser_no_provider",
       "library_analysis_status": "cran_bioconductor_manifest_and_lock_inventory",
-      "primary_unknowns": ["r_project_and_repository_profile", "nse_dispatch_native_and_external_symbols"],
+      "primary_unknowns": ["r_project_and_repository_profile", "nse_dispatch_native_and_external_symbols", "test_that_rebound_in_file", "conditional_test_registration", "source_outside_declared_parsed_subset"],
       "evidence_paths": ["docs/reports/language-support/r-completion-review.md", "src/rust/adapters/languages/r.rs", "src/rust/adapters/parsing/r.rs", "src/rust/adapters/parsing/r/testthat.rs", "src/rust/adapters/frameworks/r.rs", "src/fixtures/r/release/v0_2/", "docs/decisions/ADR-0042-bounded-r-testthat-frontend.md"],
       "prerequisite_commits": ["82ced893f81a954b64e20546dfc4ad81043b28e5"]
     },
