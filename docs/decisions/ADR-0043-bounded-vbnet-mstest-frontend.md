@@ -122,6 +122,46 @@ silently yields fewer anchors -- which is indistinguishable from a file that
 simply has fewer declarations. The units already found are kept; the diagnostic
 states that the ones not found prove nothing.
 
+### D4a. Conditional compilation bounds the claim
+
+`#If` selects one branch at compile time from a constant this frontend does not
+evaluate. **No declaration inside a conditional region anchors**, in any branch,
+and the file records `BuildVariantAmbiguity` under `vb_conditional_compilation`.
+Admitting every branch would invent a member that never compiles; admitting one
+would assert a constant we do not know.
+
+The rule applies to the whole span an anchor covers — its attribute, its
+declaration, and its `End` — because an anchor's recorded evidence range runs
+from the attribute to the `End`, and a span whose end line sits in a branch has a
+branch-dependent range even when its opening does not. A `#If` wholly inside a
+method body leaves the declaration and its `End Sub` unconditional, so the
+common case of a conditional statement inside a test does not cost the anchor.
+
+It also applies one level up, to `Imports`. An import selected by an unevaluated
+constant cannot make a bare attribute name resolve, so only unconditional code
+binds the spelling; a conditional import plus bare attributes falls to the
+existing `mstest_attribute_without_import` unknown, which does block. A fully
+qualified attribute never needed the import and is unaffected.
+
+Directive classification is deliberately asymmetric. `#If` is matched on its name
+alone rather than on a trailing `Then`, and only `End` followed by `If` closes a
+region — `#End Region` and `#End ExternalSource` do not, or a region opened by
+`#If` would silently reopen the file mid-branch. A missed open would anchor a
+declaration the build may not contain, which is unsound; a missed close only
+leaves the depth high, which understates support and cannot invent a member.
+`#ElseIf` and `#Else` stay inside the region. `#Region`, `#ExternalSource`,
+`#Const`, and `#Enable`/`#Disable Warning` select no branch and change no claim.
+Matching is case-insensitive, as the language is.
+
+The claim is deliberately separate from `vb_mstest_attribute_binding` and
+deliberately non-blocking. A skipped branch understates support; it does not
+unprove the declarations sitting in unconditional code, and those still form
+their family.
+
+This is the first half of what ADR-0020 gate 2 asks for: the admitted parse must
+not depend on what cannot be determined. Where it would, the frontend abstains
+and says so rather than choosing.
+
 ### D5. What the anchor claims
 
 It claims that a class and method carry the MSTest attributes that make the

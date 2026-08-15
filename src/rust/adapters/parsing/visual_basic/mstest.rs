@@ -109,10 +109,27 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             "a VB.NET string literal is left open at end of line, so that line's declarations were read as string",
         ));
     }
-    let imports_mstest = lines.iter().any(|line| line_imports_mstest(&line.code));
+    // An `Imports` selected by an unevaluated constant cannot make a bare
+    // attribute name resolve, so only unconditional code binds the spelling.
+    let imports_mstest = lines
+        .iter()
+        .any(|line| line.conditional_depth == 0 && line_imports_mstest(&line.code));
 
     let mut unresolved_attribute = false;
-    for group in test_class_groups(&lines, imports_mstest, &mut unresolved_attribute) {
+    let scan = test_class_groups(&lines, imports_mstest, &mut unresolved_attribute);
+    if scan.skipped_conditional {
+        // Both branches of a `#If` cannot compile, and RepoGrammar cannot
+        // evaluate the constant that picks one, so neither branch may anchor.
+        facts.push(unknown_fact(
+            &module,
+            UnknownReasonCode::BuildVariantAmbiguity,
+            "vb_conditional_compilation",
+            "declaration_under_conditional_compilation",
+            module.range.clone(),
+            "an admitted declaration sits inside conditional compilation, so the constant that selects it is unevaluated",
+        )?);
+    }
+    for group in scan.groups {
         if units.len() >= MAX_UNITS {
             facts.push(unknown_fact(
                 &module,
@@ -251,6 +268,55 @@ struct SourceLine {
     start: usize,
     end: usize,
     code: String,
+    /// Conditional-compilation depth after this line's own directive. A
+    /// declaration at depth greater than zero is compiled only under a
+    /// constant this frontend does not evaluate.
+    conditional_depth: usize,
+}
+
+/// The conditional-compilation directives that decide what may be claimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Directive {
+    /// `#If` opens a region selected by an unevaluated constant.
+    ConditionalOpen,
+    /// `#End If` closes that region. `#ElseIf` and `#Else` stay inside it.
+    ConditionalClose,
+    /// `#Region`, `#ExternalSource`, `#Const`, `#Enable`/`#Disable Warning`,
+    /// and their `#End` forms select no branch and change no claim.
+    Neutral,
+}
+
+/// Classify a stripped code line as a conditional-compilation directive.
+///
+/// The rule is deliberately asymmetric: liberal about what opens a region,
+/// strict about what closes one. A missed open would anchor a declaration the
+/// build may not contain, which is unsound; a missed close only leaves the
+/// depth high, which understates support and cannot invent a member. `#If` is
+/// therefore matched on its name alone rather than on a trailing `Then`, and
+/// only `End` followed by `If` closes.
+fn classify_directive(code: &str) -> Option<Directive> {
+    let rest = code.trim_start().strip_prefix('#')?;
+    let (first, rest) = directive_word(rest);
+    if first.eq_ignore_ascii_case("if") {
+        return Some(Directive::ConditionalOpen);
+    }
+    if first.eq_ignore_ascii_case("end") && directive_word(rest).0.eq_ignore_ascii_case("if") {
+        return Some(Directive::ConditionalClose);
+    }
+    Some(Directive::Neutral)
+}
+
+/// The next maximal ASCII-alphabetic run, and the text after it.
+///
+/// Taking the alphabetic run rather than the whitespace-delimited word is what
+/// lets `#ExternalSource("Catalog.vb", 1)` and `#Region "Tests"` classify by
+/// name despite their trailing punctuation.
+fn directive_word(text: &str) -> (&str, &str) {
+    let trimmed = text.trim_start();
+    let end = trimmed
+        .find(|character: char| !character.is_ascii_alphabetic())
+        .unwrap_or(trimmed.len());
+    trimmed.split_at(end)
 }
 
 /// Split into lines and strip what is not code from each.
@@ -264,13 +330,28 @@ fn source_lines(text: &str) -> (Vec<SourceLine>, bool) {
     // VB strings do not span lines, so an unterminated quote is decidable per
     // line and makes that line's declarations invisible to the scan.
     let mut unterminated_string = false;
+    let mut conditional_depth = 0usize;
     for raw in text.split_inclusive('\n') {
         let end = start + raw.len();
         let body = raw.strip_suffix('\n').unwrap_or(raw);
         let body = body.strip_suffix('\r').unwrap_or(body);
         let (code, closed) = strip_comment_and_strings(body);
         unterminated_string |= !closed;
-        lines.push(SourceLine { start, end, code });
+        // A directive line is not a declaration, but which directive it is
+        // decides what the lines around it may claim.
+        match classify_directive(&code) {
+            Some(Directive::ConditionalOpen) => conditional_depth += 1,
+            Some(Directive::ConditionalClose) => {
+                conditional_depth = conditional_depth.saturating_sub(1)
+            }
+            Some(Directive::Neutral) | None => {}
+        }
+        lines.push(SourceLine {
+            start,
+            end,
+            code,
+            conditional_depth,
+        });
         start = end;
     }
     (lines, unterminated_string)
@@ -371,12 +452,32 @@ struct TestClassGroup {
     methods: Vec<(usize, usize)>,
 }
 
+/// What the scan found, and what it deliberately refused to anchor.
+#[derive(Default)]
+struct AnchorScan {
+    groups: Vec<TestClassGroup>,
+    /// An otherwise admitted shape sat inside conditional compilation and was
+    /// not anchored.
+    skipped_conditional: bool,
+}
+
+/// True when any line of the span is compiled only under an unevaluated
+/// constant.
+///
+/// All three lines are checked, not just the attribute, because an anchor's
+/// recorded evidence spans from its attribute to its `End`. A span whose end
+/// line sits in a branch has a branch-dependent range even when its opening
+/// does not.
+fn spans_conditional(lines: &[SourceLine], span: [usize; 3]) -> bool {
+    span.iter().any(|line| lines[*line].conditional_depth > 0)
+}
+
 fn test_class_groups(
     lines: &[SourceLine],
     imports_mstest: bool,
     unresolved_attribute: &mut bool,
-) -> Vec<TestClassGroup> {
-    let mut groups = Vec::new();
+) -> AnchorScan {
+    let mut scan = AnchorScan::default();
     let mut index = 0usize;
     while index < lines.len() {
         match line_attribute_is(&lines[index].code, "testclass", imports_mstest) {
@@ -404,6 +505,13 @@ fn test_class_groups(
             index += 1;
             continue;
         };
+        if spans_conditional(lines, [index, class_line, class_end_line]) {
+            // A whole class compiled only under a constant is a build variant,
+            // not a proven declaration. Its methods go with it.
+            scan.skipped_conditional = true;
+            index = class_end_line + 1;
+            continue;
+        }
         let mut methods = Vec::new();
         let mut cursor = class_line + 1;
         while cursor < class_end_line {
@@ -411,7 +519,11 @@ fn test_class_groups(
                 Some(true) => {
                     if let Some(sub_line) = next_declaration(lines, cursor + 1, "sub") {
                         if let Some(sub_end) = closing_line(lines, sub_line, "sub") {
-                            methods.push((lines[cursor].start, lines[sub_end].end));
+                            if spans_conditional(lines, [cursor, sub_line, sub_end]) {
+                                scan.skipped_conditional = true;
+                            } else {
+                                methods.push((lines[cursor].start, lines[sub_end].end));
+                            }
                             cursor = sub_end + 1;
                             continue;
                         }
@@ -422,14 +534,14 @@ fn test_class_groups(
             }
             cursor += 1;
         }
-        groups.push(TestClassGroup {
+        scan.groups.push(TestClassGroup {
             class_start: lines[index].start,
             class_end: lines[class_end_line].end,
             methods,
         });
         index = class_end_line + 1;
     }
-    groups
+    scan
 }
 
 /// The next line declaring `keyword`, skipping only further attribute lines.
@@ -755,6 +867,198 @@ mod tests {
             parsed.report.diagnostics[0].severity,
             ParseDiagnosticSeverity::Error
         );
+    }
+
+    #[test]
+    fn conditional_compilation_branches_must_not_both_anchor() {
+        // `#If` selects one branch at compile time from a constant this
+        // frontend does not evaluate. Admitting both invents a member that
+        // never compiles; admitting either asserts a constant we do not know.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #If DEBUG Then\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalogDebug()\n    End Sub\n\
+             #Else\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalogRelease()\n    End Sub\n\
+             #End If\nEnd Class\n"
+        ));
+        assert_eq!(
+            methods(&parsed),
+            0,
+            "neither branch may anchor: the constant that selects one is unevaluated"
+        );
+        assert!(unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn declarations_outside_a_conditional_still_anchor() {
+        // The skipped branch understates support; it does not unprove what
+        // sits in unconditional code.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             #If DEBUG Then\n\
+             \x20   <TestMethod()>\n    Public Sub OnlyInDebug()\n    End Sub\n\
+             #End If\n\
+             \x20   <TestMethod()>\n    Public Sub FiltersCatalog()\n    End Sub\n\
+             End Class\n"
+        ));
+        assert_eq!(methods(&parsed), 2);
+        assert!(unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn a_conditional_test_class_does_not_anchor() {
+        // The same rule applies one level up: a whole class compiled only
+        // under a constant is a build variant, not a proven declaration.
+        let parsed = output(&format!(
+            "{IMPORTED}#If DEBUG Then\n<TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             End Class\n#End If\n"
+        ));
+        assert_eq!(methods(&parsed), 0);
+        assert_eq!(
+            parsed
+                .report
+                .units
+                .iter()
+                .filter(|unit| unit.kind == CodeUnitKind::VbTestClass)
+                .count(),
+            0
+        );
+        assert!(unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn a_region_is_not_a_conditional() {
+        // `#Region` is an editor fold. It compiles unconditionally, so it must
+        // not cost an anchor -- and `#End Region` must not be read as the
+        // `#End If` that would reopen one.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #Region \"Tests\"\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             #End Region\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 1);
+        assert!(!unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn an_external_source_directive_is_not_a_conditional() {
+        // `#ExternalSource` remaps debugger line numbers. It selects no branch.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #ExternalSource(\"Catalog.vb\", 1)\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             #End ExternalSource\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 1);
+        assert!(!unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn a_conditional_import_does_not_bind_the_bare_spelling() {
+        // The same unsoundness one level up: an `Imports` selected by an
+        // unevaluated constant cannot make a bare attribute name resolve.
+        let parsed = output(
+            "#If CUSTOM_BUILD Then\n\
+             Imports Microsoft.VisualStudio.TestTools.UnitTesting\n\
+             #End If\n\n\
+             <TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             End Class\n",
+        );
+        assert_eq!(methods(&parsed), 0);
+        assert!(unknown_kinds(&parsed).contains(&"mstest_attribute_without_import".to_string()));
+    }
+
+    #[test]
+    fn a_fully_qualified_attribute_survives_a_conditional_import() {
+        // A fully qualified name never needed the import, so a conditional one
+        // costs it nothing.
+        let parsed = output(
+            "#If CUSTOM_BUILD Then\n\
+             Imports Microsoft.VisualStudio.TestTools.UnitTesting\n\
+             #End If\n\n\
+             <Microsoft.VisualStudio.TestTools.UnitTesting.TestClass()>\n\
+             Public Class CatalogTests\n\
+             \x20   <Microsoft.VisualStudio.TestTools.UnitTesting.TestMethod()>\n\
+             \x20   Public Sub LoadsCatalog()\n    End Sub\nEnd Class\n",
+        );
+        assert_eq!(methods(&parsed), 1);
+    }
+
+    #[test]
+    fn an_end_region_does_not_close_an_open_conditional() {
+        // Reading any `#End ...` as a close would reopen the file mid-branch
+        // and anchor a declaration the build may not contain.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #If DEBUG Then\n#Region \"Tests\"\n#End Region\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             #End If\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 0);
+        assert!(unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn an_end_external_source_does_not_close_an_open_conditional() {
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #If DEBUG Then\n#ExternalSource(\"Catalog.vb\", 1)\n#End ExternalSource\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             #End If\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 0);
+    }
+
+    #[test]
+    fn directive_matching_follows_the_language_case_rules() {
+        // VB.NET is case-insensitive, so a lowercase directive selects a
+        // branch exactly as the documented spelling does.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #if debug then\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             #end if\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 0);
+    }
+
+    #[test]
+    fn a_conditional_inside_a_method_body_still_anchors_it() {
+        // The declaration itself is unconditional; only statements inside it
+        // vary. Abstaining here would understate support for no reason.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n\
+             #If DEBUG Then\n        Assert.IsTrue(True)\n#End If\n\
+             \x20   End Sub\nEnd Class\n"
+        ));
+        assert_eq!(methods(&parsed), 1);
+        assert!(!unknown_kinds(&parsed)
+            .contains(&"declaration_under_conditional_compilation".to_string()));
+    }
+
+    #[test]
+    fn an_unclosed_conditional_keeps_abstaining() {
+        // A `#If` with no `#End If` leaves every later declaration selected by
+        // an unevaluated constant. Understating support is the safe direction.
+        let parsed = output(&format!(
+            "{IMPORTED}<TestClass()>\nPublic Class CatalogTests\n\
+             #If DEBUG Then\n\
+             \x20   <TestMethod()>\n    Public Sub LoadsCatalog()\n    End Sub\n\
+             End Class\n"
+        ));
+        assert_eq!(methods(&parsed), 0);
     }
 
     #[test]
