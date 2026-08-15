@@ -5,6 +5,8 @@
 //! format remain inventory-only/UNKNOWN; no Ada or Alire tool is invoked.
 
 pub mod aunit;
+mod lexer;
+mod syntax;
 
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{

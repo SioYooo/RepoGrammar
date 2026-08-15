@@ -3,14 +3,20 @@
 //! Nothing here invokes GNAT, `gprbuild`, `gnattest`, Alire, Libadalang, a
 //! child process, or the network. ADR-0033 D3's Libadalang `NO_GO` stands.
 //!
-//! Ada's single quote is genuinely overloaded -- it opens a character literal
-//! and it introduces an attribute -- and the overload is resolved by the local
-//! rule real Ada lexers use: a tick whose preceding non-blank character is an
-//! identifier character or `)` is an attribute tick; otherwise it opens a
-//! character literal, which is then exactly three bytes wide. The fixed width
-//! is what makes `'''` work without a special case.
+//! The anchor is read off a parse, not off the text. [`super::lexer`] produces
+//! an Ada token stream and [`super::syntax`] parses the whole compilation unit
+//! against the declared subset; this module turns the admitted registration
+//! calls into code units and facts, and turns every refusal into a typed
+//! `UNKNOWN`.
+//!
+//! There is no third outcome. A file is parsed and its registrations are
+//! reported, or it is refused and no registration is reported at all. Nothing
+//! is recovered, because a recovered anchor cannot be told apart from a real
+//! one.
 
 use super::super::{ir_edges_for_units, ir_nodes_for_units};
+use super::lexer::Refusal;
+use super::syntax::parse_compilation;
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -27,7 +33,6 @@ pub const ADA_ANCHOR_METHOD: &str = "bounded_ada_aunit_registration_v1";
 /// Fixed support target for the one admitted exact anchor.
 pub const ADA_TEST_TARGET: &str = "aunit.Register_Routine";
 
-const REGISTER_ROUTINE: &str = "register_routine";
 const MAX_UNITS: usize = 4_096;
 
 /// True for the only suffix this frontend may read.
@@ -102,24 +107,17 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         return finish(units, facts, Vec::new());
     }
 
-    let mask = CodeMask::new(document.text);
-    // A scanner cannot fail on malformed Ada the way a parser does, but an
-    // unterminated string literal is a decidable well-formedness violation,
-    // and it makes a missing anchor uninformative rather than meaningful.
-    let mut diagnostics = Vec::new();
-    if mask.unterminated_string {
-        diagnostics.push(degraded(
-            document.path,
-            "an Ada string literal is left open at end of file, so any registration after it was read as string",
-        ));
-    }
-    let calls = register_routine_calls(document.text, &mask);
+    let admitted = match parse_compilation(document.text) {
+        Ok(admitted) => admitted,
+        Err(refusal) => return refused(units, facts, module, document.path, refusal),
+    };
+
     let mut unresolved_registration = false;
 
-    if !withs_aunit(document.text, &mask) {
-        unresolved_registration = !calls.is_empty();
+    if !admitted.aunit_context_clause {
+        unresolved_registration = !admitted.registrations.is_empty();
     } else {
-        for call in calls {
+        for call in admitted.registrations {
             if units.len() >= MAX_UNITS {
                 facts.push(unknown_fact(
                     &module,
@@ -127,7 +125,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
                     "ada_registration_scan",
                     "scanner_resource_limit",
                     module.range.clone(),
-                    "Ada scanner exceeded the bounded unit limit",
+                    "Ada frontend exceeded the bounded unit limit",
                 )?);
                 break;
             }
@@ -158,6 +156,127 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         )?);
     }
 
+    // A file that parsed is not degraded: the parser consumed the whole
+    // compilation unit or it would have refused it.
+    finish(units, facts, Vec::new())
+}
+
+/// How a refusal reaches the operator.
+///
+/// Every field is fixed vocabulary. The offending token, identifier, literal,
+/// and line never appear, because a refusal reaches `index --json`, `unknowns`,
+/// and the MCP readiness payloads.
+struct RefusalRecord {
+    reason: UnknownReasonCode,
+    affected_claim: &'static str,
+    kind: &'static str,
+    note: &'static str,
+    /// A degraded parse is reported only when the file claims to be Ada and is
+    /// malformed, or when a build variant selects between texts. An ordinary
+    /// construct outside the declared subset is a bounded-frontend limit, not a
+    /// broken file, so it must not raise an operator warning on every real Ada
+    /// repository.
+    degraded: Option<&'static str>,
+}
+
+fn refusal_record(refusal: Refusal) -> RefusalRecord {
+    match refusal {
+        Refusal::PreprocessorDirective => RefusalRecord {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "ada_conditional_compilation",
+            kind: "gnatprep_conditional_source",
+            note: "the file carries a gnatprep conditional directive, so it is preprocessor input whose selected branch is unevaluated",
+            degraded: Some(
+                "an Ada source file carries gnatprep conditional directives, so the compiled text is selected by symbols this frontend does not evaluate",
+            ),
+        },
+        Refusal::PreprocessorSubstitution => RefusalRecord {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "ada_conditional_compilation",
+            kind: "gnatprep_symbol_substitution",
+            note: "the file carries a gnatprep symbol substitution, so its compiled text is unevaluated",
+            degraded: Some(
+                "an Ada source file carries a gnatprep symbol substitution, so its compiled text is selected by symbols this frontend does not evaluate",
+            ),
+        },
+        Refusal::LanguageEditionPragma => RefusalRecord {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "ada_language_edition",
+            kind: "language_edition_pragma",
+            note: "a configuration pragma re-selects the Ada edition or enables non-standard syntax, which the declared invariance set assumes fixed",
+            degraded: Some(
+                "an Ada configuration pragma re-selects the language edition, which this frontend does not evaluate",
+            ),
+        },
+        Refusal::EditionSensitiveWord => RefusalRecord {
+            reason: UnknownReasonCode::BuildVariantAmbiguity,
+            affected_claim: "ada_language_edition",
+            kind: "edition_sensitive_reserved_word",
+            note: "a word that is reserved in some editions of the declared set and an identifier in others appears outside the one position where both readings agree",
+            degraded: Some(
+                "an Ada source file uses a word whose reserved status depends on the language edition, which this frontend does not select",
+            ),
+        },
+        Refusal::UnterminatedLiteral => RefusalRecord {
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "ada_registration_scan",
+            kind: "unterminated_literal",
+            note: "an Ada literal is left open, so the token stream after it is unproven",
+            degraded: Some(
+                "an Ada literal is left open, so every registration after it was read as literal text",
+            ),
+        },
+        Refusal::ReplacementCharacter => RefusalRecord {
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "ada_registration_scan",
+            kind: "obsolescent_replacement_character",
+            note: "an obsolescent Ada RM J.2 replacement character moves literal boundaries, so the token stream is unproven",
+            degraded: None,
+        },
+        Refusal::UnsupportedCharacter => RefusalRecord {
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "ada_registration_scan",
+            kind: "character_outside_declared_subset",
+            note: "the file uses a lexical element outside the declared Ada subset",
+            degraded: None,
+        },
+        Refusal::OutsideDeclaredSubset => RefusalRecord {
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "ada_registration_scan",
+            kind: "construct_outside_declared_subset",
+            note: "the compilation unit uses a construct outside the declared Ada subset, so it was not parsed and its registrations are unproven",
+            degraded: None,
+        },
+        Refusal::NestingLimit => RefusalRecord {
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "ada_registration_scan",
+            kind: "parser_nesting_limit",
+            note: "the compilation unit nests beyond the bounded parser ceiling",
+            degraded: None,
+        },
+    }
+}
+
+fn refused(
+    units: Vec<CodeUnit>,
+    mut facts: Vec<SemanticFact>,
+    module: CodeUnit,
+    path: &str,
+    refusal: Refusal,
+) -> Result<SourceParseOutput, ParseError> {
+    let record = refusal_record(refusal);
+    facts.push(unknown_fact(
+        &module,
+        record.reason,
+        record.affected_claim,
+        record.kind,
+        module.range.clone(),
+        record.note,
+    )?);
+    let diagnostics = record
+        .degraded
+        .map(|message| vec![degraded(path, message)])
+        .unwrap_or_default();
     finish(units, facts, diagnostics)
 }
 
@@ -207,284 +326,6 @@ fn finish(
         python_interface_hash: None,
         dependencies: Vec::new(),
     })
-}
-
-/// Per-byte "this byte is code" mask over `--` comments, `"…"` strings, and
-/// character literals.
-struct CodeMask {
-    is_code: Vec<bool>,
-    /// A string literal that runs to end of file without closing. Everything
-    /// after it was read as string, so any anchor beyond it is invisible.
-    unterminated_string: bool,
-}
-
-impl CodeMask {
-    fn new(text: &str) -> Self {
-        let bytes = text.as_bytes();
-        let mut is_code = vec![false; bytes.len()];
-        let mut unterminated_string = false;
-        let mut index = 0usize;
-        // The previous non-blank code byte decides what a tick means, and it may
-        // sit on an earlier line, so it is tracked across the whole document.
-        let mut previous_code_byte: Option<u8> = None;
-        while index < bytes.len() {
-            match bytes[index] {
-                b'-' if bytes.get(index + 1) == Some(&b'-') => {
-                    while index < bytes.len() && bytes[index] != b'\n' {
-                        index += 1;
-                    }
-                }
-                b'"' => {
-                    index += 1;
-                    let mut closed = false;
-                    while index < bytes.len() {
-                        if bytes[index] == b'"' {
-                            if bytes.get(index + 1) == Some(&b'"') {
-                                index += 2;
-                                continue;
-                            }
-                            index += 1;
-                            closed = true;
-                            break;
-                        }
-                        index += 1;
-                    }
-                    unterminated_string |= !closed;
-                    previous_code_byte = Some(b'"');
-                }
-                b'\''
-                    if !tick_is_attribute(previous_code_byte)
-                        && bytes.get(index + 2) == Some(&b'\'') =>
-                {
-                    // A character literal is exactly three bytes wide, which is
-                    // what makes `'''` need no special case.
-                    index += 3;
-                    previous_code_byte = Some(b'\'');
-                }
-                byte => {
-                    is_code[index] = true;
-                    if !byte.is_ascii_whitespace() {
-                        previous_code_byte = Some(byte);
-                    }
-                    index += 1;
-                }
-            }
-        }
-        Self {
-            is_code,
-            unterminated_string,
-        }
-    }
-
-    fn is_code(&self, index: usize) -> bool {
-        self.is_code.get(index).copied().unwrap_or(false)
-    }
-}
-
-fn tick_is_attribute(previous: Option<u8>) -> bool {
-    previous.is_some_and(|byte| is_identifier_byte(byte) || byte == b')')
-}
-
-fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-/// True when a `with` context clause names a unit whose first identifier is
-/// `AUnit`. `with` also introduces record extensions and aspects, where the
-/// next identifier is never `AUnit`.
-fn withs_aunit(text: &str, mask: &CodeMask) -> bool {
-    let bytes = text.as_bytes();
-    for (start, end) in identifier_tokens(text, mask) {
-        if !text[start..end].eq_ignore_ascii_case("with") {
-            continue;
-        }
-        let mut index = end;
-        while index < bytes.len() && (!mask.is_code(index) || bytes[index].is_ascii_whitespace()) {
-            index += 1;
-        }
-        let name_end = identifier_end(bytes, mask, index);
-        if name_end > index && text[index..name_end].eq_ignore_ascii_case("aunit") {
-            return true;
-        }
-    }
-    false
-}
-
-struct RegistrationCall {
-    start: usize,
-    end: usize,
-}
-
-/// Every `Register_Routine (T, Name'Access, "literal")` call, bare or through a
-/// dotted prefix, with the arguments possibly spanning lines.
-fn register_routine_calls(text: &str, mask: &CodeMask) -> Vec<RegistrationCall> {
-    let bytes = text.as_bytes();
-    let mut calls = Vec::new();
-    for (start, end) in identifier_tokens(text, mask) {
-        if !text[start..end].eq_ignore_ascii_case(REGISTER_ROUTINE) {
-            continue;
-        }
-        let mut index = end;
-        while index < bytes.len() && (!mask.is_code(index) || bytes[index].is_ascii_whitespace()) {
-            index += 1;
-        }
-        if bytes.get(index) != Some(&b'(') || !mask.is_code(index) {
-            continue;
-        }
-        let Some(close) = matching_paren(bytes, mask, index) else {
-            continue;
-        };
-        let arguments = split_top_level(text, mask, index + 1, close);
-        if arguments.len() != 3 {
-            continue;
-        }
-        if !argument_is_access_attribute(text, &arguments[1])
-            || !argument_is_string_literal(text, &arguments[2])
-        {
-            continue;
-        }
-        calls.push(RegistrationCall {
-            start: dotted_prefix_start(bytes, mask, start),
-            end: close + 1,
-        });
-    }
-    calls
-}
-
-/// Walk back over `Pkg.Sub.` so the unit covers the whole callee name.
-fn dotted_prefix_start(bytes: &[u8], mask: &CodeMask, identifier_start: usize) -> usize {
-    let mut start = identifier_start;
-    loop {
-        let mut index = start;
-        while index > 0
-            && mask.is_code(index - 1)
-            && bytes[index - 1].is_ascii_whitespace()
-            && bytes[index - 1] != b'\n'
-        {
-            index -= 1;
-        }
-        if index == 0 || !mask.is_code(index - 1) || bytes[index - 1] != b'.' {
-            return start;
-        }
-        index -= 1;
-        while index > 0 && mask.is_code(index - 1) && is_identifier_byte(bytes[index - 1]) {
-            index -= 1;
-        }
-        if index == start {
-            return start;
-        }
-        start = index;
-    }
-}
-
-fn matching_paren(bytes: &[u8], mask: &CodeMask, open: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut index = open;
-    while index < bytes.len() {
-        if mask.is_code(index) {
-            match bytes[index] {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(index);
-                    }
-                }
-                _ => {}
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-struct Argument {
-    start: usize,
-    end: usize,
-}
-
-fn split_top_level(text: &str, mask: &CodeMask, start: usize, end: usize) -> Vec<Argument> {
-    let bytes = text.as_bytes();
-    let mut arguments = Vec::new();
-    let mut depth = 0usize;
-    let mut argument_start = start;
-    for (index, byte) in bytes.iter().enumerate().take(end).skip(start) {
-        if !mask.is_code(index) {
-            continue;
-        }
-        match *byte {
-            b'(' => depth += 1,
-            b')' => depth = depth.saturating_sub(1),
-            b',' if depth == 0 => {
-                arguments.push(Argument {
-                    start: argument_start,
-                    end: index,
-                });
-                argument_start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    arguments.push(Argument {
-        start: argument_start,
-        end,
-    });
-    arguments
-}
-
-/// A name followed by `'Access`, with the tick read as an attribute tick.
-fn argument_is_access_attribute(text: &str, argument: &Argument) -> bool {
-    let value = text[argument.start..argument.end].trim();
-    let Some((name, attribute)) = value.rsplit_once('\'') else {
-        return false;
-    };
-    attribute.trim().eq_ignore_ascii_case("access") && is_dotted_name(name.trim())
-}
-
-fn argument_is_string_literal(text: &str, argument: &Argument) -> bool {
-    let value = text[argument.start..argument.end].trim();
-    value.len() >= 2 && value.starts_with('"') && value.ends_with('"')
-}
-
-fn is_dotted_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('.').all(|part| {
-            let part = part.trim();
-            !part.is_empty()
-                && part.starts_with(|character: char| character.is_ascii_alphabetic())
-                && part
-                    .bytes()
-                    .all(|byte| is_identifier_byte(byte) || byte == b' ')
-        })
-}
-
-fn identifier_end(bytes: &[u8], mask: &CodeMask, start: usize) -> usize {
-    let mut index = start;
-    while index < bytes.len() && mask.is_code(index) && is_identifier_byte(bytes[index]) {
-        index += 1;
-    }
-    index
-}
-
-/// Every maximal code identifier token, as byte ranges.
-fn identifier_tokens(text: &str, mask: &CodeMask) -> Vec<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut tokens = Vec::new();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if !mask.is_code(index) || !is_identifier_byte(bytes[index]) {
-            index += 1;
-            continue;
-        }
-        if index > 0 && mask.is_code(index - 1) && is_identifier_byte(bytes[index - 1]) {
-            index += 1;
-            continue;
-        }
-        let end = identifier_end(bytes, mask, index);
-        tokens.push((index, end));
-        index = end;
-    }
-    tokens
 }
 
 fn anchor_fact(unit: &CodeUnit) -> Result<SemanticFact, ParseError> {
@@ -585,26 +426,41 @@ mod tests {
             .collect()
     }
 
-    const HEAD: &str = "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n";
+    fn is_degraded(parsed: &SourceParseOutput) -> bool {
+        parsed
+            .report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == ParseDiagnosticSeverity::Error)
+    }
+
+    const HEAD: &str = "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n\
+                        procedure Register_Tests (T : in out Test_Case) is\nbegin\n";
+    const TAIL: &str = "end Register_Tests;\nend Catalog_Tests;\n";
+
+    fn body(statements: &str) -> String {
+        format!("{HEAD}{statements}{TAIL}")
+    }
 
     #[test]
     fn admitted_registrations_anchor_including_multi_line_and_prefixed_calls() {
-        let parsed = output(&format!(
-            "{HEAD}   procedure Register_Tests (T : in out Test_Case) is\n   begin\n\
-                     Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
-                     Registration.Register_Routine\n        (T, Filters_Catalog'Access, \"filters\");\n\
-                     AUnit.Test_Cases.Registration.Register_Routine (T, Sorts'Access, \"sorts\");\n\
-                  end Register_Tests;\nend Catalog_Tests;\n"
+        let parsed = output(&body(
+            "Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
+             Registration.Register_Routine\n  (T, Filters_Catalog'Access, \"filters\");\n\
+             AUnit.Test_Cases.Registration.Register_Routine (T, Sorts'Access, \"sorts\");\n",
         ));
         assert_eq!(registrations(&parsed), 3);
+        assert!(parsed.report.diagnostics.is_empty());
+        assert!(unknown_kinds(&parsed).is_empty());
     }
 
     #[test]
     fn without_an_aunit_with_clause_nothing_anchors() {
         let parsed = output(
             "with Ada.Text_IO;\npackage body Catalog_Tests is\n\
-               begin\n   Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
-             end Catalog_Tests;\n",
+             procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+             Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
+             end Register_Tests;\nend Catalog_Tests;\n",
         );
         assert_eq!(registrations(&parsed), 0);
         assert!(
@@ -614,34 +470,34 @@ mod tests {
 
     #[test]
     fn a_registration_in_a_comment_or_a_string_never_anchors() {
-        let parsed = output(&format!(
-            "{HEAD}   --  Register_Routine (T, In_A_Comment'Access, \"no\");\n\
-                  Note : constant String := \"Register_Routine (T, In_A_String'Access, \"\"no\"\")\";\n\
-             end Catalog_Tests;\n"
+        let parsed = output(&body(
+            "--  Register_Routine (T, In_A_Comment'Access, \"no\");\n\
+             Note := \"Register_Routine (T, In_A_String'Access, \"\"no\"\")\";\n",
         ));
         assert_eq!(registrations(&parsed), 0);
     }
 
     #[test]
     fn a_quote_character_literal_does_not_swallow_the_rest_of_the_file() {
-        // `'''` is the shape that breaks a scanner searching for a closing tick.
-        let parsed = output(&format!(
-            "{HEAD}   Tick : constant Character := ''';\n\
-                  Paren : constant Character := '(';\n\
-                  Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
-                  Register_Routine (T, Filters'Access, \"filters\");\n\
-             end Catalog_Tests;\n"
-        ));
+        // `'''` is the shape that breaks a lexer searching for a closing tick.
+        let parsed = output(
+            "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n\
+             Tick : constant Character := ''';\n\
+             Paren : constant Character := '(';\n\
+             procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+             Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
+             Register_Routine (T, Filters'Access, \"filters\");\n\
+             end Register_Tests;\nend Catalog_Tests;\n",
+        );
         assert_eq!(registrations(&parsed), 2);
     }
 
     #[test]
     fn an_attribute_tick_after_an_identifier_or_a_paren_is_not_a_character_literal() {
-        let parsed = output(&format!(
-            "{HEAD}   Size : constant Natural := Items (I)'Length + Integer'First;\n\
-                  Address : constant System.Address := Ptr.all'Address;\n\
-                  Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
-             end Catalog_Tests;\n"
+        let parsed = output(&body(
+            "Size := Items (I)'Length + Integer'First;\n\
+             Address := Ptr.all'Address;\n\
+             Register_Routine (T, Loads_Catalog'Access, \"loads\");\n",
         ));
         assert_eq!(
             registrations(&parsed),
@@ -653,53 +509,46 @@ mod tests {
     #[test]
     fn the_argument_shape_is_required() {
         for call in [
-            // Two arguments.
             "Register_Routine (T, Loads_Catalog'Access);",
-            // A variable instead of an access attribute.
             "Register_Routine (T, Routine_Ptr, \"loads\");",
-            // A non-literal description.
             "Register_Routine (T, Loads_Catalog'Access, Description);",
-            // A different attribute.
             "Register_Routine (T, Loads_Catalog'Address, \"loads\");",
-            // Four arguments.
             "Register_Routine (T, Loads_Catalog'Access, \"loads\", Extra);",
+            "Register_Routine (T, Loads_Catalog'Access, \"a\" & \"b\");",
+            "My_Register_Routine (T, Loads_Catalog'Access, \"loads\");",
         ] {
-            let parsed = output(&format!("{HEAD}   {call}\nend Catalog_Tests;\n"));
+            let parsed = output(&body(&format!("{call}\n")));
             assert_eq!(registrations(&parsed), 0, "{call}");
+            assert!(
+                unknown_kinds(&parsed).is_empty(),
+                "an unadmitted call shape is not an unknown: {call}"
+            );
         }
     }
 
     #[test]
     fn a_nested_call_in_the_first_argument_does_not_split_the_arguments() {
-        let parsed = output(&format!(
-            "{HEAD}   Register_Routine (Fixture (T, 1), Loads_Catalog'Access, \"loads\");\n\
-             end Catalog_Tests;\n"
+        let parsed = output(&body(
+            "Register_Routine (Fixture (T, 1), Loads_Catalog'Access, \"loads\");\n",
         ));
         assert_eq!(registrations(&parsed), 1);
     }
 
     #[test]
-    fn an_identifier_ending_in_the_callee_name_is_not_the_callee() {
-        let parsed = output(&format!(
-            "{HEAD}   My_Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
-             end Catalog_Tests;\n"
-        ));
-        assert_eq!(registrations(&parsed), 0);
-    }
-
-    #[test]
     fn case_insensitivity_follows_the_language() {
         let parsed = output(
-            "WITH Aunit.Test_Cases;\npackage body Catalog_Tests is\n\
-               REGISTER_ROUTINE (T, Loads_Catalog'ACCESS, \"loads\");\nend Catalog_Tests;\n",
+            "WITH Aunit.Test_Cases;\nPACKAGE BODY Catalog_Tests IS\n\
+             PROCEDURE Register_Tests (T : IN OUT Test_Case) IS\nBEGIN\n\
+             REGISTER_ROUTINE (T, Loads_Catalog'ACCESS, \"loads\");\n\
+             END Register_Tests;\nEND Catalog_Tests;\n",
         );
         assert_eq!(registrations(&parsed), 1);
     }
 
     #[test]
     fn every_frontend_fact_stays_below_family_supporting_certainty() {
-        let parsed = output(&format!(
-            "{HEAD}   Register_Routine (T, Loads_Catalog'Access, \"loads\");\nend Catalog_Tests;\n"
+        let parsed = output(&body(
+            "Register_Routine (T, Loads_Catalog'Access, \"loads\");\n",
         ));
         assert!(parsed
             .report
@@ -709,25 +558,141 @@ mod tests {
     }
 
     #[test]
-    fn an_unterminated_string_reports_a_degraded_parse() {
-        let parsed = output(&format!(
-            "{HEAD}   Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
-                  Note : constant String := \"never closed\nend Catalog_Tests;\n"
-        ));
-        assert_eq!(parsed.report.diagnostics.len(), 1);
-        assert_eq!(
-            parsed.report.diagnostics[0].severity,
-            ParseDiagnosticSeverity::Error
+    fn an_unterminated_string_reports_a_degraded_parse_and_abstains() {
+        // A scanner kept the anchors it had already found. A parser cannot:
+        // the token stream after an open literal is unproven, so the file
+        // abstains and says so.
+        let parsed = output(
+            "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n\
+             procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+             Register_Routine (T, Loads_Catalog'Access, \"loads\");\n\
+             Note := \"never closed\nend Register_Tests;\nend Catalog_Tests;\n",
         );
-        assert_eq!(registrations(&parsed), 1);
+        assert!(is_degraded(&parsed));
+        assert_eq!(registrations(&parsed), 0);
+        assert!(unknown_kinds(&parsed).contains(&"unterminated_literal".to_string()));
     }
 
     #[test]
     fn a_well_formed_body_reports_no_diagnostic() {
-        let parsed = output(&format!(
-            "{HEAD}   Register_Routine (T, Loads_Catalog'Access, \"loads\");\nend Catalog_Tests;\n"
+        let parsed = output(&body(
+            "Register_Routine (T, Loads_Catalog'Access, \"loads\");\n",
         ));
         assert!(parsed.report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn a_build_variant_selects_the_text_so_the_file_abstains_and_reports_it() {
+        // Each row is a construct whose compiled text or grammar RepoGrammar
+        // cannot determine. None of them may anchor, and each records a typed
+        // `UNKNOWN` under a claim that names what it affects.
+        for (source, kind) in [
+            (
+                "#if DEBUG\nwith AUnit.Test_Cases;\n#end if;\npackage body Catalog_Tests is\n\
+                 procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+                 Register_Routine (T, Loads'Access, \"loads\");\n\
+                 end Register_Tests;\nend Catalog_Tests;\n",
+                "gnatprep_conditional_source",
+            ),
+            (
+                &body("Name := $Build_Name;\nRegister_Routine (T, Loads'Access, \"loads\");\n"),
+                "gnatprep_symbol_substitution",
+            ),
+            (
+                &format!(
+                    "pragma Ada_83;\n{}",
+                    body("Register_Routine (T, Loads'Access, \"loads\");\n")
+                ),
+                "language_edition_pragma",
+            ),
+            (
+                "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n\
+                 Interface : Boolean := False;\n\
+                 procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+                 Register_Routine (T, Loads'Access, \"loads\");\n\
+                 end Register_Tests;\nend Catalog_Tests;\n",
+                "edition_sensitive_reserved_word",
+            ),
+        ] {
+            let parsed = output(source);
+            assert_eq!(registrations(&parsed), 0, "{kind}");
+            assert!(unknown_kinds(&parsed).contains(&kind.to_string()), "{kind}");
+            assert!(is_degraded(&parsed), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_construct_outside_the_subset_abstains_without_warning_the_operator() {
+        // Most real Ada is outside any bounded subset. That is a limit of this
+        // frontend, not a broken file, so it must not raise a degraded-parse
+        // warning on every Ada repository.
+        for (source, kind) in [
+            (
+                "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n\
+                 task body Worker is\nbegin\n   null;\nend Worker;\n\
+                 procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+                 Register_Routine (T, Loads'Access, \"loads\");\n\
+                 end Register_Tests;\nend Catalog_Tests;\n",
+                "construct_outside_declared_subset",
+            ),
+            (
+                &body("X := @ + 1;\nRegister_Routine (T, Loads'Access, \"loads\");\n"),
+                "character_outside_declared_subset",
+            ),
+            (
+                &body("X := 16:FF:;\nRegister_Routine (T, Loads'Access, \"loads\");\n"),
+                "obsolescent_replacement_character",
+            ),
+        ] {
+            let parsed = output(source);
+            assert_eq!(registrations(&parsed), 0, "{kind}");
+            assert!(unknown_kinds(&parsed).contains(&kind.to_string()), "{kind}");
+            assert!(!is_degraded(&parsed), "{kind}");
+        }
+    }
+
+    #[test]
+    fn no_refusal_surface_carries_source_text() {
+        // A parser naturally wants to name the token it choked on. None of
+        // these surfaces may, because they reach `index --json`, `unknowns`,
+        // and the MCP readiness payloads.
+        let secrets = [
+            "Secret_Identifier",
+            "s3cr3t-literal",
+            "Build_Name",
+            "Worker",
+            "@",
+        ];
+        for source in [
+            body("Secret_Identifier := $Build_Name;\n"),
+            body("Secret_Identifier := @ + 1;\n"),
+            body("Note := \"s3cr3t-literal\nX := 1;\n"),
+            "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n\
+             task body Worker is\nbegin\n   null;\nend Worker;\n\
+             procedure Secret_Identifier (T : in out Test_Case) is\nbegin\n   null;\n\
+             end Secret_Identifier;\nend Catalog_Tests;\n"
+                .to_string(),
+        ] {
+            let parsed = output(&source);
+            let mut surfaces = parsed
+                .report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>();
+            for fact in &parsed.report.semantic_facts {
+                surfaces.push(fact.evidence.note.clone());
+                surfaces.extend(fact.assumptions.iter().cloned());
+            }
+            for surface in surfaces {
+                for secret in secrets {
+                    assert!(
+                        !surface.contains(secret),
+                        "refusal surface leaked source text: {surface}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

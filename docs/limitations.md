@@ -46,11 +46,18 @@ production-readiness claim.
   semantics, framework role, family, or readiness claim is produced. Static
   config updates are incremental; this auxiliary inventory does not imply Go
   language support.
-- Ada is discovered-only and unsupported. Only default `.ads`/`.adb` source
-  names are inventoried; alternative GPR naming is unresolved. GPR and source
-  bytes are never read. Bounded `alire.toml` declarations may produce auxiliary
-  `alire` dependency rows, while conditional/pinned/lock semantics remain typed
-  UNKNOWN. This does not imply Ada, library, family, or readiness support.
+- Ada is unsupported. Only default `.ads`/`.adb` source names are inventoried;
+  alternative GPR naming is unresolved, and GPR bytes are never read. Under
+  ADR-0045 a bounded frontend parses `.adb` bodies against a declared subset and
+  admits one AUnit `Register_Routine` shape; anything outside that subset --
+  generics, tasking, representation clauses, subunits, `gnatprep` input,
+  edition-selecting pragmas, edition-sensitive reserved words -- makes the whole
+  file abstain with a typed UNKNOWN, so a file with no anchor is not evidence
+  that it registers nothing. No Ada edition, GPR profile, or project model is
+  selected, and no routine is resolved. Bounded `alire.toml` declarations may
+  produce auxiliary `alire` dependency rows, while conditional/pinned/lock
+  semantics remain typed UNKNOWN. This does not imply Ada, library, or
+  readiness support.
 - Fortran is discovered-only and unsupported. Only the frozen lowercase,
   non-preprocessed fixed/free-form suffix set is inventoried. A bounded
   `fpm.toml` subset may produce auxiliary `fpm` dependency rows; preprocessing,
