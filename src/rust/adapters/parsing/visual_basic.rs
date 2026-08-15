@@ -6,6 +6,7 @@
 //! properties, conditions, targets, SDKs, NuGet restore, or project code.
 
 pub(crate) mod mstest;
+mod syntax;
 
 use super::bounded_xml::{parse_bounded_xml, BoundedXmlError, BoundedXmlLimits, XmlDocument};
 use super::{ir_edges_for_units, ir_nodes_for_units};
