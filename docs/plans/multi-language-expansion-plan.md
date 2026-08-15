@@ -427,7 +427,11 @@ frontend, not a claim that C code uses CppUnit.
 
 **Blocked on a frontend (10).** Visual Basic .NET, Delphi/Object Pascal, Ada,
 Fortran, R, MATLAB, Go, PHP, Swift, Ruby. These have no source frontend, so no
-framework anchor of any kind is visible. Framework support is *downstream* of a
+framework anchor of any kind is visible. *(Five of these ten — VB.NET, Delphi,
+Ada, R and MATLAB — have since gained bounded hand-written frontends and exact
+families; see "Where all twenty-one entries stand". The sentence is left as
+written because this section records what Wave F1 decided, and correcting it in
+place would erase the reason the later waves existed.)* Framework support is *downstream* of a
 bounded frontend, which is its own multi-module effort under ADR-0020 gate 2 —
 sequencing, not infeasibility. Four already name their first framework target in
 their completion review: `go.testing.test_function`,

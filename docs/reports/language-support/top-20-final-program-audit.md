@@ -1,6 +1,6 @@
 # Top-20 language and third-party-library final program audit
 
-- Date: 2026-08-01; continuation audited 2026-08-14
+- Date: 2026-08-01; continuation audited 2026-08-14 and 2026-08-15
 - Branch: `feat/top-20-language-library-support`
 - Protected baseline: `86dba38ada7fe5646b5ab8770e2ad4183e8d22d7`
 - Verdict: `PARTIAL_AUDITED_PROGRESS`
@@ -76,18 +76,18 @@ means a recorded ADR decision closed the lane.
 | 4 | Java | `structural_substrate` | 3/9 | `zero_dependency_excluded` | direct literal Maven declarations only | no |
 | 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | no C# project/NuGet inventory | no |
 | 6 | JavaScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
-| 7 | Visual Basic .NET | `discovered_only` | 2/9 | `zero_dependency_excluded` | literal `.vbproj` NuGet declarations only | no |
+| 7 | Visual Basic .NET | `structural_substrate` | 8/9 | `zero_dependency_excluded` | literal `.vbproj` NuGet declarations only | no |
 | 8 | SQL | `structural_substrate` | 8/9 | `open_under_zero_dependency` | no SQL extension dependency consumer | no |
-| 9 | R | `discovered_only` | 2/9 | `open_under_zero_dependency` | bounded CRAN/Bioconductor manifest/renv evidence | no |
+| 9 | R | `structural_substrate` | 7/9 | `open_under_zero_dependency` | bounded CRAN/Bioconductor manifest/renv evidence | no |
 | 10 | Rust | `structural_substrate` | 3/9 | `zero_dependency_excluded` | Cargo manifest/project-model declarations only | no |
-| 11 | Delphi/Object Pascal | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal Delphi package declarations only | no |
+| 11 | Delphi/Object Pascal | `structural_substrate` | 8/9 | `open_under_zero_dependency` | literal Delphi package declarations only | no |
 | 12 | Scratch | `not_started`; prerequisite `NO_GO` | 1/9 | `no_go` | no product dependency inventory | no |
 | 13 | Go | `discovered_only` | 2/9 | `open_under_zero_dependency` | bounded `go.mod` declarations only | no |
 | 14 | PHP | `discovered_only` | 1/9 | `open_under_zero_dependency` | Composer manifest plus lock rows, without coherence | no |
 | 15 | Swift | `discovered_only` | 1/9 | `open_under_zero_dependency` | SwiftPM schema-2/3 lock pins only | no |
-| 16 | Ada | `discovered_only` | 2/9 | `open_under_zero_dependency` | unconditional literal Alire declarations only | no |
+| 16 | Ada | `structural_substrate` | 8/9 | `open_under_zero_dependency` | unconditional literal Alire declarations only | no |
 | 17 | Assembly | `structural_substrate` | 1/9 | `zero_dependency_excluded` | no native/system dependency consumer | no |
-| 18 | MATLAB | `discovered_only` | 1/9 | `open_under_zero_dependency` | bounded R2024b+ add-on manifest declarations only | no |
+| 18 | MATLAB | `structural_substrate` | 7/9 | `open_under_zero_dependency` | bounded R2024b+ add-on manifest declarations only | no |
 | 19 | Fortran | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal root fpm declarations only | no |
 | 20 | Ruby | `discovered_only` | 2/9 | `open_under_zero_dependency` | direct `Gemfile.lock` declaration inventory only | no |
 | extra | TypeScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
