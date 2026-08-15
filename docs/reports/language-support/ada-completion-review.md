@@ -29,7 +29,16 @@
   violation and reports a degraded parse. Conditional, generic, overload,
   dispatch, and resolved/unresolved fixtures do not exist: there is no Ada
   provider to resolve against.
-- [ ] Source-free readiness and leakage review for claim-bearing analysis.
+- [x] Complete source-free readiness and leakage matrix — Ada is registered
+  in the repo-shape language scopes, so its units and families are counted
+  rather than silently reported as zero; `status`, `doctor`, `stats`,
+  `unknowns`, `families`, `files`, and the MCP `inspect_readiness` and
+  `find_analogues` payloads are each asserted over both an indexed positive
+  workspace and an indexed unbound one to expose no identifier, literal, or
+  source text and no absolute path. The assertions are non-vacuous: every
+  command must exit zero and parse, the positive workspace must report
+  `framework:aunit.test_registration`, and the unbound workspace must report the lane's typed
+  `UNKNOWN` by bounded language token `ada` and count.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
 - [ ] Linked atomic prerequisite commits and final completion audit.
@@ -62,7 +71,7 @@ Not complete. Ada has a bounded scanner over one call shape, owned units and
 IR, a typed registration-binding `UNKNOWN`, and one exact family with support
 three under ADR-0045. Alire dependency presence remains auxiliary and is not
 source, library, framework, family, or readiness support. Strict gate count is
-`6/9`; it must not be counted as a supported language.
+`7/9`; it must not be counted as a supported language.
 
 Two limitations are stated rather than left to inference. This frontend is a
 scanner, so malformed Ada does not fail the way a parsed language does; it
@@ -86,7 +95,7 @@ negative is chosen over asserting an import it cannot see.
 | Exact family / fixtures | One exact family, `framework:aunit.test_registration` over `aunit.Register_Routine`, gated at support three. Positive, lookalike, and low-support fixtures exist; parse-degraded, generic, overload, dispatch, and resolved/unresolved do not, because a scanner has no parse failure and there is no Ada provider. |
 | Primary UNKNOWN cases | GPR selection, naming, edition/toolchain/target, conditional Alire data, pins, generic instantiation, overload/dispatch, generated code, and provider availability. |
 | Source-free / security | Source/GPR is zero-read; config parsing is bounded; no GNAT, Libadalang, gprbuild, alr, child, repository/dependency code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `7/9`; Top-20 complete = no. |
 
 Four-part review: correctness covers only unconditional literal declarations;
 security preserves the zero-read/non-execution boundary; completeness lacks a

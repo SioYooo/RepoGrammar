@@ -9,15 +9,33 @@
 
 - [x] Discovery/configuration — exact lowercase `.vb`/`.vbproj` are VB.NET
   inventory, VB6 is excluded, and bounded literal project metadata is retained.
-- [ ] Authoritative source frontend and versioned project profile.
-- [ ] RepoGrammar-owned source code units and IR.
-- [ ] Typed source-semantic `UNKNOWN` registry and provider fallback.
-- [ ] First exact framework family with support at least three.
+- [ ] Authoritative source frontend and versioned project profile. ADR-0043's
+  scanner is bounded to one attribute shape and pins no Roslyn version, no
+  target framework, and no MSBuild profile, so this gate stays open.
+- [x] RepoGrammar-owned source code units and IR — ADR-0043 emits a module unit
+  per decoded `.vb` file, one unit for an admitted `TestClass`, and one per
+  admitted `TestMethod`, each projected into the shared IR.
+- [x] Typed source-semantic `UNKNOWN` registry and provider fallback — an
+  MSTest attribute name without its import or a fully qualified namespace
+  yields `UnresolvedImport` under `vb_mstest_attribute_binding`, and it blocks
+  family membership.
+- [x] First exact framework family with support at least three —
+  `framework:vb_mstest.test_method` over the `mstest.TestMethod` anchor, gated
+  at support three.
 - [x] Positive, lookalike, low-support, and parse-degraded fixtures exist for
   that family. An unterminated string literal is a decidable well-formedness
   violation and reports a degraded parse. Resolved/unresolved fixtures do not
   exist: there is no VB provider to resolve against.
-- [ ] Complete source-free readiness and leakage matrix.
+- [x] Complete source-free readiness and leakage matrix — Visual Basic .NET is registered
+  in the repo-shape language scopes, so its units and families are counted
+  rather than silently reported as zero; `status`, `doctor`, `stats`,
+  `unknowns`, `families`, `files`, and the MCP `inspect_readiness` and
+  `find_analogues` payloads are each asserted over both an indexed positive
+  workspace and an indexed unbound one to expose no identifier, literal, or
+  source text and no absolute path. The assertions are non-vacuous: every
+  command must exit zero and parse, the positive workspace must report
+  `framework:vb_mstest.test_method`, and the unbound workspace must report the lane's typed
+  `UNKNOWN` by bounded language token `visual-basic` and count.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
 - [ ] Linked semantic prerequisite commits and final completion audit.
@@ -54,7 +72,7 @@ Not complete. Visual Basic .NET has a bounded scanner over one attribute shape,
 owned units and IR, a typed attribute-binding `UNKNOWN`, and one exact family
 with support three under ADR-0043. The `.vbproj` metadata inventory remains
 auxiliary and is not compiler, build, or dependency-resolution evidence. Strict
-gate count is `6/9`; it must not be counted as a supported language.
+gate count is `7/9`; it must not be counted as a supported language.
 
 One limitation is stated rather than left to inference: this frontend is a
 scanner, so malformed VB does not fail the way a parsed language does. It
@@ -75,7 +93,7 @@ a file with fewer declarations.
 | Exact family / fixtures | One exact family, `framework:vb_mstest.test_method` over `mstest.TestMethod`, gated at support three. Positive, lookalike, low-support, and parse-degraded fixtures exist; resolved/unresolved do not, because there is no VB provider. |
 | Primary UNKNOWN cases | SDK imports, properties, conditions, item transforms, central versions, analyzers/generators, target framework, assembly graph, source recovery, and provider availability. |
 | Source-free / security | Inventory outputs are source-free; XML is bounded and DTD/entity-free; no compiler, `dotnet`, MSBuild, NuGet, analyzer, child, project code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `7/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only literal direct declarations;
 security fails closed on dynamic XML/MSBuild semantics; completeness lacks every

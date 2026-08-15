@@ -28,8 +28,17 @@
   unclosed quote or bracket is a decidable well-formedness violation and reports
   a degraded parse. NSE/dispatch and unresolved/resolved fixtures do not exist:
   there is no R provider to resolve against.
-- [ ] Complete source-free readiness and leakage matrix across required public
-  surfaces.
+- [x] Complete source-free readiness and leakage matrix across required public
+  surfaces — R is registered in the repo-shape language scopes, so its units and
+  families are counted rather than silently reported as zero; `status`,
+  `doctor`, `stats`, `unknowns`, `families`, `files`, and the MCP
+  `inspect_readiness` and `find_analogues` payloads are each asserted over both
+  an indexed declared-testthat workspace and an indexed undeclared one to expose
+  no identifier, literal, or source text and no absolute path. The assertions
+  are non-vacuous: every command must exit zero and parse, the declared
+  workspace must report `framework:testthat.test_that`, and the undeclared one
+  must report the lane's typed `UNKNOWN` by bounded language token `r` and
+  count.
 - [x] Four-part review record — this report records correctness, security,
   completeness, and performance findings; open findings remain blockers.
 - [ ] Linked atomic prerequisites and final completion audit.
@@ -47,8 +56,8 @@ network action runs.
 
 Not complete. R has a bounded scanner over one path class and one call shape,
 owned units and IR, a typed identity `UNKNOWN`, and one exact family with
-support three. It has no audited source-free readiness matrix, no final audit,
-and no provider. Strict gate count is `6/9`;
+support three, and an audited source-free readiness matrix. It has no final
+audit and no provider. Strict gate count is `7/9`;
 R is `structural_substrate` and must not be counted as supported.
 
 One limitation is worth stating rather than leaving to inference: this frontend
@@ -71,7 +80,7 @@ with fewer calls.
 | Exact family / fixtures | One exact family, `framework:testthat.test_that` over the testthat block anchor, gated at support three. Positive, lookalike, low-support, and parse-degraded fixtures exist; resolved/unresolved do not, because there is no R provider. |
 | Primary UNKNOWN cases | Repository identity, selected lock/project/profile, remote sources, package directness/scope, NSE/metaprogramming, dispatch, native code, and provider availability. |
 | Source-free / security | Metadata results are source-free; `.R`/`.r` is zero-read; no R, renv, package/profile script, native code, child, repository code, or network runs. |
-| Completion state / counted | `structural_substrate`; strict gate count `6/9`; Top-20 complete = no. |
+| Completion state / counted | `structural_substrate`; strict gate count `7/9`; Top-20 complete = no. |
 
 Four-part review: correctness preserves only explicit registry evidence and
 never defaults ambiguous packages to CRAN; security discards remote/path values

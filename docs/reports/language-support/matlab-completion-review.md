@@ -78,15 +78,23 @@ one second after compilation on the recorded development host.
   fixtures exist. An unbalanced block or an unclosed `%{` is a decidable
   well-formedness violation and reports a degraded parse. Resolved/unresolved
   fixtures do not exist: there is no MATLAB provider to resolve against.
-- [ ] 7. Source-free readiness — tested for this inventory path, not all
-  required MATLAB readiness/unknown surfaces.
+- [x] 7. Source-free readiness — MATLAB is registered in the repo-shape
+  language scopes, so its units and families are counted rather than silently
+  reported as zero; `status`, `doctor`, `stats`, `unknowns`, `families`,
+  `files`, and the MCP `inspect_readiness` and `find_analogues` payloads are
+  each asserted over both an indexed `TestCase` workspace and an indexed
+  unbound-`Test`-block one to expose no identifier, literal, or source text and
+  no absolute path. The assertions are non-vacuous: every command must exit zero
+  and parse, the positive workspace must report
+  `framework:matlab_unittest.test_method`, and the unbound one must report the
+  lane's typed `UNKNOWN` by bounded language token `matlab` and count.
 - [x] 8. Four-part review — this record.
 - [ ] 9. Atomic completion audit — this branch commit is a prerequisite slice,
   not a final audit; obtain its exact SHA from file history after commit.
 
 ## Completion verdict and exact non-claims
 
-`PARTIAL_AUDITED_PROGRESS`; strict gate count `5/9`; Top-20 counted `no`.
+`PARTIAL_AUDITED_PROGRESS`; strict gate count `6/9`; Top-20 counted `no`.
 Beyond the bounded static R2024b+ package declarations, RepoGrammar now proves
 one exact class-based `matlab.unittest` declaration shape under ADR-0046. It
 still cannot prove a MATLAB release, toolbox installation, dependency

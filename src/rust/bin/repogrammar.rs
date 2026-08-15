@@ -4238,6 +4238,197 @@ mod tests {
         assert_eq!(files_json["indexing"], index_json["indexing"]);
     }
 
+    #[test]
+    fn delphi_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_delphi_release_v0_2_fixture(
+            "dunitx_exact_tests",
+            "delphi-release-readiness-positive",
+        );
+        let unbound = index_delphi_release_v0_2_fixture(
+            "dunitx_unbound_attributes",
+            "delphi-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "object-pascal",
+            "Tests.Catalog.pas",
+            &[
+                "TCatalogTests",
+                "LoadsCatalog",
+                "DUnitX.TestFramework",
+                "Assert.AreEqual",
+            ],
+        );
+    }
+
+    #[test]
+    fn ada_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_ada_release_v0_2_fixture("aunit_exact_tests", "ada-release-readiness-positive");
+        let unbound = index_ada_release_v0_2_fixture(
+            "aunit_unbound_registrations",
+            "ada-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "ada",
+            "catalog_tests.adb",
+            &[
+                "Loads_Catalog",
+                "Filters_Catalog",
+                "AUnit.Assertions",
+                "loads the catalog",
+            ],
+        );
+    }
+
+    #[test]
+    fn matlab_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_matlab_release_v0_2_fixture(
+            "unittest_exact_tests",
+            "matlab-release-readiness-positive",
+        );
+        let unbound = index_matlab_release_v0_2_fixture(
+            "unittest_unbound_block",
+            "matlab-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "matlab",
+            "CatalogTest.m",
+            &[
+                "loadsCatalog",
+                "filtersCatalog",
+                "verifyTrue",
+                "matlab.unittest.TestCase",
+            ],
+        );
+    }
+
+    #[test]
+    fn visual_basic_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_visual_basic_release_v0_2_fixture(
+            "mstest_exact_tests",
+            "vb-release-readiness-positive",
+        );
+        let unbound = index_visual_basic_release_v0_2_fixture(
+            "mstest_unbound_attributes",
+            "vb-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "visual-basic",
+            "CatalogTests.vb",
+            &[
+                "LoadsCatalog",
+                "FiltersCatalog",
+                "Assert.IsNotNull",
+                "Microsoft.VisualStudio.TestTools.UnitTesting",
+            ],
+        );
+    }
+
+    #[test]
+    fn r_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_r_release_v0_2_fixture("testthat_exact_tests", "r-release-readiness-positive");
+        let undeclared =
+            index_r_release_v0_2_fixture("testthat_undeclared", "r-release-readiness-undeclared");
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&undeclared.0, &undeclared.1),
+            "r",
+            "tests/testthat/test-catalog.R",
+            &[
+                "loads the catalog",
+                "filters the catalog",
+                "expect_true",
+                "closing_brace",
+            ],
+        );
+    }
+
+    /// ADR-0020 gate 7 for a scanner lane: every required public surface must
+    /// expose bounded tokens, states, counts, provenance, and recovery only.
+    ///
+    /// The assertions are non-vacuous by construction. Each command must exit
+    /// zero and parse, the positive workspace must really report the lane's
+    /// family, and the unbound workspace must really report the lane's typed
+    /// `UNKNOWN` -- otherwise the leakage checks would run over nothing.
+    fn assert_scanner_lane_readiness_is_source_free(
+        positive: (&TempWorkspace, &ProductCliRuntime),
+        unbound: (&TempWorkspace, &ProductCliRuntime),
+        language_token: &str,
+        analogue_target: &str,
+        markers: &[&str],
+    ) {
+        for (workspace, runtime) in [positive, unbound] {
+            for command in ["status", "doctor", "stats", "unknowns", "families", "files"] {
+                let output =
+                    run_with_runtime(cli_args(command, workspace.path(), &["--json"]), runtime);
+                assert_eq!(output.status, 0, "{command} stderr: {}", output.stderr);
+                let value = parse_machine_output(command, &output, workspace);
+                assert_eq!(value["command"], command);
+                assert_no_output_leakage(command, &output.stdout, workspace);
+                for marker in markers {
+                    assert!(
+                        !output.stdout.contains(marker),
+                        "{command} leaked {language_token} source text or identifier {marker}"
+                    );
+                }
+            }
+
+            for arguments in [
+                serde_json::json!({"operation": "inspect_readiness"}),
+                serde_json::json!({
+                    "operation": "find_analogues",
+                    "target": analogue_target,
+                    "mode": "compact",
+                }),
+            ] {
+                let payload = mcp_context_payload(runtime, workspace, arguments);
+                let rendered = payload.to_string();
+                for marker in markers {
+                    assert!(
+                        !rendered.contains(marker),
+                        "MCP leaked {language_token} source text or identifier {marker}: {rendered}"
+                    );
+                }
+            }
+        }
+
+        let (positive_workspace, positive_runtime) = positive;
+        let status = run_with_runtime(
+            cli_args("status", positive_workspace.path(), &["--json"]),
+            positive_runtime,
+        );
+        let status_json = parse_machine_output("status", &status, positive_workspace);
+        assert_eq!(
+            status_json["product_readiness"]["family_prevalence"]["total_count"], 1,
+            "the {language_token} family must reach the readiness surface: {status_json}"
+        );
+
+        let (unbound_workspace, unbound_runtime) = unbound;
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", unbound_workspace.path(), &["--json"]),
+            unbound_runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, unbound_workspace);
+        assert!(
+            unknowns_json["unknown_inventory"]["by_language"]
+                .as_array()
+                .expect("by_language")
+                .iter()
+                .any(|row| row["language"] == language_token
+                    && row["count"].as_u64().unwrap_or_default() >= 1),
+            "the {language_token} lane should reach the unknowns surface: {unknowns_json}"
+        );
+    }
+
     fn matlab_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
