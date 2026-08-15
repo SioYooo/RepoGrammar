@@ -10,6 +10,9 @@ use crate::application::recovery::{
     RecoveryAgentState, RecoveryAutosyncState, RecoveryContext, RecoveryEvidenceState,
     RecoveryFreshness, RecoveryHealth, RecoveryLockState, RecoveryReason, RecoveryRecommendation,
 };
+use crate::core::policy::generation_mode::{
+    generation_mode_for_code_unit_count, IndexingGenerationMode,
+};
 use crate::error::RepoGrammarError;
 use crate::ports::index_store::{
     IndexStorageLayout, IndexStore, StorageInspection, STORAGE_SCHEMA_VERSION,
@@ -1739,10 +1742,18 @@ fn status_for_resolved_state(
                 }
                 report.storage = RepositoryImplementationStatus::Available;
                 if inspection.active_generation.is_some() {
-                    report.indexing = if inspection.code_unit_count.unwrap_or(0) > 0 {
-                        RepositoryImplementationStatus::SyntaxOnlyCodeUnits
-                    } else {
-                        RepositoryImplementationStatus::FileManifestOnly
+                    // One classifier decides this, in `core::policy`; this path
+                    // maps its answer into the repository vocabulary and does
+                    // not re-derive it from the raw count.
+                    let recorded_units = usize::try_from(inspection.code_unit_count.unwrap_or(0))
+                        .unwrap_or(usize::MAX);
+                    report.indexing = match generation_mode_for_code_unit_count(recorded_units) {
+                        IndexingGenerationMode::SyntaxOnlyCodeUnits => {
+                            RepositoryImplementationStatus::SyntaxOnlyCodeUnits
+                        }
+                        IndexingGenerationMode::FileManifestOnly => {
+                            RepositoryImplementationStatus::FileManifestOnly
+                        }
                     };
                 }
                 report.storage_inspection = Some(inspection);

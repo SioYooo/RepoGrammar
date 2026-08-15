@@ -112,34 +112,8 @@ pub struct IndexingOutcome {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexingGenerationMode {
-    FileManifestOnly,
-    SyntaxOnlyCodeUnits,
-}
-
-impl IndexingGenerationMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FileManifestOnly => "file_manifest_only",
-            Self::SyntaxOnlyCodeUnits => "syntax_only_code_units",
-        }
-    }
-
-    pub fn parser_status(self) -> &'static str {
-        match self {
-            Self::FileManifestOnly => "deferred",
-            Self::SyntaxOnlyCodeUnits => "syntax_only",
-        }
-    }
-
-    pub fn human_summary(self) -> &'static str {
-        match self {
-            Self::FileManifestOnly => "file manifest stored",
-            Self::SyntaxOnlyCodeUnits => "syntax-only code units stored",
-        }
-    }
-}
+use crate::core::policy::generation_mode::generation_mode_for_code_unit_count;
+pub use crate::core::policy::generation_mode::IndexingGenerationMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexingSyncMode {
@@ -1277,7 +1251,7 @@ where
     }
 
     Ok(IndexingOutcome {
-        indexing_mode: indexing_generation_mode(&report),
+        indexing_mode: generation_mode_for_code_unit_count(indexed_units),
         parser_attempted_files,
         indexed_units,
         // `local_support_fact_count` sums local parser/framework/derived facts;
@@ -1400,7 +1374,7 @@ fn sync_repository_with_optional_semantic_worker(
         let mut warnings = report.warnings.clone();
         extend_inventory_only_language_warnings(&mut warnings, &report);
         return Ok(IndexingOutcome {
-            indexing_mode: indexing_generation_mode(&report),
+            indexing_mode: generation_mode_for_code_unit_count(stats.indexed_code_unit_count),
             parser_attempted_files: 0,
             indexed_units: stats.indexed_code_unit_count,
             semantic_facts: stats.semantic_fact_count,
@@ -2205,7 +2179,7 @@ where
     );
 
     Ok(IndexingOutcome {
-        indexing_mode: indexing_generation_mode(&report),
+        indexing_mode: generation_mode_for_code_unit_count(indexed_code_units.len()),
         parser_attempted_files,
         indexed_units: indexed_code_units.len(),
         semantic_facts: local_support_fact_count + rust_provider_fact_count,
@@ -6428,14 +6402,6 @@ fn inventory_only_paths(report: &FileDiscoveryReport) -> BTreeSet<String> {
         .filter(|file| discovered_file_is_inventory_only(file))
         .map(|file| file.path.clone())
         .collect()
-}
-
-fn indexing_generation_mode(report: &FileDiscoveryReport) -> IndexingGenerationMode {
-    if report.files.iter().all(discovered_file_is_inventory_only) {
-        IndexingGenerationMode::FileManifestOnly
-    } else {
-        IndexingGenerationMode::SyntaxOnlyCodeUnits
-    }
 }
 
 /// Explain a degraded Python parse once per run by naming the syntax boundary
@@ -15113,10 +15079,11 @@ mod tests {
         assert_eq!(remove_report.removed_files, 1);
         assert_eq!(remove_report.reparsed_files, 0);
         assert_eq!(
-            // `.vb` is no longer inventory-only, so the generation reports the mode
-            // it attempted rather than the units an undecodable file happened to yield.
+            // `.vb` is admitted, but this one does not decode, so the generation
+            // holds no unit and says so. Every path answers this from the recorded
+            // unit count, so `index` and a later query cannot disagree.
             removed.indexing_mode,
-            IndexingGenerationMode::SyntaxOnlyCodeUnits
+            IndexingGenerationMode::FileManifestOnly
         );
         assert!(
             crate::application::storage::list_active_dependencies(&store)
@@ -15264,10 +15231,11 @@ mod tests {
         assert_eq!(remove_report.removed_files, 1);
         assert_eq!(remove_report.reparsed_files, 0);
         assert_eq!(
-            // `.pas` is no longer inventory-only, so the generation reports the mode
-            // it attempted rather than the units an undecodable file happened to yield.
+            // `.pas` is admitted, but this one does not decode, so the generation
+            // holds no unit and says so. Every path answers this from the recorded
+            // unit count, so `index` and a later query cannot disagree.
             removed.indexing_mode,
-            IndexingGenerationMode::SyntaxOnlyCodeUnits
+            IndexingGenerationMode::FileManifestOnly
         );
         assert!(
             crate::application::storage::list_active_dependencies(&store)

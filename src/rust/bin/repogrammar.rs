@@ -4156,6 +4156,55 @@ mod tests {
         }
     }
 
+    /// `index` and every later query must answer "what does this generation
+    /// hold" identically. They used to decide it separately -- `index` from the
+    /// discovery report, queries from the recorded unit count -- so they
+    /// disagreed whenever an admitted file yielded nothing.
+    #[test]
+    fn the_indexing_mode_is_the_same_answer_from_index_and_from_a_later_query() {
+        // A decodable test class: the generation holds units.
+        let (workspace, runtime) =
+            index_matlab_release_v0_2_fixture("unittest_exact_tests", "mode-agreement-with-units");
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let files_json = parse_machine_output("files", &files, &workspace);
+        assert_eq!(index_json["indexing"], "syntax_only_code_units");
+        assert_eq!(files_json["indexing"], index_json["indexing"]);
+
+        // An admitted file that does not decode: the parser is never reached and
+        // the generation holds nothing, and both commands say so.
+        let workspace = TempWorkspace::new("mode-agreement-without-units");
+        std::fs::write(workspace.path().join("CatalogTest.m"), [0xff, 0xfe, 0xfd])
+            .expect("write undecodable MATLAB source");
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let files_json = parse_machine_output("files", &files, &workspace);
+        assert_eq!(index_json["indexed_units"], 0);
+        assert_eq!(index_json["indexing"], "file_manifest_only");
+        assert_eq!(files_json["indexing"], index_json["indexing"]);
+    }
+
     fn matlab_release_fixture_v0_2_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src")
@@ -13099,11 +13148,11 @@ class User(Base):
         let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("index", &index, &workspace);
         assert_eq!(value["discovered_files"], 3);
-        // ADR-0045 admits `.adb`, so the generation reports the mode it
-        // attempted; these bytes are not UTF-8, so the body is read and then
-        // skipped and still yields no unit. `.gpr` and Fortran stay deferred.
-        assert_eq!(value["indexing"], "syntax_only_code_units");
-        assert_eq!(value["parser"], "syntax_only");
+        // ADR-0045 admits `.adb`, but these bytes are not UTF-8, so the body is
+        // read and then skipped: the parser is never reached and the generation
+        // holds nothing. `.gpr` and Fortran stay deferred.
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
         assert_eq!(value["parser_attempted_files"], 0);
         assert_eq!(value["indexed_units"], 0);
         assert_eq!(value["semantic_facts"], 0);
@@ -13117,10 +13166,8 @@ class User(Base):
         );
         let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("files", &files, &workspace);
-        // `index` reports the mode it attempted from discovery; the persisted
-        // generation reports what it actually holds. Nothing decoded here, so a
-        // later query reads the weaker of the two, and the two answers are
-        // asserted separately rather than assumed equal.
+        // Same answer as `index` above: one classifier decides this from the
+        // recorded unit count, so the two commands cannot disagree.
         assert_eq!(value["indexing"], "file_manifest_only");
         assert_eq!(
             value["files"]

@@ -546,16 +546,31 @@ owned semantic facts in a new building generation inside
 that generation active while downgrading any previously active row to
 validated. Human and JSON output must report the authoritative generation mode,
 actual `parser_attempted_files`, `indexed_units`, and `semantic_facts` counts,
-`semantic_worker`, and `mining: deferred`. A generation containing only
-inventory-only `go`, `php`, `ruby`, `swift`, `ada`, `fortran`, or deferred
-non-admitted config paths, or no accepted source/configuration paths, reports `indexing:
-file_manifest_only` and `parser: deferred`. Exact parser-capable dependency
-inputs — `go.mod`, `go.work`, `composer.json`, `composer.lock`, `Gemfile.lock`,
-`Package.resolved`, `alire.toml`, `alire.lock`, and `fpm.toml` — produce
-project-config units and therefore report
+`semantic_worker`, and `mining: deferred`. `indexing` is decided by
+one rule and one input: a generation reports `syntax_only_code_units` when it
+holds code units and `file_manifest_only` when it holds none. `parser` restates
+that same decision and is not a separate claim about whether the parser ran;
+`parser_attempted_files` is the field that reports the work done this round, and
+the two are allowed to differ in both directions.
+
+Deriving `indexing` from discovery instead is forbidden, because discovery can
+only say what a run intended to parse. An admitted file that does not decode, or
+one whose frontend recognizes no declaration, yields a generation holding
+nothing, and a discovery-derived answer would report
+`syntax_only_code_units` beside `indexed_units: 0` while every later query read
+the recorded count and answered `file_manifest_only`.
+
+The consequences are unchanged for every ordinary case. A generation containing
+only inventory-only `go`, `php`, `ruby`, `swift`, `ada`, `fortran`, or deferred
+non-admitted config paths, or no accepted source/configuration paths, holds no
+unit and so reports `indexing: file_manifest_only` and `parser: deferred`. Exact
+parser-capable dependency inputs — `go.mod`, `go.work`, `composer.json`,
+`composer.lock`, `Gemfile.lock`, `Package.resolved`, `alire.toml`,
+`alire.lock`, and `fpm.toml` — produce project-config units and therefore report
 `indexing: syntax_only_code_units` and `parser: syntax_only`, as does any other
-generation containing a parser-capable language token. This remains true for
-unchanged mixed-repository incremental rounds with zero parser attempts. The
+generation that holds units. This remains true for unchanged mixed-repository
+incremental rounds with zero parser attempts, because those generations still
+hold their copied-forward units. The
 CLI emits at most one truthful unsupported/inventory-only warning per accepted
 manifest token, not one warning per file. By default, `semantic_worker` is
 `deferred`.

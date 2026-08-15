@@ -17122,8 +17122,13 @@ mod tests {
         assert_eq!(json_output.status, 0);
         assert!(json_output.stderr.is_empty());
         let value: Value = serde_json::from_str(json_output.stdout.trim()).expect("Go index JSON");
-        assert_eq!(value["indexing"], "syntax_only_code_units");
-        assert_eq!(value["parser"], "syntax_only");
+        // The generation holds nothing, so it is a file-manifest-only
+        // generation and `parser` restates that. Reporting
+        // `syntax_only_code_units` beside `indexed_units: 0` contradicted
+        // itself inside one payload; the attempt count is reported separately
+        // and is the field that says the parser ran.
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
         assert_eq!(value["parser_attempted_files"], 1);
         assert_eq!(value["indexed_units"], 0);
         assert_eq!(value["semantic_facts"], 0);
@@ -17132,13 +17137,9 @@ mod tests {
             run_with_context_and_runtime(["resync"], workspace.path(), &env, &runtime);
         assert_eq!(human_output.status, 0);
         assert!(human_output.stderr.is_empty());
-        assert!(human_output
-            .stdout
-            .contains("resync: syntax-only code units stored"));
-        assert!(human_output
-            .stdout
-            .contains("indexing: syntax_only_code_units"));
-        assert!(human_output.stdout.contains("parser: syntax_only"));
+        assert!(human_output.stdout.contains("resync: file manifest stored"));
+        assert!(human_output.stdout.contains("indexing: file_manifest_only"));
+        assert!(human_output.stdout.contains("parser: deferred"));
         assert!(human_output.stdout.contains("parser_attempted_files: 1"));
     }
 
