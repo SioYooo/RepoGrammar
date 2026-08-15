@@ -2704,29 +2704,38 @@ fn delphi_unknown_reason_blocks_family_membership(
     }
 }
 
-/// An undeclared testthat dependency blocks every anchor in the file.
+/// An unproven testthat identity blocks every anchor in the file.
 ///
 /// ADR-0042 makes the DESCRIPTION declaration a precondition, so without it the
-/// framework identity is unproven and nothing built on it may stand.
+/// framework identity is unproven and nothing built on it may stand. A file
+/// that binds the name `test_that` itself unproves the same identity from the
+/// other side: the call still parses, but what it calls is no longer testthat's
+/// function.
 fn r_unknown_reason_blocks_family_membership(
     reason: UnknownReasonCode,
     affected_claim: &str,
 ) -> bool {
     match reason {
-        UnknownReasonCode::MissingDependency => {
+        UnknownReasonCode::MissingDependency | UnknownReasonCode::MonkeyPatch => {
             affected_claim == "r_testthat_identity" || affected_claim.starts_with("family:")
         }
         _ => false,
     }
 }
 
+/// A call reached only under a runtime condition is recorded, never guessed at.
+///
+/// `if (interactive())` and `for (...)` decide at run time whether -- and how
+/// often -- a test is registered, and RepoGrammar evaluates neither. Not
+/// anchoring the call understates support; it does not unprove the
+/// unconditional calls beside it, so this rides along as a standing subclaim
+/// instead of blocking the shape anchor.
 fn r_unknown_is_non_blocking_family_subclaim(
-    _reason: UnknownReasonCode,
-    _affected_claim: &str,
+    reason: UnknownReasonCode,
+    affected_claim: &str,
 ) -> bool {
-    // The R lane has no standing subclaim yet: its only typed UNKNOWNs are the
-    // blocking identity gate and the scanner resource limit.
-    false
+    reason == UnknownReasonCode::BuildVariantAmbiguity
+        && affected_claim == "r_conditional_test_registration"
 }
 
 /// An unresolvable testing import blocks the declaration claim it scopes.
