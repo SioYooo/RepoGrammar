@@ -33,6 +33,33 @@ allowed.
   native test process status.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
+
+### Local Cargo build-cache lifecycle
+
+Cargo `target/` directories in the primary checkout and registered Git
+worktrees are disposable generated output, not project history, durable agent
+state, or release evidence. Commits, committed fixtures and reports, and
+explicitly archived evidence remain authoritative.
+
+- Complete the required validation for a coherent workstream before cleaning
+  its build cache; do not rebuild solely to prove that generated files were
+  removed.
+- A target is eligible for cleanup only after resolving its exact Cargo target
+  directory, proving the path is Git-ignored and contains no tracked files,
+  preserving all unrelated dirty or untracked work, and confirming that no
+  build, test, product, IDE, or agent process has an open file below it.
+- Prefer `cargo clean --manifest-path <exact-worktree>/Cargo.toml --profile dev`
+  when preserving release artifacts. Use a full `cargo clean` only after
+  confirming that no installed command, MCP configuration, release check, or
+  active task resolves into `target/release` and that the checkout can rebuild
+  the artifact when next required.
+- Cleaning a Cargo cache never authorizes deleting a registered worktree, Git
+  refs or metadata, `.repogrammar/`, fixtures, experiment evidence, logs,
+  source files, or user-authored untracked files. Never replace the exact Cargo
+  command with a broad recursive path deletion.
+- Record the cleanup scope plus before/after allocated sizes in the task report.
+  Keep one-machine paths and byte counts out of canonical product claims; the
+  durable repository rule is this lifecycle and safety gate.
 - Process-boundary tests that rely on inherited child pipes must make child
   lifetime and signal handling explicit instead of depending on
   platform-specific wrapper behavior.
