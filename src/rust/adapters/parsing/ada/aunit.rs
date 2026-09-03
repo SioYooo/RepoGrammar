@@ -14,7 +14,7 @@
 //! is recovered, because a recovered anchor cannot be told apart from a real
 //! one.
 
-use super::super::{ir_edges_for_units, ir_nodes_for_units};
+use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use super::lexer::Refusal;
 use super::syntax::parse_compilation;
 use crate::core::model::{
@@ -301,18 +301,7 @@ fn finish(
             right.id.as_str(),
         ))
     });
-    facts.sort_by(|left, right| {
-        (
-            left.evidence.range.start_byte,
-            left.evidence.range.end_byte,
-            left.kind.as_protocol_str(),
-        )
-            .cmp(&(
-                right.evidence.range.start_byte,
-                right.evidence.range.end_byte,
-                right.kind.as_protocol_str(),
-            ))
-    });
+    sort_anchor_facts(&mut facts);
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
     let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
     Ok(SourceParseOutput {

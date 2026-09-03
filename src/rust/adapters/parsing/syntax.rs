@@ -72,7 +72,7 @@ impl SourceParser for SyntaxCodeUnitParser {
 fn tsjs_project_config_output(
     document: SourceDocument<'_>,
 ) -> Result<SourceParseOutput, ParseError> {
-    let unit = project_config_unit(&document)?;
+    let unit = super::project_config_unit(&document, Language::TsJsConfig)?;
     let mut semantic_facts = Vec::new();
     let mut dependencies = Vec::new();
     let mut diagnostics = Vec::new();
@@ -132,29 +132,6 @@ fn tsjs_project_config_output(
         },
         python_interface_hash: None,
         dependencies,
-    })
-}
-
-fn project_config_unit(document: &SourceDocument<'_>) -> Result<CodeUnit, ParseError> {
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let id = CodeUnitId::new(format!(
-        "unit:{}#project_config:0-{}:0",
-        document.path,
-        document.text.len()
-    ))
-    .map_err(ParseError::Internal)?;
-    Ok(CodeUnit {
-        id,
-        language: Language::TsJsConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
     })
 }
 

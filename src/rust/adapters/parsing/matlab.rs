@@ -8,12 +8,11 @@
 pub mod unittest;
 
 use super::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
-use super::{ir_edges_for_units, ir_nodes_for_units};
+use super::config_source_parse_output;
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin, Language,
+    PackageIdentity, SemanticFact, SemanticFactKind, SymbolId, UnknownReasonCode,
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
@@ -62,24 +61,7 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
     if document.language != Language::MatlabConfig || !is_mpackage_path(document.path) {
         return Err(ParseError::UnsupportedLanguage);
     }
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::MatlabConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance: Provenance::new(
-            document.path,
-            document.content_hash.clone(),
-            document.repository_revision.clone(),
-        )
-        .map_err(ParseError::Internal)?,
-    };
+    let unit = super::project_config_unit(&document, Language::MatlabConfig)?;
 
     let (mut facts, dependencies) = inventory(document.text, &unit)?;
     facts.sort_by(|left, right| {
@@ -94,23 +76,7 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
                 right.assumptions.as_slice(),
             ))
     });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            units,
-            ir_nodes,
-            ir_edges,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 fn inventory(

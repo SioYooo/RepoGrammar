@@ -14,7 +14,7 @@
 //! across the declared set, so it is exactly the dialect-dependent fact this
 //! frontend has no authority to assert.
 
-use super::{ir_edges_for_units, ir_nodes_for_units};
+use super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -253,20 +253,7 @@ fn finish(
             right.id.as_str(),
         ))
     });
-    facts.sort_by(|left, right| {
-        (
-            left.evidence.range.start_byte,
-            left.evidence.range.end_byte,
-            left.kind.as_protocol_str(),
-            left.target.as_ref().map(SymbolId::as_str),
-        )
-            .cmp(&(
-                right.evidence.range.start_byte,
-                right.evidence.range.end_byte,
-                right.kind.as_protocol_str(),
-                right.target.as_ref().map(SymbolId::as_str),
-            ))
-    });
+    sort_anchor_facts(&mut facts);
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
     let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
     Ok(SourceParseOutput {

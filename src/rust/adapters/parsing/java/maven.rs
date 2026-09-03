@@ -7,12 +7,11 @@
 //! `project/dependencies/dependency` become dependency records. Every wider
 //! Maven model obligation remains a claim-scoped typed `UNKNOWN`.
 
-use super::super::{ir_edges_for_units, ir_nodes_for_units};
+use super::super::{config_source_parse_output, sort_inventory_facts};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin, Language,
+    PackageIdentity, SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
 };
 use crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES;
 use crate::ports::parser::{
@@ -62,56 +61,11 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
         return Err(ParseError::UnsupportedLanguage);
     }
 
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::JavaConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
-    };
+    let unit = super::super::project_config_unit(&document, Language::JavaConfig)?;
 
     let (mut facts, dependencies) = pom_inventory(document.text, &unit)?;
-    facts.sort_by(|left, right| {
-        (
-            left.target.as_ref().map(SymbolId::as_str),
-            left.assumptions.as_slice(),
-            left.evidence.note.as_str(),
-        )
-            .cmp(&(
-                right.target.as_ref().map(SymbolId::as_str),
-                right.assumptions.as_slice(),
-                right.evidence.note.as_str(),
-            ))
-    });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            units,
-            ir_nodes,
-            ir_edges,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
+    sort_inventory_facts(&mut facts);
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -20,7 +20,7 @@
 //! VB has no single-quoted string, so the character that opens a comment is
 //! never a delimiter — the ambiguity that rules Ruby out does not exist here.
 
-use super::super::{ir_edges_for_units, ir_nodes_for_units};
+use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use super::syntax;
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
@@ -386,20 +386,7 @@ fn finish(
             right.id.as_str(),
         ))
     });
-    facts.sort_by(|left, right| {
-        (
-            left.evidence.range.start_byte,
-            left.evidence.range.end_byte,
-            left.kind.as_protocol_str(),
-            left.target.as_ref().map(SymbolId::as_str),
-        )
-            .cmp(&(
-                right.evidence.range.start_byte,
-                right.evidence.range.end_byte,
-                right.kind.as_protocol_str(),
-                right.target.as_ref().map(SymbolId::as_str),
-            ))
-    });
+    sort_anchor_facts(&mut facts);
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
     let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
     Ok(SourceParseOutput {

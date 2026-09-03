@@ -6,12 +6,12 @@
 
 use super::CPP_ANCHOR_ENGINE;
 use crate::adapters::parsing::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
-use crate::adapters::parsing::{ir_edges_for_units, ir_nodes_for_units};
+use crate::adapters::parsing::config_source_parse_output;
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, CodeUnitId, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel,
+    DependencyRecord, DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin,
+    Language, PackageIdentity, Provenance, SemanticFact, SemanticFactKind, SymbolId,
+    UnknownReasonCode,
 };
 use crate::ports::parser::{ParseError, ParseReport, SourceDocument, SourceParseOutput};
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,25 +40,7 @@ pub(super) fn parse(document: SourceDocument<'_>) -> Result<ParseReport, ParseEr
 }
 
 pub(super) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError> {
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::CppConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
-    };
+    let unit = super::super::project_config_unit(&document, Language::CppConfig)?;
     let basename = document.path.rsplit('/').next().unwrap_or(document.path);
     let (mut facts, dependencies) = match basename {
         "compile_commands.json" => (compile_commands_facts(&document, &unit)?, Vec::new()),
@@ -78,23 +60,7 @@ pub(super) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
                 right.evidence.range.start_byte,
             ))
     });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            units,
-            ir_nodes,
-            ir_edges,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 fn config_project_fact(

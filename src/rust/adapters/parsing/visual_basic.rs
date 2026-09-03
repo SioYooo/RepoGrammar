@@ -9,12 +9,11 @@ pub(crate) mod mstest;
 mod syntax;
 
 use super::bounded_xml::{parse_bounded_xml, BoundedXmlError, BoundedXmlLimits, XmlDocument};
-use super::{ir_edges_for_units, ir_nodes_for_units};
+use super::config_source_parse_output;
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin, Language,
+    PackageIdentity, SemanticFact, SemanticFactKind, SymbolId, UnknownReasonCode,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
@@ -67,7 +66,7 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
     {
         return Err(ParseError::UnsupportedLanguage);
     }
-    let unit = project_config_unit(&document)?;
+    let unit = super::project_config_unit(&document, Language::VisualBasicConfig)?;
     let mut facts = vec![config_fact(
         &unit,
         "visual_basic.vbproj",
@@ -111,23 +110,7 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
                 right.evidence.note.as_str(),
             ))
     });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            units,
-            ir_nodes,
-            ir_edges,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 fn package_references(
@@ -316,26 +299,6 @@ fn valid_literal_version(value: &str) -> bool {
         && !["$(", "@(", "%("]
             .iter()
             .any(|marker| value.contains(marker))
-}
-
-fn project_config_unit(document: &SourceDocument<'_>) -> Result<CodeUnit, ParseError> {
-    Ok(CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::VisualBasicConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range: SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?,
-        provenance: Provenance::new(
-            document.path,
-            document.content_hash.clone(),
-            document.repository_revision.clone(),
-        )
-        .map_err(ParseError::Internal)?,
-    })
 }
 
 fn config_fact(
