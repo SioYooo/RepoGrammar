@@ -13,12 +13,13 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    SourceDocument, SourceParser,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tree_sitter::{Node, Parser};
 
+mod project_config;
 mod test_data;
 
 pub(crate) const CSHARP_ANCHOR_ENGINE: &str = "repogrammar-csharp-syntax";
@@ -98,6 +99,9 @@ impl SourceParser for CSharpSyntaxParser {
         if document.language != Language::CSharp {
             return Err(ParseError::UnsupportedLanguage);
         }
+        if is_csproj_document(&document) {
+            return project_config::parse(document);
+        }
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -112,6 +116,26 @@ impl SourceParser for CSharpSyntaxParser {
         scanner.scan_tree(tree.root_node())?;
         scanner.finish()
     }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        if document.language == Language::CSharp && is_csproj_document(&document) {
+            return project_config::parse_output(document);
+        }
+        self.parse_with_context(document, context)
+            .map(SourceParseOutput::from_report)
+    }
+}
+
+fn is_csproj_document(document: &SourceDocument<'_>) -> bool {
+    document
+        .path
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.ends_with(".csproj"))
 }
 
 #[derive(Debug, Clone, Default)]
