@@ -1,6 +1,8 @@
 //! Parsing adapters. Tree-sitter types must not cross this module boundary.
 
-use crate::core::model::{CodeUnit, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId};
+use crate::core::model::{
+    CodeUnit, CodeUnitId, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId,
+};
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, PythonInterfaceProbe, SourceDocument,
     SourceParseOutput, SourceParser,
@@ -361,6 +363,105 @@ pub(crate) fn ir_edges_for_units(units: &[CodeUnit]) -> Result<Vec<IrEdge>, Stri
             )
         })
         .collect()
+}
+
+/// Deterministic identity order for config-inventory facts:
+/// (target, assumptions, evidence note). One fact per dependency claim, so
+/// claim identity — not source position — is the canonical order.
+pub(crate) fn sort_inventory_facts(facts: &mut [crate::core::model::SemanticFact]) {
+    facts.sort_by(|left, right| {
+        (
+            left.target
+                .as_ref()
+                .map(crate::core::model::SymbolId::as_str),
+            left.assumptions.as_slice(),
+            left.evidence.note.as_str(),
+        )
+            .cmp(&(
+                right
+                    .target
+                    .as_ref()
+                    .map(crate::core::model::SymbolId::as_str),
+                right.assumptions.as_slice(),
+                right.evidence.note.as_str(),
+            ))
+    });
+}
+
+/// Deterministic positional order for source-anchor facts:
+/// (range start, range end, kind, target). Anchor facts repeat within one
+/// file, so source position is the primary key and claim identity breaks
+/// ties.
+pub(crate) fn sort_anchor_facts(facts: &mut [crate::core::model::SemanticFact]) {
+    facts.sort_by(|left, right| {
+        (
+            left.evidence.range.start_byte,
+            left.evidence.range.end_byte,
+            left.kind.as_protocol_str(),
+            left.target
+                .as_ref()
+                .map(crate::core::model::SymbolId::as_str),
+        )
+            .cmp(&(
+                right.evidence.range.start_byte,
+                right.evidence.range.end_byte,
+                right.kind.as_protocol_str(),
+                right
+                    .target
+                    .as_ref()
+                    .map(crate::core::model::SymbolId::as_str),
+            ))
+    });
+}
+
+/// The single whole-file `project_config` unit every config-inventory lane
+/// emits: stable id, full-range `SourceRange`, and document provenance.
+pub(crate) fn project_config_unit(
+    document: &SourceDocument<'_>,
+    language: crate::core::model::Language,
+) -> Result<CodeUnit, ParseError> {
+    let end_byte = document.text.len();
+    Ok(CodeUnit {
+        id: CodeUnitId::new(format!(
+            "unit:{}#project_config:0-{}:0",
+            document.path, end_byte
+        ))
+        .map_err(ParseError::Internal)?,
+        language,
+        kind: CodeUnitKind::ProjectConfig,
+        range: crate::core::model::SourceRange::new(0, end_byte).map_err(ParseError::Internal)?,
+        provenance: crate::core::model::Provenance::new(
+            document.path,
+            document.content_hash.clone(),
+            document.repository_revision.clone(),
+        )
+        .map_err(ParseError::Internal)?,
+    })
+}
+
+/// The shared `SourceParseOutput` epilogue for config-inventory lanes: sorted
+/// facts, unit IR, and the validated dependency snapshot.
+pub(crate) fn config_source_parse_output(
+    units: Vec<CodeUnit>,
+    semantic_facts: Vec<crate::core::model::SemanticFact>,
+    dependencies: Vec<crate::core::model::DependencyRecord>,
+) -> Result<SourceParseOutput, ParseError> {
+    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
+    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
+    let dependencies = crate::core::model::DependencySnapshot::new(dependencies, Vec::new())
+        .map_err(ParseError::Internal)?
+        .dependencies;
+    Ok(SourceParseOutput {
+        report: ParseReport {
+            units,
+            ir_nodes,
+            ir_edges,
+            semantic_facts,
+            diagnostics: Vec::new(),
+        },
+        python_interface_hash: None,
+        dependencies,
+    })
 }
 
 fn same_file(left: &CodeUnit, right: &CodeUnit) -> bool {

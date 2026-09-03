@@ -6,12 +6,11 @@
 //! they do not prove installation or runtime selection.
 
 use super::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
-use super::{ir_edges_for_units, ir_nodes_for_units};
+use super::{config_source_parse_output, project_config_unit, sort_inventory_facts};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin, Language,
+    PackageIdentity, SemanticFact, SemanticFactKind, SymbolId, UnknownReasonCode,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
@@ -63,60 +62,15 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
         return Err(ParseError::UnsupportedLanguage);
     }
 
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::PhpConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
-    };
+    let unit = project_config_unit(&document, Language::PhpConfig)?;
 
     let (mut facts, dependencies) = match basename {
         "composer.json" => manifest_inventory(document.text, &unit)?,
         "composer.lock" => lock_inventory(document.text, &unit)?,
         _ => unreachable!("basename was checked above"),
     };
-    facts.sort_by(|left, right| {
-        (
-            left.target.as_ref().map(SymbolId::as_str),
-            left.assumptions.as_slice(),
-            left.evidence.note.as_str(),
-        )
-            .cmp(&(
-                right.target.as_ref().map(SymbolId::as_str),
-                right.assumptions.as_slice(),
-                right.evidence.note.as_str(),
-            ))
-    });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            units,
-            ir_nodes,
-            ir_edges,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
+    sort_inventory_facts(&mut facts);
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 fn manifest_inventory(

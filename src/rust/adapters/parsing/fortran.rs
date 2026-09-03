@@ -4,12 +4,11 @@
 //! `[dev-dependencies]` tables are admitted. Dotted namespace, git, path,
 //! target-specific, and preprocessor-bearing shapes remain typed UNKNOWN.
 
-use super::{ir_edges_for_units, ir_nodes_for_units};
+use super::{config_source_parse_output, sort_inventory_facts};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin, Language,
+    PackageIdentity, SemanticFact, SemanticFactKind, SymbolId, UnknownReasonCode,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
@@ -56,54 +55,10 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
     {
         return Err(ParseError::UnsupportedLanguage);
     }
-    let unit = project_config_unit(&document)?;
+    let unit = super::project_config_unit(&document, Language::FortranConfig)?;
     let (mut facts, dependencies) = fpm_manifest_inventory(document.text, &unit)?;
-    facts.sort_by(|left, right| {
-        (
-            left.target.as_ref().map(SymbolId::as_str),
-            left.assumptions.as_slice(),
-        )
-            .cmp(&(
-                right.target.as_ref().map(SymbolId::as_str),
-                right.assumptions.as_slice(),
-            ))
-    });
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    let units = vec![unit];
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            ir_nodes: ir_nodes_for_units(&units).map_err(ParseError::Internal)?,
-            ir_edges: ir_edges_for_units(&units).map_err(ParseError::Internal)?,
-            units,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
-}
-
-fn project_config_unit(document: &SourceDocument<'_>) -> Result<CodeUnit, ParseError> {
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    Ok(CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::FortranConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance: Provenance::new(
-            document.path,
-            document.content_hash.clone(),
-            document.repository_revision.clone(),
-        )
-        .map_err(ParseError::Internal)?,
-    })
+    sort_inventory_facts(&mut facts);
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

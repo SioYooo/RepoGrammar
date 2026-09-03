@@ -7,12 +7,11 @@
 
 pub(crate) mod source;
 
-use super::{ir_edges_for_units, ir_nodes_for_units};
+use super::{config_source_parse_output, sort_inventory_facts};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
-    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
-    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
+    CodeUnit, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord,
+    DependencyScope, DependencyVersion, Evidence, FactCertainty, FactOrigin, Language,
+    PackageIdentity, SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
 };
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, SourceDocument, SourceParseOutput, SourceParser,
@@ -58,60 +57,15 @@ fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, Parse
     if document.language != Language::GoConfig {
         return Err(ParseError::UnsupportedLanguage);
     }
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::GoConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
-    };
+    let unit = super::project_config_unit(&document, Language::GoConfig)?;
     let basename = document.path.rsplit('/').next().unwrap_or(document.path);
     let (mut facts, dependencies) = match basename {
         "go.mod" => parse_go_mod(document.text, &unit)?,
         "go.work" => parse_go_work(document.text, &unit)?,
         _ => return Err(ParseError::UnsupportedLanguage),
     };
-    facts.sort_by(|left, right| {
-        (
-            left.target.as_ref().map(SymbolId::as_str),
-            left.evidence.range.start_byte,
-            left.evidence.range.end_byte,
-        )
-            .cmp(&(
-                right.target.as_ref().map(SymbolId::as_str),
-                right.evidence.range.start_byte,
-                right.evidence.range.end_byte,
-            ))
-    });
-    let units = vec![unit];
-    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    let dependencies = DependencySnapshot::new(dependencies, Vec::new())
-        .map_err(ParseError::Internal)?
-        .dependencies;
-    Ok(SourceParseOutput {
-        report: ParseReport {
-            units,
-            ir_nodes,
-            ir_edges,
-            semantic_facts: facts,
-            diagnostics: Vec::new(),
-        },
-        python_interface_hash: None,
-        dependencies,
-    })
+    sort_inventory_facts(&mut facts);
+    config_source_parse_output(vec![unit], facts, dependencies)
 }
 
 fn parse_go_work(
