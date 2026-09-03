@@ -17,7 +17,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MCP_SERVER_NAME: &str = "repogrammar";
 pub const CLI_BINARY_NAME: &str = "repogrammar";
-pub const LIVE_AGENT_TARGETS: [AgentTarget; 2] = [AgentTarget::Codex, AgentTarget::ClaudeCode];
+pub const LIVE_AGENT_TARGETS: [AgentTarget; 3] = [
+    AgentTarget::Codex,
+    AgentTarget::ClaudeCode,
+    AgentTarget::Opencode,
+];
 pub const KNOWN_AGENT_TARGETS: [AgentTarget; 8] = [
     AgentTarget::Codex,
     AgentTarget::ClaudeCode,
@@ -119,7 +123,9 @@ impl AgentTarget {
     pub fn has_live_writer(self, scope: InstallScope) -> bool {
         matches!(
             (self, scope),
-            (Self::Codex, InstallScope::Global) | (Self::ClaudeCode, InstallScope::Global)
+            (Self::Codex, InstallScope::Global)
+                | (Self::ClaudeCode, InstallScope::Global)
+                | (Self::Opencode, InstallScope::Global)
         )
     }
 }
@@ -550,6 +556,9 @@ pub fn execute_install(
         let reconfigured = targets_to_reconfigure.contains(&target);
         if !reconfigured {
             mutations.configured_targets.push(target);
+            mutations
+                .created_config_files
+                .push(opencode_action_created_config_file(&action));
         }
         let (instruction_path, instruction_action) = match instruction_file_for(context, target) {
             Some(path) => match write_managed_instruction_section(Path::new(path)) {
@@ -818,6 +827,9 @@ pub fn execute_prepared_agent_disconnect(
                         target.as_str()
                     )));
                 }
+            }
+            if let Some(created) = &snapshot.created_config_file {
+                remove_opencode_created_config_file_if_empty(created)?;
             }
             maybe_fail_disconnect_step(target, DisconnectMutationStep::Instruction)?;
             if let Some((instruction_path, instruction_action)) = &snapshot.receipt_instruction {
@@ -1111,7 +1123,6 @@ args = ["serve"]
         AgentTarget::Opencode => format!(
             r#"# {}
 {{
-  "$schema": "https://opencode.ai/config.json",
   "mcp": {{
     "{MCP_SERVER_NAME}": {{
       "type": "local",
@@ -1122,9 +1133,9 @@ args = ["serve"]
 }}
 "#,
             if scope == InstallScope::Global {
-                "$XDG_CONFIG_HOME/opencode/opencode.jsonc"
+                "$XDG_CONFIG_HOME/opencode/opencode.json (default: ~/.config/opencode/opencode.json)"
             } else {
-                "./opencode.jsonc"
+                "./opencode.json"
             }
         ),
         AgentTarget::Hermes => format!(
@@ -1197,6 +1208,10 @@ pub fn target_plan_line(target: AgentTarget, scope: InstallScope) -> String {
         }
         (AgentTarget::ClaudeCode, InstallScope::Global) => {
             "native_mcp: claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
+                .to_string()
+        }
+        (AgentTarget::Opencode, InstallScope::Global) => {
+            "native_mcp: write mcp.repogrammar local entry to $XDG_CONFIG_HOME/opencode/opencode.json (<repogrammar-executable> serve)"
                 .to_string()
         }
         (target, scope) if target.has_live_writer(scope) => {
@@ -1378,6 +1393,11 @@ struct OwnedIntegrationSnapshot {
     receipt_backup: FileSnapshot,
     instruction_files: Vec<FileSnapshot>,
     receipt_instruction: Option<(PathBuf, InstructionAction)>,
+    /// Agent config file this integration created from scratch, proven by the
+    /// receipt's recorded native action. Only the file-based opencode writer
+    /// records one; disconnect may delete it only when removing the managed
+    /// entry would otherwise leave it an empty object.
+    created_config_file: Option<PathBuf>,
 }
 
 fn capture_owned_integration(
@@ -1466,6 +1486,7 @@ fn capture_owned_integration(
             .map(|path| capture_file_snapshot(path, "managed instruction file"))
             .collect::<Result<Vec<_>, _>>()?,
         receipt_instruction,
+        created_config_file: receipt_created_config_file(&receipt_path, target),
     })
 }
 
@@ -1917,6 +1938,9 @@ fn previous_managed_file_removal_error(label: &str, error: std::io::Error) -> Re
 #[derive(Default)]
 struct InstallMutationLog {
     configured_targets: Vec<AgentTarget>,
+    /// Parallel to `configured_targets`: the agent config file this run created
+    /// from scratch for that target, when its writer recorded one.
+    created_config_files: Vec<Option<PathBuf>>,
     configured_instructions: Vec<(Option<String>, InstructionAction)>,
     new_receipt_paths: Vec<String>,
     reconfigured_snapshots: Vec<OwnedIntegrationSnapshot>,
@@ -1939,7 +1963,15 @@ fn rollback_install_run(
             *target,
             &command_record.executable_path,
         ) {
-            Ok(()) => safe_new_cleanup[index] = true,
+            Ok(()) => {
+                safe_new_cleanup[index] = true;
+                if let Some(created) = mutations.created_config_files.get(index).cloned().flatten()
+                {
+                    if let Err(error) = remove_opencode_created_config_file_if_empty(&created) {
+                        failures.push(error.to_string());
+                    }
+                }
+            }
             Err(error) => failures.push(error),
         }
     }
@@ -2515,6 +2547,33 @@ fn receipt_instruction_action(receipt_path: &Path) -> InstructionAction {
         .and_then(|value| value.as_str())
         .and_then(InstructionAction::from_receipt_str)
         .unwrap_or(InstructionAction::Deferred)
+}
+
+/// Recover the agent config file this receipt proves RepoGrammar created from
+/// scratch. Only the file-based opencode writer records one, encoded as its
+/// native action (`native_program` = config path, `native_args` ending in
+/// `file-created`); every other target reports `None`.
+fn receipt_created_config_file(receipt_path: &Path, target: AgentTarget) -> Option<PathBuf> {
+    if target != AgentTarget::Opencode {
+        return None;
+    }
+    let Ok(contents) = fs::read_to_string(receipt_path) else {
+        return None;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return None;
+    };
+    let program = value.get("native_program").and_then(|v| v.as_str())?;
+    let args = value.get("native_args")?.as_array()?;
+    if args.len() == 2
+        && args.first().and_then(|v| v.as_str()) == Some(&opencode_mcp_key())
+        && args.get(1).and_then(|v| v.as_str()) == Some("file-created")
+        && Path::new(program).is_absolute()
+    {
+        Some(PathBuf::from(program))
+    } else {
+        None
+    }
 }
 
 fn receipt_path(
@@ -3646,6 +3705,489 @@ fn instruction_file_for(context: &InstallExecutionContext, target: AgentTarget) 
         .map(|(_, path)| path.as_str())
 }
 
+// ---------------------------------------------------------------------------
+// opencode global config writer
+//
+// The first file-based live writer: instead of shelling out to a native agent
+// CLI, RepoGrammar reads and writes the opencode global config file directly
+// under the same ownership, receipt, and rollback rules as the native-CLI
+// writers.
+// ---------------------------------------------------------------------------
+
+/// Receipt/native-action token naming the managed entry inside the opencode
+/// config file, e.g. `mcp.repogrammar`.
+fn opencode_mcp_key() -> String {
+    format!("mcp.{MCP_SERVER_NAME}")
+}
+
+/// Resolve the opencode global config file RepoGrammar writes:
+/// `$XDG_CONFIG_HOME/opencode/opencode.json`, defaulting to
+/// `$HOME/.config/opencode/opencode.json` when `XDG_CONFIG_HOME` is unset or
+/// empty. A relative `XDG_CONFIG_HOME` is rejected rather than silently
+/// resolved against the current directory.
+pub fn opencode_global_config_path<F>(env_lookup: &F) -> Result<PathBuf, RepoGrammarError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(value) = env_lookup("XDG_CONFIG_HOME").filter(|value| !value.trim().is_empty()) {
+        let base = PathBuf::from(value);
+        if !base.is_absolute() {
+            return Err(RepoGrammarError::InvalidInput(
+                "XDG_CONFIG_HOME must be absolute when set for opencode configuration writes"
+                    .to_string(),
+            ));
+        }
+        return Ok(base.join("opencode").join("opencode.json"));
+    }
+    let home = env_lookup("HOME")
+        .or_else(|| env_lookup("USERPROFILE"))
+        .ok_or_else(|| {
+            RepoGrammarError::InvalidInput(
+                "XDG_CONFIG_HOME or HOME is required to resolve the opencode global config path"
+                    .to_string(),
+            )
+        })?;
+    Ok(Path::new(&home)
+        .join(".config")
+        .join("opencode")
+        .join("opencode.json"))
+}
+
+fn opencode_require_global_scope(scope: InstallScope) -> Result<(), RepoGrammarError> {
+    if scope != InstallScope::Global {
+        return Err(RepoGrammarError::InvalidInput(
+            "opencode live install is global-only; project-local writes are deferred".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The exact MCP entry object RepoGrammar writes for opencode:
+/// `{"type":"local","command":[<executable>,"serve"],"enabled":true}`.
+fn opencode_mcp_entry(executable_path: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "local",
+        "command": [executable_path, "serve"],
+        "enabled": true,
+    })
+}
+
+/// Normalize a parsed `mcp.repogrammar` entry at the ownership boundary: the
+/// opencode `command` array becomes `(executable_path, args)` so the shared
+/// `NativeMcpServerConfig` ownership matching keeps working. A missing
+/// `enabled` field keeps opencode's documented default (`true`); an entry that
+/// is not a recognizable local command server yields `None`.
+pub fn parse_opencode_mcp_entry(
+    entry: &serde_json::Value,
+    scope: InstallScope,
+) -> Option<NativeMcpServerConfig> {
+    let object = entry.as_object()?;
+    if object.get("type").and_then(|value| value.as_str()) != Some("local") {
+        return None;
+    }
+    let command = object.get("command")?.as_array()?;
+    if command.is_empty() {
+        return None;
+    }
+    let mut parts = command
+        .iter()
+        .map(|value| value.as_str().map(str::to_string))
+        .collect::<Option<Vec<_>>>()?;
+    let args = parts.split_off(1);
+    let enabled = match object.get("enabled") {
+        Some(serde_json::Value::Bool(value)) => *value,
+        None => true,
+        Some(_) => return None,
+    };
+    let executable_path = parts.into_iter().next()?;
+    Some(NativeMcpServerConfig {
+        executable_path,
+        args,
+        scope,
+        enabled,
+    })
+}
+
+/// Require the opencode config path to be absent or a regular file. Returns
+/// `Ok(false)` when absent so callers can branch without guessing.
+fn require_regular_opencode_config(path: &Path) -> Result<bool, RepoGrammarError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(RepoGrammarError::InvalidInput(
+                "opencode config path must be a regular file".to_string(),
+            ))
+        }
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(RepoGrammarError::InvalidInput(format!(
+            "failed to inspect opencode config file: {error}"
+        ))),
+    }
+}
+
+fn opencode_read_config_object(path: &Path) -> Result<serde_json::Value, RepoGrammarError> {
+    let contents = fs::read_to_string(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to read opencode config file: {error}"))
+    })?;
+    serde_json::from_str(&contents).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("opencode config file is not valid JSON: {error}"))
+    })
+}
+
+/// Read the opencode config file and classify the managed `mcp.repogrammar`
+/// entry without shelling out. Absence is the `mcp.repogrammar` key being
+/// absent; an unparseable file or an unrecognizable entry shape is
+/// `Malformed` so the shared state machine preserves it.
+pub fn opencode_inspect_mcp_config(
+    path: &Path,
+    scope: InstallScope,
+) -> Result<NativeMcpServerState, RepoGrammarError> {
+    opencode_require_global_scope(scope)?;
+    if !require_regular_opencode_config(path)? {
+        return Ok(NativeMcpServerState::NotFound);
+    }
+    let value = match opencode_read_config_object(path) {
+        Ok(value) => value,
+        Err(_) => return Ok(NativeMcpServerState::Malformed),
+    };
+    let Some(mcp) = value.get("mcp") else {
+        return Ok(NativeMcpServerState::NotFound);
+    };
+    let Some(entry) = mcp
+        .as_object()
+        .and_then(|object| object.get(MCP_SERVER_NAME))
+    else {
+        return if mcp.is_object() {
+            Ok(NativeMcpServerState::NotFound)
+        } else {
+            Ok(NativeMcpServerState::Malformed)
+        };
+    };
+    Ok(
+        parse_opencode_mcp_entry(entry, scope).map_or(NativeMcpServerState::Malformed, |config| {
+            NativeMcpServerState::Present(config)
+        }),
+    )
+}
+
+/// Outcome of an idempotent opencode config write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpencodeConfigWriteAction {
+    /// The config file did not exist and was created with the managed entry.
+    CreatedFile,
+    /// A pre-existing config file was modified to hold the managed entry.
+    UpdatedFile,
+    /// The file already held the exact managed entry; nothing was written.
+    Unchanged,
+}
+
+impl OpencodeConfigWriteAction {
+    fn receipt_token(self) -> &'static str {
+        match self {
+            Self::CreatedFile => "file-created",
+            Self::UpdatedFile => "file-updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+/// Outcome of an opencode managed-entry removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpencodeConfigRemovalAction {
+    /// The managed entry was removed from the config file.
+    RemovedEntry,
+    /// Neither the file nor the managed entry was present.
+    NotPresent,
+}
+
+impl OpencodeConfigRemovalAction {
+    fn receipt_token(self) -> &'static str {
+        match self {
+            Self::RemovedEntry => "removed",
+            Self::NotPresent => "not-present",
+        }
+    }
+}
+
+fn opencode_config_backup_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("opencode.json");
+    path.with_file_name(format!("{name}.repogrammar-bak"))
+}
+
+fn opencode_entry_matches(root: &serde_json::Value, entry: &serde_json::Value) -> bool {
+    root.get("mcp")
+        .and_then(|mcp| mcp.get(MCP_SERVER_NAME))
+        .is_some_and(|current| current == entry)
+}
+
+fn opencode_pretty(root: &serde_json::Value) -> Result<String, RepoGrammarError> {
+    serde_json::to_string_pretty(root)
+        .map(|contents| format!("{contents}\n"))
+        .map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to serialize opencode config file: {error}"
+            ))
+        })
+}
+
+fn opencode_verify_written_entry(
+    path: &Path,
+    entry: &serde_json::Value,
+) -> Result<(), RepoGrammarError> {
+    let root = opencode_read_config_object(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to re-read opencode config file for verification: {error}"
+        ))
+    })?;
+    if opencode_entry_matches(&root, entry) {
+        Ok(())
+    } else {
+        Err(RepoGrammarError::InvalidInput(
+            "opencode config file managed entry failed verification after write".to_string(),
+        ))
+    }
+}
+
+fn opencode_verify_entry_absent(path: &Path) -> Result<(), RepoGrammarError> {
+    let root = opencode_read_config_object(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to re-read opencode config file for verification: {error}"
+        ))
+    })?;
+    let present = root
+        .get("mcp")
+        .and_then(|mcp| mcp.get(MCP_SERVER_NAME))
+        .is_some();
+    if present {
+        Err(RepoGrammarError::InvalidInput(
+            "opencode config file managed entry was not removed".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static OPENCODE_REPAIR_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn inject_opencode_repair_failure() {
+    OPENCODE_REPAIR_FAILURE.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn maybe_fail_opencode_repair() -> Result<(), RepoGrammarError> {
+    if OPENCODE_REPAIR_FAILURE.with(|flag| flag.replace(false)) {
+        Err(RepoGrammarError::InvalidInput(
+            "injected opencode repair failure".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(test))]
+fn maybe_fail_opencode_repair() -> Result<(), RepoGrammarError> {
+    Ok(())
+}
+
+/// Idempotently write the managed `mcp.repogrammar` entry into the opencode
+/// global config file. Preserves every unknown field through a
+/// `serde_json::Value` round-trip, refuses a malformed or non-object file by
+/// default, backs the exact previous bytes up beside the file before modifying
+/// it, writes atomically through a same-directory temp file plus rename, and
+/// reparses the result to verify the exact entry before reporting success. The
+/// backup is removed only after verification succeeds, so a failed or corrupted
+/// write leaves the pre-write bytes available for manual recovery.
+pub fn opencode_write_mcp_config(
+    path: &Path,
+    scope: InstallScope,
+    executable_path: &str,
+) -> Result<OpencodeConfigWriteAction, RepoGrammarError> {
+    opencode_require_global_scope(scope)?;
+    let entry = opencode_mcp_entry(executable_path);
+    if !require_regular_opencode_config(path)? {
+        let root = serde_json::json!({ "mcp": { MCP_SERVER_NAME: entry } });
+        let contents = opencode_pretty(&root)?;
+        atomic_write_instruction(path, &contents, None)?;
+        opencode_verify_written_entry(path, &entry)?;
+        return Ok(OpencodeConfigWriteAction::CreatedFile);
+    }
+
+    let previous = fs::read_to_string(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to read opencode config file: {error}"))
+    })?;
+    let mut root = opencode_read_config_object(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "opencode config file is malformed; refusing automatic repair: {error}"
+        ))
+    })?;
+    if !root.is_object() {
+        return Err(RepoGrammarError::InvalidInput(
+            "opencode config file is malformed; refusing automatic repair".to_string(),
+        ));
+    }
+    if opencode_entry_matches(&root, &entry) {
+        return Ok(OpencodeConfigWriteAction::Unchanged);
+    }
+    match root.get_mut("mcp") {
+        Some(mcp @ serde_json::Value::Object(_)) => {
+            mcp[MCP_SERVER_NAME] = entry.clone();
+        }
+        Some(_) => {
+            return Err(RepoGrammarError::InvalidInput(
+                "opencode config file is malformed; refusing automatic repair".to_string(),
+            ));
+        }
+        None => {
+            root["mcp"] = serde_json::json!({ MCP_SERVER_NAME: entry.clone() });
+        }
+    }
+    let contents = opencode_pretty(&root)?;
+    let backup = opencode_config_backup_path(path);
+    fs::write(&backup, &previous).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to back up opencode config file before repair: {error}"
+        ))
+    })?;
+    maybe_fail_opencode_repair()?;
+    atomic_write_instruction(path, &contents, Some(&previous))?;
+    opencode_verify_written_entry(path, &entry)?;
+    fs::remove_file(&backup).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to remove opencode config backup after verified write: {error}"
+        ))
+    })?;
+    Ok(OpencodeConfigWriteAction::UpdatedFile)
+}
+
+/// Remove only the managed `mcp.repogrammar` key from the opencode global
+/// config file, preserving all other content. When the managed entry was the
+/// only member of the `mcp` object, that now-empty object is dropped as well so
+/// a RepoGrammar-created file becomes exactly `{}`. Verifies removal by
+/// reparsing the written file.
+pub fn opencode_remove_mcp_config(
+    path: &Path,
+    scope: InstallScope,
+) -> Result<OpencodeConfigRemovalAction, RepoGrammarError> {
+    opencode_require_global_scope(scope)?;
+    if !require_regular_opencode_config(path)? {
+        return Ok(OpencodeConfigRemovalAction::NotPresent);
+    }
+    let previous = fs::read_to_string(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to read opencode config file: {error}"))
+    })?;
+    let mut root = opencode_read_config_object(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "opencode config file is malformed; refusing automatic repair: {error}"
+        ))
+    })?;
+    let Some(mcp) = root.get_mut("mcp") else {
+        return Ok(OpencodeConfigRemovalAction::NotPresent);
+    };
+    let Some(mcp_object) = mcp.as_object_mut() else {
+        return Err(RepoGrammarError::InvalidInput(
+            "opencode config file is malformed; refusing automatic repair".to_string(),
+        ));
+    };
+    if mcp_object.remove(MCP_SERVER_NAME).is_none() {
+        return Ok(OpencodeConfigRemovalAction::NotPresent);
+    }
+    if mcp_object.is_empty() {
+        root.as_object_mut()
+            .ok_or_else(|| {
+                RepoGrammarError::InvalidInput(
+                    "opencode config file is malformed; refusing automatic repair".to_string(),
+                )
+            })?
+            .remove("mcp");
+    }
+    let contents = opencode_pretty(&root)?;
+    atomic_write_instruction(path, &contents, Some(&previous))?;
+    opencode_verify_entry_absent(path)?;
+    Ok(OpencodeConfigRemovalAction::RemovedEntry)
+}
+
+/// Delete an agent config file only when receipt evidence proves RepoGrammar
+/// created it and removing the managed entry left it exactly `{}`. A file with
+/// any remaining content, unparseable bytes, or a non-regular path is
+/// preserved.
+pub fn remove_opencode_created_config_file_if_empty(path: &Path) -> Result<bool, RepoGrammarError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(RepoGrammarError::InvalidInput(format!(
+                "failed to inspect RepoGrammar-created opencode config file: {error}"
+            )));
+        }
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(RepoGrammarError::InvalidInput(
+                    "RepoGrammar-created opencode config path must be a regular file".to_string(),
+                ));
+            }
+        }
+    }
+    let is_empty_object = fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
+        .and_then(|value| value.as_object().map(|object| object.is_empty()));
+    if !is_empty_object.unwrap_or(false) {
+        return Ok(false);
+    }
+    fs::remove_file(path).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!(
+            "failed to remove RepoGrammar-created opencode config file: {error}"
+        ))
+    })?;
+    Ok(true)
+}
+
+/// Receipt/native-action decoder for the install mutation log: identifies the
+/// config file a file-based writer created from scratch during this run.
+fn opencode_action_created_config_file(action: &NativeAgentAction) -> Option<PathBuf> {
+    if action.target != AgentTarget::Opencode
+        || action.args.len() != 2
+        || action.args[0] != opencode_mcp_key()
+        || action.args[1] != "file-created"
+        || !Path::new(&action.program).is_absolute()
+    {
+        return None;
+    }
+    Some(PathBuf::from(&action.program))
+}
+
+/// Native action recorded in receipts for opencode config writes:
+/// `native_program` is the absolute config file path and `native_args` names
+/// the managed entry plus the write outcome token.
+pub fn opencode_native_add_action(
+    config_path: &Path,
+    write: OpencodeConfigWriteAction,
+) -> NativeAgentAction {
+    NativeAgentAction {
+        target: AgentTarget::Opencode,
+        program: config_path.display().to_string(),
+        args: vec![opencode_mcp_key(), write.receipt_token().to_string()],
+    }
+}
+
+/// Native action describing an opencode managed-entry removal.
+pub fn opencode_native_remove_action(
+    config_path: &Path,
+    removal: OpencodeConfigRemovalAction,
+) -> NativeAgentAction {
+    NativeAgentAction {
+        target: AgentTarget::Opencode,
+        program: config_path.display().to_string(),
+        args: vec![opencode_mcp_key(), removal.receipt_token().to_string()],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3683,13 +4225,21 @@ mod tests {
     fn target_registry_marks_live_writers_explicitly() {
         assert_eq!(
             supported_concrete_targets(),
-            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
         assert_eq!(known_agent_targets().len(), 8);
         assert!(AgentTarget::Codex.has_live_writer(InstallScope::Global));
         assert!(AgentTarget::ClaudeCode.has_live_writer(InstallScope::Global));
+        assert!(AgentTarget::Opencode.has_live_writer(InstallScope::Global));
         assert!(!AgentTarget::Cursor.has_live_writer(InstallScope::Global));
+        assert!(!AgentTarget::Hermes.has_live_writer(InstallScope::Global));
+        assert!(!AgentTarget::Gemini.has_live_writer(InstallScope::Global));
         assert!(!AgentTarget::Codex.has_live_writer(InstallScope::ProjectLocal));
+        assert!(!AgentTarget::Opencode.has_live_writer(InstallScope::ProjectLocal));
         assert!(!AgentTarget::Hermes.supports_scope(InstallScope::ProjectLocal));
         assert!(AgentTarget::Gemini.supports_scope(InstallScope::ProjectLocal));
     }
@@ -3716,8 +4266,9 @@ mod tests {
             .filter(|adapter| adapter.has_live_writer(InstallScope::Global))
             .map(|adapter| adapter.target_id())
             .collect();
-        assert_eq!(live, vec!["codex", "claude-code"]);
+        assert_eq!(live, vec!["codex", "claude-code", "opencode"]);
         assert!(!target_adapter(AgentTarget::Codex).has_live_writer(InstallScope::ProjectLocal));
+        assert!(!target_adapter(AgentTarget::Opencode).has_live_writer(InstallScope::ProjectLocal));
     }
 
     #[test]
@@ -3832,13 +4383,18 @@ mod tests {
 
         assert_eq!(
             outcome.configured_targets,
-            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
         assert_eq!(self_test.calls.borrow().len(), 2);
         let actions = configurator.actions.borrow();
-        assert_eq!(actions.len(), 2);
+        assert_eq!(actions.len(), 3);
         assert_eq!(actions[0].target, AgentTarget::Codex);
         assert_eq!(actions[1].target, AgentTarget::ClaudeCode);
+        assert_eq!(actions[2].target, AgentTarget::Opencode);
     }
 
     #[test]
@@ -4224,7 +4780,11 @@ mod tests {
         assert!(outcome.configured_targets.is_empty());
         assert_eq!(
             outcome.skipped_targets,
-            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
         let command_path = workspace.command_path_str();
         assert_eq!(outcome.command_path.as_deref(), Some(command_path.as_str()));
@@ -4260,7 +4820,11 @@ mod tests {
         assert!(outcome.configured_targets.is_empty());
         assert_eq!(
             outcome.skipped_targets,
-            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
         assert_eq!(configurator.actions.borrow().len(), 0);
         assert_eq!(self_test.calls.borrow().len(), 1);
@@ -4320,7 +4884,11 @@ mod tests {
 
         // Simulate a previous-layout install: rewrite each receipt's recorded
         // executable to a stale path that no longer matches the authority.
-        for target in [AgentTarget::Codex, AgentTarget::ClaudeCode] {
+        for target in [
+            AgentTarget::Codex,
+            AgentTarget::ClaudeCode,
+            AgentTarget::Opencode,
+        ] {
             let path = receipt_path(&workspace.context, target, InstallScope::Global);
             let mut value: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&path).expect("receipt"))
@@ -4349,7 +4917,11 @@ mod tests {
         assert!(outcome.configured_targets.is_empty());
         assert_eq!(
             outcome.reconfigured_targets,
-            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
         assert!(outcome.skipped_targets.is_empty());
         let actions = configurator.actions.borrow();
@@ -4361,13 +4933,17 @@ mod tests {
             .iter()
             .filter(|action| action.args.get(1).map(String::as_str) == Some("add"))
             .count();
-        assert_eq!(removes, 2, "{actions:?}");
-        assert_eq!(adds, 2, "{actions:?}");
+        assert_eq!(removes, 3, "{actions:?}");
+        assert_eq!(adds, 3, "{actions:?}");
         drop(actions);
         assert_eq!(self_test.calls.borrow().len(), 2);
         // Receipts now record the authority again, so a follow-up install skips.
         let authority = workspace.data_dir.join("bin").join(binary_name());
-        for target in [AgentTarget::Codex, AgentTarget::ClaudeCode] {
+        for target in [
+            AgentTarget::Codex,
+            AgentTarget::ClaudeCode,
+            AgentTarget::Opencode,
+        ] {
             let path = receipt_path(&workspace.context, target, InstallScope::Global);
             let recorded = receipt_executable_path(&path).expect("recorded executable");
             assert!(same_path(Path::new(&recorded), &authority), "{recorded}");
@@ -6200,6 +6776,556 @@ mod tests {
         );
     }
 
+    #[test]
+    fn opencode_config_path_resolution_follows_xdg_without_hardcoded_home_config() {
+        let root = TempDir::new("opencode-xdg-path");
+        let xdg_config = root.file("xdg-config");
+        let home = root.file("home");
+
+        let xdg_set =
+            |key: &str| (key == "XDG_CONFIG_HOME").then(|| xdg_config.display().to_string());
+        assert_eq!(
+            opencode_global_config_path(&xdg_set).expect("xdg path"),
+            xdg_config.join("opencode").join("opencode.json")
+        );
+
+        let home_only = |key: &str| (key == "HOME").then(|| home.display().to_string());
+        assert_eq!(
+            opencode_global_config_path(&home_only).expect("home default"),
+            home.join(".config").join("opencode").join("opencode.json")
+        );
+
+        let blank_xdg = |key: &str| {
+            if key == "XDG_CONFIG_HOME" {
+                Some("   ".to_string())
+            } else if key == "HOME" {
+                Some(home.display().to_string())
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            opencode_global_config_path(&blank_xdg).expect("blank XDG falls back to HOME"),
+            home.join(".config").join("opencode").join("opencode.json")
+        );
+
+        let relative_xdg =
+            |key: &str| (key == "XDG_CONFIG_HOME").then(|| "relative/config".to_string());
+        assert!(opencode_global_config_path(&relative_xdg)
+            .expect_err("relative XDG_CONFIG_HOME must be refused")
+            .to_string()
+            .contains("XDG_CONFIG_HOME must be absolute"));
+
+        let neither = |_: &str| None;
+        assert!(opencode_global_config_path(&neither)
+            .expect_err("missing XDG_CONFIG_HOME and HOME must be refused")
+            .to_string()
+            .contains("XDG_CONFIG_HOME or HOME is required"));
+    }
+
+    #[test]
+    fn opencode_write_is_idempotent_and_preserves_unknown_fields() {
+        let dir = TempDir::new("opencode-write-idempotent");
+        let executable = dir.path.join("bin").join("repogrammar");
+        fs::create_dir_all(dir.path.join("bin")).expect("bin dir");
+        fs::write(&executable, "stub").expect("stub executable");
+        let executable_path = executable.display().to_string();
+
+        let created = dir.file("opencode.json");
+        assert_eq!(
+            opencode_write_mcp_config(&created, InstallScope::Global, &executable_path)
+                .expect("create config"),
+            OpencodeConfigWriteAction::CreatedFile
+        );
+        assert_eq!(
+            opencode_write_mcp_config(&created, InstallScope::Global, &executable_path)
+                .expect("rewrite config"),
+            OpencodeConfigWriteAction::Unchanged
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&created).expect("config")).expect("JSON");
+        assert_eq!(value["mcp"]["repogrammar"]["type"], "local");
+        assert_eq!(
+            value["mcp"]["repogrammar"]["command"],
+            serde_json::json!([executable_path, "serve"])
+        );
+        assert_eq!(value["mcp"]["repogrammar"]["enabled"], true);
+
+        let user_config = dir.file("user-opencode.json");
+        fs::write(
+            &user_config,
+            r#"{"theme":"dark","mcp":{"other":{"type":"local","command":["other","--flag"],"enabled":true}}}"#,
+        )
+        .expect("user config");
+        assert_eq!(
+            opencode_write_mcp_config(&user_config, InstallScope::Global, &executable_path)
+                .expect("update user config"),
+            OpencodeConfigWriteAction::UpdatedFile
+        );
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&user_config).expect("config")).expect("JSON");
+        assert_eq!(updated["theme"], "dark");
+        assert_eq!(updated["mcp"]["other"]["command"][0], "other");
+        assert_eq!(
+            updated["mcp"]["repogrammar"]["command"][0],
+            *executable_path
+        );
+        assert!(
+            !opencode_config_backup_path(&user_config).exists(),
+            "verified writes must not leave a backup behind"
+        );
+    }
+
+    #[test]
+    fn opencode_write_refuses_malformed_or_non_object_config() {
+        let dir = TempDir::new("opencode-write-malformed");
+        let malformed = dir.file("malformed.json");
+        fs::write(&malformed, "{ not json").expect("malformed config");
+        let error = opencode_write_mcp_config(&malformed, InstallScope::Global, "/bin/repogrammar")
+            .expect_err("malformed config must be refused");
+        assert!(error.to_string().contains("refusing automatic repair"));
+        assert_eq!(
+            fs::read_to_string(&malformed).expect("preserved"),
+            "{ not json"
+        );
+
+        let array_root = dir.file("array-root.json");
+        fs::write(&array_root, "[1,2]").expect("array config");
+        let error =
+            opencode_write_mcp_config(&array_root, InstallScope::Global, "/bin/repogrammar")
+                .expect_err("non-object config must be refused");
+        assert!(error.to_string().contains("refusing automatic repair"));
+
+        let mcp_array = dir.file("mcp-array.json");
+        fs::write(&mcp_array, r#"{"mcp":[]}"#).expect("mcp array config");
+        let error = opencode_write_mcp_config(&mcp_array, InstallScope::Global, "/bin/repogrammar")
+            .expect_err("non-object mcp must be refused");
+        assert!(error.to_string().contains("refusing automatic repair"));
+
+        let scoped = dir.file("scoped.json");
+        let error =
+            opencode_write_mcp_config(&scoped, InstallScope::ProjectLocal, "/bin/repogrammar")
+                .expect_err("project-local must be refused");
+        assert!(error.to_string().contains("global-only"));
+    }
+
+    #[test]
+    fn opencode_write_backs_up_before_repair_and_keeps_backup_on_failure() {
+        let dir = TempDir::new("opencode-backup-repair");
+        let config = dir.file("opencode.json");
+        let original = r#"{"theme":"dark","mcp":{"repogrammar":{"type":"local","command":["/old/bin/repogrammar","serve"],"enabled":true}}}"#;
+        fs::write(&config, original).expect("existing config");
+
+        inject_opencode_repair_failure();
+        let error =
+            opencode_write_mcp_config(&config, InstallScope::Global, "/new/bin/repogrammar")
+                .expect_err("injected repair failure");
+        assert!(error
+            .to_string()
+            .contains("injected opencode repair failure"));
+        let backup = opencode_config_backup_path(&config);
+        assert!(backup.is_file(), "failed repair must keep the backup");
+        assert_eq!(fs::read_to_string(&backup).expect("backup"), original);
+        assert_eq!(
+            fs::read_to_string(&config).expect("untouched destination"),
+            original
+        );
+
+        let updated =
+            opencode_write_mcp_config(&config, InstallScope::Global, "/new/bin/repogrammar")
+                .expect("retry after injected failure");
+        assert_eq!(updated, OpencodeConfigWriteAction::UpdatedFile);
+        assert!(!backup.exists(), "verified repair must clean the backup");
+    }
+
+    #[test]
+    fn opencode_inspect_classifies_absence_malformed_and_present_entries() {
+        let dir = TempDir::new("opencode-inspect");
+        let absent = dir.file("absent.json");
+        assert_eq!(
+            opencode_inspect_mcp_config(&absent, InstallScope::Global).expect("absent"),
+            NativeMcpServerState::NotFound
+        );
+
+        let unparseable = dir.file("unparseable.json");
+        fs::write(&unparseable, "nope").expect("unparseable");
+        assert_eq!(
+            opencode_inspect_mcp_config(&unparseable, InstallScope::Global).expect("malformed"),
+            NativeMcpServerState::Malformed
+        );
+
+        let mcp_array = dir.file("mcp-array.json");
+        fs::write(&mcp_array, r#"{"mcp":[]}"#).expect("mcp array");
+        assert_eq!(
+            opencode_inspect_mcp_config(&mcp_array, InstallScope::Global).expect("malformed"),
+            NativeMcpServerState::Malformed
+        );
+
+        let remote = dir.file("remote.json");
+        fs::write(
+            &remote,
+            r#"{"mcp":{"repogrammar":{"type":"remote","url":"https://example.invalid"}}}"#,
+        )
+        .expect("remote entry");
+        assert_eq!(
+            opencode_inspect_mcp_config(&remote, InstallScope::Global).expect("malformed"),
+            NativeMcpServerState::Malformed
+        );
+
+        let other_only = dir.file("other-only.json");
+        fs::write(
+            &other_only,
+            r#"{"mcp":{"other":{"type":"local","command":["other"]}}}"#,
+        )
+        .expect("other server only");
+        assert_eq!(
+            opencode_inspect_mcp_config(&other_only, InstallScope::Global).expect("absent"),
+            NativeMcpServerState::NotFound
+        );
+
+        let no_mcp = dir.file("no-mcp.json");
+        fs::write(&no_mcp, r#"{"theme":"dark"}"#).expect("no mcp key");
+        assert_eq!(
+            opencode_inspect_mcp_config(&no_mcp, InstallScope::Global).expect("absent"),
+            NativeMcpServerState::NotFound
+        );
+
+        let local = dir.file("local.json");
+        fs::write(
+            &local,
+            r#"{"mcp":{"repogrammar":{"type":"local","command":["/bin/repogrammar","serve"]}}}"#,
+        )
+        .expect("local entry without enabled field");
+        assert_eq!(
+            opencode_inspect_mcp_config(&local, InstallScope::Global).expect("present"),
+            NativeMcpServerState::Present(NativeMcpServerConfig {
+                executable_path: "/bin/repogrammar".to_string(),
+                args: vec!["serve".to_string()],
+                scope: InstallScope::Global,
+                enabled: true,
+            })
+        );
+
+        let disabled = dir.file("disabled.json");
+        fs::write(
+            &disabled,
+            r#"{"mcp":{"repogrammar":{"type":"local","command":["/bin/repogrammar","serve"],"enabled":false}}}"#,
+        )
+        .expect("disabled entry");
+        assert_eq!(
+            opencode_inspect_mcp_config(&disabled, InstallScope::Global).expect("present"),
+            NativeMcpServerState::Present(NativeMcpServerConfig {
+                executable_path: "/bin/repogrammar".to_string(),
+                args: vec!["serve".to_string()],
+                scope: InstallScope::Global,
+                enabled: false,
+            })
+        );
+    }
+
+    #[test]
+    fn opencode_remove_inverse_tracks_file_creation_ownership() {
+        let dir = TempDir::new("opencode-remove");
+        let created = dir.file("created.json");
+        opencode_write_mcp_config(&created, InstallScope::Global, "/bin/repogrammar")
+            .expect("create config");
+        assert_eq!(
+            opencode_remove_mcp_config(&created, InstallScope::Global).expect("remove entry"),
+            OpencodeConfigRemovalAction::RemovedEntry
+        );
+        let after: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&created).expect("config after removal"))
+                .expect("JSON");
+        assert!(after.as_object().expect("object").is_empty());
+        assert_eq!(
+            opencode_remove_mcp_config(&created, InstallScope::Global).expect("absent entry"),
+            OpencodeConfigRemovalAction::NotPresent
+        );
+        assert!(
+            remove_opencode_created_config_file_if_empty(&created).expect("created file cleanup")
+        );
+        assert!(!created.exists());
+
+        // A pre-existing file that keeps any content after removal is never a
+        // deletion candidate for the created-file cleanup, regardless of the
+        // receipt: the helper preserves everything except an exactly-`{}` file.
+        let pre_existing = dir.file("pre-existing.json");
+        fs::write(&pre_existing, r#"{"theme":"dark","mcp":{}}"#).expect("pre-existing config");
+        opencode_write_mcp_config(&pre_existing, InstallScope::Global, "/bin/repogrammar")
+            .expect("update pre-existing config");
+        opencode_remove_mcp_config(&pre_existing, InstallScope::Global)
+            .expect("remove from pre-existing config");
+        assert!(
+            !remove_opencode_created_config_file_if_empty(&pre_existing)
+                .expect("content-bearing file is preserved"),
+            "a file with remaining user content must never be deleted"
+        );
+        assert!(pre_existing.exists());
+
+        let shared = dir.file("shared.json");
+        fs::write(
+            &shared,
+            r#"{"mcp":{"other":{"type":"local","command":["other"],"enabled":true}}}"#,
+        )
+        .expect("shared config");
+        opencode_write_mcp_config(&shared, InstallScope::Global, "/bin/repogrammar")
+            .expect("update shared config");
+        opencode_remove_mcp_config(&shared, InstallScope::Global).expect("remove from shared");
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&shared).expect("config")).expect("JSON");
+        assert!(value["mcp"]["other"].is_object());
+        assert!(value["mcp"].get("repogrammar").is_none());
+    }
+
+    #[test]
+    fn opencode_live_install_and_disconnect_roundtrip_with_receipt_evidence() {
+        let workspace = TempInstallWorkspace::new("opencode-roundtrip");
+        let config_dir = workspace.root.join("xdg-config");
+        fs::create_dir_all(&config_dir).expect("config dir");
+        let config_path = config_dir.join("opencode.json");
+        let configurator = OpencodeFileTestConfigurator {
+            config_path: config_path.clone(),
+        };
+        let request = InstallRequest {
+            target: AgentTarget::Opencode,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let outcome = execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("opencode install");
+
+        assert_eq!(outcome.configured_targets, vec![AgentTarget::Opencode]);
+        assert!(config_path.is_file());
+        let receipt = receipt_path(
+            &workspace.context,
+            AgentTarget::Opencode,
+            InstallScope::Global,
+        );
+        let receipt_value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&receipt).expect("receipt"))
+                .expect("receipt JSON");
+        assert_eq!(
+            receipt_value["native_program"],
+            config_path.display().to_string()
+        );
+        assert_eq!(
+            receipt_value["native_args"],
+            serde_json::json!(["mcp.repogrammar", "file-created"])
+        );
+
+        let again = execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("opencode reinstall");
+        assert!(again.configured_targets.is_empty());
+        assert_eq!(again.skipped_targets, vec![AgentTarget::Opencode]);
+
+        execute_disconnect(
+            &disconnect_request(AgentTarget::Opencode),
+            &workspace.context,
+            &configurator,
+        )
+        .expect("opencode disconnect");
+        assert!(
+            !config_path.exists(),
+            "disconnect must delete a config file created by the install"
+        );
+        assert!(!receipt.is_file());
+    }
+
+    #[test]
+    fn opencode_install_preserves_user_config_and_disconnect_keeps_file() {
+        let workspace = TempInstallWorkspace::new("opencode-user-config");
+        let config_dir = workspace.root.join("xdg-config");
+        fs::create_dir_all(&config_dir).expect("config dir");
+        let config_path = config_dir.join("opencode.json");
+        fs::write(
+            &config_path,
+            r#"{"theme":"dark","mcp":{"other":{"type":"local","command":["other"],"enabled":true}}}"#,
+        )
+        .expect("user config");
+        let configurator = OpencodeFileTestConfigurator {
+            config_path: config_path.clone(),
+        };
+        let request = InstallRequest {
+            target: AgentTarget::Opencode,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("opencode install");
+
+        let receipt = receipt_path(
+            &workspace.context,
+            AgentTarget::Opencode,
+            InstallScope::Global,
+        );
+        let receipt_value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&receipt).expect("receipt"))
+                .expect("receipt JSON");
+        assert_eq!(
+            receipt_value["native_args"],
+            serde_json::json!(["mcp.repogrammar", "file-updated"])
+        );
+
+        execute_disconnect(
+            &disconnect_request(AgentTarget::Opencode),
+            &workspace.context,
+            &configurator,
+        )
+        .expect("opencode disconnect");
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).expect("config")).expect("JSON");
+        assert_eq!(value["theme"], "dark");
+        assert!(value["mcp"]["other"].is_object());
+        assert!(value["mcp"].get("repogrammar").is_none());
+        assert!(config_path.exists());
+        assert!(!receipt.is_file());
+    }
+
+    #[test]
+    fn opencode_foreign_entry_without_receipt_refuses_install() {
+        let workspace = TempInstallWorkspace::new("opencode-foreign");
+        let config_dir = workspace.root.join("xdg-config");
+        fs::create_dir_all(&config_dir).expect("config dir");
+        let config_path = config_dir.join("opencode.json");
+        let foreign = r#"{"mcp":{"repogrammar":{"type":"local","command":["/foreign/repogrammar","serve"],"enabled":true}}}"#;
+        fs::write(&config_path, foreign).expect("foreign entry");
+        let configurator = OpencodeFileTestConfigurator {
+            config_path: config_path.clone(),
+        };
+        let request = InstallRequest {
+            target: AgentTarget::Opencode,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+
+        let error = execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect_err("foreign entry must be preserved");
+
+        assert!(error.to_string().contains("refusing to overwrite foreign"));
+        assert_eq!(
+            fs::read_to_string(&config_path).expect("preserved"),
+            foreign
+        );
+        assert!(!workspace.command_path().exists());
+    }
+
+    #[test]
+    fn opencode_drifted_receipt_refuses_automatic_repair() {
+        let workspace = TempInstallWorkspace::new("opencode-drift");
+        let config_dir = workspace.root.join("xdg-config");
+        fs::create_dir_all(&config_dir).expect("config dir");
+        let config_path = config_dir.join("opencode.json");
+        let configurator = OpencodeFileTestConfigurator {
+            config_path: config_path.clone(),
+        };
+        let request = InstallRequest {
+            target: AgentTarget::Opencode,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("opencode install");
+        let drifted = r#"{"mcp":{"repogrammar":{"type":"local","command":["/elsewhere/repogrammar","serve"],"enabled":true}}}"#;
+        fs::write(&config_path, drifted).expect("drifted entry");
+        let receipt = receipt_path(
+            &workspace.context,
+            AgentTarget::Opencode,
+            InstallScope::Global,
+        );
+        let receipt_before = fs::read(&receipt).expect("receipt before");
+
+        let error = execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect_err("drifted state must require explicit repair");
+
+        assert!(error
+            .to_string()
+            .contains("does not match native MCP state"));
+        assert_eq!(
+            fs::read_to_string(&config_path).expect("preserved"),
+            drifted
+        );
+        assert_eq!(
+            fs::read(&receipt).expect("preserved receipt"),
+            receipt_before
+        );
+    }
+
+    #[test]
+    fn opencode_malformed_config_refuses_install() {
+        let workspace = TempInstallWorkspace::new("opencode-malformed");
+        let config_dir = workspace.root.join("xdg-config");
+        fs::create_dir_all(&config_dir).expect("config dir");
+        let config_path = config_dir.join("opencode.json");
+        fs::write(&config_path, "{ broken").expect("malformed config");
+        let configurator = OpencodeFileTestConfigurator {
+            config_path: config_path.clone(),
+        };
+        let request = InstallRequest {
+            target: AgentTarget::Opencode,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+
+        let error = execute_install(
+            &request,
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect_err("malformed config must be preserved");
+
+        assert!(error.to_string().contains("malformed or unsupported"));
+        assert_eq!(
+            fs::read_to_string(&config_path).expect("preserved"),
+            "{ broken"
+        );
+        assert!(!workspace.command_path().exists());
+    }
+
+    #[test]
+    fn product_agent_disconnect_preflight_treats_opencode_absence_as_noop() {
+        let workspace = TempInstallWorkspace::new("opencode-absent-uninstall");
+        let configurator = OpencodeFileTestConfigurator {
+            config_path: workspace.root.join("absent-opencode.json"),
+        };
+
+        let prepared = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect("absent agent integrations are a clean no-op");
+
+        assert!(prepared.is_empty());
+        assert!(prepared.targets().is_empty());
+    }
+
     struct TempDir {
         path: PathBuf,
     }
@@ -6448,6 +7574,58 @@ mod tests {
                 self.set_native_state(target, NativeMcpServerState::NotFound);
             }
             Ok(action)
+        }
+    }
+
+    /// File-backed test configurator routing opencode through the real
+    /// file-based writer while reporting absence for native-CLI targets, so
+    /// install/disconnect flows can be exercised without real agent CLIs.
+    struct OpencodeFileTestConfigurator {
+        config_path: PathBuf,
+    }
+
+    impl NativeAgentConfigurator for OpencodeFileTestConfigurator {
+        fn inspect_mcp_server(
+            &self,
+            target: AgentTarget,
+            scope: InstallScope,
+            _current_dir: &str,
+        ) -> Result<NativeMcpServerState, RepoGrammarError> {
+            if target == AgentTarget::Opencode {
+                return opencode_inspect_mcp_config(&self.config_path, scope);
+            }
+            Ok(NativeMcpServerState::NotFound)
+        }
+
+        fn add_mcp_server(
+            &self,
+            target: AgentTarget,
+            scope: InstallScope,
+            executable_path: &str,
+            _current_dir: &str,
+        ) -> Result<NativeAgentAction, RepoGrammarError> {
+            if target == AgentTarget::Opencode {
+                let write = opencode_write_mcp_config(&self.config_path, scope, executable_path)?;
+                return Ok(opencode_native_add_action(&self.config_path, write));
+            }
+            Err(RepoGrammarError::InvalidInput(
+                "test configurator supports the opencode target only".to_string(),
+            ))
+        }
+
+        fn remove_mcp_server(
+            &self,
+            target: AgentTarget,
+            scope: InstallScope,
+            _current_dir: &str,
+        ) -> Result<NativeAgentAction, RepoGrammarError> {
+            if target == AgentTarget::Opencode {
+                let removal = opencode_remove_mcp_config(&self.config_path, scope)?;
+                return Ok(opencode_native_remove_action(&self.config_path, removal));
+            }
+            Err(RepoGrammarError::InvalidInput(
+                "test configurator supports the opencode target only".to_string(),
+            ))
         }
     }
 

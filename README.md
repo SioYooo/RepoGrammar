@@ -239,6 +239,8 @@ an additional machine-level check:
 ```bash
 codex mcp get repogrammar --json
 # or: claude mcp get repogrammar
+# or, for opencode, check the mcp.repogrammar entry:
+cat "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
 ```
 
 For the full recorded judge journey—including a target-repository patch,
@@ -354,7 +356,8 @@ leaving this README focused on the developer tool.
 
 - Start with the [general quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md),
   [Codex guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md),
-  or [Claude Code guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md).
+  [Claude Code guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md),
+  or [opencode guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-opencode.md).
 - Browse the [documentation map](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md)
   and [known limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
 - Report bugs or propose improvements with the repository's

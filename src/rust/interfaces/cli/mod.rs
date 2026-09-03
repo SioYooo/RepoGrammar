@@ -653,7 +653,7 @@ fn full_usage() -> String {
         "  repogrammar <command> -h",
         "",
         "Project lifecycle:",
-        "  setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
+        "  setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
         "      Complete agent wiring, repository indexing, autosync, and MCP self-test in one plan.",
         "  init [--project <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
         "      Create repo-local state, build the active index, and start autosync by default.",
@@ -742,14 +742,14 @@ fn help_text(lines: &[&str]) -> String {
 pub fn command_usage(command: &str) -> Option<String> {
     match command {
         "setup" => Some(help_text(&[
-            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
+            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
             "",
             "Builds one reversible onboarding plan, asks once, then wires a detected agent, initializes and indexes the repository, starts autosync, and verifies the read-only MCP server.",
             "Telemetry remains off. Missing agents do not prevent repository-only setup. Foreign or malformed integration is never overwritten.",
             "",
             "Options:",
             "  --project <path>                  Repository root. Defaults to the current directory.",
-            "  --target auto|codex|claude-code  Auto-select live supported agents, or request one explicitly.",
+            "  --target auto|codex|claude-code|opencode  Auto-select live supported agents, or request one explicitly.",
             "  --yes                             Confirm the complete plan noninteractively.",
             "  --dry-run                         Inspect the plan without any writes.",
             "  --no-autosync                     Build the active index without starting background sync.",
@@ -4344,6 +4344,7 @@ fn setup_target_token(target: SetupTarget) -> &'static str {
         SetupTarget::Auto => "auto",
         SetupTarget::Codex => "codex",
         SetupTarget::ClaudeCode => "claude-code",
+        SetupTarget::Opencode => "opencode",
     }
 }
 
@@ -4622,7 +4623,7 @@ fn instruction_outcome_human(outcome: &ManagedInstructionOutcome) -> String {
     );
     if instruction_session_restart_recommended(outcome) {
         rendered.push_str(
-            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
+            "next: restart the coding-agent session; already-open coding-agent MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
         );
     }
     rendered
@@ -5142,10 +5143,33 @@ fn install_agent_selection_prompt(statuses: &[InstallAgentStatus]) -> String {
             "\nWarning: no supported agent CLI was detected on PATH; selected native configuration may fail.\n",
         );
     }
+    let mut choices = String::new();
+    for (index, status) in statuses.iter().enumerate() {
+        choices.push_str(&format!(
+            "  {} = {}\n",
+            index + 1,
+            install_target_label(status.target)
+        ));
+    }
     prompt.push_str(&format!(
-        "\nSelect agents to configure:\n  1 = Codex\n  2 = Claude Code\n  1,2 = both\n  a = {automatic_label}\n  none = configure no agents\n  q = cancel\n\nSelection [a]: "
+        "\nSelect agents to configure:\n{choices}  a = {automatic_label}\n  none = configure no agents\n  q = cancel\n\nSelection [a]: "
     ));
     prompt
+}
+
+/// Selection-token vocabulary derived from the live wizard menu: numbered
+/// entries in menu order plus each agent's CLI names and aliases.
+fn agent_selection_hint(statuses: &[InstallAgentStatus]) -> String {
+    let numbers = (1..=statuses.len())
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let names = statuses
+        .iter()
+        .map(|status| status.target.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("use {numbers}, a comma-separated list, an agent name ({names}), a, none, or q")
 }
 
 fn parse_interactive_agent_selection(
@@ -5167,16 +5191,12 @@ fn parse_interactive_agent_selection(
     } else {
         for token in trimmed.split(',').map(str::trim) {
             let normalized = token.to_ascii_lowercase();
-            let target = match normalized.as_str() {
-                "1" => AgentTarget::Codex,
-                "2" => AgentTarget::ClaudeCode,
-                "codex" => AgentTarget::Codex,
-                "claude" | "claude-code" => AgentTarget::ClaudeCode,
-                _ => return Err(
-                    "unknown agent selection; use 1, 2, 1,2, codex, claude-code, all, none, or q"
-                        .to_string(),
-                ),
-            };
+            let target = selection_token_target(&normalized, statuses).ok_or_else(|| {
+                format!(
+                    "unknown agent selection; {}",
+                    agent_selection_hint(statuses)
+                )
+            })?;
             if !selected.contains(&target) {
                 selected.push(target);
             }
@@ -5187,6 +5207,21 @@ fn parse_interactive_agent_selection(
     }
     let selected = normalize_concrete_targets(&selected).map_err(|error| error.to_string())?;
     Ok(Some(selected))
+}
+
+/// Resolve one wizard selection token to a target using the live menu: the
+/// numbered entries keep the menu order, and agent names/aliases reuse the
+/// target parser restricted to the targets this wizard offers.
+fn selection_token_target(token: &str, statuses: &[InstallAgentStatus]) -> Option<AgentTarget> {
+    if let Ok(index) = token.parse::<usize>() {
+        let index = index.checked_sub(1)?;
+        return statuses.get(index).map(|status| status.target);
+    }
+    let parsed = AgentTarget::parse(token).ok()?;
+    statuses
+        .iter()
+        .find(|status| status.target == parsed)
+        .map(|status| status.target)
 }
 
 fn default_interactive_targets(statuses: &[InstallAgentStatus]) -> Vec<AgentTarget> {
@@ -5247,8 +5282,10 @@ fn native_command_shape(target: AgentTarget) -> &'static str {
         AgentTarget::ClaudeCode => {
             "claude mcp add --scope user repogrammar -- <repogrammar-executable> serve"
         }
+        AgentTarget::Opencode => {
+            "write mcp.repogrammar local entry to $XDG_CONFIG_HOME/opencode/opencode.json (<repogrammar-executable> serve)"
+        }
         AgentTarget::Cursor => "Cursor MCP JSON config preview",
-        AgentTarget::Opencode => "opencode MCP JSONC config preview",
         AgentTarget::Hermes => "Hermes YAML config preview",
         AgentTarget::Gemini => "Gemini MCP JSON config preview",
         AgentTarget::Antigravity => "Antigravity MCP JSON config preview",
@@ -5580,7 +5617,7 @@ fn install_outcome_human(outcome: &InstallExecutionOutcome) -> String {
     }
     if outcome.command == "install" {
         output.push_str(
-            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
+            "next: restart the coding-agent session; already-open coding-agent MCP child processes do not hot-swap RepoGrammar binaries or managed instructions\n",
         );
     }
     output
@@ -8520,13 +8557,21 @@ fn parse_setup_options(rest: &[String]) -> Result<SetupCliOptions, String> {
                 index += 2;
             }
             "--target" => {
-                let value = option_value(rest, index, "--target", "auto, codex, or claude-code")?;
+                let value = option_value(
+                    rest,
+                    index,
+                    "--target",
+                    "auto, codex, claude-code, or opencode",
+                )?;
                 options.target = match value {
                     "auto" => SetupTarget::Auto,
                     "codex" => SetupTarget::Codex,
                     "claude-code" | "claude" => SetupTarget::ClaudeCode,
+                    "opencode" => SetupTarget::Opencode,
                     _ => {
-                        return Err("--target requires auto, codex, or claude-code".to_string());
+                        return Err(
+                            "--target requires auto, codex, claude-code, or opencode".to_string()
+                        );
                     }
                 };
                 index += 2;
@@ -12728,7 +12773,7 @@ mod tests {
         );
         assert_eq!(synced_human.status, 0, "{}", synced_human.stderr);
         assert!(synced_human.stdout.contains(
-            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
+            "next: restart the coding-agent session; already-open coding-agent MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
         ));
 
         let remove_plan = run_with_context(
@@ -12928,7 +12973,7 @@ mod tests {
         assert_eq!(value["ready_agent_targets"], json!([]));
         assert_eq!(
             value["blocked_agent_targets"],
-            json!(["codex", "claude-code"])
+            json!(["codex", "claude-code", "opencode"])
         );
         assert_eq!(value["product_self_test_state"], "passed");
         assert_eq!(value["agent_query_ready"], false);
@@ -19450,7 +19495,7 @@ mod tests {
             .join("install")
             .join("receipts");
         fs::create_dir_all(&receipt_dir).expect("receipt dir");
-        for target in ["codex", "claude-code"] {
+        for target in ["codex", "claude-code", "opencode"] {
             fs::write(
                 receipt_dir.join(format!("{target}-global.json")),
                 format!(
@@ -19471,12 +19516,18 @@ mod tests {
             run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
 
         assert_eq!(output.status, 0, "{output:?}");
-        assert!(output.stdout.contains("skipped_targets=codex,claude-code"));
+        assert!(output
+            .stdout
+            .contains("skipped_targets=codex,claude-code,opencode"));
         let requests = runtime.requests.borrow();
         assert_eq!(requests.len(), 1);
         assert_eq!(
             requests[0].selected_targets,
-            vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
         assert!(requests[0].assume_yes);
         assert_eq!(prompt.selection_calls.get(), 1);
@@ -19791,6 +19842,187 @@ mod tests {
     }
 
     #[test]
+    fn interactive_agent_selection_supports_the_three_live_menu_entries() {
+        let statuses = supported_concrete_targets()
+            .into_iter()
+            .map(|target| InstallAgentStatus {
+                target,
+                detected: false,
+                installed: false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statuses.len(), 3);
+
+        assert_eq!(
+            parse_interactive_agent_selection("3", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Opencode])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("1,3", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Codex, AgentTarget::Opencode])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("opencode", &statuses).expect("selection"),
+            Some(vec![AgentTarget::Opencode])
+        );
+        assert_eq!(
+            parse_interactive_agent_selection("open-code,2", &statuses).expect("selection"),
+            Some(vec![AgentTarget::ClaudeCode, AgentTarget::Opencode])
+        );
+        assert!(parse_interactive_agent_selection("4", &statuses).is_err());
+        assert!(parse_interactive_agent_selection("0", &statuses).is_err());
+        assert!(parse_interactive_agent_selection("gemini", &statuses).is_err());
+
+        let prompt = install_agent_selection_prompt(&statuses);
+        assert!(prompt.contains("1 = Codex CLI"));
+        assert!(prompt.contains("2 = Claude Code"));
+        assert!(prompt.contains("3 = opencode"));
+        assert!(!prompt.contains("= both"));
+    }
+
+    #[test]
+    fn interactive_install_wizard_selects_opencode_by_menu_number() {
+        #[derive(Default)]
+        struct InstallRuntime {
+            requests: RefCell<Vec<InstallRequest>>,
+        }
+
+        impl CliRuntime for InstallRuntime {
+            fn index_repository(
+                &self,
+                _command: &str,
+                _request: CliIndexRequest,
+            ) -> Result<IndexingOutcome, RepoGrammarError> {
+                unreachable!("installer opencode wizard test")
+            }
+
+            fn repository_status(
+                &self,
+                _request: RepositoryStatusRequest,
+            ) -> Result<RepositoryStatusReport, RepoGrammarError> {
+                unreachable!("installer opencode wizard test")
+            }
+
+            fn repository_doctor(
+                &self,
+                _request: RepositoryDoctorRequest,
+            ) -> Result<RepositoryDoctorReport, RepoGrammarError> {
+                unreachable!("installer opencode wizard test")
+            }
+
+            fn install_agent_integration(
+                &self,
+                request: InstallRequest,
+                context: InstallExecutionContext,
+            ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+                self.requests.borrow_mut().push(request.clone());
+                Ok(InstallExecutionOutcome {
+                    command: "install",
+                    target: request.target,
+                    scope: request.scope,
+                    configured_targets: request.selected_targets.clone(),
+                    reconfigured_targets: Vec::new(),
+                    skipped_targets: Vec::new(),
+                    receipt_paths: vec![context.data_dir],
+                    installed_executable_path: Some(context.executable_path),
+                    command_path: Some(context.command_dir),
+                    command_on_path: context.command_dir_on_path,
+                    message: "agent MCP integration installed after self-test".to_string(),
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("cli-install-wizard-opencode");
+        let command_dir = workspace.path().join("commands");
+        fs::create_dir_all(&command_dir).expect("command dir");
+        let data_home = workspace.path().join("data-home");
+        let env = |key: &str| match key {
+            "XDG_DATA_HOME" => Some(data_home.display().to_string()),
+            "REPOGRAMMAR_COMMAND_DIR" => Some(command_dir.display().to_string()),
+            _ => None,
+        };
+        let runtime = InstallRuntime::default();
+        let prompt = WizardPrompt::new(["1,3"], [""], [""]);
+
+        let output =
+            run_with_context_runtime_prompt(["install"], workspace.path(), &env, &runtime, &prompt);
+
+        assert_eq!(output.status, 0, "{output:?}");
+        let requests = runtime.requests.borrow();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].selected_targets,
+            vec![AgentTarget::Codex, AgentTarget::Opencode]
+        );
+        assert!(prompt.selection_prompts.borrow()[0].contains("3 = opencode"));
+    }
+
+    #[test]
+    fn install_dry_run_and_print_config_cover_opencode_without_writes() {
+        let dry_run = run([
+            "install",
+            "--target",
+            "opencode",
+            "--scope",
+            "global",
+            "--dry-run",
+            "--no-telemetry",
+        ]);
+        assert_eq!(dry_run.status, 0);
+        assert!(dry_run.stdout.contains("target=opencode"));
+        assert!(dry_run.stdout.contains(
+            "native_mcp: write mcp.repogrammar local entry to $XDG_CONFIG_HOME/opencode/opencode.json"
+        ));
+
+        let workspace = TempWorkspace::new("cli-install-print-config-opencode");
+        let env = |key: &str| match key {
+            "XDG_CONFIG_HOME" => Some(workspace.path().join("xdg-config").display().to_string()),
+            "HOME" => Some(workspace.path().join("home").display().to_string()),
+            _ => None,
+        };
+        let print_config = run_with_context(
+            [
+                "install",
+                "--target",
+                "opencode",
+                "--scope",
+                "global",
+                "--print-config",
+                "--no-telemetry",
+            ],
+            workspace.path(),
+            &env,
+        );
+        assert_eq!(print_config.status, 0);
+        assert!(print_config
+            .stdout
+            .contains("config preview: target=opencode"));
+        assert!(print_config
+            .stdout
+            .contains("\"command\": [\"<repogrammar-executable>\", \"serve\"]"));
+        assert!(print_config
+            .stdout
+            .contains("$XDG_CONFIG_HOME/opencode/opencode.json"));
+        assert!(
+            !workspace.path().join("xdg-config").exists(),
+            "print-config must not create the opencode config directory"
+        );
+    }
+
+    #[test]
+    fn setup_target_option_accepts_opencode() {
+        let options = parse_setup_options(&[
+            "--target".to_string(),
+            "opencode".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .expect("opencode setup target");
+        assert_eq!(options.target, SetupTarget::Opencode);
+        assert_eq!(setup_target_token(SetupTarget::Opencode), "opencode");
+        assert!(parse_setup_options(&["--target".to_string(), "cursor".to_string()]).is_err());
+    }
+
+    #[test]
     fn install_target_option_accepts_codegraph_style_values() {
         let auto = parse_install_options(&["--target".to_string(), "auto".to_string()])
             .expect("auto target");
@@ -19811,10 +20043,25 @@ mod tests {
             "claude-code,codex,codex".to_string(),
         ])
         .expect("csv target");
-        assert_eq!(csv.target, AgentTarget::AllSupported);
+        assert_eq!(csv.target, AgentTarget::Codex);
         assert_eq!(
             csv.selected_targets,
             vec![AgentTarget::Codex, AgentTarget::ClaudeCode]
+        );
+
+        let all_live = parse_install_options(&[
+            "--target".to_string(),
+            "opencode,codex,claude-code".to_string(),
+        ])
+        .expect("all live csv target");
+        assert_eq!(all_live.target, AgentTarget::AllSupported);
+        assert_eq!(
+            all_live.selected_targets,
+            vec![
+                AgentTarget::Codex,
+                AgentTarget::ClaudeCode,
+                AgentTarget::Opencode
+            ]
         );
 
         let deferred = parse_install_options(&[
@@ -20189,7 +20436,7 @@ mod tests {
             .contains("install: agent MCP integration installed"));
         assert!(output.stdout.contains("configured_targets=codex"));
         assert!(output.stdout.contains(
-            "next: restart the coding-agent session; already-open Codex/Claude MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
+            "next: restart the coding-agent session; already-open coding-agent MCP child processes do not hot-swap RepoGrammar binaries or managed instructions"
         ));
     }
 

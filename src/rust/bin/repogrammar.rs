@@ -27,11 +27,13 @@ use repogrammar::application::indexing::{
 };
 use repogrammar::application::install::{
     execute_disconnect, execute_install, execute_prepared_agent_disconnect,
-    inspect_agent_integration, prepare_product_agent_disconnect, rollback_agent_disconnect,
-    AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget, DisconnectExecutionOutcome,
-    InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
-    McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator, NativeMcpServerConfig,
-    NativeMcpServerState, AGENT_PREFLIGHT_GATE, MCP_SERVER_NAME,
+    inspect_agent_integration, opencode_global_config_path, opencode_inspect_mcp_config,
+    opencode_native_add_action, opencode_native_remove_action, opencode_remove_mcp_config,
+    opencode_write_mcp_config, parse_opencode_mcp_entry, prepare_product_agent_disconnect,
+    rollback_agent_disconnect, AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget,
+    DisconnectExecutionOutcome, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
+    InstallScope, McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator,
+    NativeMcpServerConfig, NativeMcpServerState, AGENT_PREFLIGHT_GATE, MCP_SERVER_NAME,
 };
 use repogrammar::application::product_installation::{
     inspect_product_installation, ProductInstallationPlan, ProductInstallationRequest,
@@ -2405,6 +2407,13 @@ fn run_serve_command(rest: &[String], runtime: &impl McpReadOnlyRuntime) -> i32 
 
 struct ProductNativeAgentConfigurator;
 
+impl ProductNativeAgentConfigurator {
+    fn opencode_config_path() -> Result<PathBuf, RepoGrammarError> {
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        opencode_global_config_path(&env_lookup)
+    }
+}
+
 impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
     fn inspect_mcp_server(
         &self,
@@ -2412,6 +2421,10 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
         scope: InstallScope,
         current_dir: &str,
     ) -> Result<NativeMcpServerState, RepoGrammarError> {
+        if target == AgentTarget::Opencode {
+            let path = Self::opencode_config_path()?;
+            return opencode_inspect_mcp_config(&path, scope);
+        }
         let (program, args) = native_get_command(target, scope)?;
         run_native_agent_probe(target, scope, &program, &args, current_dir)
     }
@@ -2423,6 +2436,11 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
         executable_path: &str,
         current_dir: &str,
     ) -> Result<NativeAgentAction, RepoGrammarError> {
+        if target == AgentTarget::Opencode {
+            let path = Self::opencode_config_path()?;
+            let write = opencode_write_mcp_config(&path, scope, executable_path)?;
+            return Ok(opencode_native_add_action(&path, write));
+        }
         let (program, args) = native_add_command(target, scope, executable_path)?;
         run_native_agent_command(&program, &args, current_dir)?;
         Ok(NativeAgentAction {
@@ -2438,6 +2456,11 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
         scope: InstallScope,
         current_dir: &str,
     ) -> Result<NativeAgentAction, RepoGrammarError> {
+        if target == AgentTarget::Opencode {
+            let path = Self::opencode_config_path()?;
+            let removal = opencode_remove_mcp_config(&path, scope)?;
+            return Ok(opencode_native_remove_action(&path, removal));
+        }
         let (program, args) = native_remove_command(target, scope)?;
         run_native_agent_command(&program, &args, current_dir)?;
         Ok(NativeAgentAction {
@@ -2843,7 +2866,10 @@ fn classify_native_agent_probe(
 ) -> Result<NativeMcpServerState, RepoGrammarError> {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
-    if !matches!(target, AgentTarget::Codex | AgentTarget::ClaudeCode) {
+    if !matches!(
+        target,
+        AgentTarget::Codex | AgentTarget::ClaudeCode | AgentTarget::Opencode
+    ) {
         return Err(RepoGrammarError::InvalidInput(
             "native MCP probe requires a live agent target".to_string(),
         ));
@@ -2864,6 +2890,7 @@ fn classify_native_agent_probe(
     let config = match target {
         AgentTarget::Codex => parse_codex_mcp_probe(&stdout, scope),
         AgentTarget::ClaudeCode => parse_claude_mcp_probe(&stdout),
+        AgentTarget::Opencode => parse_opencode_mcp_probe(&stdout, scope),
         _ => unreachable!("live target checked above"),
     };
     Ok(config.map_or(
@@ -2947,9 +2974,22 @@ fn parse_claude_mcp_probe(output: &str) -> Option<NativeMcpServerConfig> {
     })
 }
 
+/// Classify the opencode config file contents handed to the probe classifier.
+/// The file-based configurator reads the file directly; this parser keeps
+/// `classify_native_agent_probe` accepting the opencode target through the same
+/// entry-normalization authority.
+fn parse_opencode_mcp_probe(output: &str, scope: InstallScope) -> Option<NativeMcpServerConfig> {
+    let value: serde_json::Value = serde_json::from_str(output).ok()?;
+    let entry = value.get("mcp")?.get(MCP_SERVER_NAME)?;
+    parse_opencode_mcp_entry(entry, scope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repogrammar::application::install::{
+        OpencodeConfigRemovalAction, OpencodeConfigWriteAction,
+    };
     use repogrammar::application::progress::{ProgressStage, WorkUnits};
     use repogrammar::application::query::{
         assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
@@ -15744,6 +15784,86 @@ pythonpath = ["src"]
         let rendered = format!("{malformed:?}");
         assert!(!rendered.contains("/Users/alice"));
         assert!(!rendered.contains("SECRET_TOKEN"));
+    }
+
+    #[test]
+    fn native_probe_classifier_accepts_opencode_config_contents() {
+        let present = classify_native_agent_probe(
+            AgentTarget::Opencode,
+            InstallScope::Global,
+            true,
+            br#"{"mcp":{"repogrammar":{"type":"local","command":["/opt/repogrammar","serve"],"enabled":true}}}"#,
+            b"",
+        )
+        .expect("valid opencode config contents");
+        assert_eq!(
+            present,
+            NativeMcpServerState::Present(NativeMcpServerConfig {
+                executable_path: "/opt/repogrammar".to_string(),
+                args: vec!["serve".to_string()],
+                scope: InstallScope::Global,
+                enabled: true,
+            })
+        );
+
+        let malformed = classify_native_agent_probe(
+            AgentTarget::Opencode,
+            InstallScope::Global,
+            true,
+            br#"{"mcp":{"repogrammar":{"type":"remote","url":"https://example.invalid"}}}"#,
+            b"",
+        )
+        .expect("unrecognized opencode entry is a preserved malformed state");
+        assert_eq!(malformed, NativeMcpServerState::Malformed);
+
+        let error = classify_native_agent_probe(
+            AgentTarget::Gemini,
+            InstallScope::Global,
+            true,
+            b"{}",
+            b"",
+        )
+        .expect_err("non-live targets still fail closed");
+        assert_eq!(
+            error.to_string(),
+            "native MCP probe requires a live agent target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn product_configurator_routes_opencode_through_the_file_writer() {
+        let workspace = TempWorkspace::new("product-configurator-opencode");
+        let xdg_config = workspace.path().join("xdg-config");
+        fs::create_dir_all(&xdg_config).expect("xdg config dir");
+        let config_path = xdg_config.join("opencode").join("opencode.json");
+        let executable = workspace.path().join("repogrammar");
+        fs::write(&executable, "stub\n").expect("stub executable");
+
+        // The env-based path resolution honors XDG_CONFIG_HOME without
+        // hardcoding ~/.config; this test avoids mutating process env vars by
+        // exercising the same resolution through the install-service helper.
+        let resolved = {
+            let env_lookup = |key: &str| match key {
+                "XDG_CONFIG_HOME" => Some(xdg_config.display().to_string()),
+                _ => None,
+            };
+            opencode_global_config_path(&env_lookup).expect("resolve opencode config path")
+        };
+        assert_eq!(resolved, config_path);
+        let action = opencode_write_mcp_config(
+            &resolved,
+            InstallScope::Global,
+            &executable.display().to_string(),
+        )
+        .expect("write opencode config");
+        assert_eq!(action, OpencodeConfigWriteAction::CreatedFile);
+        let inspected = opencode_inspect_mcp_config(&resolved, InstallScope::Global)
+            .expect("inspect opencode config");
+        assert!(matches!(inspected, NativeMcpServerState::Present(_)));
+        let removal = opencode_remove_mcp_config(&resolved, InstallScope::Global)
+            .expect("remove opencode entry");
+        assert_eq!(removal, OpencodeConfigRemovalAction::RemovedEntry);
     }
 
     #[cfg(unix)]

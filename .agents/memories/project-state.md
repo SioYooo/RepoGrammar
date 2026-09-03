@@ -1,5 +1,33 @@
 # Project State
 
+## opencode global live writer — 2026-09-04
+
+opencode is promoted to the third live agent target (global scope only) as the
+first file-based writer. It reads and writes
+`$XDG_CONFIG_HOME/opencode/opencode.json` (default
+`$HOME/.config/opencode/opencode.json`) directly; no opencode CLI is executed
+for configuration, probing, or removal. The managed entry is the top-level
+`mcp.repogrammar` key with `{"type":"local","command":[<exe>,"serve"],"enabled":true}`,
+normalized at the ownership boundary into the shared `NativeMcpServerConfig`
+matching. Writer safety follows `docs/specifications/installation.md`: malformed
+refusal, unknown-field preservation via `serde_json::Value` round-trip (keys are
+serialized deterministically, so key order may normalize while no field is
+lost), sibling `opencode.json.repogrammar-bak` backup before modifying a
+pre-existing file (removed after verified write), atomic temp+rename with
+reparse verification, and receipt-encoded file-creation evidence
+(`native_program` = config path, `native_args` = `["mcp.repogrammar",
+"file-created"|"file-updated"|"unchanged"]`). The uninstall inverse removes
+only the managed key and deletes the file only on `file-created` receipt
+evidence when removal leaves exactly `{}`. The interactive wizard is now a
+data-driven menu (1=Codex, 2=Claude Code, 3=opencode) and `setup --target
+opencode` is accepted. Remaining UNKNOWN: the real-world opencode config
+contract (plain `opencode.json` vs JSONC precedence, the documented
+`enabled`-default-true reading, and the `local` server type spelling) is based
+on public opencode configuration documentation, not verification against a
+live opencode installation; ADR-0007's consequence text also still describes
+live writes as native-agent-CLI execution and may need a maintainer-approved
+amendment for the file-based writer class.
+
 ## Top-20 final audited checkpoint — 2026-08-01
 
 The isolated `feat/top-20-language-library-support` campaign is consolidated in
@@ -126,7 +154,8 @@ preview dist-tag remains `0.2.0-preview.0`.
   bounded exact-anchor Python `DATAFLOW_DERIVED` support derivation,
   internal active claim-input snapshot reads, semantic-fact
   freshness/readiness gating, FamilyStore-backed query reads, read-only MCP
-  serving, and global Codex/Claude Code installer writes with an interactive
+  serving, and global Codex/Claude Code/opencode installer writes (opencode via
+  the file-based global config writer) with an interactive
   multi-select wizard and all-or-rollback `--target all` transaction. ADR-0011 makes
   Python-first analysis the official v0.1 implementation target, and ADR-0012
   defines the claim-driven selective Python analysis cascade. The current

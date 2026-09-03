@@ -176,7 +176,7 @@ output so terminal users are not flooded with machine progress events.
 ## Repository state commands
 
 `repogrammar setup [--project <path>] [--target
-auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json]
+auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json]
 [--progress auto|always|never]` is the primary user-facing onboarding
 orchestrator. It composes the existing machine-level installation and
 repository lifecycle boundaries; it does not replace either boundary or invoke
@@ -953,8 +953,10 @@ accepts `auto`, `all`, `none`, single concrete ids, and comma-separated
 concrete target lists. Recognized concrete ids are `codex`, `claude-code`
 (`claude` alias), `cursor`, `opencode`, `hermes`, `gemini`, `antigravity`, and
 `kiro`. `repogrammar install` with no flags launches a simple TUI-style text
-wizard when running in an interactive terminal. The wizard supports multi-select
-Codex and Claude Code in one run, shows existing RepoGrammar-managed receipts,
+wizard when running in an interactive terminal. The wizard menu is data-driven
+over the live targets (currently `1 = Codex`, `2 = Claude Code`,
+`3 = opencode`), supports multi-select in one run through comma-separated
+numbers or agent names, shows existing RepoGrammar-managed receipts,
 uses `a` as the default automatic selection, selects only detected
 not-yet-managed agents through that default, reports a no-op when that set is
 empty, and lets users explicitly add missing supported agents on later runs.
@@ -963,7 +965,9 @@ Noninteractive live writes require `--yes`. `install --yes`, `install
 --dry-run`, and explicit `--target ... --yes` must never prompt. The current
 implementation supports `--target codex --scope global` through the native
 Codex MCP CLI, `--target claude-code --scope global` through the native Claude
-Code MCP CLI, and safe `--target all --scope global --yes` through the same
+Code MCP CLI, `--target opencode --scope global` through the file-based
+opencode global config writer (no opencode CLI is executed), and safe
+`--target all --scope global --yes` through the same
 all-or-rollback transaction. In the interactive wizard, anonymous telemetry
 consent remains default-no, while the final reviewed install-plan confirmation
 is default-yes. `all` and `auto` resolve to the current first-class live targets
@@ -976,8 +980,11 @@ when possible, runs a read-only MCP self-test before native configuration,
 writes one managed receipt per configured target, and rolls back all changes
 from the same run if any selected agent install, native verification, receipt
 write, or final product `tools/list` self-test fails. Before any command-path or
-native write, the installer uses the selected agent's bounded, read-only native `mcp get`
-operation. Only an exact target-specific not-found response is absent; unknown
+native write, the installer uses the selected agent's bounded, read-only
+ownership probe — the native `mcp get` operation for Codex and Claude Code, and
+a direct config-file read for the file-based opencode writer. Only an exact
+target-specific not-found response (or, for opencode, the `mcp.repogrammar` key
+being absent) is absent; unknown
 or malformed probe output fails closed and is not echoed. A same-name native
 entry without a RepoGrammar receipt is foreign. A receipt whose native entry is
 missing, has a different scope or executable, or does not use exactly the

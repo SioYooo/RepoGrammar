@@ -94,7 +94,8 @@ context lives under `.agents/memories/`.
   `experiments/v0.2-real-repo-dogfood.md`.
 - Public-preview growth readiness:
   `reports/public-preview-growth-readiness.md`, `quickstart.md`,
-  `quickstart-codex.md`, `quickstart-claude.md`, `limitations.md`,
+  `quickstart-codex.md`, `quickstart-claude.md`, `quickstart-opencode.md`,
+  `limitations.md`,
   `examples/python-fastapi-pytest.md`, and `promotion/launch-kit.md`.
 - Build Week demo and Developer Tools evidence:
   `demo/build-week-demo.md`, `quickstart-codex.md`, and

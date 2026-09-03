@@ -4,6 +4,20 @@
 
 ### Added
 
+- Added opencode as the third live agent target for global-scope installs, as
+  the first file-based writer. `repogrammar install --target opencode --scope
+  global --yes` writes the exact `mcp.repogrammar` local entry into
+  `$XDG_CONFIG_HOME/opencode/opencode.json` (default
+  `~/.config/opencode/opencode.json`) without executing an opencode CLI. The
+  writer is idempotent, preserves unknown fields, refuses malformed files,
+  backs up a pre-existing file before repair, writes atomically with reparse
+  verification, records file-creation evidence in the existing receipt fields,
+  and uninstalls by removing only the managed key (deleting the file only when
+  RepoGrammar created it and it would otherwise be empty). The interactive
+  installer wizard is now a data-driven menu over the live targets
+  (1=Codex, 2=Claude Code, 3=opencode), and `setup --target opencode` is
+  accepted. Project-local opencode writes remain deferred.
+
 - Added the isolated Top-20 language and third-party-library campaign audit:
   20 ranked completion reviews plus a TypeScript-extra review, a 21-record JSON
   summary, ecosystem/provider/version/license/manifest/lockfile/`UNKNOWN`

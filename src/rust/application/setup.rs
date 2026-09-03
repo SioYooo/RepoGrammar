@@ -16,6 +16,7 @@ pub enum SetupTarget {
     Auto,
     Codex,
     ClaudeCode,
+    Opencode,
 }
 
 impl SetupTarget {
@@ -24,6 +25,7 @@ impl SetupTarget {
             Self::Auto => supported_concrete_targets(),
             Self::Codex => vec![AgentTarget::Codex],
             Self::ClaudeCode => vec![AgentTarget::ClaudeCode],
+            Self::Opencode => vec![AgentTarget::Opencode],
         }
     }
 }
