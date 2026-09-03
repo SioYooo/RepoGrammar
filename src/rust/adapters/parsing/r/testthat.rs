@@ -28,8 +28,16 @@
 //! Outside the declared subset the parser abstains: it never guesses, never
 //! recovers, and never resynchronizes to a later expression. Input is untrusted,
 //! so both the input size and the recursion depth are bounded.
+//!
+//! Every typed `UNKNOWN` this frontend can emit is declared exactly once in
+//! [`R_OBLIGATION_REGISTRY`], the lane's ADR-0020 gate 4 source-semantic
+//! obligation registry: the claim each unknown scopes, whether an unmet
+//! obligation blocks the family claim, and the provider-fallback policy that
+//! says what could discharge it. Nothing outside the bounded parse may turn a
+//! registry entry into certainty, and a count may fall only when a
+//! source-backed replacement fact discharges the same obligation.
 
-use super::super::{ir_edges_for_units, ir_nodes_for_units};
+use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -51,6 +59,220 @@ const MAX_BLOCK_UNITS: usize = 4_096;
 /// Bound on recursive-descent nesting. Input is untrusted, and a file of
 /// nothing but open parentheses must abstain rather than exhaust the stack.
 const MAX_PARSE_DEPTH: usize = 128;
+
+/// One source-semantic obligation the admitted R family claim rests on.
+///
+/// This is the lane's ADR-0020 gate 4 registry. Every typed `UNKNOWN` the
+/// testthat frontend emits is declared here exactly once, with the claim it
+/// scopes, its reason code, whether an unmet obligation blocks the family
+/// claim, and the provider-fallback policy that names what could discharge it.
+/// `application/family.rs` stays the authoritative claim-impact classifier;
+/// this record must agree with it, and the registry tests below pin the
+/// emitted vocabulary to this table so the two cannot drift silently.
+pub(crate) struct RObligation {
+    /// Stable affected-claim token (`affected_claim=` assumption).
+    pub(crate) affected_claim: &'static str,
+    /// Stable kind token (`r_unknown_kind=` assumption).
+    pub(crate) kind: &'static str,
+    /// Stable protocol reason code (the fact target).
+    pub(crate) reason: UnknownReasonCode,
+    /// A standing obligation rides on every admitted anchor because the
+    /// bounded parse can never discharge it; a triggered one fires only on
+    /// the construct that leaves it unmet.
+    pub(crate) standing: bool,
+    /// Recorded claim impact of an unmet obligation. Must agree with
+    /// `r_unknown_reason_blocks_family_membership` and
+    /// `r_unknown_is_non_blocking_family_subclaim` in
+    /// `src/rust/application/family.rs`.
+    pub(crate) blocks_family_claim: bool,
+    /// Source-free, fixed human-facing evidence note.
+    pub(crate) note: &'static str,
+    /// Provider-fallback policy as a stable low-cardinality token, mirrored on
+    /// every emitted fact as the `provider_fallback=` assumption. The prose
+    /// policy each token stands for is the comment above the registry entry.
+    pub(crate) fallback: &'static str,
+}
+
+/// The complete ADR-0020 gate 4 source-semantic obligation registry for the
+/// `testthat.test_that` family claim.
+///
+/// Obligations split three ways. The identity obligations block the family
+/// claim when unmet: ADR-0042 D3 makes the DESCRIPTION declaration a
+/// precondition, and D2b makes an in-file rebinding an unproof of the same
+/// identity. The reach obligations record registrations this frontend
+/// deliberately does not anchor. The remaining obligations are residuals the
+/// bounded parse can never discharge -- callee binding beyond the file, the
+/// quoted block's own semantics, dispatch, and external symbols -- so they
+/// ride along as non-blocking unknowns rather than being guessed away.
+///
+/// Fallback tokens: `repository_metadata_declaration` means only the
+/// repository's own DESCRIPTION can discharge the obligation, and no provider
+/// can substitute for it. `runtime_trace_not_integrated` and
+/// `runtime_observation_not_integrated` mean a bounded trace would settle the
+/// claim but no trace mechanism is authorized or integrated.
+/// `source_inside_declared_subset_only` means the parse can only read source
+/// the ADR-0042 D4 subset admits and never recovers past a refusal.
+/// `bounded_input_refusal` means the untrusted-input bounds refused the file
+/// and no provider is involved. `source_only_shape_widening_needs_adr` means
+/// the admitted shape is a decision, and widening it needs a superseding
+/// ADR rather than a provider. `no_r_provider_irreducible` means the
+/// obligation needs an R semantic provider or evaluator, no R provider slot
+/// exists or is registered, and ADR-0036 forbids executing R -- so the
+/// residual is irreducible under current constraints.
+pub(crate) const R_OBLIGATION_REGISTRY: &[RObligation] = &[
+    // Fallback: recoverable by repository metadata only -- declare testthat in
+    // a DESCRIPTION dependency field. No provider can substitute for the
+    // repository's own declaration.
+    RObligation {
+        affected_claim: "r_testthat_identity",
+        kind: "testthat_not_declared",
+        reason: UnknownReasonCode::MissingDependency,
+        standing: false,
+        blocks_family_claim: true,
+        note: "no DESCRIPTION in this repository declares testthat, so the framework identity is unproven",
+        fallback: "repository_metadata_declaration",
+    },
+    // Fallback: irreducible without executing R, which ADR-0036 forbids; a
+    // bounded runtime trace is the only discharge and none is integrated.
+    RObligation {
+        affected_claim: "r_testthat_identity",
+        kind: "test_that_rebound_in_file",
+        reason: UnknownReasonCode::MonkeyPatch,
+        standing: false,
+        blocks_family_claim: true,
+        note: "this file binds the name test_that itself, so a call to it is not proven to be testthat's",
+        fallback: "runtime_trace_not_integrated",
+    },
+    // Fallback: recoverable only by observing whether the runtime condition
+    // holds. No observation mechanism is integrated, so support is
+    // deliberately understated rather than guessed.
+    RObligation {
+        affected_claim: "r_conditional_test_registration",
+        kind: "conditional_test_registration",
+        reason: UnknownReasonCode::BuildVariantAmbiguity,
+        standing: false,
+        blocks_family_claim: false,
+        note: "an otherwise admitted test_that call is reached only under a runtime condition or loop",
+        fallback: "runtime_observation_not_integrated",
+    },
+    // Fallback: source-only obligation. The description must be read in the
+    // file itself; widening the admitted description shape is a superseding
+    // decision, not a provider question.
+    RObligation {
+        affected_claim: "r_testthat_description_literal",
+        kind: "description_not_source_literal",
+        reason: UnknownReasonCode::FrameworkMagic,
+        standing: false,
+        blocks_family_claim: false,
+        note: "a top-level test_that call's description is not a source-visible plain string literal, so the call was not anchored",
+        fallback: "source_only_shape_widening_needs_adr",
+    },
+    // Fallback: recoverable only by source inside the declared ADR-0042 D4
+    // subset. The parse never recovers past the boundary.
+    RObligation {
+        affected_claim: "r_test_parse",
+        kind: "unadmitted_r_construct",
+        reason: UnknownReasonCode::InsufficientSupport,
+        standing: false,
+        blocks_family_claim: false,
+        note: "R source left the declared parsed subset, so no later expression in this file was read",
+        fallback: "source_inside_declared_subset_only",
+    },
+    // Fallback: bounded-input refusal on untrusted nesting. No provider is
+    // involved.
+    RObligation {
+        affected_claim: "r_test_parse",
+        kind: "parser_depth_limit",
+        reason: UnknownReasonCode::InsufficientSupport,
+        standing: false,
+        blocks_family_claim: false,
+        note: "R source nested past the bounded parse depth, so no later expression in this file was read",
+        fallback: "bounded_input_refusal",
+    },
+    // Fallback: bounded-input refusal on untrusted size. No provider is
+    // involved.
+    RObligation {
+        affected_claim: "r_test_parse",
+        kind: "source_byte_limit",
+        reason: UnknownReasonCode::InsufficientSupport,
+        standing: false,
+        blocks_family_claim: false,
+        note: "R source exceeded the bounded input-byte limit",
+        fallback: "bounded_input_refusal",
+    },
+    // Fallback: bounded-input refusal on untrusted unit counts. No provider is
+    // involved.
+    RObligation {
+        affected_claim: "r_test_parse",
+        kind: "parser_resource_limit",
+        reason: UnknownReasonCode::InsufficientSupport,
+        standing: false,
+        blocks_family_claim: false,
+        note: "R parser exceeded the bounded block limit",
+        fallback: "bounded_input_refusal",
+    },
+    // Fallback: the anchor proves the call shape, not that the bare name
+    // resolves to testthat's function. Binding by library masking, sourced
+    // helpers, attach, or enclosing environments needs an evaluator, no R
+    // provider slot exists or is registered, and ADR-0036 forbids executing
+    // R. Irreducible under current constraints.
+    RObligation {
+        affected_claim: "r_testthat_callee_binding",
+        kind: "callee_binding_unproven",
+        reason: UnknownReasonCode::UnresolvedImport,
+        standing: true,
+        blocks_family_claim: false,
+        note: "the anchor proves the call shape, not that the bare name test_that resolves to testthat's function in the runtime search path",
+        fallback: "no_r_provider_irreducible",
+    },
+    // Fallback: test_that quotes its code block, so its non-standard
+    // evaluation, assertions, data masking, and skips need an evaluator
+    // ADR-0036 forbids. No R provider slot exists or is registered.
+    // Irreducible under current constraints.
+    RObligation {
+        affected_claim: "r_testthat_block_semantics",
+        kind: "block_nse_not_evaluated",
+        reason: UnknownReasonCode::FrameworkMagic,
+        standing: true,
+        blocks_family_claim: false,
+        note: "test_that quotes its code block, so non-standard evaluation, assertions, data masking, and skips inside it are not evaluated and no symbol inside the block is resolved",
+        fallback: "no_r_provider_irreducible",
+    },
+    // Fallback: S3/S4 method tables are runtime type state. No R runtime or
+    // type provider exists, so this is irreducible under current constraints.
+    RObligation {
+        affected_claim: "r_dispatch_target",
+        kind: "s3_s4_dispatch_call",
+        reason: UnknownReasonCode::FrameworkMagic,
+        standing: false,
+        blocks_family_claim: false,
+        note: "a parsed call registers or dispatches an S3 or S4 generic whose method selection is runtime type state",
+        fallback: "no_r_provider_irreducible",
+    },
+    // Fallback: package attach, namespace exports, and native entry points
+    // need an installed-graph provider. None exists, so this is irreducible
+    // under current constraints.
+    RObligation {
+        affected_claim: "r_external_symbol_resolution",
+        kind: "native_or_package_symbol_call",
+        reason: UnknownReasonCode::UnresolvedImport,
+        standing: false,
+        blocks_family_claim: false,
+        note: "a parsed call resolves a package, namespace, or native symbol this frontend cannot bind",
+        fallback: "no_r_provider_irreducible",
+    },
+];
+
+fn registry_entry(kind: &str) -> Result<&'static RObligation, ParseError> {
+    R_OBLIGATION_REGISTRY
+        .iter()
+        .find(|entry| entry.kind == kind)
+        .ok_or_else(|| ParseError::Internal(format!("unregistered R obligation kind {kind}")))
+}
+
+fn standing_obligations() -> impl Iterator<Item = &'static RObligation> {
+    R_OBLIGATION_REGISTRY.iter().filter(|entry| entry.standing)
+}
 
 /// True for the only paths this frontend may read.
 ///
@@ -124,13 +346,10 @@ pub(crate) fn parse_output(
     let mut facts = Vec::new();
 
     if document.text.len() > usize::try_from(DEFAULT_MAX_FILE_BYTES).unwrap_or(usize::MAX) {
-        facts.push(unknown_fact(
+        facts.push(obligation_fact(
             &module,
-            UnknownReasonCode::InsufficientSupport,
-            "r_test_parse",
-            "source_byte_limit",
+            registry_entry("source_byte_limit")?,
             full_range,
-            "R source exceeded the bounded input-byte limit",
         )?);
         return finish(units, facts, Vec::new());
     }
@@ -138,13 +357,10 @@ pub(crate) fn parse_output(
     if !context.r_declares_testthat {
         // A directory named tests/testthat in a project that does not depend on
         // testthat establishes nothing.
-        facts.push(unknown_fact(
+        facts.push(obligation_fact(
             &module,
-            UnknownReasonCode::MissingDependency,
-            "r_testthat_identity",
-            "testthat_not_declared",
+            registry_entry("testthat_not_declared")?,
             full_range,
-            "no DESCRIPTION in this repository declares testthat, so the framework identity is unproven",
         )?);
         return finish(units, facts, Vec::new());
     }
@@ -160,13 +376,10 @@ pub(crate) fn parse_output(
     let mut diagnostics = Vec::new();
     if let Some(abstention) = program.abstention {
         diagnostics.push(degraded(document.path, abstention.diagnostic()));
-        facts.push(unknown_fact(
+        facts.push(obligation_fact(
             &module,
-            UnknownReasonCode::InsufficientSupport,
-            "r_test_parse",
-            abstention.unknown_kind(),
+            registry_entry(abstention.unknown_kind())?,
             module.range.clone(),
-            abstention.note(),
         )?);
     }
 
@@ -175,13 +388,10 @@ pub(crate) fn parse_output(
         // assigns the name itself has redefined what every later call in it
         // means, and RepoGrammar cannot evaluate the replacement. Nothing in
         // the file anchors.
-        facts.push(unknown_fact(
+        facts.push(obligation_fact(
             &module,
-            UnknownReasonCode::MonkeyPatch,
-            "r_testthat_identity",
-            "test_that_rebound_in_file",
+            registry_entry("test_that_rebound_in_file")?,
             full_range,
-            "this file binds the name test_that itself, so a call to it is not proven to be testthat's",
         )?);
         return finish(units, facts, diagnostics);
     }
@@ -191,13 +401,38 @@ pub(crate) fn parse_output(
         // how often -- a test is registered, and RepoGrammar evaluates neither.
         // The call is not admitted, and saying so understates support rather
         // than unproving the unconditional calls beside it.
-        facts.push(unknown_fact(
+        facts.push(obligation_fact(
             &module,
-            UnknownReasonCode::BuildVariantAmbiguity,
-            "r_conditional_test_registration",
-            "conditional_test_registration",
+            registry_entry("conditional_test_registration")?,
             module.range.clone(),
-            "an otherwise admitted test_that call is reached only under a runtime condition or loop",
+        )?);
+    }
+
+    if program.description_not_literal {
+        // The description is the only thing distinguishing one anchor from
+        // another, so a computed or raw-string one is not source-visible and
+        // the call is not anchored (ADR-0042 D2). Recording why keeps the
+        // understatement honest instead of silent.
+        facts.push(obligation_fact(
+            &module,
+            registry_entry("description_not_source_literal")?,
+            module.range.clone(),
+        )?);
+    }
+
+    if program.dispatch_call {
+        facts.push(obligation_fact(
+            &module,
+            registry_entry("s3_s4_dispatch_call")?,
+            module.range.clone(),
+        )?);
+    }
+
+    if program.external_symbol_call {
+        facts.push(obligation_fact(
+            &module,
+            registry_entry("native_or_package_symbol_call")?,
+            module.range.clone(),
         )?);
     }
 
@@ -220,17 +455,26 @@ pub(crate) fn parse_output(
             provenance: provenance.clone(),
         };
         facts.push(anchor_fact(&unit)?);
+        // The standing obligations ride on every admitted anchor: the bounded
+        // parse proves the call shape and nothing beyond it, so what the bare
+        // callee binds to and what the quoted block means stay typed `UNKNOWN`
+        // on the anchor itself rather than being guessed away. They are
+        // recorded residuals and must never block the family claim.
+        for entry in standing_obligations() {
+            debug_assert!(
+                !entry.blocks_family_claim,
+                "a standing R obligation is a recorded residual and must not block"
+            );
+            facts.push(obligation_fact(&unit, entry, range.clone())?);
+        }
         units.push(unit);
     }
 
     if limit_hit {
-        facts.push(unknown_fact(
+        facts.push(obligation_fact(
             &module,
-            UnknownReasonCode::InsufficientSupport,
-            "r_test_parse",
-            "parser_resource_limit",
+            registry_entry("parser_resource_limit")?,
             module.range.clone(),
-            "R parser exceeded the bounded block limit",
         )?);
     }
 
@@ -258,20 +502,7 @@ fn finish(
             right.id.as_str(),
         ))
     });
-    facts.sort_by(|left, right| {
-        (
-            left.evidence.range.start_byte,
-            left.evidence.range.end_byte,
-            left.kind.as_protocol_str(),
-            left.target.as_ref().map(SymbolId::as_str),
-        )
-            .cmp(&(
-                right.evidence.range.start_byte,
-                right.evidence.range.end_byte,
-                right.kind.as_protocol_str(),
-                right.target.as_ref().map(SymbolId::as_str),
-            ))
-    });
+    sort_anchor_facts(&mut facts);
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
     let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
     Ok(SourceParseOutput {
@@ -336,17 +567,6 @@ impl Abstention {
             }
             AbstainReason::DepthLimit => {
                 "R nesting exceeded the bounded parse depth, so the expressions after it are unread"
-            }
-        }
-    }
-
-    fn note(self) -> &'static str {
-        match self.reason {
-            AbstainReason::UnadmittedConstruct => {
-                "R source left the declared parsed subset, so no later expression in this file was read"
-            }
-            AbstainReason::DepthLimit => {
-                "R source nested past the bounded parse depth, so no later expression in this file was read"
             }
         }
     }
@@ -1536,6 +1756,13 @@ struct Program {
     rebinds_callee: bool,
     /// An otherwise admitted call is reached only under a runtime condition.
     conditional_registration: bool,
+    /// A top-level two-positional-argument call whose description is not a
+    /// source-visible plain string literal.
+    description_not_literal: bool,
+    /// A parsed call registers or dispatches an S3/S4 generic.
+    dispatch_call: bool,
+    /// A parsed call resolves a package, namespace, or native symbol.
+    external_symbol_call: bool,
     abstention: Option<Abstention>,
 }
 
@@ -1552,12 +1779,22 @@ fn parse_program(text: &str) -> Program {
     let mut anchors = Vec::new();
     let mut rebinds_callee = false;
     let mut conditional_registration = false;
+    let mut description_not_literal = false;
+    let mut dispatch_call = false;
+    let mut external_symbol_call = false;
     for expression in &top_level {
         if admitted_anchor(expression) {
             anchors.push(TestThatBlock {
                 start: expression.start,
                 end: expression.end,
             });
+        }
+        if let Some(args) = admitted_call_args(expression) {
+            let brace_body = args[1]
+                .value
+                .as_ref()
+                .is_some_and(|code| matches!(code.kind, NodeKind::Brace(_)));
+            description_not_literal |= brace_body && !description_is_plain_literal(&args[0]);
         }
         if matches!(
             expression.kind,
@@ -1572,6 +1809,8 @@ fn parse_program(text: &str) -> Program {
         }
         expression.visit(&mut |node| {
             rebinds_callee |= binds_callee(node);
+            dispatch_call |= is_dispatch_call(node);
+            external_symbol_call |= is_external_symbol_node(node);
         });
     }
 
@@ -1579,6 +1818,9 @@ fn parse_program(text: &str) -> Program {
         anchors,
         rebinds_callee,
         conditional_registration,
+        description_not_literal,
+        dispatch_call,
+        external_symbol_call,
         abstention: parse_abstention.or(lex_abstention),
     }
 }
@@ -1588,35 +1830,85 @@ fn parse_program(text: &str) -> Program {
 /// A partially parsed or recovered node can never reach here: the parser
 /// returns whole expressions or nothing.
 fn admitted_anchor(node: &Node<'_>) -> bool {
-    let NodeKind::Call { callee, args } = &node.kind else {
+    let Some(args) = admitted_call_args(node) else {
         return false;
+    };
+    description_is_plain_literal(&args[0])
+        && args[1]
+            .value
+            .as_ref()
+            .is_some_and(|code| matches!(code.kind, NodeKind::Brace(_)))
+}
+
+/// The arguments of a call that is the bare-identifier, exactly-two-positional
+/// `test_that` shape; `None` for every other node.
+fn admitted_call_args<'a>(node: &'a Node<'a>) -> Option<&'a [Arg<'a>]> {
+    let NodeKind::Call { callee, args } = &node.kind else {
+        return None;
     };
     // A bare identifier callee only: not `testthat::test_that`, not
     // `obj$test_that`, and not the backtick spelling `` `test_that` ``.
     if !matches!(callee.kind, NodeKind::Identifier(name) if name == CALLEE) {
-        return false;
+        return None;
     }
     if args.len() != 2 || args.iter().any(|arg| arg.named) {
-        return false;
+        return None;
     }
-    let Some(description) = args[0].value.as_ref() else {
-        return false;
-    };
-    // An empty description distinguishes nothing, and a computed or raw-string
-    // one is not the source-visible literal this anchor claims.
-    if !matches!(
-        description.kind,
-        NodeKind::Str {
-            raw: false,
-            inner
-        } if !inner.is_empty()
-    ) {
-        return false;
+    Some(args)
+}
+
+/// The description is the one part of the shape that must be read in the
+/// source itself: a non-empty plain string literal, so neither a computed nor
+/// a variable nor an R 4.0 raw-string description is source-visible.
+fn description_is_plain_literal(arg: &Arg<'_>) -> bool {
+    arg.value.as_ref().is_some_and(|description| {
+        matches!(
+            description.kind,
+            NodeKind::Str {
+                raw: false,
+                inner
+            } if !inner.is_empty()
+        )
+    })
+}
+
+/// True when this node registers or dispatches an S3/S4 generic.
+///
+/// `UseMethod`/`NextMethod` are the S3 entry points, `setClass`/`setMethod`/
+/// `setGeneric`/`setRefClass` define S4 types and methods, and `callGeneric`/
+/// `callNextMethod` dispatch them. Which method runs is runtime type state.
+fn is_dispatch_call(node: &Node<'_>) -> bool {
+    matches!(&node.kind, NodeKind::Call { callee, .. }
+    if matches!(
+        callee.kind,
+        NodeKind::Identifier(
+            "UseMethod"
+                | "NextMethod"
+                | "callGeneric"
+                | "callNextMethod"
+                | "setMethod"
+                | "setGeneric"
+                | "setClass"
+                | "setRefClass"
+        )
+    ))
+}
+
+/// True when this node resolves a symbol the bounded parse cannot bind:
+/// `library`/`require` attach packages to the search path, the dotted
+/// entries call native code, and `::`/`:::` name a package export directly.
+fn is_external_symbol_node(node: &Node<'_>) -> bool {
+    match &node.kind {
+        NodeKind::Call { callee, .. } => matches!(
+            callee.kind,
+            NodeKind::Identifier("library" | "require" | ".Call" | ".C" | ".Fortran" | ".External")
+        ),
+        NodeKind::Binary {
+            op: TokenKind::NsGet,
+            ..
+        } => true,
+        _ => false,
     }
-    matches!(
-        args[1].value.as_ref().map(|value| &value.kind),
-        Some(NodeKind::Brace(_))
-    )
 }
 
 /// True when this node binds the name `test_that`.
@@ -1681,25 +1973,26 @@ fn anchor_fact(unit: &CodeUnit) -> Result<SemanticFact, ParseError> {
     })
 }
 
-fn unknown_fact(
+fn obligation_fact(
     unit: &CodeUnit,
-    reason: UnknownReasonCode,
-    affected_claim: &str,
-    kind: &str,
+    entry: &RObligation,
     range: SourceRange,
-    note: &str,
 ) -> Result<SemanticFact, ParseError> {
     Ok(SemanticFact {
         kind: SemanticFactKind::Unknown,
         subject: unit.id.as_str().to_string(),
-        target: Some(SymbolId::new(reason.as_protocol_str()).map_err(ParseError::Internal)?),
+        target: Some(SymbolId::new(entry.reason.as_protocol_str()).map_err(ParseError::Internal)?),
         origin: origin(),
         certainty: FactCertainty::Unknown,
-        evidence: Evidence::new(unit.id.clone(), range, unit.provenance.clone(), note)
+        evidence: Evidence::new(unit.id.clone(), range, unit.provenance.clone(), entry.note)
             .map_err(ParseError::Internal)?,
         assumptions: vec![
-            format!("affected_claim={affected_claim}"),
-            format!("r_unknown_kind={kind}"),
+            format!("affected_claim={}", entry.affected_claim),
+            format!("r_unknown_kind={}", entry.kind),
+            // The provider-fallback policy rides on the fact itself so the
+            // recorded registry policy is machine-visible per obligation, the
+            // same way provider unknowns carry their recovery guidance.
+            format!("provider_fallback={}", entry.fallback),
         ],
     })
 }
@@ -1762,6 +2055,23 @@ mod tests {
             .iter()
             .flat_map(|fact| fact.assumptions.iter())
             .filter_map(|assumption| assumption.strip_prefix("r_unknown_kind=").map(String::from))
+            .collect()
+    }
+
+    fn unknown_kind_count(parsed: &SourceParseOutput, kind: &str) -> usize {
+        unknown_kinds(parsed)
+            .iter()
+            .filter(|emitted| emitted == &kind)
+            .count()
+    }
+
+    fn affected_claims(parsed: &SourceParseOutput) -> Vec<String> {
+        parsed
+            .report
+            .semantic_facts
+            .iter()
+            .flat_map(|fact| fact.assumptions.iter())
+            .filter_map(|assumption| assumption.strip_prefix("affected_claim=").map(String::from))
             .collect()
     }
 
@@ -1993,6 +2303,363 @@ mod tests {
         assert_eq!(anchors(&parsed), 0);
     }
 
+    // --- ADR-0020 gate 4: the source-semantic obligation registry ---
+
+    #[test]
+    fn a_non_literal_description_records_its_own_unknown() {
+        for source in [
+            // Computed description.
+            "test_that(paste0(\"a\", \"b\"), { })",
+            // Variable description.
+            "test_that(description, { })",
+            // Raw-string description: a literal, but not the plain
+            // source-visible spelling the anchor claims.
+            "test_that(r\"(raw description)\", { })",
+            // Empty literal: a literal that distinguishes nothing.
+            "test_that(\"\", { })",
+        ] {
+            let parsed = output(&format!("{source}\n"));
+            assert_eq!(anchors(&parsed), 0, "must not anchor: {source}");
+            assert!(
+                unknown_kinds(&parsed).contains(&"description_not_source_literal".to_string()),
+                "{source}: {:?}",
+                unknown_kinds(&parsed)
+            );
+            assert!(
+                affected_claims(&parsed).contains(&"r_testthat_description_literal".to_string()),
+                "{source}: {:?}",
+                affected_claims(&parsed)
+            );
+        }
+        // A shape problem elsewhere in the call is an admission decision, not
+        // the description obligation, so it must not fire this unknown.
+        let not_brace = output("test_that(\"desc\", expect_true(TRUE))\n");
+        assert!(!unknown_kinds(&not_brace).contains(&"description_not_source_literal".to_string()));
+    }
+
+    #[test]
+    fn a_conditionally_reached_computed_description_stays_silent() {
+        // The conditional bucket owns calls under `if`; a nested computed
+        // description is not a top-level call and understates silently.
+        let parsed = output("if (interactive()) test_that(paste0(\"a\"), { })\n");
+        assert_eq!(anchors(&parsed), 0);
+        assert!(!unknown_kinds(&parsed).contains(&"description_not_source_literal".to_string()));
+    }
+
+    #[test]
+    fn s3_s4_dispatch_calls_record_their_own_unknown_without_blocking() {
+        for call in [
+            "setClass(\"shape\", slots = c(id = \"integer\"))",
+            "setMethod(\"plot\", signature(x = \"shape\"), function(x) invisible(NULL))",
+            "UseMethod(\"handler\")",
+            "NextMethod(\"handler\")",
+        ] {
+            let parsed = output(&format!("test_that(\"dispatches\", {{\n  {call}\n}})\n"));
+            assert_eq!(
+                anchors(&parsed),
+                1,
+                "dispatch must not block the anchor: {call}"
+            );
+            assert!(
+                unknown_kinds(&parsed).contains(&"s3_s4_dispatch_call".to_string()),
+                "{call}: {:?}",
+                unknown_kinds(&parsed)
+            );
+            assert!(affected_claims(&parsed).contains(&"r_dispatch_target".to_string()));
+        }
+        let plain = output("test_that(\"plain\", { })\n");
+        assert!(!unknown_kinds(&plain).contains(&"s3_s4_dispatch_call".to_string()));
+    }
+
+    #[test]
+    fn native_package_and_namespace_calls_record_their_own_unknown() {
+        for call in [
+            "library(utils)",
+            "require(stats)",
+            "result <- .Call(\"c_entry\", 1L)",
+            "value <- .C(\"c_entry\", 1L)",
+            "value <- .Fortran(\"f_entry\", 1L)",
+            "value <- .External(\"ext_entry\", 1L)",
+            "value <- utils::head(1:3)",
+            "value <- base:::unlisted(1:3)",
+        ] {
+            let parsed = output(&format!("test_that(\"interop\", {{\n  {call}\n}})\n"));
+            assert_eq!(
+                anchors(&parsed),
+                1,
+                "external symbols must not block: {call}"
+            );
+            assert!(
+                unknown_kinds(&parsed).contains(&"native_or_package_symbol_call".to_string()),
+                "{call}: {:?}",
+                unknown_kinds(&parsed)
+            );
+            assert!(affected_claims(&parsed).contains(&"r_external_symbol_resolution".to_string()));
+        }
+        let plain = output("test_that(\"plain\", { value <- head(1:3) })\n");
+        assert!(!unknown_kinds(&plain).contains(&"native_or_package_symbol_call".to_string()));
+    }
+
+    #[test]
+    fn standing_obligations_ride_on_every_admitted_anchor_and_only_there() {
+        let parsed = output("test_that(\"a\", { })\ntest_that(\"b\", { })\n");
+        assert_eq!(anchors(&parsed), 2);
+        for entry in R_OBLIGATION_REGISTRY.iter().filter(|entry| entry.standing) {
+            assert_eq!(
+                unknown_kind_count(&parsed, entry.kind),
+                2,
+                "standing obligation {} must ride on every anchor",
+                entry.kind
+            );
+        }
+        // Each standing fact is scoped to the anchor unit it rides on, so the
+        // unknown stays claim-scoped rather than file-global.
+        let block_units = parsed
+            .report
+            .units
+            .iter()
+            .filter(|unit| unit.kind == CodeUnitKind::RTestThatBlock)
+            .map(|unit| unit.id.as_str().to_string())
+            .collect::<Vec<_>>();
+        let standing_kinds = R_OBLIGATION_REGISTRY
+            .iter()
+            .filter(|entry| entry.standing)
+            .map(|entry| format!("r_unknown_kind={}", entry.kind))
+            .collect::<Vec<_>>();
+        for fact in &parsed.report.semantic_facts {
+            if fact.kind == SemanticFactKind::Unknown
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| standing_kinds.contains(assumption))
+            {
+                assert!(
+                    block_units.contains(&fact.subject),
+                    "standing unknown must be anchored to a block unit"
+                );
+            }
+        }
+        // With no anchors there is nothing for a standing obligation to ride
+        // on, and no other unknown fires either.
+        let empty = output("value <- 1\n");
+        assert!(
+            unknown_kinds(&empty).is_empty(),
+            "{:?}",
+            unknown_kinds(&empty)
+        );
+    }
+
+    #[test]
+    fn byte_and_block_bounds_are_exact_then_fail_at_plus_one() {
+        let limit = usize::try_from(DEFAULT_MAX_FILE_BYTES).unwrap_or(usize::MAX);
+        let exact = format!("# {}\n", "x".repeat(limit - 3));
+        assert!(exact.len() <= limit);
+        let parsed = output(&exact);
+        assert_eq!(anchors(&parsed), 0);
+        assert!(!unknown_kinds(&parsed).contains(&"source_byte_limit".to_string()));
+        let over = format!("# {}\n", "x".repeat(limit - 2));
+        assert!(over.len() > limit);
+        let parsed = output(&over);
+        assert_eq!(anchors(&parsed), 0);
+        assert!(unknown_kinds(&parsed).contains(&"source_byte_limit".to_string()));
+
+        let exact_blocks = "test_that(\"fills the file\", { })\n".repeat(MAX_BLOCK_UNITS);
+        let parsed = output(&exact_blocks);
+        assert_eq!(anchors(&parsed), MAX_BLOCK_UNITS);
+        assert!(!unknown_kinds(&parsed).contains(&"parser_resource_limit".to_string()));
+        let over_blocks = "test_that(\"fills the file\", { })\n".repeat(MAX_BLOCK_UNITS + 1);
+        let parsed = output(&over_blocks);
+        assert_eq!(anchors(&parsed), MAX_BLOCK_UNITS);
+        assert!(unknown_kinds(&parsed).contains(&"parser_resource_limit".to_string()));
+    }
+
+    #[test]
+    fn every_registry_entry_fires_on_its_trigger_and_every_emission_is_registered() {
+        // One corpus per registry entry: each trigger below must make its
+        // entry fire, so the registry cannot list an obligation nothing
+        // records. Standing entries fire on any admitted anchor.
+        let depth_source = format!(
+            "test_that(\"before\", {{ }})\nx <- {}1{}\n",
+            "(".repeat(4_096),
+            ")".repeat(4_096)
+        );
+        let declared_triggers: &[(&str, &str)] = &[
+            (
+                "test_that_rebound_in_file",
+                "test_that <- identity\ntest_that(\"x\", { })\n",
+            ),
+            (
+                "conditional_test_registration",
+                "if (interactive()) test_that(\"x\", { })\n",
+            ),
+            (
+                "description_not_source_literal",
+                "test_that(paste0(\"a\"), { })\n",
+            ),
+            (
+                "unadmitted_r_construct",
+                "test_that(\"before\", { })\nx => f()\n",
+            ),
+            ("parser_depth_limit", depth_source.as_str()),
+            ("callee_binding_unproven", "test_that(\"x\", { })\n"),
+            ("block_nse_not_evaluated", "test_that(\"x\", { })\n"),
+            (
+                "s3_s4_dispatch_call",
+                "test_that(\"x\", { UseMethod(\"h\") })\n",
+            ),
+            (
+                "native_or_package_symbol_call",
+                "test_that(\"x\", { library(utils) })\n",
+            ),
+        ];
+        for (kind, source) in declared_triggers {
+            let declared = output(source);
+            assert!(
+                unknown_kinds(&declared).contains(&kind.to_string()),
+                "{kind} must fire on its trigger: {:?}",
+                unknown_kinds(&declared)
+            );
+        }
+        // The undeclared identity trigger needs a context without the
+        // DESCRIPTION declaration.
+        let undeclared = output_with(&ParserProjectContext::default(), "test_that(\"x\", { })\n");
+        assert!(
+            unknown_kinds(&undeclared).contains(&"testthat_not_declared".to_string()),
+            "{:?}",
+            unknown_kinds(&undeclared)
+        );
+        // The byte and block bounds get their own triggers because their
+        // inputs are too large to inline above.
+        let limit = usize::try_from(DEFAULT_MAX_FILE_BYTES).unwrap_or(usize::MAX);
+        let over_bytes = format!("# {}\n", "x".repeat(limit - 2));
+        assert!(unknown_kinds(&output(&over_bytes)).contains(&"source_byte_limit".to_string()));
+        let over_blocks = "test_that(\"fills the file\", { })\n".repeat(MAX_BLOCK_UNITS + 1);
+        assert!(unknown_kinds(&output(&over_blocks)).contains(&"parser_resource_limit".to_string()));
+
+        // And the reverse direction: nothing the frontend emits is outside
+        // the registry, and the registry's (claim, kind) pairs are unique.
+        let mut pairs = R_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| (entry.affected_claim, entry.kind))
+            .collect::<Vec<_>>();
+        pairs.sort_unstable();
+        let count = pairs.len();
+        pairs.dedup();
+        assert_eq!(
+            pairs.len(),
+            count,
+            "registry (claim, kind) pairs must be unique"
+        );
+        for (kind, source) in declared_triggers {
+            for emitted in unknown_kinds(&output(source)) {
+                assert!(
+                    R_OBLIGATION_REGISTRY
+                        .iter()
+                        .any(|entry| entry.kind == emitted),
+                    "emitted kind {emitted} from {kind} trigger is not registered"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn obligation_output_is_deterministic_and_counts_are_stable() {
+        let source = "test_that(\"a\", { library(utils) })\n\
+                      test_that(\"b\", { })\n\
+                      test_that(paste0(\"c\"), { })\n\
+                      if (interactive()) test_that(\"d\", { })\n";
+        let first = output(source);
+        let second = output(source);
+        assert_eq!(
+            format!("{:?}", first.report.semantic_facts),
+            format!("{:?}", second.report.semantic_facts),
+            "obligation facts must be deterministic"
+        );
+        assert_eq!(
+            format!("{:?}", first.report.units),
+            format!("{:?}", second.report.units)
+        );
+        // Exact, stable counts: two anchors, two standing obligations each,
+        // one triggered external-symbol unknown, one description unknown, and
+        // one conditional-registration unknown. Nothing else fires.
+        assert_eq!(anchors(&first), 2);
+        assert_eq!(unknown_kind_count(&first, "callee_binding_unproven"), 2);
+        assert_eq!(unknown_kind_count(&first, "block_nse_not_evaluated"), 2);
+        assert_eq!(
+            unknown_kind_count(&first, "native_or_package_symbol_call"),
+            1
+        );
+        assert_eq!(
+            unknown_kind_count(&first, "description_not_source_literal"),
+            1
+        );
+        assert_eq!(
+            unknown_kind_count(&first, "conditional_test_registration"),
+            1
+        );
+        assert_eq!(
+            unknown_kinds(&first).len(),
+            7,
+            "{:?}",
+            unknown_kinds(&first)
+        );
+    }
+
+    #[test]
+    fn registry_strings_satisfy_the_stored_assumption_content_rules() {
+        // Assumptions are persisted verbatim and the storage layer rejects
+        // values that look like source snippets (an `=` together with a `;`,
+        // braces, `=>`), absolute paths, or URL schemes. Every registry entry
+        // must keep its emitted assumption strings inside those rules.
+        for entry in R_OBLIGATION_REGISTRY {
+            for value in [
+                format!("affected_claim={}", entry.affected_claim),
+                format!("r_unknown_kind={}", entry.kind),
+                format!("provider_fallback={}", entry.fallback),
+                entry.note.to_string(),
+            ] {
+                assert!(!value.contains("=>"), "{value}");
+                assert!(!(value.contains('=') && value.contains(';')), "{value}");
+                assert!(!value.contains('{') && !value.contains('}'), "{value}");
+                assert!(!value.contains("://"), "{value}");
+                assert!(!value.contains('\0'), "{value}");
+            }
+        }
+    }
+
+    #[test]
+    fn registry_blocking_records_match_the_authoritative_classifier() {
+        // `application/family.rs` is the authoritative claim-impact classifier
+        // and this crate's adapters must not depend on it, so this test pins
+        // the recorded split by re-deriving the two rules it must agree with:
+        // an unmet identity obligation blocks the family claim, and every
+        // other recorded obligation is non-blocking. The rules live verbatim
+        // in `r_unknown_reason_blocks_family_membership` and
+        // `r_unknown_is_non_blocking_family_subclaim`.
+        for entry in R_OBLIGATION_REGISTRY {
+            if entry.blocks_family_claim {
+                assert_eq!(
+                    entry.affected_claim, "r_testthat_identity",
+                    "only the identity claim may block the R family"
+                );
+                assert!(
+                    matches!(
+                        entry.reason,
+                        UnknownReasonCode::MissingDependency | UnknownReasonCode::MonkeyPatch
+                    ),
+                    "{} blocks with a reason the classifier does not block on",
+                    entry.kind
+                );
+                assert!(!entry.standing);
+            } else {
+                assert_ne!(
+                    entry.affected_claim, "r_testthat_identity",
+                    "an identity obligation that does not block contradicts ADR-0042 D3/D2b"
+                );
+            }
+        }
+    }
+
     // --- ADR-0042 D2b: a file that rebinds the callee proves nothing ---
 
     #[test]
@@ -2204,7 +2871,21 @@ mod tests {
             parsed.report.diagnostics
         );
         assert_eq!(anchors(&parsed), 3);
-        assert!(unknown_kinds(&parsed).is_empty());
+        // The plain admitted case fires no triggered obligation except the
+        // one its own `library(testthat)` line earns; the only other
+        // unknowns are the two standing residuals riding on every anchor.
+        assert_eq!(unknown_kind_count(&parsed, "callee_binding_unproven"), 3);
+        assert_eq!(unknown_kind_count(&parsed, "block_nse_not_evaluated"), 3);
+        assert_eq!(
+            unknown_kind_count(&parsed, "native_or_package_symbol_call"),
+            1
+        );
+        assert_eq!(
+            unknown_kinds(&parsed).len(),
+            7,
+            "{:?}",
+            unknown_kinds(&parsed)
+        );
     }
 
     #[test]

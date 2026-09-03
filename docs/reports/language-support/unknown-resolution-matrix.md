@@ -36,7 +36,7 @@ fallback, or reclassification is not progress.
 | JavaScript | runtime/module mode, package exports, external symbols | TS worker partial; fallback structural | pinned JS-mode Program/TypeChecker project profile and lock/config join |
 | VB.NET | MSBuild effective model, Roslyn symbols/generators | no provider | bounded `.vbproj` profile plus isolated Roslyn VB query |
 | SQL | dialect/version, migration order, catalog/extensions | no provider and source zero-read | repository-owned dialect/profile plus versioned non-executing parser |
-| R | project/repository, NSE/dispatch/native symbols | no provider and source zero-read | selected R project plus sandboxed source frontend/provider |
+| R | callee binding beyond the file, block NSE, S3/S4 dispatch, native/package symbols (typed, claim-scoped, non-blocking in `R_OBLIGATION_REGISTRY`) plus project/repository selection | bounded testthat frontend types them; no R provider slot registered, so every residual is irreducible under current constraints (`manual_review_required`) | a sandboxed R semantic provider/evaluator, which ADR-0036's execution boundary currently forbids |
 | Rust | module graph, cfg/features, macros, trait dispatch | rust-analyzer slot `not_integrated` | isolated rust-analyzer/rustc query with selected Cargo profile |
 | Delphi | compiler dialect/project, packages, units | no provider | evidence-pinned Delphi project/frontend; FPC separately qualified |
 | Scratch | binary/deflate, extension opcodes, block semantics | product `NO_GO` | binary port plus vetted deflate then bounded format/extension resolver |
