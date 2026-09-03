@@ -312,15 +312,19 @@ explicitly archived evidence remain authoritative.
   modes, and zero family/support output without invoking R, renv, profiles,
   packages, native code, children, or network.
 - MATLAB coverage must prove exact lowercase `.m` and root/nested
-  `resources/mpackage.json` classification, normalized-path rejection,
-  inventory-only source persistence, and zero source-store/parser use for `.m`.
-  Package tests must cover shared duplicate-member/depth/key limits, schema
-  1.0.0/1.1.0, later-schema abstention, validated name/UUID/version fields,
-  direct `matlab_add_on` declarations, conflicting and unsafe requirement
-  omission, resource ceilings, provider/contact non-retention, persistence,
-  copy-forward, replacement, removal, path-free UNKNOWN output, and zero family
-  support. Tests must never require MATLAB, Octave, Simulink, installation,
-  child processes, or network access.
+  `resources/mpackage.json` classification, normalized-path rejection, and
+  exclusion of candidates under exact `codegen`/`slprj`/`sccprj` path
+  components while ordinary same-named candidates stay selected. Parser tests
+  must cover the bounded `classdef`/`methods`/`matlab.unittest.TestCase`
+  anchor, whole-file abstention on non-admitted constructs, whitespace and
+  transpose handling, and degraded-parse refusal. Package tests must cover
+  shared duplicate-member/depth/key limits, schema 1.0.0/1.1.0, later-schema
+  abstention, validated name/UUID/version fields, direct `matlab_add_on`
+  declarations, conflicting and unsafe requirement omission, resource
+  ceilings, provider/contact non-retention, persistence, copy-forward,
+  replacement, removal, path-free UNKNOWN output, and zero family support
+  beyond the anchored `matlab.unittest` family. Tests must never require
+  MATLAB, Octave, Simulink, installation, child processes, or network access.
 - Assembly coverage must prove lowercase `.s` admission, uppercase `.S`
   exclusion, unsupported NASM/MASM suffixes, normalized-path rejection, exact
   byte/line/label/fact limits, CRLF handling, module/label/containment output,

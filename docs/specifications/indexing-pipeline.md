@@ -959,18 +959,22 @@ do not meet this source-free non-execution lane. No Flang/f18, fpm, compiler,
 preprocessor, repository/dependency code, child process, or network action is
 introduced. No Fortran family, support, readiness, or semantic claim may follow
 without a separately qualified frontend and completion gate.
-MATLAB is `discovered_only` and unsupported. A single pure classifier admits
-lowercase `.m` as `matlab` and exact root/nested `resources/mpackage.json` as
-`matlab-config`. Source files persist only path/hash/size/token metadata and
-bypass parser-facing source-store access. Package-definition bytes alone enter
-the shared bounded unique-member JSON gate and may create one project-config
-unit, exact direct `matlab_add_on` declaration rows, and source-free
+MATLAB is a bounded `structural_substrate`, not completed language support.
+A single pure classifier admits lowercase `.m` as `matlab` and exact root/nested
+`resources/mpackage.json` as `matlab-config`, and excludes candidates under an
+exact `codegen`, `slprj`, or `sccprj` path component as MathWorks
+code-generation output. Admitted `.m` bytes enter the bounded ADR-0046 parser,
+which anchors only `classdef` files whose `methods` blocks declare
+`matlab.unittest.TestCase` test methods; everything else abstains whole-file
+with typed refusals. Package-definition bytes alone enter the shared bounded
+unique-member JSON gate and may create one project-config unit, exact direct
+`matlab_add_on` declaration rows, and source-free
 `matlab_dependency_inventory` UNKNOWNs. Supported schema 1.0.0/1.1.0 metadata
 does not establish installed packages or resolved versions; later valid schema
 versions abstain. Incremental changes parse file-locally, unchanged dependency
 evidence copies forward, removals omit it, and legacy MATLAB source claims are
-purged. No MATLAB/Octave/Simulink execution, source IR, external symbol,
-framework role, family, readiness promotion, or support exists.
+purged. No MATLAB/Octave/Simulink execution, external symbol resolution,
+provider, readiness promotion, or support claim exists.
 
 Assembly is a bounded `structural_substrate`, not completed language support.
 Discovery admits only lowercase `.s`; uppercase `.S` is excluded rather than

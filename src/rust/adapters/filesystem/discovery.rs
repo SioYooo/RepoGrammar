@@ -479,6 +479,9 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
         MatlabPathClassification::PackageConfig => {
             return LanguagePathClassification::Supported(DiscoveredLanguage::MatlabConfig);
         }
+        MatlabPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
         MatlabPathClassification::NotMatlab => {}
     }
     match AssemblyLanguageAdapter::classify_path(path) {
@@ -3006,5 +3009,116 @@ mod tests {
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("Demo"));
         assert!(!debug.contains("entry"));
+    }
+
+    #[test]
+    fn discovers_matlab_selection_with_code_generation_exclusions() {
+        let workspace = TempWorkspace::new("discovery-matlab-exclusions");
+        for directory in [
+            "+pkg",
+            "tests",
+            "codegen/lib/demo",
+            "codegen/resources",
+            "slprj/_simcommon",
+            "sccprj/modelref",
+        ] {
+            fs::create_dir_all(workspace.path().join(directory))
+                .expect("create MATLAB selection fixture dir");
+        }
+        fs::write(workspace.path().join("main.m"), [0xff, 0xfe, 0xfd])
+            .expect("write binary MATLAB source inventory");
+        fs::write(workspace.path().join("+pkg/function.m"), "% helper\n")
+            .expect("write package MATLAB source");
+        fs::write(workspace.path().join("tests/CatalogTest.m"), "% test\n")
+            .expect("write MATLAB test source");
+        fs::write(
+            workspace.path().join("codegen/lib/demo/build.m"),
+            "generated\n",
+        )
+        .expect("write MATLAB Coder output");
+        fs::write(
+            workspace.path().join("codegen/resources/mpackage.json"),
+            "generated\n",
+        )
+        .expect("write generated package definition candidate");
+        fs::write(
+            workspace.path().join("slprj/_simcommon/cache.m"),
+            "generated\n",
+        )
+        .expect("write Simulink cache output");
+        fs::write(
+            workspace.path().join("sccprj/modelref/model.m"),
+            "generated\n",
+        )
+        .expect("write Simulink Coder build output");
+        fs::write(workspace.path().join("codegen/kept.py"), "value = 1\n")
+            .expect("write non-MATLAB source under codegen");
+        fs::write(workspace.path().join("slprj/kept.ts"), "export {};\n")
+            .expect("write non-MATLAB source under slprj");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover MATLAB selection inventory");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("+pkg/function.m", DiscoveredLanguage::Matlab),
+                ("codegen/kept.py", DiscoveredLanguage::Python),
+                ("main.m", DiscoveredLanguage::Matlab),
+                ("slprj/kept.ts", DiscoveredLanguage::TypeScript),
+                ("tests/CatalogTest.m", DiscoveredLanguage::Matlab),
+            ]
+        );
+        for path in [
+            "codegen/lib/demo/build.m",
+            "codegen/resources/mpackage.json",
+            "slprj/_simcommon/cache.m",
+            "sccprj/modelref/model.m",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path
+                        && skipped.reason == SkippedReason::LanguageSpecificExclusion
+                }),
+                "{path}"
+            );
+        }
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("generated"));
+    }
+
+    #[test]
+    fn rejects_matlab_symlink_escape_without_following_it() {
+        let workspace = TempWorkspace::new("discovery-matlab-symlink");
+        let outside = TempWorkspace::new("discovery-matlab-symlink-outside");
+        fs::write(outside.path().join("outside.m"), "% outside\n")
+            .expect("write outside MATLAB source");
+
+        if !create_test_symlink_file(
+            &outside.path().join("outside.m"),
+            &workspace.path().join("link.m"),
+        ) {
+            return;
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover MATLAB symlink");
+
+        assert!(report.files.is_empty());
+        assert!(report
+            .skipped
+            .iter()
+            .any(|skip| skip.path == "link.m" && skip.reason == SkippedReason::SymlinkEscape));
     }
 }

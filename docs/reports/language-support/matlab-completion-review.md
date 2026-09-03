@@ -4,7 +4,7 @@
 - Status: Incomplete — `structural_substrate`
 - Authority: ADR-0020, ADR-0030, ADR-0037, ADR-0046
 - Branch/base: `feat/top20-matlab-assembly-scratch` from `9d3a0ba`
-- Last updated: 2026-08-15
+- Last updated: 2026-09-04
 - Top-20 counted: no
 
 ## Capability record
@@ -14,7 +14,7 @@
 | Dialect/version | Package metadata is bounded to `resources/mpackage.json`, introduced in R2024b; `.m` discovery selects no MATLAB release, and none is needed for the admitted subset. ADR-0046 D4c declares the MATLAB/Octave lexical-invariance set: a construct the two read differently makes the file abstain, so the dialect cannot change what is claimed. |
 | Provider/frontend | Bounded in-process recursive-descent parser `repogrammar-matlab-unittest-parser` / `bounded_matlab_unittest_class_v2` over the ADR-0046 D2a subset, plus the JSON metadata reader `bounded_mpackage_dependency_inventory_v1`. No MATLAB, Octave, grammar, toolchain, or external artifact; semantic provider `PROVIDER_UNAVAILABLE`. |
 | Provider version | RepoGrammar crate version for the parser and the static reader; no MATLAB/Octave/Code Analyzer version. |
-| Discovery/config | Normalized lowercase `.m` metadata discovery and exact root/nested `resources/mpackage.json`. |
+| Discovery/config | Deterministic selection: exact lowercase `.m` source and exact root/nested `resources/mpackage.json` are the only candidates, and any candidate below an exact `codegen`, `slprj`, or `sccprj` component — the MathWorks code-generation output folders named by the standard MATLAB ignore template — is excluded as generated output with the shared `language_specific_exclusion` skip token, MATLAB-only, exact and case-sensitive. Generic `build`/`dist`/`generated`/`target` output is covered by the shared default exclusion table. Invalid bytes hash without decoding, oversized files skip with `too_large`, and symlinks are never followed (escape skip), all per the shared pipeline spec. |
 | Manifest/lockfile | Direct `matlab_add_on` `name@uuid` declarations with optional compatible-version requirement; no lockfile/resolution/install proof. |
 | Owned IR | One `project_config` unit/IR node per parsed package definition, plus owned units and IR for the ADR-0046 anchor: a module unit per decoded `.m`, a test-class unit, and a test-method unit. |
 | External symbols | None. Imports, packages, class/function binding, Java/MEX, path precedence, and dynamic dispatch are unresolved. |
@@ -81,9 +81,22 @@ compilation on the recorded development host.
 
 ## ADR-0020 nine-gate checklist
 
-- [ ] 1. Discovery/configuration — partial: deterministic discovery and one
-  safe package format exist, but `.m` dialect/generated/build selection and
-  broader project/toolbox metadata do not.
+- [x] 1. Discovery/configuration — deterministic selection is implemented and
+  tested: exact lowercase `.m` and exact root/nested `resources/mpackage.json`
+  are the only candidates (lookalikes `.M`, `.mlx`, `toolbox.mltbx`,
+  `mpackage.json` outside `resources/` are refused); generated/build output is
+  excluded per a documented rule — MATLAB candidates below an exact
+  `codegen`/`slprj`/`sccprj` component are skipped as
+  `language_specific_exclusion` without hiding other languages below those
+  components, and generic build/dependency output is covered by the shared
+  default exclusion table; project metadata inventory is bounded to
+  `resources/mpackage.json` exactly as ADR-0037 decides it (project XML,
+  `.prj`, `.mlproj`, and toolbox archives are refused inputs, not missing
+  work); and invalid/oversized/symlink behavior is the shared pipeline
+  contract, pinned for this lane by tests (binary `.m` bytes hashed without
+  decoding, symlink escape refused). Dialect is not selected by discovery:
+  `.m` admits no MATLAB-versus-Octave claim, and ADR-0046 D4c bounds the
+  question by lexical invariance with a typed file-level abstention.
 - [x] 2. Authoritative frontend/format parser for the declared scope —
   ADR-0046's bounded in-process recursive-descent parser is the primary syntax
   evidence for MATLAB source, on the terms ADR-0040 established for SQL. Its
@@ -138,12 +151,27 @@ compilation on the recorded development host.
 
 ## Completion verdict and exact non-claims
 
-`PARTIAL_AUDITED_PROGRESS`; strict gate count `7/9`; Top-20 counted `no`.
+`PARTIAL_AUDITED_PROGRESS`; strict gate count `8/9`; Top-20 counted `no`.
 Beyond the bounded static R2024b+ package declarations, RepoGrammar now proves
 one exact class-based `matlab.unittest` declaration shape under ADR-0046. It
 still cannot prove a MATLAB release, toolbox installation, dependency
 resolution, external symbols, runtime behavior, or any Simulink fact. No
 `LICENSE_BLOCKED` claim is made because no licensed provider was probed.
+
+Gate 1 moved from unchecked to checked on 2026-09-04 by closing the selection
+rule, and the scope of what closed is stated exactly. The generated/build
+exclusion set is the three MathWorks code-generation output folders
+(`codegen` for MATLAB Coder output, `slprj` and `sccprj` for Simulink
+simulation/code-generation targets) named by the standard MATLAB ignore
+template; nothing beyond that set is excluded, because no lane authority names
+another MATLAB generated-location convention and inventing one would convert a
+heuristic into certainty. Discovery still selects no MATLAB release and no
+MATLAB-versus-Octave dialect: `.m` is admitted as a shared-extension candidate
+only, and the dialect question is bounded downstream by ADR-0046 D4c lexical
+invariance, never guessed. Broader project/toolbox metadata inventory remains
+out of scope by ADR-0037 decision — the project XML format is documented as
+unstable and executing a project is forbidden — so its absence is a non-claim,
+not an open obligation of this gate.
 
 Gate 2 moved from unchecked to checked, and the reason it was unchecked is
 retracted rather than quietly dropped. The earlier record argued the ambiguity
@@ -172,6 +200,7 @@ MATLAB.
 ## Evidence paths and risks
 
 - `src/rust/adapters/languages/matlab.rs`
+- `src/rust/adapters/filesystem/discovery.rs`
 - `src/rust/adapters/parsing/matlab.rs`
 - `src/rust/adapters/parsing/matlab/unittest.rs`
 - `src/rust/application/family.rs`
