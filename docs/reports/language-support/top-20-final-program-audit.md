@@ -55,6 +55,8 @@ The accepted terminal label is partial audited progress. `COMPLETE`,
 | 2026-08-14 R3 — SQL family | role registry, owned derived support, `sql.schema.table_definition`, adversarial fixture corpus | SQL gates 5, 6 close; 7/9 |
 | 2026-08-14 R4 — blocker partition | per-language `blocker_class`/`blocker` in the summary JSON, stale-document sweep | every lane has a source-backed conclusion |
 | 2026-08-14 R5 — SQL readiness | source-free/leakage audit across `status`, `doctor`, `stats`, `unknowns`, `families`, `files`, and MCP; corrected the dialect recovery mechanism | SQL gate 7 closes; 8/9, gate 9 left to a maintainer ruling |
+| 2026-09-04 R6 — MATLAB Gate 1 selection | deterministic `.m`/`mpackage.json` selection with MATLAB-only `codegen`/`slprj`/`sccprj` generated-output exclusions, ADR-0046 D4c dialect abstention re-verified, and lane symlink/invalid-bytes discovery tests | MATLAB gate 1 closes; 8/9, gate 9 left to the completion audit |
+| 2026-09-04 R7 — R obligation registry | `R_OBLIGATION_REGISTRY` in the testthat frontend declares every claim-scoped typed `UNKNOWN` (identity blocking obligations, conditional reach, description literal, parse bounds, standing callee-binding and block-NSE residuals, triggered S3/S4 dispatch and native/package-symbol unknowns) with recorded provider fallbacks; all emission routes through the table and registry/determinism/count tests pin it | R gate 4 closes; 8/9, gate 9 (final completion audit with linked prerequisite SHAs) remains |
 
 ## Strict language matrix
 
@@ -74,11 +76,11 @@ means a recorded ADR decision closed the lane.
 | 2 | C | `structural_substrate` | 2/9 | `zero_dependency_excluded` | shared vcpkg/Conan manifest declarations only | no |
 | 3 | C++ | `structural_substrate` | 3/9 | `zero_dependency_excluded` | vcpkg/Conan manifest declarations only | no |
 | 4 | Java | `structural_substrate` | 3/9 | `zero_dependency_excluded` | direct literal Maven declarations only | no |
-| 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | no C# project/NuGet inventory | no |
+| 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | bounded `.csproj` NuGet reader landed at the parser layer; discovery admission pending | no |
 | 6 | JavaScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
 | 7 | Visual Basic .NET | `structural_substrate` | 8/9 | `zero_dependency_excluded` | literal `.vbproj` NuGet declarations only | no |
 | 8 | SQL | `structural_substrate` | 8/9 | `open_under_zero_dependency` | no SQL extension dependency consumer | no |
-| 9 | R | `structural_substrate` | 7/9 | `open_under_zero_dependency` | bounded CRAN/Bioconductor manifest/renv evidence | no |
+| 9 | R | `structural_substrate` | 8/9 | `open_under_zero_dependency` | bounded CRAN/Bioconductor manifest/renv evidence | no |
 | 10 | Rust | `structural_substrate` | 3/9 | `zero_dependency_excluded` | Cargo manifest/project-model declarations only | no |
 | 11 | Delphi/Object Pascal | `structural_substrate` | 8/9 | `open_under_zero_dependency` | literal Delphi package declarations only | no |
 | 12 | Scratch | `not_started`; prerequisite `NO_GO` | 1/9 | `no_go` | no product dependency inventory | no |
@@ -87,7 +89,7 @@ means a recorded ADR decision closed the lane.
 | 15 | Swift | `discovered_only` | 1/9 | `open_under_zero_dependency` | SwiftPM schema-2/3 lock pins only | no |
 | 16 | Ada | `structural_substrate` | 8/9 | `open_under_zero_dependency` | unconditional literal Alire declarations only | no |
 | 17 | Assembly | `structural_substrate` | 1/9 | `zero_dependency_excluded` | no native/system dependency consumer | no |
-| 18 | MATLAB | `structural_substrate` | 7/9 | `open_under_zero_dependency` | bounded R2024b+ add-on manifest declarations only | no |
+| 18 | MATLAB | `structural_substrate` | 8/9 | `open_under_zero_dependency` | bounded R2024b+ add-on manifest declarations only | no |
 | 19 | Fortran | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal root fpm declarations only | no |
 | 20 | Ruby | `discovered_only` | 2/9 | `open_under_zero_dependency` | direct `Gemfile.lock` declaration inventory only | no |
 | extra | TypeScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
