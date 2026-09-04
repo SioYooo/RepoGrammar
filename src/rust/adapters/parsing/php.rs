@@ -4,6 +4,14 @@
 //! documents. It never executes PHP, Composer, autoloaders, plugins, scripts,
 //! repositories, or project code. Lock entries are static lockfile evidence;
 //! they do not prove installation or runtime selection.
+//!
+//! The sibling [`phpunit`] module is the ADR-0047 bounded PHPUnit frontend
+//! over PHP source; this file remains the PhpConfig lane.
+
+pub mod phpunit;
+
+mod lexer;
+mod syntax;
 
 use super::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
 use super::{config_source_parse_output, project_config_unit, sort_inventory_facts};

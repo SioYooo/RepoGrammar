@@ -12,15 +12,19 @@ pub mod cpp;
 pub mod csharp;
 pub mod delphi;
 pub mod express;
+pub mod fortran;
 pub mod go;
 pub mod java;
 pub mod jest;
 pub mod matlab;
 pub mod nestjs;
+pub mod php;
 pub mod r;
 pub mod react;
+pub mod ruby;
 pub mod rust_general;
 pub mod sql;
+pub mod swift;
 pub mod tsjs;
 pub mod visual_basic;
 pub mod vitest;
@@ -130,6 +134,14 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
             assumption: role.assumption,
         });
     }
+    if let Some(role) = php::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
     if let Some(role) = r::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
@@ -138,7 +150,31 @@ fn framework_role_for_unit(unit: &CodeUnit) -> Option<FrameworkRole<'_>> {
             assumption: role.assumption,
         });
     }
+    if let Some(role) = ruby::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = fortran::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
     if let Some(role) = sql::role_for_code_unit_kind(&unit.kind) {
+        return Some(FrameworkRole {
+            unit,
+            target: role.target,
+            note: role.note,
+            assumption: role.assumption,
+        });
+    }
+    if let Some(role) = swift::role_for_code_unit_kind(&unit.kind) {
         return Some(FrameworkRole {
             unit,
             target: role.target,

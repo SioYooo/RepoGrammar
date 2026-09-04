@@ -166,6 +166,15 @@ impl IrNodeKind {
             CodeUnitKind::AdaTestRegistration => Self::Unknown,
             CodeUnitKind::MatlabTestClass => Self::Class,
             CodeUnitKind::MatlabTestMethod => Self::Method,
+            CodeUnitKind::RubyMinitestTestClass => Self::Class,
+            CodeUnitKind::RubyMinitestTestMethod => Self::Method,
+            CodeUnitKind::PhpTestClass => Self::Class,
+            CodeUnitKind::PhpTestMethod => Self::Method,
+            CodeUnitKind::SwiftTestClass => Self::Class,
+            CodeUnitKind::SwiftTestMethod => Self::Method,
+            // A test-drive test is a declared subroutine, so the IR projects
+            // it as a function the way Go test functions are projected.
+            CodeUnitKind::FortranTestDriveSubroutine => Self::Function,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,

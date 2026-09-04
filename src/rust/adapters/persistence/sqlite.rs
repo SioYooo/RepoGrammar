@@ -3266,6 +3266,11 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "object-pascal",
     "ada",
     "matlab",
+    "php",
+    "swift",
+    "ruby",
+    "go",
+    "fortran",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3398,6 +3403,15 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         }
         "ada" => "code_units.language = 'ada' AND code_units.kind = 'ada_test_registration'",
         "matlab" => "code_units.language = 'matlab' AND code_units.kind = 'matlab_test_method'",
+        "php" => "code_units.language = 'php' AND code_units.kind = 'php_test_method'",
+        "swift" => "code_units.language = 'swift' AND code_units.kind = 'swift_test_method'",
+        "ruby" => {
+            "code_units.language = 'ruby' AND code_units.kind = 'ruby_minitest_test_method'"
+        }
+        "go" => "code_units.language = 'go' AND code_units.kind = 'go_test_function'",
+        "fortran" => {
+            "code_units.language = 'fortran' AND code_units.kind = 'fortran_test_drive_subroutine'"
+        }
         _ => "0",
     }
 }
@@ -3419,6 +3433,11 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "object-pascal" => "indexed_files.language IN ('object-pascal', 'delphi-config')",
         "ada" => "indexed_files.language IN ('ada', 'ada-config')",
         "matlab" => "indexed_files.language IN ('matlab', 'matlab-config')",
+        "php" => "indexed_files.language IN ('php', 'php-config')",
+        "swift" => "indexed_files.language IN ('swift', 'swift-config')",
+        "ruby" => "indexed_files.language IN ('ruby', 'ruby-config')",
+        "go" => "indexed_files.language IN ('go', 'go-config')",
+        "fortran" => "indexed_files.language IN ('fortran', 'fortran-config')",
         _ => "0",
     }
 }
@@ -3440,6 +3459,11 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "object-pascal" => "code_units.language = 'object-pascal'",
         "ada" => "code_units.language = 'ada'",
         "matlab" => "code_units.language = 'matlab'",
+        "php" => "code_units.language = 'php'",
+        "swift" => "code_units.language = 'swift'",
+        "ruby" => "code_units.language = 'ruby'",
+        "go" => "code_units.language = 'go'",
+        "fortran" => "code_units.language = 'fortran'",
         _ => "0",
     }
 }
@@ -3467,6 +3491,11 @@ fn repo_shape_family_where(language: &str) -> &'static str {
         "object-pascal" => "families.family_id GLOB 'family:object_pascal:*'",
         "ada" => "families.family_id GLOB 'family:ada:*'",
         "matlab" => "families.family_id GLOB 'family:matlab:*'",
+        "php" => "families.family_id GLOB 'family:php:*'",
+        "swift" => "families.family_id GLOB 'family:swift:*'",
+        "ruby" => "families.family_id GLOB 'family:ruby:*'",
+        "go" => "families.family_id GLOB 'family:go:*'",
+        "fortran" => "families.family_id GLOB 'family:fortran:*'",
         _ => "0",
     }
 }

@@ -17297,6 +17297,8 @@ mod tests {
         assert!(!json_output.stdout.contains("php-source-must-not-be-read"));
         assert!(!json_output.stdout.contains("php-config-must-not-be-read"));
         let value: Value = serde_json::from_str(json_output.stdout.trim()).expect("PHP index JSON");
+        // ADR-0047 admits `main.php`; these undecodable bytes are read once
+        // and skipped, so the generation stays manifest-only with no claims.
         assert_eq!(value["indexing"], "file_manifest_only");
         assert_eq!(value["parser"], "deferred");
         assert_eq!(value["parser_attempted_files"], 0);
@@ -17305,8 +17307,8 @@ mod tests {
         assert_eq!(
             value["warnings"],
             json!([
-                "parser skipped unsupported language token: php",
-                "parser skipped unsupported language token: php-config"
+                "parser skipped unsupported language token: php-config",
+                "parser skipped non-UTF-8 source: main.php"
             ])
         );
 
@@ -17366,7 +17368,7 @@ mod tests {
         assert!(human_output.stdout.contains("parser_attempted_files: 0"));
         assert!(human_output
             .stdout
-            .contains("warning: parser skipped unsupported language token: php\n"));
+            .contains("warning: parser skipped non-UTF-8 source: main.php\n"));
         assert!(human_output
             .stdout
             .contains("warning: parser skipped unsupported language token: php-config\n"));
@@ -17421,8 +17423,8 @@ mod tests {
         assert_eq!(
             value["warnings"],
             json!([
-                "parser skipped unsupported language token: swift",
-                "parser skipped unsupported language token: swift-config"
+                "parser skipped unsupported language token: swift-config",
+                "parser skipped non-UTF-8 source: main.swift"
             ])
         );
 
@@ -17497,7 +17499,7 @@ mod tests {
         assert!(human_output.stdout.contains("parser_attempted_files: 0"));
         assert!(human_output
             .stdout
-            .contains("warning: parser skipped unsupported language token: swift\n"));
+            .contains("warning: parser skipped non-UTF-8 source: main.swift\n"));
         assert!(human_output
             .stdout
             .contains("warning: parser skipped unsupported language token: swift-config\n"));

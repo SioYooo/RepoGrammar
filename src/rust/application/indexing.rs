@@ -6,14 +6,19 @@ use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD}
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
+use crate::adapters::parsing::fortran::testdrive::{FORTRAN_ANCHOR_ENGINE, FORTRAN_ANCHOR_METHOD};
+use crate::adapters::parsing::go::testing::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::matlab::unittest::{MATLAB_ANCHOR_ENGINE, MATLAB_ANCHOR_METHOD};
+use crate::adapters::parsing::php::phpunit::{PHP_ANCHOR_ENGINE, PHP_ANCHOR_METHOD};
 use crate::adapters::parsing::python::{
     python_project_config_parser_method, MAX_PYTHON_FRONTEND_INPUT_BYTES,
 };
 use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
+use crate::adapters::parsing::ruby::minitest::{RUBY_ANCHOR_ENGINE, RUBY_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
 use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
+use crate::adapters::parsing::swift::xctest::{SWIFT_ANCHOR_ENGINE, SWIFT_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::family::{
@@ -21,18 +26,23 @@ use crate::application::family::{
     cpp_support_target_is_role_compatible, csharp_support_target_is_role_compatible,
     delphi_support_target_is_role_compatible, family_constraint_profile_record,
     family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
+    fortran_support_target_is_role_compatible, go_support_target_is_role_compatible,
     java_support_target_is_role_compatible, matlab_support_target_is_role_compatible,
-    min_family_support, python_support_target_is_role_compatible,
-    r_support_target_is_role_compatible, sql_support_target_is_role_compatible,
-    tsjs_support_target_is_role_compatible, vb_support_target_is_role_compatible,
-    ADA_DERIVED_SUPPORT_ENGINE, ADA_DERIVED_SUPPORT_METHOD, CPP_DERIVED_SUPPORT_ENGINE,
-    CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE, CSHARP_DERIVED_SUPPORT_METHOD,
-    DELPHI_DERIVED_SUPPORT_ENGINE, DELPHI_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE,
-    JAVA_DERIVED_SUPPORT_METHOD, MATLAB_DERIVED_SUPPORT_ENGINE, MATLAB_DERIVED_SUPPORT_METHOD,
+    min_family_support, php_support_target_is_role_compatible,
+    python_support_target_is_role_compatible, r_support_target_is_role_compatible,
+    ruby_support_target_is_role_compatible, sql_support_target_is_role_compatible,
+    swift_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
+    vb_support_target_is_role_compatible, ADA_DERIVED_SUPPORT_ENGINE, ADA_DERIVED_SUPPORT_METHOD,
+    CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
+    CSHARP_DERIVED_SUPPORT_METHOD, DELPHI_DERIVED_SUPPORT_ENGINE, DELPHI_DERIVED_SUPPORT_METHOD,
+    FORTRAN_DERIVED_SUPPORT_ENGINE, FORTRAN_DERIVED_SUPPORT_METHOD, GO_DERIVED_SUPPORT_ENGINE,
+    GO_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
+    MATLAB_DERIVED_SUPPORT_ENGINE, MATLAB_DERIVED_SUPPORT_METHOD, PHP_DERIVED_SUPPORT_ENGINE,
+    PHP_DERIVED_SUPPORT_METHOD, RUBY_DERIVED_SUPPORT_ENGINE, RUBY_DERIVED_SUPPORT_METHOD,
     RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD, R_DERIVED_SUPPORT_ENGINE,
     R_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD,
-    TSJS_DERIVED_SUPPORT_ENGINE, TSJS_DERIVED_SUPPORT_METHOD, VB_DERIVED_SUPPORT_ENGINE,
-    VB_DERIVED_SUPPORT_METHOD,
+    SWIFT_DERIVED_SUPPORT_ENGINE, SWIFT_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE,
+    TSJS_DERIVED_SUPPORT_METHOD, VB_DERIVED_SUPPORT_ENGINE, VB_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
@@ -852,227 +862,19 @@ where
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
         record_semantic_facts(session.as_mut(), parser_fact_count, &framework_role_facts)?;
-    let mut derived_python_support_facts = derive_python_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_python_support_facts);
-    let derived_python_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count + framework_fact_count,
-        &derived_python_support_facts,
-    )?;
-    let mut derived_tsjs_support_facts = derive_tsjs_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_tsjs_support_facts);
-    let derived_tsjs_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count + framework_fact_count + derived_python_support_fact_count,
-        &derived_tsjs_support_facts,
-    )?;
-    let mut derived_java_support_facts = derive_java_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_java_support_facts);
-    let derived_java_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count,
-        &derived_java_support_facts,
-    )?;
-    let mut derived_csharp_support_facts = derive_csharp_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_csharp_support_facts);
-    let derived_csharp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count,
-        &derived_csharp_support_facts,
-    )?;
-    let mut derived_cpp_support_facts = derive_cpp_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_cpp_support_facts);
-    let derived_cpp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count,
-        &derived_cpp_support_facts,
-    )?;
-    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_rust_support_facts);
-    let derived_rust_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count,
-        &derived_rust_support_facts,
-    )?;
-    let mut derived_sql_support_facts = derive_sql_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_sql_support_facts);
-    let derived_sql_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count,
-        &derived_sql_support_facts,
-    )?;
-    let mut derived_r_support_facts = derive_r_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_r_support_facts);
-    let derived_r_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count
-            + derived_sql_support_fact_count,
-        &derived_r_support_facts,
-    )?;
-    let mut derived_vb_support_facts = derive_vb_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_vb_support_facts);
-    let derived_vb_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count
-            + derived_sql_support_fact_count
-            + derived_r_support_fact_count,
-        &derived_vb_support_facts,
-    )?;
-    let mut derived_delphi_support_facts = derive_delphi_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_delphi_support_facts);
-    let derived_delphi_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count
-            + derived_sql_support_fact_count
-            + derived_r_support_fact_count
-            + derived_vb_support_fact_count,
-        &derived_delphi_support_facts,
-    )?;
-    let mut derived_ada_support_facts = derive_ada_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_ada_support_facts);
-    let derived_ada_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count
-            + derived_sql_support_fact_count
-            + derived_r_support_fact_count
-            + derived_vb_support_fact_count
-            + derived_delphi_support_fact_count,
-        &derived_ada_support_facts,
-    )?;
-    let mut derived_matlab_support_facts = derive_matlab_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_matlab_support_facts);
-    let derived_matlab_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count
-            + derived_rust_support_fact_count
-            + derived_sql_support_fact_count
-            + derived_r_support_fact_count
-            + derived_vb_support_fact_count
-            + derived_delphi_support_fact_count
-            + derived_ada_support_fact_count,
-        &derived_matlab_support_facts,
-    )?;
-    let local_support_fact_count = parser_fact_count
-        + framework_fact_count
-        + derived_python_support_fact_count
-        + derived_tsjs_support_fact_count
-        + derived_java_support_fact_count
-        + derived_csharp_support_fact_count
-        + derived_cpp_support_fact_count
-        + derived_rust_support_fact_count
-        + derived_sql_support_fact_count
-        + derived_r_support_fact_count
-        + derived_vb_support_fact_count
-        + derived_delphi_support_fact_count
-        + derived_ada_support_fact_count
-        + derived_matlab_support_fact_count;
+    let mut derived_support_facts: Vec<Vec<SemanticFact>> = Vec::new();
+    let mut local_support_fact_count = parser_fact_count + framework_fact_count;
+    for derive in DERIVED_SUPPORT_DERIVERS {
+        let mut facts = derive(
+            &indexed_code_units,
+            &parser_semantic_facts,
+            &framework_role_facts,
+        )?;
+        sort_semantic_facts(&mut facts);
+        let count = record_semantic_facts(session.as_mut(), local_support_fact_count, &facts)?;
+        local_support_fact_count += count;
+        derived_support_facts.push(facts);
+    }
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1167,39 +969,15 @@ where
             "checking family candidates",
             WorkUnits::Unknown,
         );
-        let mut family_facts = Vec::with_capacity(
-            parser_semantic_facts.len()
-                + framework_role_facts.len()
-                + derived_python_support_facts.len()
-                + derived_tsjs_support_facts.len()
-                + derived_java_support_facts.len()
-                + derived_csharp_support_facts.len()
-                + derived_cpp_support_facts.len()
-                + derived_rust_support_facts.len()
-                + derived_sql_support_facts.len()
-                + derived_r_support_facts.len()
-                + derived_vb_support_facts.len()
-                + rust_provider_facts.len()
-                + worker_facts.len()
-                + derived_tsjs_provider_support_facts.len(),
-        );
+        let mut family_facts = Vec::new();
         family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
-        family_facts.extend(derived_python_support_facts);
-        family_facts.extend(derived_tsjs_support_facts);
-        family_facts.extend(derived_java_support_facts);
-        family_facts.extend(derived_csharp_support_facts);
-        family_facts.extend(derived_cpp_support_facts);
-        family_facts.extend(derived_rust_support_facts);
-        family_facts.extend(derived_sql_support_facts);
-        family_facts.extend(derived_r_support_facts);
-        family_facts.extend(derived_vb_support_facts);
-        family_facts.extend(derived_delphi_support_facts);
-        family_facts.extend(derived_ada_support_facts);
-        family_facts.extend(derived_matlab_support_facts);
+        for facts in &derived_support_facts {
+            family_facts.extend(facts.iter().cloned());
+        }
         family_facts.extend(rust_provider_facts.iter().cloned());
-        family_facts.extend(worker_facts);
-        family_facts.extend(derived_tsjs_provider_support_facts);
+        family_facts.extend(worker_facts.iter().cloned());
+        family_facts.extend(derived_tsjs_provider_support_facts.iter().cloned());
         // Capture the base generation's family ids before the new generation is
         // activated, but only when there is a base generation to diff against.
         let base_family_ids = sync_report
@@ -1877,147 +1655,18 @@ where
     let mut all_framework_role_facts = copied_framework_role_facts;
     all_framework_role_facts.extend(framework_role_facts.iter().cloned());
 
-    let mut derived_python_support_facts = derive_python_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_python_support_facts);
-    let derived_python_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_python_support_facts,
-    )?;
-    next_fact_offset += derived_python_support_fact_count;
-    let mut derived_tsjs_support_facts = derive_tsjs_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_tsjs_support_facts);
-    let derived_tsjs_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_tsjs_support_facts,
-    )?;
-    next_fact_offset += derived_tsjs_support_fact_count;
-    let mut derived_java_support_facts = derive_java_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_java_support_facts);
-    let derived_java_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_java_support_facts,
-    )?;
-    next_fact_offset += derived_java_support_fact_count;
-    let mut derived_csharp_support_facts = derive_csharp_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_csharp_support_facts);
-    let derived_csharp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_csharp_support_facts,
-    )?;
-    next_fact_offset += derived_csharp_support_fact_count;
-    let mut derived_cpp_support_facts = derive_cpp_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_cpp_support_facts);
-    let derived_cpp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_cpp_support_facts,
-    )?;
-    next_fact_offset += derived_cpp_support_fact_count;
-    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_rust_support_facts);
-    let derived_rust_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_rust_support_facts,
-    )?;
-    next_fact_offset += derived_rust_support_fact_count;
-    let mut derived_sql_support_facts = derive_sql_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_sql_support_facts);
-    let derived_sql_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_sql_support_facts,
-    )?;
-    next_fact_offset += derived_sql_support_fact_count;
-    let mut derived_r_support_facts = derive_r_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_r_support_facts);
-    let derived_r_support_fact_count =
-        record_semantic_facts(session.as_mut(), next_fact_offset, &derived_r_support_facts)?;
-    next_fact_offset += derived_r_support_fact_count;
-    let mut derived_vb_support_facts = derive_vb_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_vb_support_facts);
-    let derived_vb_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_vb_support_facts,
-    )?;
-    next_fact_offset += derived_vb_support_fact_count;
-    let mut derived_delphi_support_facts = derive_delphi_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_delphi_support_facts);
-    let derived_delphi_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_delphi_support_facts,
-    )?;
-    next_fact_offset += derived_delphi_support_fact_count;
-    let mut derived_ada_support_facts = derive_ada_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_ada_support_facts);
-    let derived_ada_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_ada_support_facts,
-    )?;
-    next_fact_offset += derived_ada_support_fact_count;
-    let mut derived_matlab_support_facts = derive_matlab_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_matlab_support_facts);
-    let derived_matlab_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_matlab_support_facts,
-    )?;
-    next_fact_offset += derived_matlab_support_fact_count;
+    let mut derived_support_facts: Vec<Vec<SemanticFact>> = Vec::new();
+    for derive in DERIVED_SUPPORT_DERIVERS {
+        let mut facts = derive(
+            &indexed_code_units,
+            &all_parser_facts,
+            &all_framework_role_facts,
+        )?;
+        sort_semantic_facts(&mut facts);
+        let count = record_semantic_facts(session.as_mut(), next_fact_offset, &facts)?;
+        next_fact_offset += count;
+        derived_support_facts.push(facts);
+    }
     // Recompute provider-resolved TS/JS support from the copied-forward worker
     // facts so incremental-sync family support matches a full rebuild for
     // unchanged files instead of silently dropping it.
@@ -2035,19 +1684,7 @@ where
         &derived_tsjs_provider_support_facts,
     )?;
     next_fact_offset += derived_tsjs_provider_support_fact_count;
-    let local_support_fact_count = copied_semantic_records.len()
-        + parser_fact_count
-        + framework_fact_count
-        + derived_python_support_fact_count
-        + derived_tsjs_support_fact_count
-        + derived_java_support_fact_count
-        + derived_csharp_support_fact_count
-        + derived_cpp_support_fact_count
-        + derived_rust_support_fact_count
-        + derived_sql_support_fact_count
-        + derived_r_support_fact_count
-        + derived_vb_support_fact_count
-        + derived_tsjs_provider_support_fact_count;
+    let local_support_fact_count = copied_semantic_records.len() + next_fact_offset;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -2109,37 +1746,14 @@ where
             "checking family candidates",
             WorkUnits::Unknown,
         );
-        let mut family_facts = Vec::with_capacity(
-            all_parser_facts.len()
-                + all_framework_role_facts.len()
-                + derived_python_support_facts.len()
-                + derived_tsjs_support_facts.len()
-                + derived_java_support_facts.len()
-                + derived_csharp_support_facts.len()
-                + derived_cpp_support_facts.len()
-                + derived_rust_support_facts.len()
-                + derived_sql_support_facts.len()
-                + derived_r_support_facts.len()
-                + derived_vb_support_facts.len()
-                + rust_provider_facts.len()
-                + derived_tsjs_provider_support_facts.len(),
-        );
-        family_facts.extend(all_parser_facts);
-        family_facts.extend(all_framework_role_facts);
-        family_facts.extend(derived_python_support_facts);
-        family_facts.extend(derived_tsjs_support_facts);
-        family_facts.extend(derived_java_support_facts);
-        family_facts.extend(derived_csharp_support_facts);
-        family_facts.extend(derived_cpp_support_facts);
-        family_facts.extend(derived_rust_support_facts);
-        family_facts.extend(derived_sql_support_facts);
-        family_facts.extend(derived_r_support_facts);
-        family_facts.extend(derived_vb_support_facts);
-        family_facts.extend(derived_delphi_support_facts);
-        family_facts.extend(derived_ada_support_facts);
-        family_facts.extend(derived_matlab_support_facts);
-        family_facts.extend(rust_provider_facts);
-        family_facts.extend(derived_tsjs_provider_support_facts);
+        let mut family_facts = Vec::new();
+        family_facts.extend(all_parser_facts.iter().cloned());
+        family_facts.extend(all_framework_role_facts.iter().cloned());
+        for facts in &derived_support_facts {
+            family_facts.extend(facts.iter().cloned());
+        }
+        family_facts.extend(rust_provider_facts.iter().cloned());
+        family_facts.extend(derived_tsjs_provider_support_facts.iter().cloned());
         // The incremental path always resyncs from an active base generation, so
         // its family ids are always available to diff against.
         let base_family_ids = base_generation_family_ids(family_store)?;
@@ -2207,6 +1821,11 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | DELPHI_DERIVED_SUPPORT_ENGINE
             | ADA_DERIVED_SUPPORT_ENGINE
             | MATLAB_DERIVED_SUPPORT_ENGINE
+            | PHP_DERIVED_SUPPORT_ENGINE
+            | SWIFT_DERIVED_SUPPORT_ENGINE
+            | RUBY_DERIVED_SUPPORT_ENGINE
+            | GO_DERIVED_SUPPORT_ENGINE
+            | FORTRAN_DERIVED_SUPPORT_ENGINE
     )
 }
 
@@ -3707,6 +3326,35 @@ fn sanitize_semantic_assumption(value: &str) -> String {
         sanitized
     }
 }
+
+type DerivedSupportDeriver = fn(
+    &[IndexedCodeUnitRecord],
+    &[SemanticFact],
+    &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError>;
+
+/// Every language's derived framework-support pass, in the exact order their
+/// facts are recorded into a generation. Recording order is part of the fact
+/// offset contract, so the table order must not change between releases.
+const DERIVED_SUPPORT_DERIVERS: &[DerivedSupportDeriver] = &[
+    derive_python_framework_support_facts,
+    derive_tsjs_framework_support_facts,
+    derive_java_framework_support_facts,
+    derive_csharp_framework_support_facts,
+    derive_cpp_framework_support_facts,
+    derive_rust_framework_support_facts,
+    derive_sql_framework_support_facts,
+    derive_r_framework_support_facts,
+    derive_vb_framework_support_facts,
+    derive_delphi_framework_support_facts,
+    derive_ada_framework_support_facts,
+    derive_matlab_framework_support_facts,
+    derive_php_framework_support_facts,
+    derive_swift_framework_support_facts,
+    derive_ruby_framework_support_facts,
+    derive_go_framework_support_facts,
+    derive_fortran_framework_support_facts,
+];
 
 fn derive_python_framework_support_facts(
     code_units: &[IndexedCodeUnitRecord],
@@ -5388,6 +5036,192 @@ fn derived_ada_framework_support_fact(
     )
 }
 
+fn derive_php_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "php",
+        PHP_ANCHOR_ENGINE,
+        PHP_ANCHOR_METHOD,
+        php_support_target_is_role_compatible,
+        PHP_DERIVED_SUPPORT_ENGINE,
+        PHP_DERIVED_SUPPORT_METHOD,
+        "bounded PHPUnit anchor support",
+        "derived_from=bounded_php_phpunit_anchors",
+    )
+}
+
+fn derive_swift_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "swift",
+        SWIFT_ANCHOR_ENGINE,
+        SWIFT_ANCHOR_METHOD,
+        swift_support_target_is_role_compatible,
+        SWIFT_DERIVED_SUPPORT_ENGINE,
+        SWIFT_DERIVED_SUPPORT_METHOD,
+        "bounded XCTest anchor support",
+        "derived_from=bounded_swift_xctest_anchors",
+    )
+}
+
+fn derive_ruby_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "ruby",
+        RUBY_ANCHOR_ENGINE,
+        RUBY_ANCHOR_METHOD,
+        ruby_support_target_is_role_compatible,
+        RUBY_DERIVED_SUPPORT_ENGINE,
+        RUBY_DERIVED_SUPPORT_METHOD,
+        "bounded Minitest anchor support",
+        "derived_from=bounded_ruby_minitest_anchors",
+    )
+}
+
+fn derive_go_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "go",
+        GO_ANCHOR_ENGINE,
+        GO_ANCHOR_METHOD,
+        go_support_target_is_role_compatible,
+        GO_DERIVED_SUPPORT_ENGINE,
+        GO_DERIVED_SUPPORT_METHOD,
+        "bounded go.testing anchor support",
+        "derived_from=bounded_go_testing_anchors",
+    )
+}
+
+fn derive_fortran_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "fortran",
+        FORTRAN_ANCHOR_ENGINE,
+        FORTRAN_ANCHOR_METHOD,
+        fortran_support_target_is_role_compatible,
+        FORTRAN_DERIVED_SUPPORT_ENGINE,
+        FORTRAN_DERIVED_SUPPORT_METHOD,
+        "bounded test-drive anchor support",
+        "derived_from=bounded_fortran_testdrive_anchors",
+    )
+}
+
+/// The shared shape of every bounded-frontend lane's derived-support pass:
+/// structural anchor facts from the lane's parser, one framework role per
+/// unit, no blocking UNKNOWN on that unit, and a role-compatible target
+/// become one derived support fact per (unit, target).
+#[allow(clippy::too_many_arguments)]
+fn derive_bounded_frontend_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+    unit_language: &str,
+    anchor_engine: &str,
+    anchor_method: &str,
+    target_is_role_compatible: fn(&str, &str) -> Option<bool>,
+    derived_engine: &str,
+    derived_method: &str,
+    derived_note: &str,
+    derived_from_assumption: &str,
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == unit_language
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !(fact.kind == SemanticFactKind::Symbol
+            && fact.certainty == FactCertainty::Structural
+            && fact.origin.engine == anchor_engine
+            && fact.origin.method == anchor_method
+            && fact.target.is_some())
+        {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != unit_language || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        let assumptions = vec![
+            derived_from_assumption.to_string(),
+            format!("framework_role={framework_role}"),
+            "provider_resolved=false".to_string(),
+        ];
+        derived.push(derived_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            &fact.evidence.provenance.repository_revision,
+            DerivedSupportSpec {
+                engine: derived_engine,
+                method: derived_method,
+                note: derived_note,
+                assumptions,
+            },
+        )?);
+    }
+
+    Ok(derived)
+}
+
 fn derive_delphi_framework_support_facts(
     code_units: &[IndexedCodeUnitRecord],
     parser_facts: &[SemanticFact],
@@ -6339,10 +6173,28 @@ fn file_is_inventory_only(language: &str, path: &str) -> bool {
         return !crate::adapters::parsing::delphi::dunitx::is_pascal_unit_path(path);
     }
     if language == DiscoveredLanguage::Go.as_str() {
-        // ADR-0041 admits only `*_test.go`. The filename is part of the anchor's
-        // meaning, not a convenience filter: `go test` compiles only those files
-        // as tests, so the same signature elsewhere is not a test.
-        return !crate::adapters::parsing::go::source::is_go_test_path(path);
+        // ADR-0050 admits only `*_test.go` through the bounded parser. The
+        // filename is part of the anchor's meaning, not a convenience filter:
+        // `go test` compiles only those files as tests, so the same signature
+        // elsewhere is not a test.
+        return !crate::adapters::parsing::go::testing::is_go_test_path(path);
+    }
+    if language == DiscoveredLanguage::Php.as_str() {
+        // ADR-0047 admits every `.php` path; the `<?php` prologue gate is
+        // byte-level inside the parser, not a path rule.
+        return !crate::adapters::parsing::php::phpunit::is_phpunit_source_path(path);
+    }
+    if language == DiscoveredLanguage::Ruby.as_str() {
+        // ADR-0049 admits only the runner-scoped Minitest test paths.
+        return !crate::adapters::parsing::ruby::minitest::is_minitest_path(path);
+    }
+    if language == DiscoveredLanguage::Swift.as_str() {
+        // ADR-0048 D1 admits every discovered `.swift` file.
+        return false;
+    }
+    if language == DiscoveredLanguage::Fortran.as_str() {
+        // ADR-0051 admits the admitted free-form Fortran suffixes only.
+        return !crate::adapters::parsing::fortran::testdrive::is_free_form_fortran_path(path);
     }
     language_token_is_inventory_only(language)
 }
@@ -6381,18 +6233,7 @@ fn is_r_dependency_config_path(path: &str) -> bool {
 }
 
 fn language_token_is_inventory_only(language: &str) -> bool {
-    matches!(
-        language,
-        "php"
-            | "php-config"
-            | "ruby"
-            | "ruby-config"
-            | "swift"
-            | "swift-config"
-            | "ada-config"
-            | "fortran"
-            | "fortran-config"
-    )
+    matches!(language, "ada-config")
 }
 
 fn inventory_only_paths(report: &FileDiscoveryReport) -> BTreeSet<String> {
@@ -6755,9 +6596,14 @@ mod tests {
             // Path-insensitive lanes.
             (DiscoveredLanguage::FortranConfig, "fpm.toml", false),
             (DiscoveredLanguage::Go, "cmd/demo/main.go", true),
+            (DiscoveredLanguage::Go, "pkg/strings_test.go", false),
             (DiscoveredLanguage::GoConfig, "go.mod", false),
+            // ADR-0049 admits only runner-scoped Minitest paths; an app
+            // model stays inventory.
             (DiscoveredLanguage::Ruby, "app/models/user.rb", true),
-            (DiscoveredLanguage::Swift, "Sources/App/main.swift", true),
+            (DiscoveredLanguage::Ruby, "test/unit/user_test.rb", false),
+            // ADR-0048 D1 admits every discovered `.swift` file.
+            (DiscoveredLanguage::Swift, "Sources/App/main.swift", false),
             (DiscoveredLanguage::VisualBasic, "src/Program.vb", false),
             // ADR-0044 admits `.pas` units and leaves programs and packages
             // as inventory, so the suffix decides within one language token.
@@ -6768,7 +6614,14 @@ mod tests {
             // so the suffix decides within one language token.
             (DiscoveredLanguage::Ada, "ada/main.adb", false),
             (DiscoveredLanguage::Ada, "ada/main.ads", true),
-            (DiscoveredLanguage::Fortran, "fortran/free.f90", true),
+            // ADR-0051 admits the free-form suffixes; fixed-form and
+            // preprocessed spellings stay inventory.
+            (DiscoveredLanguage::Fortran, "fortran/free.f90", false),
+            (DiscoveredLanguage::Fortran, "fortran/fixed.f", true),
+            (DiscoveredLanguage::Fortran, "fortran/pre.fpp", true),
+            // ADR-0047 admits every `.php` path; the prologue gate is
+            // byte-level inside the parser, not a path rule.
+            (DiscoveredLanguage::Php, "src/HealthCheck.php", false),
             (DiscoveredLanguage::R, "R/main.R", true),
             // ADR-0046 admits every `.m` file: matlab.unittest discovers
             // tests by class shape and defines no file set.
@@ -7701,8 +7554,7 @@ mod tests {
         assert_eq!(report.reparsed_files, 1);
     }
 
-    const PY_APP_BODY_DEFAULT: &str =
-        "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n";
+    const PY_APP_BODY_DEFAULT: &str = "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n";
 
     #[test]
     fn python_body_edit_stable_interface_takes_incremental_fast_path() {
@@ -8686,30 +8538,18 @@ mod tests {
             outcome.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 3);
-        assert_eq!(outcome.indexed_units, 3);
-        assert_eq!(outcome.semantic_facts, 4);
+        assert_eq!(outcome.parser_attempted_files, 4);
         assert_eq!(
-            // ADR-0045 admits `.adb`, so the body is read; these bytes are not
-            // UTF-8, so it is read and then skipped. The `.ads` spec, the
-            // `.gpr`, and every Fortran source stay unread.
+            // ADR-0045 admits `.adb` (undecodable, read then skipped) and
+            // ADR-0051 admits the free-form `.f90`; the `.ads` spec, the
+            // `.gpr`, and the fixed-form `.f` stay unread.
             source_store.paths(),
             vec![
                 "ada/main.adb".to_string(),
                 "alire.toml".to_string(),
                 "alire/alire.lock".to_string(),
+                "fortran/main.f90".to_string(),
                 "fpm.toml".to_string(),
-            ]
-        );
-        assert_eq!(
-            outcome.warnings,
-            vec![
-                // The `.ads` spec keeps the inventory warning; the admitted
-                // `.adb` body reports its own decode failure instead.
-                "parser skipped unsupported language token: ada".to_string(),
-                "parser skipped unsupported language token: ada-config".to_string(),
-                "parser skipped unsupported language token: fortran".to_string(),
-                "parser skipped non-UTF-8 source: ada/main.adb".to_string(),
             ]
         );
         let dependencies = crate::application::storage::list_active_dependencies(&store)
@@ -8750,7 +8590,7 @@ mod tests {
             workspace.path().join("fortran/main.f90"),
             "EDITED_FORTRAN_SOURCE_MUST_NOT_BE_READ",
         )
-        .expect("edit Fortran source inventory");
+        .expect("edit admitted Fortran source");
         let copied = sync_repository_with_discovery_parser_frameworks_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
             &FilesystemFileDiscovery,
@@ -8763,7 +8603,9 @@ mod tests {
         let copy_report = copied.sync_report.expect("copy-forward report");
         assert_eq!(copy_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(copy_report.modified_files, 1);
-        assert_eq!(copy_report.reparsed_files, 0);
+        // ADR-0051 admits the free-form source, so the edit is reparsed by
+        // the bounded frontend; the manifest rows still copy forward.
+        assert_eq!(copy_report.reparsed_files, 1);
         assert_eq!(
             crate::application::storage::list_active_dependencies(&store)
                 .expect("read copied dependencies")
@@ -8870,15 +8712,21 @@ mod tests {
         assert_eq!(outcome.parser_attempted_files, 2);
         assert_eq!(outcome.indexed_units, 2);
         assert_eq!(outcome.semantic_facts, 1);
+        // ADR-0047 admits every `.php` path, so the undecodable source is
+        // read once and skipped; the phpunit.xml config stays inventory.
         assert_eq!(
             source_store.paths(),
-            vec!["composer.json".to_string(), "composer.lock".to_string()]
+            vec![
+                "composer.json".to_string(),
+                "composer.lock".to_string(),
+                "src/main.php".to_string()
+            ]
         );
         assert_eq!(
             outcome.warnings,
             vec![
-                "parser skipped unsupported language token: php".to_string(),
                 "parser skipped unsupported language token: php-config".to_string(),
+                "parser skipped non-UTF-8 source: src/main.php".to_string(),
             ]
         );
 
@@ -8945,7 +8793,7 @@ mod tests {
             workspace.path().join("src/main.php"),
             b"<?php // unrelated inventory-only edit\n",
         )
-        .expect("edit deferred PHP source");
+        .expect("edit admitted PHP source");
         let synced = sync_repository_with_discovery_parser_frameworks_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
             &FilesystemFileDiscovery,
@@ -8958,10 +8806,17 @@ mod tests {
         let sync_report = synced.sync_report.expect("incremental sync report");
         assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(sync_report.modified_files, 1);
-        assert_eq!(sync_report.reparsed_files, 0);
+        // ADR-0047 admits `.php`, so the edit is reparsed by the bounded
+        // frontend; a comment-only file anchors nothing and claims nothing.
+        assert_eq!(sync_report.reparsed_files, 1);
         assert_eq!(
             source_store.paths(),
-            vec!["composer.json".to_string(), "composer.lock".to_string()]
+            vec![
+                "composer.json".to_string(),
+                "composer.lock".to_string(),
+                "src/main.php".to_string(),
+                "src/main.php".to_string()
+            ]
         );
         assert_eq!(
             crate::application::storage::list_active_dependencies(&store)
@@ -8994,6 +8849,8 @@ mod tests {
             vec![
                 "composer.json".to_string(),
                 "composer.lock".to_string(),
+                "src/main.php".to_string(),
+                "src/main.php".to_string(),
                 "composer.json".to_string(),
             ]
         );
@@ -9036,7 +8893,7 @@ mod tests {
 
     #[test]
     fn default_index_persists_source_free_swift_inventory_without_claim_inputs() {
-        let workspace = TempWorkspace::new("indexing-swift-discovery-only");
+        let workspace = TempWorkspace::new("indexing-swift-frontend");
         fs::create_dir_all(workspace.path().join("Sources/App")).expect("create Swift source dir");
         fs::create_dir_all(workspace.path().join("nested"))
             .expect("create nested Swift package dir");
@@ -9059,11 +8916,11 @@ mod tests {
             workspace.path().join("Sources/App/main.swift"),
             [0xff, 0xfe, 0xfd],
         )
-        .expect("write binary Swift source");
+        .expect("write undecodable Swift source");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
 
         let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -9083,12 +8940,18 @@ mod tests {
         assert_eq!(outcome.parser_attempted_files, 0);
         assert_eq!(outcome.indexed_units, 0);
         assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        // ADR-0048 admits every `.swift` file, so the source is read once and
+        // skipped when it does not decode; the executable manifests stay
+        // inventory and are never read.
+        assert_eq!(
+            source_store.paths(),
+            vec!["Sources/App/main.swift".to_string()]
+        );
         assert_eq!(
             outcome.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parser skipped non-UTF-8 source: Sources/App/main.swift".to_string(),
             ]
         );
 
@@ -9254,7 +9117,7 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
 
         let outcome = sync_repository_with_discovery_parser_frameworks_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -9266,12 +9129,14 @@ mod tests {
         )
         .expect("first PHP sync");
 
+        // ADR-0047 admits `main.php`; a prologue-only file yields its module
+        // unit, anchors nothing, and reparses nothing.
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(source_store.paths(), vec!["main.php".to_string()]);
         let report = outcome.sync_report.expect("sync fallback report");
         assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
         assert_eq!(
@@ -9279,7 +9144,8 @@ mod tests {
             Some("missing_active_generation")
         );
         assert_eq!(report.added_files, 2);
-        assert_eq!(report.reparsed_files, 0);
+        // The fallback rebuild counts its one parse.
+        assert_eq!(report.reparsed_files, 1);
     }
 
     #[test]
@@ -9292,7 +9158,7 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
         let request = || IndexingRequest::new(workspace.path().display().to_string());
 
         let first = sync_repository_with_discovery_parser_frameworks_and_store(
@@ -9305,17 +9171,22 @@ mod tests {
         )
         .expect("first Swift sync");
 
+        // ADR-0048 admits `main.swift`; a top-level-statement file abstains
+        // outside the subset with exactly its module unit and one typed
+        // UNKNOWN, and the executable manifest is never read.
         assert_eq!(
             first.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(first.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(first.parser_attempted_files, 1);
+        assert_eq!(source_store.paths(), vec!["main.swift".to_string()]);
         assert_eq!(
             first.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parse degraded for main.swift: frontend reported an error diagnostic; \
+                 missing code units are not evidence that a construct is absent"
+                    .to_string(),
             ]
         );
         let first_report = first.sync_report.expect("first Swift sync report");
@@ -9328,7 +9199,8 @@ mod tests {
             Some("missing_active_generation")
         );
         assert_eq!(first_report.added_files, 2);
-        assert_eq!(first_report.reparsed_files, 0);
+        // The fallback rebuild counts its one degraded parse.
+        assert_eq!(first_report.reparsed_files, 1);
 
         let unchanged = sync_repository_with_discovery_parser_frameworks_and_store(
             request(),
@@ -9342,16 +9214,12 @@ mod tests {
 
         assert_eq!(
             unchanged.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
         assert_eq!(unchanged.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: swift".to_string(),
-                "parser skipped unsupported language token: swift-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: swift-config".to_string(),]
         );
         let unchanged_report = unchanged.sync_report.expect("unchanged Swift sync report");
         assert_eq!(unchanged_report.sync_mode, IndexingSyncMode::Incremental);
@@ -9762,19 +9630,18 @@ mod tests {
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(added.parser_attempted_files, 0);
+        // ADR-0047 admits `main.php`, so the added source is parsed; the
+        // RecordingParser returns an empty report and claims nothing.
+        assert_eq!(added.parser_attempted_files, 1);
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(added_report.added_files, 3);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
-        assert_eq!(added_report.reparsed_files, 0);
+        assert_eq!(added_report.reparsed_files, 1);
         assert_eq!(
             added.warnings,
-            vec![
-                "parser skipped unsupported language token: php".to_string(),
-                "parser skipped unsupported language token: php-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: php-config".to_string(),]
         );
         assert_eq!(
             store
@@ -9800,10 +9667,7 @@ mod tests {
         assert_eq!(unchanged.parser_attempted_files, 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: php".to_string(),
-                "parser skipped unsupported language token: php-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: php-config".to_string(),]
         );
         let unchanged_report = unchanged.sync_report.expect("unchanged sync report");
         assert_eq!(unchanged_report.sync_mode, IndexingSyncMode::Incremental);
@@ -9824,20 +9688,19 @@ mod tests {
             modified.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(modified.parser_attempted_files, 0);
+        // ADR-0047 admits `main.php`, so its edit is reparsed; the configs
+        // stay inventory.
+        assert_eq!(modified.parser_attempted_files, 1);
         assert_eq!(
             modified.warnings,
-            vec![
-                "parser skipped unsupported language token: php".to_string(),
-                "parser skipped unsupported language token: php-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: php-config".to_string(),]
         );
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
         assert_eq!(modified_report.modified_files, 3);
         assert_eq!(modified_report.removed_files, 0);
-        assert_eq!(modified_report.reparsed_files, 0);
+        assert_eq!(modified_report.reparsed_files, 1);
 
         fs::remove_file(workspace.path().join("main.php")).expect("remove PHP source inventory");
         let source_removed =
@@ -9893,8 +9756,24 @@ mod tests {
                 .families,
             expected_families
         );
-        assert_eq!(source_store.paths(), vec!["server.ts".to_string()]);
-        assert_eq!(parser.paths(), vec!["server.ts".to_string()]);
+        // `main.php` was read when added and when modified (ADR-0047); the
+        // removal itself reads nothing.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.php".to_string(),
+                "main.php".to_string()
+            ]
+        );
+        assert_eq!(
+            parser.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.php".to_string(),
+                "main.php".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -9950,12 +9829,18 @@ mod tests {
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(added.parser_attempted_files, 0);
+        // ADR-0048 admits `main.swift`, so the added source is parsed. A
+        // top-level statement file is outside the declared subset and
+        // abstains whole-file with an error diagnostic, which surfaces as the
+        // shared parse-degraded warning.
+        assert_eq!(added.parser_attempted_files, 1);
         assert_eq!(
             added.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parse degraded for main.swift: frontend reported an error diagnostic; \
+                 missing code units are not evidence that a construct is absent"
+                    .to_string(),
             ]
         );
         let added_report = added.sync_report.expect("added sync report");
@@ -9963,14 +9848,34 @@ mod tests {
         assert_eq!(added_report.added_files, 2);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
-        assert_eq!(added_report.reparsed_files, 0);
-        assert_eq!(
-            store
-                .list_active_semantic_facts()
-                .expect("list facts after Swift add")
-                .facts,
-            expected_facts
-        );
+        assert_eq!(added_report.reparsed_files, 1);
+        // Every pre-existing claim survives; the admitted-but-outside-subset
+        // Swift file adds exactly one typed UNKNOWN and no family claims.
+        // Generation-local fact ids shift with the insertion, so presence is
+        // compared on the identity fields, not the record ids.
+        let fact_identity = |fact: &IndexedSemanticFactRecord| {
+            (
+                fact.kind.clone(),
+                fact.subject.clone(),
+                fact.target.clone(),
+                fact.certainty.clone(),
+                fact.origin_engine.clone(),
+                fact.origin_method.clone(),
+                fact.path.clone(),
+            )
+        };
+        let facts_after_add = store
+            .list_active_semantic_facts()
+            .expect("list facts after Swift add")
+            .facts;
+        assert_eq!(facts_after_add.len(), expected_facts.len() + 1);
+        assert!(facts_after_add
+            .iter()
+            .any(|fact| fact.path == "main.swift" && fact.kind == "UNKNOWN"));
+        let identities_after: Vec<_> = facts_after_add.iter().map(fact_identity).collect();
+        for expected in &expected_facts {
+            assert!(identities_after.contains(&fact_identity(expected)));
+        }
         assert_eq!(
             store
                 .list_active_families()
@@ -9988,10 +9893,7 @@ mod tests {
         assert_eq!(unchanged.parser_attempted_files, 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: swift".to_string(),
-                "parser skipped unsupported language token: swift-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: swift-config".to_string(),]
         );
         let unchanged_report = unchanged.sync_report.expect("unchanged sync report");
         assert_eq!(unchanged_report.sync_mode, IndexingSyncMode::Incremental);
@@ -10013,12 +9915,16 @@ mod tests {
             modified.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(modified.parser_attempted_files, 0);
+        // ADR-0048 admits `main.swift`, so its edit is reparsed and abstains
+        // again outside the subset; the manifest stays inventory.
+        assert_eq!(modified.parser_attempted_files, 1);
         assert_eq!(
             modified.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parse degraded for main.swift: frontend reported an error diagnostic; \
+                 missing code units are not evidence that a construct is absent"
+                    .to_string(),
             ]
         );
         let modified_report = modified.sync_report.expect("modified sync report");
@@ -10026,7 +9932,7 @@ mod tests {
         assert_eq!(modified_report.added_files, 0);
         assert_eq!(modified_report.modified_files, 2);
         assert_eq!(modified_report.removed_files, 0);
-        assert_eq!(modified_report.reparsed_files, 0);
+        assert_eq!(modified_report.reparsed_files, 1);
 
         fs::remove_file(workspace.path().join("main.swift"))
             .expect("remove Swift source inventory");
@@ -10082,8 +9988,24 @@ mod tests {
                 .families,
             expected_families
         );
-        assert_eq!(source_store.paths(), vec!["server.ts".to_string()]);
-        assert_eq!(parser.paths(), vec!["server.ts".to_string()]);
+        // `main.swift` was read when added and when modified (ADR-0048); the
+        // removal itself reads nothing.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.swift".to_string(),
+                "main.swift".to_string()
+            ]
+        );
+        assert_eq!(
+            parser.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.swift".to_string(),
+                "main.swift".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -10712,24 +10634,27 @@ mod tests {
             .files
             .iter()
             .any(|file| file.path == "phpunit.xml" && file.language == "php-config"));
+        // ADR-0047 admits `main.php`, so its records copy forward like any
+        // unchanged admitted path; only the still-inventory `phpunit.xml`
+        // claims are purged as legacy.
         assert!(!store
             .list_active_code_units()
             .expect("read units after purge")
             .units
             .iter()
-            .any(|unit| matches!(unit.path.as_str(), "main.php" | "phpunit.xml")));
+            .any(|unit| unit.path.as_str() == "phpunit.xml"));
         assert!(!store
             .list_active_ir_graph()
             .expect("read IR after purge")
             .nodes
             .iter()
-            .any(|node| node.code_unit_id == "unit:main.php#module:0-1:legacy"));
+            .any(|node| node.code_unit_id == "unit:phpunit.xml#module:0-1:legacy"));
         assert!(!store
             .list_active_semantic_facts()
             .expect("read facts after purge")
             .facts
             .iter()
-            .any(|fact| matches!(fact.path.as_str(), "main.php" | "phpunit.xml")));
+            .any(|fact| fact.path.as_str() == "phpunit.xml"));
         assert!(!store
             .list_active_families()
             .expect("read families after purge")
@@ -10742,10 +10667,8 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM evidence \
                  WHERE generation_id = ?1 \
-                   AND (path IN ('main.php', 'phpunit.xml') \
-                        OR evidence_id IN ('evidence:legacy-php', \
-                                           'evidence:legacy-php-config', \
-                                           'evidence:legacy-php-family'))",
+                   AND (path = 'phpunit.xml' \
+                        OR evidence_id IN ('evidence:legacy-php-config'))",
                 params![active_after_purge.generation_id],
                 |row| row.get(0),
             )
@@ -10754,11 +10677,11 @@ mod tests {
         assert!(source_store
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.php" | "phpunit.xml")));
+            .all(|path| path.as_str() != "phpunit.xml"));
         assert!(parser
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.php" | "phpunit.xml")));
+            .all(|path| path.as_str() != "phpunit.xml"));
     }
 
     #[test]
@@ -10940,27 +10863,27 @@ mod tests {
             .files
             .iter()
             .any(|file| file.path == "Package.swift" && file.language == "swift-config"));
+        // ADR-0048 admits `main.swift`, so its records copy forward like any
+        // unchanged admitted path; only the still-inventory `Package.swift`
+        // claims are purged as legacy.
         assert!(!store
             .list_active_code_units()
             .expect("read units after purge")
             .units
             .iter()
-            .any(|unit| matches!(unit.path.as_str(), "main.swift" | "Package.swift")));
+            .any(|unit| unit.path.as_str() == "Package.swift"));
         assert!(!store
             .list_active_ir_graph()
             .expect("read IR after purge")
             .nodes
             .iter()
-            .any(|node| matches!(
-                node.code_unit_id.as_str(),
-                "unit:main.swift#module:0-1:legacy" | "unit:Package.swift#module:0-1:legacy"
-            )));
+            .any(|node| node.code_unit_id.as_str() == "unit:Package.swift#module:0-1:legacy"));
         assert!(!store
             .list_active_semantic_facts()
             .expect("read facts after purge")
             .facts
             .iter()
-            .any(|fact| matches!(fact.path.as_str(), "main.swift" | "Package.swift")));
+            .any(|fact| fact.path.as_str() == "Package.swift"));
         assert!(!store
             .list_active_families()
             .expect("read families after purge")
@@ -10973,10 +10896,8 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM evidence \
                  WHERE generation_id = ?1 \
-                   AND (path IN ('main.swift', 'Package.swift') \
-                        OR evidence_id IN ('evidence:legacy-swift', \
-                                           'evidence:legacy-swift-config', \
-                                           'evidence:legacy-swift-family'))",
+                   AND (path = 'Package.swift' \
+                        OR evidence_id IN ('evidence:legacy-swift-config'))",
                 params![active_after_purge.generation_id],
                 |row| row.get(0),
             )
@@ -10985,11 +10906,11 @@ mod tests {
         assert!(source_store
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.swift" | "Package.swift")));
+            .all(|path| path.as_str() != "Package.swift"));
         assert!(parser
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.swift" | "Package.swift")));
+            .all(|path| path.as_str() != "Package.swift"));
     }
 
     fn indexed_language_path_is_go(path: &str) -> bool {
@@ -12711,10 +12632,11 @@ mod tests {
                 .expect("derive exact adapter support");
 
             assert_eq!(derived.len(), 3, "{role} should derive support");
-            assert!(derived.iter().all(|fact| fact
-                .assumptions
-                .iter()
-                .any(|assumption| assumption == &format!("derived_from={derived_from}"))));
+            assert!(derived.iter().all(|fact| {
+                fact.assumptions
+                    .iter()
+                    .any(|assumption| assumption == &format!("derived_from={derived_from}"))
+            }));
             let mut family_facts = role_facts;
             family_facts.extend(derived);
             let report = build_family_claims(&units, &family_facts);
@@ -15088,6 +15010,117 @@ mod tests {
         assert!(
             crate::application::storage::list_active_dependencies(&store)
                 .expect("read dependencies after vbproj removal")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn csproj_dependencies_persist_incrementally_while_undecodable_cs_source_is_skipped() {
+        let workspace = TempWorkspace::new("indexing-csproj-dependencies");
+        fs::write(
+            workspace.path().join("App.csproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="[13.0.3]"/></ItemGroup></Project>"#,
+        )
+        .expect("write csproj");
+        fs::write(workspace.path().join("Program.cs"), [0xff, 0xfe, 0xfd])
+            .expect("write undecodable C# source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded csproj dependency inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        // The undecodable `.cs` is skipped with a warning and contributes no
+        // unit, so the generation holds exactly the csproj project-config
+        // unit.
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec!["App.csproj".to_string(), "Program.cs".to_string()]
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["parser skipped non-UTF-8 source: Program.cs".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read NuGet dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "nuget");
+        assert_eq!(dependency.package_name, "Newtonsoft.Json");
+        assert_eq!(dependency.requirement.as_deref(), Some("[13.0.3]"));
+        assert_eq!(dependency.resolved_version, None);
+        assert_eq!(dependency.scope, "unknown");
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert!(store
+            .list_active_families()
+            .expect("list C# families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("Program.cs"), [0xff, 0xfe, 0xfc])
+            .expect("edit undecodable C# source");
+        let source_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync C# source metadata edit");
+        let source_report = source_edit.sync_report.expect("C# source sync report");
+        assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(source_report.modified_files, 1);
+        assert_eq!(source_report.reparsed_files, 0);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied NuGet dependency")
+                .dependencies[0]
+                .package_name,
+            "Newtonsoft.Json"
+        );
+
+        fs::remove_file(workspace.path().join("App.csproj")).expect("remove csproj");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove NuGet dependency inventory");
+        let remove_report = removed.sync_report.expect("csproj removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            // The `.cs` stays undecodable, so the generation holds no unit and
+            // every path answers the generation mode from that unit count.
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after csproj removal")
                 .dependencies
                 .is_empty()
         );
@@ -17577,8 +17610,7 @@ mod tests {
         fs::create_dir_all(workspace.path().join("app/users")).expect("create next dirs");
         let source = "import service from '@app/service';\nexport * from './barrel';\n";
         let repository = "import { prisma } from './db';\nprisma.user.findMany();\n";
-        let drizzle_repository =
-            "import { db } from './drizzle-db';\nimport { users } from './schema';\ndb.select().from(users);\n";
+        let drizzle_repository = "import { db } from './drizzle-db';\nimport { users } from './schema';\ndb.select().from(users);\n";
         let target = "export const service = true;\n";
         let barrel = "export const value = true;\n";
         let db = "export const prisma = {};\n";
@@ -18809,9 +18841,11 @@ extraPaths = ["src/lib", "C:/secret"]
         impl SourceParser for BadUnitParser {
             fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
                 let (path, hash, end_byte) = match self.0 {
-                    BadUnitMode::DifferentPath => {
-                        ("src/other.ts", document.content_hash.clone(), document.text.len())
-                    }
+                    BadUnitMode::DifferentPath => (
+                        "src/other.ts",
+                        document.content_hash.clone(),
+                        document.text.len(),
+                    ),
                     BadUnitMode::MismatchedHash => (
                         document.path,
                         strict_hash(
@@ -18819,9 +18853,11 @@ extraPaths = ["src/lib", "C:/secret"]
                         ),
                         document.text.len(),
                     ),
-                    BadUnitMode::OutOfBoundsRange => {
-                        (document.path, document.content_hash.clone(), document.text.len() + 1)
-                    }
+                    BadUnitMode::OutOfBoundsRange => (
+                        document.path,
+                        document.content_hash.clone(),
+                        document.text.len() + 1,
+                    ),
                 };
                 Ok(ParseReport {
                     units: vec![parser_unit(

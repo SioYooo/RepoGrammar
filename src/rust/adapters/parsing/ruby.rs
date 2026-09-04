@@ -4,6 +4,12 @@
 //! only dependency-producing input is the direct `DEPENDENCIES` section of an
 //! exact `Gemfile.lock`. Every other Ruby configuration is rejected at this
 //! boundary and remains source-free inventory in the indexing application.
+//!
+//! Runner-scoped `.rb` test paths are decoded by the bounded Minitest
+//! frontend of ADR-0049 instead: see [`minitest`].
+
+pub(crate) mod lexer;
+pub(crate) mod minitest;
 
 use super::{config_source_parse_output, sort_inventory_facts};
 use crate::core::model::{

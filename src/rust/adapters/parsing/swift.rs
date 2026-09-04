@@ -3,6 +3,12 @@
 //! Swift source remains discovery-only. This adapter reads supplied
 //! `swift-config` bytes only: it never evaluates `Package.swift`, invokes
 //! SwiftPM, opens a toolchain, downloads packages, or executes plugins/macros.
+//!
+//! `xctest` is the ADR-0048 bounded frontend over Swift *source*; it shares
+//! no state with the config inventory above.
+
+pub(crate) mod syntax;
+pub(crate) mod xctest;
 
 use super::bounded_json::{has_duplicate_or_excess_members, BoundedJsonLimits};
 use super::config_source_parse_output;

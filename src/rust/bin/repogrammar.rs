@@ -5136,11 +5136,11 @@ mod tests {
     }
 
     #[test]
-    fn go_testing_declarations_are_auxiliary_and_never_form_a_family() {
-        // ADR-0021's evidence ladder forbids text or regex matching for the
-        // claim, and this scanner is exactly that, so ADR-0041's correction
-        // demotes its output to auxiliary evidence. The declarations are still
-        // recognized as units; no family may be built on them.
+    fn go_testing_declarations_parse_into_derived_support_and_form_a_family() {
+        // ADR-0050 replaces ADR-0021's closed ladder: the bounded parser
+        // proves the test-function anchor, so the exact-test corpus derives
+        // support facts like every other bounded frontend and the
+        // go.testing family forms from parser evidence.
         let (workspace, runtime) =
             index_go_release_v0_2_fixture("testing_exact_tests", "go-release-testing-exact");
 
@@ -5161,8 +5161,8 @@ mod tests {
             "TestMain, the helper, and the benchmark are not test declarations"
         );
         assert!(
-            go_derived_support_targets(&runtime, &workspace).is_empty(),
-            "no Go support fact may be derived from scanner evidence"
+            !go_derived_support_targets(&runtime, &workspace).is_empty(),
+            "the parser-proven anchors derive support facts"
         );
         let families = run_with_runtime(
             cli_args("families", workspace.path(), &["--json"]),
@@ -5170,13 +5170,13 @@ mod tests {
         );
         let families_json = parse_machine_output("families", &families, &workspace);
         assert!(
-            !families_json["families"]
+            families_json["families"]
                 .as_array()
                 .map(|families| families.iter().any(|family| family["family_id"]
                     .as_str()
                     .is_some_and(|id| id.contains("go_test_function"))))
                 .unwrap_or(false),
-            "Go must form no family: {families_json}"
+            "the exact-anchor corpus must form the go.testing family: {families_json}"
         );
     }
 
@@ -5212,6 +5212,75 @@ mod tests {
     }
 
     #[test]
+    fn go_testing_benchmarks_fuzz_and_table_driven_anchor_every_declaration() {
+        // ADR-0050 admits `TestXxx`, `BenchmarkXxx` and `FuzzXxx` as one
+        // `go.testing.test_function` family, and the bounded parser skips
+        // declaration bodies. The benchmark/fuzz corpus therefore anchors two
+        // benchmarks, one fuzz target and the bare `Test`; the table-driven
+        // corpus anchors its three declarations and nothing from the `t.Run`
+        // subtests, commented-out code or string literals inside their bodies.
+        for (fixture, prefix, support) in [
+            (
+                "testing_benchmarks_fuzz",
+                "go-release-testing-benchmarks-fuzz",
+                4,
+            ),
+            ("testing_table_driven", "go-release-testing-table-driven", 3),
+        ] {
+            let (workspace, runtime) = index_go_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            let family = families_json["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .find(|family| {
+                    family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("go_test_function"))
+                })
+                .unwrap_or_else(|| {
+                    panic!("{fixture} must form the go.testing family: {families_json}")
+                });
+            assert_eq!(
+                family["support"], support,
+                "every admitted Go anchor must count in {fixture}: {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn go_testing_parse_degraded_indexes_without_forming_a_family() {
+        // Every file in this corpus leaves the declared subset -- a cgo
+        // import, a generic type-parameter list, unbalanced braces and an
+        // unterminated string -- so each abstains whole-file. The repository
+        // still indexes to completion, and no unproven declaration reaches
+        // family formation.
+        let (workspace, runtime) =
+            index_go_release_v0_2_fixture("testing_parse_degraded", "go-release-testing-degraded");
+        assert!(
+            go_derived_support_targets(&runtime, &workspace).is_empty(),
+            "an abstaining file must derive no support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("go_test_function"))))
+                .unwrap_or(false),
+            "a whole-file abstention must not form a Go family: {families_json}"
+        );
+    }
+    #[test]
     fn go_source_outside_test_filenames_is_never_read() {
         let workspace = TempWorkspace::new("go-release-non-test-source");
         fs::write(
@@ -5240,6 +5309,444 @@ mod tests {
         // The signature is exact, but `go test` would not compile this file as a
         // test, so the frontend must never see it.
         assert!(go_derived_support_targets(&runtime, &workspace).is_empty());
+    }
+
+    fn php_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("php")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_php_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &php_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // A lookalike or degraded corpus must still index cleanly; only the
+        // family may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn php_phpunit_exact_tests_form_a_family_through_the_product_cli() {
+        // ADR-0047: the bounded PHPUnit frontend proves the test-method
+        // anchor, so the exact-test corpus must survive the product's
+        // storage-validation path and form the phpunit family.
+        let (workspace, runtime) =
+            index_php_release_v0_2_fixture("phpunit_exact_tests", "php-release-phpunit-exact");
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family = families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("php_test_method"))
+            })
+            .unwrap_or_else(|| {
+                panic!("the exact-anchor corpus must form the phpunit family: {families_json}")
+            });
+        assert_eq!(
+            family["support"], 6,
+            "every admitted PHPUnit anchor must count: {family}"
+        );
+    }
+
+    #[test]
+    fn php_phpunit_lookalikes_low_support_and_degraded_form_no_family() {
+        for (fixture, prefix) in [
+            ("phpunit_lookalikes", "php-release-phpunit-lookalikes"),
+            ("phpunit_low_support", "php-release-phpunit-low-support"),
+            ("phpunit_degraded", "php-release-phpunit-degraded"),
+        ] {
+            let (workspace, runtime) = index_php_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("php_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a PHP family: {families_json}"
+            );
+        }
+    }
+
+    fn swift_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("swift")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_swift_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &swift_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // Conditional, degraded, and unbound-import corpora must still index
+        // cleanly; only the family may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn swift_xctest_exact_and_throwing_tests_form_a_family_through_the_product_cli() {
+        // ADR-0048: `throws` on an XCTest method changes nothing about the
+        // anchor, so both corpora must reach the same support through the
+        // product's family-formation path.
+        for (fixture, prefix) in [
+            ("xctest_exact_tests", "swift-release-xctest-exact"),
+            ("xctest_throwing_tests", "swift-release-xctest-throwing"),
+        ] {
+            let (workspace, runtime) = index_swift_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            let family = families_json["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .find(|family| {
+                    family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("swift_test_method"))
+                })
+                .unwrap_or_else(|| {
+                    panic!("{fixture} must form the xctest family: {families_json}")
+                });
+            assert_eq!(
+                family["support"], 3,
+                "every admitted XCTest anchor must count in {fixture}: {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn swift_xctest_lookalikes_low_support_and_unbound_corpora_form_no_family() {
+        for (fixture, prefix) in [
+            ("xctest_lookalikes", "swift-release-xctest-lookalikes"),
+            ("xctest_low_support", "swift-release-xctest-low-support"),
+            ("xctest_degraded", "swift-release-xctest-degraded"),
+            ("xctest_conditional", "swift-release-xctest-conditional"),
+            ("xctest_setup_override", "swift-release-xctest-setup"),
+            ("xctest_unbound_import", "swift-release-xctest-unbound"),
+        ] {
+            let (workspace, runtime) = index_swift_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("swift_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Swift family: {families_json}"
+            );
+        }
+    }
+
+    fn ruby_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("ruby")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_ruby_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &ruby_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // A parse-degraded corpus must still index cleanly; only the family
+        // may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn ruby_minitest_exact_tests_form_a_family_through_the_product_cli() {
+        // ADR-0049: the bounded Minitest frontend proves the `def test_*`
+        // anchor under a Minitest::Test subclass, so the exact-test corpus
+        // must form the minitest family through the product path.
+        let (workspace, runtime) =
+            index_ruby_release_v0_2_fixture("minitest_exact_tests", "ruby-release-minitest-exact");
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family = families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("ruby_minitest_test_method"))
+            })
+            .unwrap_or_else(|| {
+                panic!("the exact-anchor corpus must form the minitest family: {families_json}")
+            });
+        assert_eq!(
+            family["support"], 8,
+            "every admitted Minitest anchor must count: {family}"
+        );
+    }
+
+    #[test]
+    fn ruby_minitest_lookalikes_low_support_and_degraded_form_no_family() {
+        for (fixture, prefix) in [
+            ("minitest_lookalikes", "ruby-release-minitest-lookalikes"),
+            ("minitest_low_support", "ruby-release-minitest-low-support"),
+            ("minitest_parse_degraded", "ruby-release-minitest-degraded"),
+        ] {
+            let (workspace, runtime) = index_ruby_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("ruby_minitest_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Ruby family: {families_json}"
+            );
+        }
+    }
+
+    fn fortran_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("fortran")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_fortran_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &fortran_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // A degraded or use-less corpus must still index cleanly; only the
+        // family may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn fortran_test_drive_exact_tests_form_a_family_through_the_product_cli() {
+        // ADR-0051: the bounded test-drive frontend proves the module-scope
+        // subroutine whose first dummy is an `error_type`, so the exact-test
+        // corpus must clear storage validation and form the test-drive family.
+        let (workspace, runtime) = index_fortran_release_v0_2_fixture(
+            "testdrive_exact_tests",
+            "fortran-release-testdrive-exact",
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family = families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("fortran_test_drive_subroutine"))
+            })
+            .unwrap_or_else(|| {
+                panic!("the exact-anchor corpus must form the test-drive family: {families_json}")
+            });
+        assert_eq!(
+            family["support"], 6,
+            "every admitted test-drive anchor must count: {family}"
+        );
+    }
+
+    #[test]
+    fn fortran_test_drive_lookalikes_low_support_and_missing_use_form_no_family() {
+        for (fixture, prefix) in [
+            (
+                "testdrive_lookalikes",
+                "fortran-release-testdrive-lookalikes",
+            ),
+            (
+                "testdrive_low_support",
+                "fortran-release-testdrive-low-support",
+            ),
+            (
+                "testdrive_parse_degraded",
+                "fortran-release-testdrive-degraded",
+            ),
+            (
+                "testdrive_missing_use",
+                "fortran-release-testdrive-missing-use",
+            ),
+        ] {
+            let (workspace, runtime) = index_fortran_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("fortran_test_drive_subroutine"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Fortran family: {families_json}"
+            );
+        }
     }
 
     fn sql_release_fixture_v0_1_root() -> PathBuf {
@@ -13530,9 +14037,9 @@ class User(Base):
         let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
         let value = parse_machine_output("index", &index, &workspace);
         assert_eq!(value["discovered_files"], 3);
-        // ADR-0045 admits `.adb`, but these bytes are not UTF-8, so the body is
-        // read and then skipped: the parser is never reached and the generation
-        // holds nothing. `.gpr` and Fortran stay deferred.
+        // ADR-0045 admits `.adb` and ADR-0051 admits `.f90`, but these bytes are
+        // not UTF-8, so each body is read and then skipped: the parser is never
+        // reached and the generation holds nothing. `.gpr` stays deferred.
         assert_eq!(value["indexing"], "file_manifest_only");
         assert_eq!(value["parser"], "deferred");
         assert_eq!(value["parser_attempted_files"], 0);
@@ -13542,8 +14049,8 @@ class User(Base):
             value["warnings"],
             serde_json::json!([
                 "parser skipped unsupported language token: ada-config",
-                "parser skipped unsupported language token: fortran",
-                "parser skipped non-UTF-8 source: main.adb"
+                "parser skipped non-UTF-8 source: main.adb",
+                "parser skipped non-UTF-8 source: main.f90"
             ])
         );
         let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
@@ -14136,8 +14643,8 @@ class User(Base):
         assert_eq!(
             value["warnings"],
             serde_json::json!([
-                "parser skipped unsupported language token: php",
-                "parser skipped unsupported language token: php-config"
+                "parser skipped unsupported language token: php-config",
+                "parser skipped non-UTF-8 source: main.php"
             ])
         );
         assert!(!index.stdout.contains("php-source-must-not-be-read"));
@@ -14191,7 +14698,7 @@ class User(Base):
         assert!(human.stdout.contains("parser_attempted_files: 0"));
         assert!(human
             .stdout
-            .contains("warning: parser skipped unsupported language token: php\n"));
+            .contains("warning: parser skipped non-UTF-8 source: main.php\n"));
         assert!(human
             .stdout
             .contains("warning: parser skipped unsupported language token: php-config\n"));
@@ -14236,8 +14743,8 @@ class User(Base):
         assert_eq!(
             value["warnings"],
             serde_json::json!([
-                "parser skipped unsupported language token: swift",
-                "parser skipped unsupported language token: swift-config"
+                "parser skipped unsupported language token: swift-config",
+                "parser skipped non-UTF-8 source: main.swift"
             ])
         );
         assert!(!index.stdout.contains("swift-source-must-not-be-read"));
@@ -14294,7 +14801,7 @@ class User(Base):
         assert!(human.stdout.contains("parser_attempted_files: 0"));
         assert!(human
             .stdout
-            .contains("warning: parser skipped unsupported language token: swift\n"));
+            .contains("warning: parser skipped non-UTF-8 source: main.swift\n"));
         assert!(human
             .stdout
             .contains("warning: parser skipped unsupported language token: swift-config\n"));

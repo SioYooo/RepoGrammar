@@ -5,7 +5,13 @@
 //! environment, or turns dependency declarations into language/framework
 //! support evidence.
 
+// Historical ADR-0041 auxiliary-evidence scanner, retained per ADR-0050 D7.
+// Nothing dispatches to it; the application layer still reads its path
+// predicate and engine constants until the shared-registry integration
+// repoints them at `go::testing`.
+#[allow(dead_code)]
 pub(crate) mod source;
+pub(crate) mod testing;
 
 use super::{config_source_parse_output, sort_inventory_facts};
 use crate::core::model::{
@@ -778,7 +784,7 @@ fn unsupported_directive_marker(
                 note: "Go module replacement requires unresolved module-graph interpretation",
                 start_byte,
                 end_byte,
-            }
+            };
         }
         _ => (
             UnknownReasonCode::InsufficientSupport,

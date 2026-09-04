@@ -4,13 +4,14 @@ use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
 use crate::adapters::frameworks::{
-    ada, cpp, csharp, delphi, java, matlab, r, sql, tsjs, visual_basic,
+    ada, cpp, csharp, delphi, fortran, go, java, matlab, php, r, ruby, sql, swift, tsjs,
+    visual_basic,
 };
 use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
-use crate::adapters::parsing::go::source::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
+use crate::adapters::parsing::go::testing::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
 use crate::adapters::parsing::matlab::unittest::{MATLAB_ANCHOR_ENGINE, MATLAB_ANCHOR_METHOD};
 use crate::adapters::parsing::python::PYTHON_ANCHOR_ENGINE;
@@ -66,6 +67,16 @@ pub(crate) const ADA_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-ada-derived";
 pub(crate) const ADA_DERIVED_SUPPORT_METHOD: &str = "bounded_ada_aunit_anchor_v1";
 pub(crate) const MATLAB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-matlab-derived";
 pub(crate) const MATLAB_DERIVED_SUPPORT_METHOD: &str = "bounded_matlab_unittest_anchor_v1";
+pub(crate) const PHP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-php-derived";
+pub(crate) const PHP_DERIVED_SUPPORT_METHOD: &str = "bounded_php_phpunit_v1";
+pub(crate) const SWIFT_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-swift-derived";
+pub(crate) const SWIFT_DERIVED_SUPPORT_METHOD: &str = "bounded_swift_xctest_declaration_v1";
+pub(crate) const RUBY_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-ruby-derived";
+pub(crate) const RUBY_DERIVED_SUPPORT_METHOD: &str = "bounded_ruby_minitest_v1";
+pub(crate) const GO_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-go-derived";
+pub(crate) const GO_DERIVED_SUPPORT_METHOD: &str = "bounded_go_test_declaration_v2";
+pub(crate) const FORTRAN_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-fortran-derived";
+pub(crate) const FORTRAN_DERIVED_SUPPORT_METHOD: &str = "bounded_fortran_testdrive_v1";
 pub(crate) const R_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-r-derived";
 pub(crate) const R_DERIVED_SUPPORT_METHOD: &str = "bounded_r_testthat_anchor_v1";
 pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
@@ -4238,6 +4249,21 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         framework_role if matlab::framework_role_is_known(framework_role) => {
             matlab::support_family(target, framework_role)
         }
+        framework_role if php::framework_role_is_known(framework_role) => {
+            php::support_family(target, framework_role)
+        }
+        framework_role if swift::framework_role_is_known(framework_role) => {
+            swift::support_family(target, framework_role)
+        }
+        framework_role if ruby::framework_role_is_known(framework_role) => {
+            ruby::support_family(target, framework_role)
+        }
+        framework_role if go::framework_role_is_known(framework_role) => {
+            go::support_family(target, framework_role)
+        }
+        framework_role if fortran::framework_role_is_known(framework_role) => {
+            fortran::support_family(target, framework_role)
+        }
         _ => framework_role.to_string(),
     }
 }
@@ -4526,11 +4552,112 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if matlab::framework_role_is_known(framework_role) {
         return matlab_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
-    // Go has no arm on purpose. ADR-0021's evidence ladder forbids text or
-    // regex matching for the claim, and ADR-0041's correction demotes the
-    // scanner to auxiliary evidence: its role is detected, and no support fact
-    // may ever be derived from it, so no Go family can form.
+    if php::framework_role_is_known(framework_role) {
+        return php_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if swift::framework_role_is_known(framework_role) {
+        return swift_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if ruby::framework_role_is_known(framework_role) {
+        return ruby_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    // ADR-0050 replaces ADR-0021's closed ladder: the bounded Go parser
+    // proves the test-function anchor by parsing, so its support facts may
+    // derive exactly like the other bounded frontends. The scanner of
+    // ADR-0041 stays auxiliary and derives nothing.
+    if go::framework_role_is_known(framework_role) {
+        return go_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if fortran::framework_role_is_known(framework_role) {
+        return fortran_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     false
+}
+
+fn php_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = php::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && php_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn php_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        PHP_DERIVED_SUPPORT_ENGINE,
+        PHP_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_php_phpunit_anchors".to_string()],
+    )
+}
+
+fn swift_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = swift::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && swift_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn swift_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        SWIFT_DERIVED_SUPPORT_ENGINE,
+        SWIFT_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_swift_xctest_anchors".to_string()],
+    )
+}
+
+fn ruby_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = ruby::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && ruby_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn ruby_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        RUBY_DERIVED_SUPPORT_ENGINE,
+        RUBY_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_ruby_minitest_anchors".to_string()],
+    )
+}
+
+fn go_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = go::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && go_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn go_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        GO_DERIVED_SUPPORT_ENGINE,
+        GO_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_go_testing_anchors".to_string()],
+    )
+}
+
+fn fortran_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = fortran::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && fortran_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn fortran_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        FORTRAN_DERIVED_SUPPORT_ENGINE,
+        FORTRAN_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_fortran_testdrive_anchors".to_string()],
+    )
 }
 
 fn vb_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -4849,6 +4976,40 @@ pub(crate) fn ada_support_target_is_role_compatible(
 ) -> Option<bool> {
     ada::support_target_is_role_compatible(target, framework_role)
 }
+pub(crate) fn php_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    php::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn swift_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    swift::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn ruby_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    ruby::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn go_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    go::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn fortran_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    fortran::support_target_is_role_compatible(target, framework_role)
+}
 
 pub(crate) fn delphi_support_target_is_role_compatible(
     target: &str,
@@ -5096,6 +5257,11 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "delphi_test_procedure"
             | "ada_test_registration"
             | "matlab_test_method"
+            | "php_test_method"
+            | "swift_test_method"
+            | "ruby_minitest_test_method"
+            | "go_test_function"
+            | "fortran_test_drive_subroutine"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -5143,6 +5309,27 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if language == "sql" {
         // ADR-0020 requires SQL to reach support three; the shared default of
         // two would let a pair of CREATE TABLE statements form a family.
+        3
+    } else if language == "go" {
+        // ADR-0050's completion review requires support at least three; the
+        // shared default of two would let a pair of TestXxx declarations form
+        // a family from the low-support fixture.
+        3
+    } else if language == "php" {
+        // ADR-0047's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "swift" {
+        // ADR-0048's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "ruby" {
+        // ADR-0049's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "fortran" {
+        // ADR-0051's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
         3
     } else {
         DEFAULT_MIN_FAMILY_SUPPORT
@@ -5693,6 +5880,11 @@ mod tests {
             crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST,
             crate::adapters::frameworks::r::ROLE_TESTTHAT_TEST,
             crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION,
+            crate::adapters::frameworks::php::ROLE_PHPUNIT_TEST,
+            crate::adapters::frameworks::swift::ROLE_XCTEST_TEST,
+            crate::adapters::frameworks::ruby::ROLE_MINITEST_TEST,
+            crate::adapters::frameworks::go::ROLE_GO_TESTING_TEST,
+            crate::adapters::frameworks::fortran::ROLE_TESTDRIVE_TEST,
         ];
         for role in roles {
             let claimants = [
@@ -5708,6 +5900,11 @@ mod tests {
                 ("delphi", delphi::framework_role_is_known(role)),
                 ("ada", ada::framework_role_is_known(role)),
                 ("matlab", matlab::framework_role_is_known(role)),
+                ("php", php::framework_role_is_known(role)),
+                ("swift", swift::framework_role_is_known(role)),
+                ("ruby", ruby::framework_role_is_known(role)),
+                ("go", go::framework_role_is_known(role)),
+                ("fortran", fortran::framework_role_is_known(role)),
             ]
             .into_iter()
             .filter(|(_, claimed)| *claimed)
@@ -5724,6 +5921,67 @@ mod tests {
     #[test]
     fn sql_requires_three_members_like_the_adr_gate_says() {
         assert_eq!(min_family_support("sql"), 3);
+    }
+
+    #[test]
+    fn go_unknown_classification_uses_the_live_parser_engine_identity() {
+        // This module classified Go unknowns against the retired ADR-0041
+        // scanner's engine identity while every real fact carried the ADR-0050
+        // parser's, so the Go arm never matched and both Go claim-impact
+        // classifiers were dead against product data. Nothing failed: no test
+        // built a Go fact with the engine string the live parser emits.
+        assert_eq!(GO_ANCHOR_ENGINE, "repogrammar-go-testing-parser");
+        assert_eq!(GO_ANCHOR_METHOD, "bounded_go_test_declaration_v2");
+        assert_eq!(
+            FamilyUnknownDomain::from_language_and_origin("go", GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD),
+            Some(FamilyUnknownDomain::Go),
+            "a fact from the dispatched Go parser must classify as the Go domain"
+        );
+        assert_eq!(
+            FamilyUnknownDomain::from_language_and_origin(
+                "go",
+                "repogrammar-go-test-scanner",
+                "bounded_go_test_declaration_v1",
+            ),
+            None,
+            "the retired scanner's identity must not classify as the Go domain"
+        );
+    }
+
+    #[test]
+    fn every_exact_anchor_language_pins_the_three_member_bar() {
+        // Falling through to DEFAULT_MIN_FAMILY_SUPPORT is silent: the lane
+        // keeps compiling, every lane test keeps passing, and a pair of
+        // anchors quietly forms a family the completion review says must not
+        // form. A lane added without its explicit bar fails here instead.
+        for language in [
+            "python",
+            "typescript",
+            "javascript",
+            "java",
+            "csharp",
+            "cpp",
+            "c",
+            "rust",
+            "matlab",
+            "ada",
+            "object-pascal",
+            "visual-basic",
+            "r",
+            "sql",
+            "go",
+            "php",
+            "swift",
+            "ruby",
+            "fortran",
+        ] {
+            assert_eq!(
+                min_family_support(language),
+                3,
+                "{language} must pin the three-member bar its completion review states, \
+                 not inherit the shared default of {DEFAULT_MIN_FAMILY_SUPPORT}"
+            );
+        }
     }
 
     #[test]

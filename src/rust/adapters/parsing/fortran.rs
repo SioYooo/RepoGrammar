@@ -15,6 +15,9 @@ use crate::ports::parser::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod free_form;
+pub mod testdrive;
+
 const FORTRAN_CONFIG_ENGINE: &str = "repogrammar-fortran-project-config";
 const FORTRAN_CONFIG_METHOD: &str = "bounded_fpm_dependency_inventory_v1";
 const MAX_MANIFEST_BYTES: usize = 1_048_576;

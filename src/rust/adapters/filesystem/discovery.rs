@@ -6,7 +6,7 @@ use super::resource_limits::{DiscoveryLimits, DiscoveryResourceBudget};
 use crate::adapters::languages::ada::{AdaLanguageAdapter, AdaPathClassification};
 use crate::adapters::languages::assembly::{AssemblyLanguageAdapter, AssemblyPathClassification};
 use crate::adapters::languages::cpp::CppLanguageAdapter;
-use crate::adapters::languages::csharp::CSharpLanguageAdapter;
+use crate::adapters::languages::csharp::{CSharpLanguageAdapter, CSharpPathClassification};
 use crate::adapters::languages::fortran::{FortranLanguageAdapter, FortranPathClassification};
 use crate::adapters::languages::go::GoLanguageAdapter;
 use crate::adapters::languages::java::JavaLanguageAdapter;
@@ -564,6 +564,9 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
     }
     if JavaLanguageAdapter::is_project_config_path(path) {
         return LanguagePathClassification::Supported(DiscoveredLanguage::JavaConfig);
+    }
+    if CSharpLanguageAdapter::classify_path(path) == CSharpPathClassification::Config {
+        return LanguagePathClassification::Supported(DiscoveredLanguage::CSharp);
     }
     if path == "compile_commands.json" || path == "vcpkg.json" || path == "conanfile.txt" {
         return LanguagePathClassification::Supported(DiscoveredLanguage::CppConfig);
@@ -1722,19 +1725,19 @@ mod tests {
                 .iter()
                 .map(|file| (file.path.as_str(), file.language))
                 .collect::<Vec<_>>(),
-            vec![(
-                "Controllers/CatalogController.cs",
-                DiscoveredLanguage::CSharp
-            )]
+            vec![
+                (
+                    "Controllers/CatalogController.cs",
+                    DiscoveredLanguage::CSharp
+                ),
+                ("Demo.csproj", DiscoveredLanguage::CSharp)
+            ]
         );
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "obj" && skipped.reason == SkippedReason::DefaultExcludedDirectory
         }));
         assert!(!report.skipped.iter().any(|skipped| skipped.path == "bin"
             && skipped.reason == SkippedReason::DefaultExcludedDirectory));
-        assert!(report.skipped.iter().any(|skipped| {
-            skipped.path == "Demo.csproj" && skipped.reason == SkippedReason::UnsupportedExtension
-        }));
     }
 
     #[test]

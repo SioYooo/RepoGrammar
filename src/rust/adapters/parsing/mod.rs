@@ -47,7 +47,7 @@ pub struct RepoGrammarSourceParser {
     php: php::PhpConfigParser,
     ruby: RubyConfigParser,
     r: r::RProjectConfigParser,
-    go_source: go::source::GoTestSourceParser,
+    go_testing: go::testing::GoTestingParser,
     r_testthat: r::testthat::RTestThatParser,
     visual_basic_mstest: visual_basic::mstest::VisualBasicMsTestParser,
     delphi_dunitx: delphi::dunitx::DelphiDUnitXParser,
@@ -59,6 +59,7 @@ pub struct RepoGrammarSourceParser {
     visual_basic: visual_basic::VisualBasicProjectConfigParser,
     ada: ada::AdaProjectConfigParser,
     fortran: fortran::FortranProjectConfigParser,
+    fortran_testdrive: fortran::testdrive::FortranTestDriveParser,
 }
 
 #[derive(Debug, Default)]
@@ -104,12 +105,14 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => self.cpp.parse(document),
-            crate::core::model::Language::Go => self.go_source.parse(document),
+            crate::core::model::Language::Go => self.go_testing.parse(document),
             crate::core::model::Language::GoConfig => self.go.parse(document),
             crate::core::model::Language::PhpConfig => self.php.parse(document),
-            crate::core::model::Language::Php
-            | crate::core::model::Language::Ruby
-            | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Php => php::phpunit::PhpPHPUnitParser.parse(document),
+            crate::core::model::Language::Ruby => {
+                ruby::minitest::RubyMinitestParser.parse(document)
+            }
+            crate::core::model::Language::Swift => swift::xctest::parse_report(document),
             crate::core::model::Language::SwiftConfig => self.swift.parse(document),
             crate::core::model::Language::VisualBasicConfig => self.visual_basic.parse(document),
             crate::core::model::Language::VisualBasic => self.visual_basic_mstest.parse(document),
@@ -117,7 +120,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::DelphiConfig => self.delphi.parse(document),
             crate::core::model::Language::Ada => self.ada_aunit.parse(document),
             crate::core::model::Language::AdaConfig => self.ada.parse(document),
-            crate::core::model::Language::Fortran => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Fortran => self.fortran_testdrive.parse(document),
             crate::core::model::Language::FortranConfig => self.fortran.parse(document),
             crate::core::model::Language::RubyConfig => self.ruby.parse(document),
             crate::core::model::Language::RConfig => self.r.parse(document),
@@ -166,15 +169,19 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.cpp.parse_with_context(document, context)
             }
             crate::core::model::Language::Go => {
-                self.go_source.parse_with_context(document, context)
+                self.go_testing.parse_with_context(document, context)
             }
             crate::core::model::Language::GoConfig => self.go.parse_with_context(document, context),
             crate::core::model::Language::PhpConfig => {
                 self.php.parse_with_context(document, context)
             }
-            crate::core::model::Language::Php
-            | crate::core::model::Language::Ruby
-            | crate::core::model::Language::Swift => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Php => {
+                php::phpunit::PhpPHPUnitParser.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Ruby => {
+                ruby::minitest::RubyMinitestParser.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Swift => swift::xctest::parse_report(document),
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context(document, context)
             }
@@ -196,7 +203,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::AdaConfig => {
                 self.ada.parse_with_context(document, context)
             }
-            crate::core::model::Language::Fortran => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Fortran => {
+                self.fortran_testdrive.parse_with_context(document, context)
+            }
             crate::core::model::Language::FortranConfig => {
                 self.fortran.parse_with_context(document, context)
             }
@@ -244,7 +253,7 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.cpp.parse_with_context_output(document, context)
             }
             crate::core::model::Language::Go => {
-                self.go_source.parse_with_context_output(document, context)
+                self.go_testing.parse_with_context_output(document, context)
             }
             crate::core::model::Language::GoConfig => {
                 self.go.parse_with_context_output(document, context)
@@ -252,6 +261,7 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::PhpConfig => {
                 self.php.parse_with_context_output(document, context)
             }
+            crate::core::model::Language::Swift => swift::xctest::parse_output(document),
             crate::core::model::Language::SwiftConfig => {
                 self.swift.parse_with_context_output(document, context)
             }
@@ -273,6 +283,9 @@ impl SourceParser for RepoGrammarSourceParser {
             crate::core::model::Language::AdaConfig => {
                 self.ada.parse_with_context_output(document, context)
             }
+            crate::core::model::Language::Fortran => self
+                .fortran_testdrive
+                .parse_with_context_output(document, context),
             crate::core::model::Language::FortranConfig => {
                 self.fortran.parse_with_context_output(document, context)
             }
@@ -281,6 +294,9 @@ impl SourceParser for RepoGrammarSourceParser {
             }
             crate::core::model::Language::RConfig => {
                 self.r.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::CSharp => {
+                self.csharp.parse_with_context_output(document, context)
             }
             crate::core::model::Language::Sql => {
                 self.sql.parse_with_context_output(document, context)
@@ -497,6 +513,9 @@ fn is_class_like(kind: &str) -> bool {
             | "vb_test_class"
             | "delphi_test_fixture"
             | "matlab_test_class"
+            | "swift_test_class"
+            | "php_test_class"
+            | "ruby_minitest_test_class"
             | "marshmallow_schema"
             | "aspnet_controller"
             | "efcore_db_context"
@@ -529,6 +548,9 @@ fn is_method_like(kind: &str) -> bool {
             | "vb_test_method"
             | "delphi_test_procedure"
             | "matlab_test_method"
+            | "swift_test_method"
+            | "php_test_method"
+            | "ruby_minitest_test_method"
             | "junit5_test_method"
             | "junit4_test_method"
             | "testng_test_method"
@@ -768,12 +790,20 @@ mod tests {
     }
 
     #[test]
-    fn product_parser_rejects_swift_source_and_accepts_bounded_config() {
+    fn product_parser_routes_swift_source_and_accepts_bounded_config() {
         let parser = RepoGrammarSourceParser::default();
-        assert_eq!(
-            parser.parse(swift_inventory_document(Language::Swift)),
-            Err(ParseError::UnsupportedLanguage)
-        );
+        // ADR-0048 routes `.swift` to the bounded xctest frontend. This
+        // inventory text is outside the declared subset, so it yields the
+        // file's module unit plus one typed refusal and no anchor.
+        let swift_source = parser
+            .parse(swift_inventory_document(Language::Swift))
+            .expect("route bounded Swift source");
+        assert_eq!(swift_source.units.len(), 1);
+        assert_eq!(swift_source.units[0].kind, CodeUnitKind::Module);
+        assert!(swift_source
+            .semantic_facts
+            .iter()
+            .all(|fact| fact.kind == SemanticFactKind::Unknown));
         let report = parser
             .parse_with_context(
                 swift_inventory_document(Language::SwiftConfig),
@@ -1246,6 +1276,34 @@ setup(name="second-project", package_dir={"": "second-src"})
                     .parse(python_config_document(path, "setup(name='not-config')\n")),
                 Err(ParseError::UnsupportedLanguage)
             ));
+        }
+    }
+
+    #[test]
+    fn class_bearing_lanes_classify_both_halves_of_their_containment_pair() {
+        // `ir_edges_for_units` emits a Contains edge only when the container is
+        // class-like and the member is method-like. A lane that adds a test
+        // class and a test method without listing both here still compiles,
+        // still parses, and still forms its family — it silently loses every
+        // containment edge instead, with no failing test to say so. Each
+        // class-bearing lane pins both halves of its pair.
+        for (class_kind, method_kind) in [
+            ("class", "method"),
+            ("vb_test_class", "vb_test_method"),
+            ("delphi_test_fixture", "delphi_test_procedure"),
+            ("matlab_test_class", "matlab_test_method"),
+            ("swift_test_class", "swift_test_method"),
+            ("php_test_class", "php_test_method"),
+            ("ruby_minitest_test_class", "ruby_minitest_test_method"),
+        ] {
+            assert!(
+                is_class_like(class_kind),
+                "{class_kind} must be class-like or its members lose containment"
+            );
+            assert!(
+                is_method_like(method_kind),
+                "{method_kind} must be method-like or it loses containment"
+            );
         }
     }
 }
