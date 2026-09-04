@@ -2,6 +2,28 @@
 //!
 //! This adapter uses the repository's Python worker process so Rust does not
 //! hand-roll Python parsing rules. The worker returns owned metadata only.
+//!
+//! Every claim-scoped typed `UNKNOWN` this lane can emit is declared exactly
+//! once in [`PYTHON_OBLIGATION_REGISTRY`], the lane's ADR-0020 gate 4
+//! source-semantic obligation registry: the claim each unknown scopes, whether
+//! an unmet obligation blocks the family claim, the provider mechanism that
+//! could recover it, and the provider-fallback policy that says what could
+//! discharge it. Reason codes stay a separate axis in
+//! [`python_unknown_reason_is_supported`], because one reason serves many
+//! claims.
+//!
+//! Fallback tokens, and the policy each one stands for:
+//!
+//! - `python_type_provider_not_integrated` means
+//!   `SemanticProviderSlot::PythonTypeProvider` exists and claims this
+//!   mechanism (see `resolves_mechanisms` in `src/rust/core/model/provider.rs`),
+//!   but the slot is not integrated, so nothing answers the obligation today.
+//! - `no_registered_provider_resolves_this_mechanism` means no provider slot
+//!   claims the mechanism at all; discharging it needs a framework-specific
+//!   analyzer this product does not have.
+//! - `repository_configuration_declaration` means the obligation is
+//!   recoverable from the repository's own configuration, with no provider
+//!   involved.
 
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
@@ -1193,10 +1215,7 @@ fn project_config_unknown_fact(
                 "python project config UNKNOWN affected claim was invalid".to_string(),
             )
         })?;
-    if !matches!(
-        affected_claim,
-        "python_project_config" | "python_dependency_inventory"
-    ) {
+    if !python_project_config_claim_is_supported(affected_claim) {
         return Err(ParseError::Internal(
             "python project config UNKNOWN affected claim was unsupported".to_string(),
         ));
@@ -1921,6 +1940,233 @@ fn python_structural_target_is_supported(value: &str) -> bool {
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-'))
 }
 
+/// Recorded claim impact of an unmet Python obligation.
+///
+/// `application/family.rs` stays the authoritative claim-impact classifier;
+/// this is the record that must agree with it, and the lockstep test in that
+/// module pins the two together so they cannot drift silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PythonClaimImpact {
+    /// Blocks the family claim wherever it appears.
+    Blocking,
+    /// Recorded residual; never blocks.
+    NonBlocking,
+    /// Blocks only under a `framework:pytest` role, which is the existing
+    /// behaviour of `python_unknown_affected_claim_blocks_family`.
+    BlockingUnderPytestRole,
+}
+
+/// One source-semantic obligation an admitted Python family claim rests on.
+///
+/// This is the lane's ADR-0020 gate 4 registry, mirroring
+/// `R_OBLIGATION_REGISTRY`. Every claim-scoped typed `UNKNOWN` the Python lane
+/// emits is declared here exactly once, with what it scopes, whether an unmet
+/// obligation blocks the family claim, the provider mechanism that could
+/// recover it, and the provider-fallback policy that names what could
+/// discharge it.
+pub(crate) struct PythonObligation {
+    /// Stable affected-claim token (`affected_claim=` assumption).
+    pub(crate) affected_claim: &'static str,
+    /// Recorded claim impact of an unmet obligation. Must agree with
+    /// `python_unknown_affected_claim_blocks_family` in
+    /// `src/rust/application/family.rs`.
+    // Read by the family.rs lockstep test only: routing the classifier through
+    // this field would make that test tautological.
+    #[allow(dead_code)]
+    pub(crate) impact: PythonClaimImpact,
+    /// The mechanism `claim_specific_required_unknown_mechanism` reports for
+    /// this claim, or None where that function falls through to the
+    /// reason-based default.
+    // Read by the query.rs lockstep test only, for the same reason.
+    #[allow(dead_code)]
+    pub(crate) required_mechanism: Option<&'static str>,
+    /// Source-free, fixed human-facing note saying what the unknown scopes.
+    #[allow(dead_code)]
+    pub(crate) note: &'static str,
+    /// Provider-fallback policy as a stable low-cardinality token. The prose
+    /// policy each token stands for is in this module's doc comment.
+    pub(crate) fallback: &'static str,
+}
+
+/// The complete ADR-0020 gate 4 source-semantic obligation registry for the
+/// Python lane's claim-scoped unknowns.
+///
+/// Obligations split three ways. The identity and binding obligations block
+/// the family claim when unmet: without a proven import, call target, or
+/// framework receiver the membership claim itself is unproven. The fixture
+/// obligation blocks only under a pytest role, because only there does the
+/// injected binding carry the claim. The remaining obligations are residuals
+/// the bounded frontend can never discharge -- request-time injection, runtime
+/// dispatch, ORM registries, and configuration state -- so they ride along as
+/// non-blocking unknowns rather than being guessed away.
+///
+/// The fallback token vocabulary is documented once in this module's doc
+/// comment.
+pub(crate) const PYTHON_OBLIGATION_REGISTRY: &[PythonObligation] = &[
+    PythonObligation {
+        affected_claim: "python_import_resolution",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "an import binding is not resolved to a repository-local module or an installed distribution, so the imported symbol's origin is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_call_target",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: None,
+        note: "a call's receiver is not bound to a definition, so the called implementation is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_framework_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: None,
+        note: "a unit's framework role rests on a binding this frontend cannot prove, so the framework identity is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_django_model_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("django_project_model"),
+        note: "a Django model or manager identity depends on app-registry and settings state this frontend does not read",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_django_url_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("django_project_model"),
+        note: "a Django URL entry names its view through include or a dotted path the URL configuration resolves at import time",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_flask_route_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("flask_app_model"),
+        note: "a Flask route's application or blueprint receiver is not bound, so the route's owning app is unproven",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_cli_command_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a CLI command's group or callback receiver is imported from another module, so the command's owning group is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_celery_task_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a Celery task decorator's app receiver is imported from another module, so the task's owning app is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "pytest_fixture_binding",
+        impact: PythonClaimImpact::BlockingUnderPytestRole,
+        required_mechanism: Some("pytest_fixture_graph"),
+        note: "a test parameter is supplied by pytest's fixture lookup across conftest scopes, so the fixture that binds it is unproven",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "fastapi_dependency_target",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("fastapi_dependency_graph"),
+        note: "a FastAPI Depends callable is injected per request, so the implementation that answers the dependency stays a residual",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "fastapi_router_binding",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("fastapi_dependency_graph"),
+        note: "an include_router call names a router defined elsewhere, so the routes it contributes are not enumerated",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "fastapi_router_prefix",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("fastapi_dependency_graph"),
+        note: "a router prefix is composed at include time rather than written as a literal, so the mounted path is not computed",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "pydantic_validator_side_effects",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("pydantic_validator_model"),
+        note: "a Pydantic validator coerces or rejects values when the model runs, so a field's effective shape beyond its declaration is not modeled",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "sqlalchemy_query_shape",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("sqlalchemy_session_model"),
+        note: "a query is assembled through session and chained builder calls, so the statement's final shape is not reconstructed",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "sqlalchemy_relationship_target",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("sqlalchemy_model_graph"),
+        note: "a relationship names its target model as a string the declarative registry resolves, so the related model is not bound",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_django_string_dispatch",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("django_project_model"),
+        note: "a Django call names its target as a dotted string resolved at runtime, so the dispatch target is not bound",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_django_settings_behavior",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("django_settings_model"),
+        note: "behavior depends on settings values assembled from environment and settings modules this frontend does not evaluate",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_unittest_patch_target",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a unittest.mock patch names its target as a string resolved when the patch runs, so the patched attribute is not bound",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_celery_runtime_routing",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a Celery task is dispatched by name through broker routing, so the worker-side task that receives it is not bound",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_project_config",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: None,
+        note: "the repository's Python project configuration is absent, unreadable, or contradictory, so the declared project metadata is unproven",
+        fallback: "repository_configuration_declaration",
+    },
+    PythonObligation {
+        affected_claim: "python_dependency_inventory",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: None,
+        note: "a declared dependency's identity or version is not stated in the repository's own configuration, so the inventory entry is incomplete",
+        fallback: "repository_configuration_declaration",
+    },
+];
+
+/// Registry lookup by affected claim. Claims outside the registry are not part
+/// of the lane's declared unknown vocabulary.
+pub(crate) fn python_obligation(affected_claim: &str) -> Option<&'static PythonObligation> {
+    PYTHON_OBLIGATION_REGISTRY
+        .iter()
+        .find(|entry| entry.affected_claim == affected_claim)
+}
+
+/// True for the claims the project-config path may scope an UNKNOWN to: the
+/// registry entries the repository's own configuration could discharge.
+fn python_project_config_claim_is_supported(affected_claim: &str) -> bool {
+    python_obligation(affected_claim)
+        .is_some_and(|entry| entry.fallback == "repository_configuration_declaration")
+}
+
 fn python_unknown_reason_is_supported(value: &str) -> bool {
     matches!(
         value,
@@ -1939,29 +2185,7 @@ fn python_unknown_reason_is_supported(value: &str) -> bool {
 }
 
 fn python_affected_claim_is_supported(value: &str) -> bool {
-    matches!(
-        value,
-        "python_import_resolution"
-            | "python_call_target"
-            | "python_framework_identity"
-            | "fastapi_dependency_target"
-            | "fastapi_router_binding"
-            | "fastapi_router_prefix"
-            | "pydantic_validator_side_effects"
-            | "sqlalchemy_query_shape"
-            | "sqlalchemy_relationship_target"
-            | "pytest_fixture_binding"
-            | "python_project_config"
-            | "python_django_model_identity"
-            | "python_django_url_identity"
-            | "python_flask_route_identity"
-            | "python_cli_command_identity"
-            | "python_celery_task_identity"
-            | "python_django_string_dispatch"
-            | "python_unittest_patch_target"
-            | "python_celery_runtime_routing"
-            | "python_django_settings_behavior"
-    )
+    python_obligation(value).is_some()
 }
 
 fn python_anchor_kind_is_supported(value: &str) -> bool {
@@ -5690,5 +5914,143 @@ def _api_client():
                 "affected_claim=python_import_resolution"
             ]
         })
+    }
+
+    /// The exact claim vocabulary the two allowlists admitted before the
+    /// registry consolidated them: the twenty the CPython-ast path accepted,
+    /// plus `python_dependency_inventory` from the project-config path.
+    const DECLARED_PYTHON_CLAIMS: &[&str] = &[
+        "python_import_resolution",
+        "python_call_target",
+        "python_framework_identity",
+        "python_django_model_identity",
+        "python_django_url_identity",
+        "python_flask_route_identity",
+        "python_cli_command_identity",
+        "python_celery_task_identity",
+        "pytest_fixture_binding",
+        "fastapi_dependency_target",
+        "fastapi_router_binding",
+        "fastapi_router_prefix",
+        "pydantic_validator_side_effects",
+        "sqlalchemy_query_shape",
+        "sqlalchemy_relationship_target",
+        "python_django_string_dispatch",
+        "python_django_settings_behavior",
+        "python_unittest_patch_target",
+        "python_celery_runtime_routing",
+        "python_project_config",
+        "python_dependency_inventory",
+    ];
+
+    #[test]
+    fn python_obligation_registry_admits_exactly_the_declared_claim_vocabulary() {
+        assert_eq!(DECLARED_PYTHON_CLAIMS.len(), 21);
+        let registered = PYTHON_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| entry.affected_claim)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            registered,
+            DECLARED_PYTHON_CLAIMS
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+        for claim in DECLARED_PYTHON_CLAIMS {
+            assert!(
+                python_affected_claim_is_supported(claim),
+                "{claim} must stay accepted"
+            );
+        }
+        // Nothing outside the registry is accepted. `python_family_membership`
+        // and `family:` claims appear in the family classifier but are not part
+        // of the emitted vocabulary, so they must stay rejected here.
+        for claim in [
+            "",
+            "python_family_membership",
+            "family:python.fastapi.route",
+            "python_import_resolution ",
+            "r_testthat_identity",
+        ] {
+            assert!(
+                !python_affected_claim_is_supported(claim),
+                "{claim} must not be accepted"
+            );
+        }
+        // The project-config path stays narrower than the full registry: only
+        // the claims the repository's own configuration could discharge.
+        let config_claims = DECLARED_PYTHON_CLAIMS
+            .iter()
+            .copied()
+            .filter(|claim| python_project_config_claim_is_supported(claim))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            config_claims,
+            vec!["python_project_config", "python_dependency_inventory"]
+        );
+    }
+
+    #[test]
+    fn python_obligation_registry_declares_each_claim_once() {
+        let mut claims = PYTHON_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| entry.affected_claim)
+            .collect::<Vec<_>>();
+        let count = claims.len();
+        claims.sort_unstable();
+        claims.dedup();
+        assert_eq!(claims.len(), count, "registry claims must be unique");
+    }
+
+    #[test]
+    fn python_obligation_registry_records_well_formed_mechanisms_and_fallbacks() {
+        for entry in PYTHON_OBLIGATION_REGISTRY {
+            if let Some(mechanism) = entry.required_mechanism {
+                assert!(
+                    !mechanism.is_empty(),
+                    "{} records an empty mechanism",
+                    entry.affected_claim
+                );
+            }
+            assert!(
+                matches!(
+                    entry.fallback,
+                    "python_type_provider_not_integrated"
+                        | "no_registered_provider_resolves_this_mechanism"
+                        | "repository_configuration_declaration"
+                ),
+                "{} records an undocumented fallback token {}",
+                entry.affected_claim,
+                entry.fallback
+            );
+            assert!(
+                !entry.note.is_empty(),
+                "{} records an empty note",
+                entry.affected_claim
+            );
+        }
+    }
+
+    #[test]
+    fn python_obligation_lookups_are_total_and_order_is_stable() {
+        for claim in DECLARED_PYTHON_CLAIMS {
+            let entry = python_obligation(claim).expect("registry lookup must be total");
+            assert_eq!(entry.affected_claim, *claim);
+        }
+        assert!(python_obligation("python_family_membership").is_none());
+        let order = PYTHON_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| entry.affected_claim)
+            .collect::<Vec<_>>();
+        assert_eq!(order, DECLARED_PYTHON_CLAIMS.to_vec());
+        assert_eq!(
+            order,
+            PYTHON_OBLIGATION_REGISTRY
+                .iter()
+                .map(|entry| entry.affected_claim)
+                .collect::<Vec<_>>(),
+            "registry order must be stable across reads"
+        );
     }
 }

@@ -14958,4 +14958,20 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn python_registry_mechanisms_match_the_live_claim_specific_map() {
+        // The registry in `adapters/parsing/python.rs` records the mechanism
+        // this function reports for each claim. This is the lockstep check
+        // that keeps the two tables from drifting apart; the map here stays
+        // authoritative and the registry is the record that must agree.
+        for entry in crate::adapters::parsing::python::PYTHON_OBLIGATION_REGISTRY {
+            assert_eq!(
+                claim_specific_required_unknown_mechanism("python", entry.affected_claim, "", &[]),
+                entry.required_mechanism,
+                "recorded mechanism for {} disagrees with the live map",
+                entry.affected_claim
+            );
+        }
+    }
 }

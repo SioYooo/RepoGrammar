@@ -10645,4 +10645,48 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn python_registry_impacts_match_the_authoritative_claim_classifier() {
+        // `python_unknown_affected_claim_blocks_family` stays the
+        // authoritative claim-impact classifier; the registry in
+        // `adapters/parsing/python.rs` is the record that must agree with it.
+        // This is the lockstep check that keeps the two from drifting apart.
+        use crate::adapters::parsing::python::{PythonClaimImpact, PYTHON_OBLIGATION_REGISTRY};
+
+        for entry in PYTHON_OBLIGATION_REGISTRY {
+            let claim = entry.affected_claim;
+            match entry.impact {
+                PythonClaimImpact::Blocking => {
+                    for role in ["", "framework:pytest.test", "framework:fastapi.route"] {
+                        assert!(
+                            python_unknown_affected_claim_blocks_family(claim, role),
+                            "{claim} is recorded as blocking but does not block under role {role}"
+                        );
+                    }
+                }
+                PythonClaimImpact::NonBlocking => {
+                    for role in ["", "framework:pytest.test", "framework:fastapi.route"] {
+                        assert!(
+                            !python_unknown_affected_claim_blocks_family(claim, role),
+                            "{claim} is recorded as non-blocking but blocks under role {role}"
+                        );
+                    }
+                }
+                PythonClaimImpact::BlockingUnderPytestRole => {
+                    assert!(
+                        python_unknown_affected_claim_blocks_family(claim, "framework:pytest.test"),
+                        "{claim} must block under a pytest role"
+                    );
+                    assert!(
+                        !python_unknown_affected_claim_blocks_family(
+                            claim,
+                            "framework:fastapi.route"
+                        ),
+                        "{claim} must not block outside a pytest role"
+                    );
+                }
+            }
+        }
+    }
 }

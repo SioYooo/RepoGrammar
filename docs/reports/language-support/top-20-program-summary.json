@@ -40,10 +40,10 @@
       "rank": 1,
       "counted_in_top20": true,
       "status": "structural_substrate",
-      "completion_gates_passed": 4,
+      "completion_gates_passed": 5,
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
-      "blocker": "Gates 4, 6, and 7 need an executing Pyrefly or Pyright provider, which is an external artifact this program excludes; the port now types every provider abstention but no provider answers. Gate 9 additionally needs a linked atomic audit, which no dependency blocks.",
+      "blocker": "Gate 4 closed 2026-09-05 with PYTHON_OBLIGATION_REGISTRY: twenty-one claim-scoped entries, one per admitted affected_claim, each recording claim impact, the provider mechanism that could recover it, and one of three fallback tokens, with the claim vocabulary enforced from the registry on both emission paths and lockstep tests pinning it against the authoritative mechanism map in application/query.rs and claim-impact rule in application/family.rs. The earlier text said gates 4, 6, and 7 all need an executing Pyrefly or Pyright provider; for gate 4 that was an over-reading of the same kind ADR-0047..0051 corrected, because the gate asks the language to RECORD which unknowns a provider could recover, not to run one, which is how ADR-0042 closed gate 4 for R with no R provider in existence. Gate 6 is the one that genuinely needs an artifact this program excludes: its provider-state matrix exists at the port boundary but closing it needs that matrix on a product path, which requires a provider that answers. Gate 1 needs dialect selection and packaging-profile qualification closed as one module, gate 7 needs the provider/readiness matrix audited and linked as a completion submodule, and gate 9 needs the linked atomic audit; none of those three needs an external artifact. Explicit non-claim: StaleEvidence is typed in the provider port and admitted by the reason allowlist but has no producer, because repository staleness is decided by the generation freshness model rather than a parser unknown.",
       "framework_support": {
         "state": "landed",
         "framework": "marshmallow",
@@ -59,8 +59,8 @@
       "evidence_paths": [
         "docs/reports/language-support/python-completion-review.md",
         "src/rust/adapters/parsing/python.rs",
-        "src/workers/python/worker.py",
-        "src/rust/ports/python_provider.rs"
+        "src/rust/ports/python_provider.rs",
+        "src/workers/python/worker.py"
       ],
       "prerequisite_commits": [
         "e275c9b2a3d9ba1984ba2e344b0ad9e826abc973",
