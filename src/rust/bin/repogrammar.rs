@@ -4460,6 +4460,129 @@ mod tests {
         );
     }
 
+    #[test]
+    fn php_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_php_release_v0_2_fixture("phpunit_exact_tests", "php-release-readiness-positive");
+        let lookalikes = index_php_release_v0_2_fixture(
+            "phpunit_lookalikes",
+            "php-release-readiness-lookalikes",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&lookalikes.0, &lookalikes.1),
+            "php",
+            "tests/CatalogTest.php",
+            &[
+                "testLoadsTheCatalog",
+                "testFiltersByCategory",
+                "assertSame",
+                "extends TestCase",
+            ],
+        );
+    }
+
+    #[test]
+    fn swift_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_swift_release_v0_2_fixture(
+            "xctest_exact_tests",
+            "swift-release-readiness-positive",
+        );
+        let unbound = index_swift_release_v0_2_fixture(
+            "xctest_unbound_import",
+            "swift-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "swift",
+            "CatalogTests.swift",
+            &[
+                "testLoadsCatalog",
+                "testFiltersCatalog",
+                "testSortsCatalog",
+                "XCTAssertEqual",
+            ],
+        );
+    }
+
+    #[test]
+    fn ruby_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_ruby_release_v0_2_fixture(
+            "minitest_exact_tests",
+            "ruby-release-readiness-positive",
+        );
+        let lookalikes = index_ruby_release_v0_2_fixture(
+            "minitest_lookalikes",
+            "ruby-release-readiness-lookalikes",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&lookalikes.0, &lookalikes.1),
+            "ruby",
+            "test/test_catalog.rb",
+            &[
+                "CatalogTest",
+                "test_loads_catalog",
+                "test_filters_catalog",
+                "Minitest::Test",
+            ],
+        );
+    }
+
+    #[test]
+    fn go_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_go_release_v0_2_fixture("testing_exact_tests", "go-release-readiness-positive");
+        // `testing_lookalikes` persists no Go unknown at all, so only the
+        // degraded corpus can prove the lane reaches the unknowns surface.
+        let degraded = index_go_release_v0_2_fixture(
+            "testing_parse_degraded",
+            "go-release-readiness-degraded",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&degraded.0, &degraded.1),
+            "go",
+            "catalog_test.go",
+            &[
+                // Go unit ids now carry the declaration's ordinal rather than
+                // its name, so the admitted test names must not reach any
+                // surface either, exactly as in every sibling lane.
+                "TestLoadsCatalog",
+                "TestFiltersCatalog",
+                "t.Log",
+                "*testing.T",
+                "func TestMain",
+                "TestRaw",
+            ],
+        );
+    }
+
+    #[test]
+    fn fortran_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_fortran_release_v0_2_fixture(
+            "testdrive_exact_tests",
+            "fortran-release-readiness-positive",
+        );
+        let missing_use = index_fortran_release_v0_2_fixture(
+            "testdrive_missing_use",
+            "fortran-release-readiness-missing-use",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&missing_use.0, &missing_use.1),
+            "fortran",
+            "test_drive_suite.f90",
+            &[
+                "test_plain",
+                "test_multi",
+                "test_alloc_order",
+                "new_unittest",
+            ],
+        );
+    }
+
     /// ADR-0020 gate 7 for a scanner lane: every required public surface must
     /// expose bounded tokens, states, counts, provenance, and recovery only.
     ///

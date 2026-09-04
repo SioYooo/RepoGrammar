@@ -141,7 +141,7 @@ own decision rather than internal counting. Go's repo-shape counts therefore
 exist in storage and are not surfaced through the public per-language stats
 rows.
 
-Three defects found this session applied to this lane and are recorded rather
+Four defects found this session applied to this lane and are recorded rather
 than left implied. `min_family_support` fell through to the shared default of
 two, and this lane proved it live: the `testing_low_support` fixture's two
 anchors formed a family the review says must not form.
@@ -155,6 +155,7 @@ current constants and the retired scanner's rejection. And the sqlite
 repo-shape stats allowlists (`REPO_SHAPE_LANGUAGE_SCOPES` and all four
 `repo_shape_*_where` predicates) omitted Go, so the language silently counted
 zero; the pre-existing four-predicate invariant test now actually covers it.
+Fourth, this lane's code unit ids ended in the declaration's name (`unit:<path>#go_test_function:<range>:<name>`), which reaches MCP output, so a repository identifier of unbounded cardinality crossed a gate 7 surface. Go was the only one of the eleven bounded lanes doing this: R and SQL carry a bounded ordinal in that position and Ada, MATLAB, Delphi, PHP, Swift, Ruby, and Fortran carry nothing, and no ADR required the name. The id now ends in the declaration's ordinal, and this lane's readiness test asserts the admitted test names never reach any surface, which it could not do before.
 
 ## Completion verdict
 

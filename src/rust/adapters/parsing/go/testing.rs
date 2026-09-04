@@ -434,6 +434,14 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         };
         let range =
             SourceRange::new(declaration.start, declaration.end).map_err(ParseError::Internal)?;
+        // The trailing component is the declaration's ordinal, not its name.
+        // A unit id reaches MCP output, and ADR-0020 gate 7 excludes
+        // high-cardinality repository identifiers from those surfaces; the
+        // path and byte range already address the declaration uniquely. This
+        // matches every other bounded lane: R and SQL carry a bounded ordinal,
+        // and Ada, MATLAB, Delphi, PHP, Swift, Ruby, and Fortran carry
+        // nothing. The name spelling was inherited from the ADR-0041 scanner,
+        // which no ADR requires.
         let unit = CodeUnit {
             id: CodeUnitId::new(format!(
                 "unit:{}#{}:{}-{}:{}",
@@ -441,7 +449,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
                 kind.as_str(),
                 declaration.start,
                 declaration.end,
-                declaration.name
+                ordinal
             ))
             .map_err(ParseError::Internal)?,
             language: Language::Go,
