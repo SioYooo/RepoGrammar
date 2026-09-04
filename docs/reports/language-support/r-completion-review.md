@@ -48,16 +48,26 @@
   resolution (`r_external_symbol_resolution`, triggered by `library`/
   `require`/`.Call`/`.C`/`.Fortran`/`.External` and `::`/`:::` access). Each
   entry records its reason code, its claim scope, whether an unmet obligation
-  blocks the family claim, and its provider-fallback policy. No R semantic
-  provider slot exists or is registered, so every residual classifies
-  irreducible-under-current-constraints (`manual_review_required` recovery in
-  the unknowns inventory); the identity obligations recover only through the
-  repository's own metadata, and counts may fall only via source-backed
-  replacement facts. `application/family.rs` remains the authoritative
-  claim-impact classifier and implements exactly the recorded split
-  (MissingDependency/MonkeyPatch on `r_testthat_identity` block;
-  `r_conditional_test_registration` is a non-blocking subclaim); a registry
-  test pins that only identity entries may record a blocking impact.
+  blocks the family claim, and its provider-fallback policy. The registry
+  records those four residuals under `no_r_provider_irreducible`: no R
+  semantic provider slot exists or is registered, the repository's
+  zero-external-dependency constraint admits none, and ADR-0036 forbids an
+  evaluator, so the obligation cannot be discharged in practice. The
+  product's `unknowns` surface answers a different question and reports them
+  on its own axis — on `testthat_exact_tests` it emits
+  `recoverable_unknowns: 8`, `irreducible_unknowns: 0`, with
+  `not_implemented_in_current_version` recovery for the three
+  `framework_semantic_provider` residuals — that generic mechanism token is
+  claimed by a registered but unintegrated provider slot — and
+  `manual_review_required` for the four `import_resolution_provider`
+  residuals, which no slot claims, plus the inventory lane's one governance
+  residual. Both statements are true of the same facts. The identity
+  obligations recover only through the repository's own metadata, and counts
+  may fall only via source-backed replacement facts. `application/family.rs`
+  remains the authoritative claim-impact classifier and implements exactly
+  the recorded split (MissingDependency/MonkeyPatch on `r_testthat_identity`
+  block; `r_conditional_test_registration` is a non-blocking subclaim); a
+  registry test pins that only identity entries may record a blocking impact.
 - [x] Exact family with support at least three — `testthat.test_that` over the
   fixed `testthat.test_that` target, minimum support three rather than the
   shared default of two, and the owned `repogrammar-r-derived` origin.
@@ -123,9 +133,14 @@ ADR-0042 D2b, but `library()` masking, a `source()`d or testthat-loaded helper,
 residuals are no longer silent: the registry records them as the standing
 `r_testthat_callee_binding` and `r_testthat_block_semantics` unknowns on every
 admitted anchor plus the triggered `r_dispatch_target` and
-`r_external_symbol_resolution` unknowns, each irreducible under current
-constraints. Closing them needs an evaluator, which is exactly what ADR-0036
-forbids, so they stay typed `UNKNOWN` rather than becoming claims.
+`r_external_symbol_resolution` unknowns, each carrying the registry's
+`no_r_provider_irreducible` fallback — no R provider slot can discharge them
+under the dependency constraint — while the `unknowns` surface counts them
+under `recoverable_unknowns` and recovers the framework-semantic residuals
+via `not_implemented_in_current_version` and the symbol-binding ones via
+`manual_review_required`. Closing them needs an evaluator, which is exactly
+what ADR-0036 forbids, so they stay typed `UNKNOWN` rather than becoming
+claims.
 
 ## Final program audit fields
 
@@ -139,7 +154,7 @@ forbids, so they stay typed `UNKNOWN` rather than becoming claims.
 | Owned source IR / external symbols | Owned units exist for the ADR-0042 anchor only, and the IR abstains on their kind because a testthat block is a call, not a declaration; external symbols stay absent, and package imports, S3/S4/R6 dispatch, native symbols, NSE, and generated code are unresolved. |
 | Library Contracts | Registry exists, production packs = 0; inventory never creates a behavior contract. |
 | Exact family / fixtures | One exact family, `framework:testthat.test_that` over the testthat block anchor, gated at support three. Positive, lookalike, low-support, and parse-degraded fixtures exist; resolved/unresolved do not, because there is no R provider. |
-| Primary UNKNOWN cases | `r_testthat_identity` (undeclared testthat dependency; a file that rebinds `test_that` itself — both blocking), `r_conditional_test_registration` (non-blocking reach), `r_testthat_description_literal` (description not a source-visible plain literal), `r_test_parse` (source outside the declared subset, byte/unit/depth bounds), `r_testthat_callee_binding` and `r_testthat_block_semantics` (standing on every anchor), `r_dispatch_target` (S3/S4 generic registration or dispatch), `r_external_symbol_resolution` (`library`/`require`/dotted native entries/`::`/`:::`), plus the inventory lane's `r_dependency_inventory` tokens for repository identity, selected lock/project/profile, remote sources, and package directness/scope. All source-semantic residuals share one provider fallback: no R semantic provider slot exists or is registered, so they classify irreducible under current constraints with `manual_review_required` recovery. |
+| Primary UNKNOWN cases | `r_testthat_identity` (undeclared testthat dependency; a file that rebinds `test_that` itself — both blocking), `r_conditional_test_registration` (non-blocking reach), `r_testthat_description_literal` (description not a source-visible plain literal), `r_test_parse` (source outside the declared subset, byte/unit/depth bounds), `r_testthat_callee_binding` and `r_testthat_block_semantics` (standing on every anchor), `r_dispatch_target` (S3/S4 generic registration or dispatch), `r_external_symbol_resolution` (`library`/`require`/dotted native entries/`::`/`:::`), plus the inventory lane's `r_dependency_inventory` tokens for repository identity, selected lock/project/profile, remote sources, and package directness/scope. The four provider-bound residuals (`r_testthat_callee_binding`, `r_testthat_block_semantics`, `r_dispatch_target`, `r_external_symbol_resolution`) share one provider fallback, `no_r_provider_irreducible`: no R semantic provider slot exists or is registered and the dependency constraint admits none, so the obligation cannot be discharged in practice. The `unknowns` surface classifies the same residuals on its own axis — measured on `testthat_exact_tests`, `recoverable_unknowns: 8`, `irreducible_unknowns: 0`, `by_recovery_code` = `manual_review_required` 5 (the four `import_resolution_provider` residuals plus the inventory lane's governance residual), `not_implemented_in_current_version` 3 (the `framework_semantic_provider` residuals). |
 | Source-free / security | Metadata results are source-free; only `tests/testthat/test-*.R` bytes are read, every other `.R`/`.r` byte stays zero-read, and no source text, identifier, or literal reaches a readiness surface; input is bounded by byte, unit, and recursion-depth limits; no R, renv, package/profile script, native code, child, repository code, or network runs. |
 | Completion state / counted | `structural_substrate`; strict gate count `8/9`; Top-20 complete = no. |
 

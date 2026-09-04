@@ -203,8 +203,8 @@
       "status": "structural_substrate",
       "completion_gates_passed": 3,
       "top20_complete": false,
-      "blocker_class": "open_under_zero_dependency",
-      "blocker": "The TypeScript compiler worker already ships with the package, so deepening the JavaScript project model, fixtures, and readiness needs no new artifact. It is a separate multi-module effort this program did not attempt.",
+      "blocker_class": "zero_dependency_excluded",
+      "blocker": "Corrected 2026-09-05, same finding as TypeScript: the claim that the TypeScript compiler worker ships with the package is false. Only workers/python/worker.py is bundled into the release archive. JavaScript shares the TS/JS lane, so its gate 2 has the same two routes: a bundled pinned TypeScript, which the zero-dependency constraint excludes, or a bounded hand-written frontend over a declared subset on the ADR-0042..0051 precedent, which it permits.",
       "framework_support": {
         "state": "landed",
         "framework": "Playwright",
@@ -235,8 +235,8 @@
       "status": "structural_substrate",
       "completion_gates_passed": 8,
       "top20_complete": false,
-      "blocker_class": "zero_dependency_excluded",
-      "blocker": "Gate 9 remains: the linked semantic prerequisite commits and the final completion audit. ADR-0043 D4b replaced the line scanner with a bounded recursive-descent parser over a declared VB.NET 10-17 invariance set, so malformed VB now abstains for the whole file and reports a degraded parse instead of yielding fewer admitted declarations. It needs no external artifact.",
+      "blocker_class": "open_under_zero_dependency",
+      "blocker": "Gate 9 remains: the linked semantic prerequisite commits and the final completion audit. ADR-0043 D4b replaced the line scanner with a bounded recursive-descent parser over a declared VB.NET 10-17 invariance set, so malformed VB now abstains for the whole file and reports a degraded parse instead of yielding fewer admitted declarations. It needs no external artifact. Reclassified 2026-09-05: the class had stayed zero_dependency_excluded from before ADR-0043 landed the bounded parser, contradicting this row's own text and the taxonomy, under which a lane needing no external artifact is open_under_zero_dependency.",
       "framework_support": {
         "state": "landed",
         "framework": "MSTest",
@@ -689,8 +689,8 @@
       "status": "structural_substrate",
       "completion_gates_passed": 3,
       "top20_complete": false,
-      "blocker_class": "open_under_zero_dependency",
-      "blocker": "The TypeScript compiler worker already ships with the package, so the pinned full project model, fixture closure, and linked audit need no new artifact. They are a separate effort this program did not attempt.",
+      "blocker_class": "zero_dependency_excluded",
+      "blocker": "Corrected 2026-09-05. The earlier text claimed \"the TypeScript compiler worker already ships with the package\"; it does not. The release workflow bundles only workers/python/worker.py into the archive, and the npm installer validates only that path, so src/workers/typescript/worker.js reaches no installed product. Even from a source checkout the worker's compiler-API mode is off unless a typescript package is resolvable: it tries require(\"typescript\") first and only consults the analyzed repository's own copy when the operator sets REPOGRAMMAR_TSJS_TRUST_PROJECT_TYPESCRIPT=1, because loading it executes that repository's module code. With no compiler API every consumer guards on model.typescript and falls back to structural resolution, which ADR-0020 gate 2 forbids as a sole semantic oracle. Gate 2 therefore needs either a bundled and pinned TypeScript, which the zero-dependency constraint excludes, or a bounded hand-written frontend over a declared subset on the ADR-0042..0051 precedent, which the constraint permits and which no one has attempted.",
       "framework_support": {
         "state": "landed",
         "framework": "Playwright",

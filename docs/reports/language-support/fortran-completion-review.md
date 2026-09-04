@@ -198,8 +198,18 @@ The anchor is a claim about a declaration's shape and an in-file import, not
 about registration or module resolution. Whether a collect subroutine
 registers the test, and which module file satisfies `use testdrive`, are the
 standing `test_registration_unproven` and `testdrive_module_binding`
-residuals on every anchor, irreducible under current constraints because
-ADR-0034 forbids executing Fortran tooling and no provider slot exists.
+residuals on every anchor. The registry records them under
+`no_fortran_provider_irreducible`: ADR-0034 forbids executing Fortran
+tooling, no provider slot exists or is registered, and the
+zero-external-dependency constraint admits none, so the obligation cannot be
+discharged in practice. The product's `unknowns` surface answers a different
+question and reports them on its own axis — on `testdrive_exact_tests` it
+emits `recoverable_unknowns: 12`, `irreducible_unknowns: 0`, with
+`not_implemented_in_current_version` recovery for the six
+`framework_semantic_provider` residuals — that generic mechanism token is
+claimed by a registered but unintegrated provider slot — and
+`manual_review_required` for the six `import_resolution_provider` residuals,
+which no slot claims. Both statements are true of the same facts.
 
 ## Final program audit fields
 
@@ -213,7 +223,7 @@ ADR-0034 forbids executing Fortran tooling and no provider slot exists.
 | Owned source IR / external symbols | Owned units exist for the ADR-0051 anchor only; the IR projects them as functions with module containment. External symbols stay absent; module graphs, interfaces, generics, submodules, coarrays, and generated code are unresolved. |
 | Library Contracts | Registry exists, production packs = 0; manifest rows and anchors create no behavior contract. |
 | Exact family / fixtures | One exact family, `fortran.testdrive.test_subroutine` under role `framework:testdrive.test_subroutine` over the fixed target `testdrive.test_subroutine`, family id `family:fortran:fortran_test_drive_subroutine:framework_testdrive_test_subroutine`, support bar three pinned explicitly for `fortran`. Measured: six positive instances across two files form the family at support 6; lookalikes for every named negative class, low-support (two anchors), missing-use, and three parse-degraded refusals index complete and form none. Resolved/unresolved pairs do not exist because there is no Fortran provider. |
-| Primary UNKNOWN cases | `fortran_testdrive_identity` (`testdrive_use_not_proven` — blocking; `testdrive_module_binding` — standing), `fortran_testdrive_registration` (`test_registration_unproven` — standing), `fortran_test_parse` (preprocessor directive, include statement, fixed-form signature, unadmitted construct, byte/depth/unit limits), plus the inventory lane's `fortran_dependency_inventory` tokens. Standing residuals share one fallback: no Fortran provider slot exists or is registered and ADR-0034 forbids executing Fortran tooling, so they are irreducible under current constraints. |
+| Primary UNKNOWN cases | `fortran_testdrive_identity` (`testdrive_use_not_proven` — blocking; `testdrive_module_binding` — standing), `fortran_testdrive_registration` (`test_registration_unproven` — standing), `fortran_test_parse` (preprocessor directive, include statement, fixed-form signature, unadmitted construct, byte/depth/unit limits), plus the inventory lane's `fortran_dependency_inventory` tokens. Standing residuals share one fallback, `no_fortran_provider_irreducible`: no Fortran provider slot exists or is registered, ADR-0034 forbids executing Fortran tooling, and the dependency constraint admits none, so the obligation cannot be discharged in practice. The `unknowns` surface classifies the same residuals on its own axis — measured on `testdrive_exact_tests`, `recoverable_unknowns: 12`, `irreducible_unknowns: 0`, `by_recovery_code` = `manual_review_required` 6 (`import_resolution_provider`), `not_implemented_in_current_version` 6 (`framework_semantic_provider`). |
 | Source-free / security | Only free-form Fortran bytes are read; fixed-form and preprocessed files are refused or never discovered. No source text, identifier, literal, or absolute path reaches any fact, note, assumption, or unit id; input is bounded by bytes, block depth, module nesting, and unit counts; no fpm, gfortran, flang, preprocessor, include processor, repository code, child process, or network runs. |
 | Completion state / counted | `structural_substrate`; strict gate count `8/9` with gate 9 open on the commit-shape ruling; Top-20 complete = no. |
 

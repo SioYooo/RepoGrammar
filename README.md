@@ -42,9 +42,8 @@ the gap with a plausible guess.
 
 The index is pre-computed structure an agent would otherwise re-derive by
 reading files: one lookup returns the compatible implementations, their
-provenance, and the smallest set of source still worth reading. In one recorded
-demo run, the same agent task used **52% fewer tokens** with RepoGrammar
-supplying family context first than it did reading source broadly.
+provenance, and the smallest set of source still worth reading. One recorded
+demo run observed a **52% reduction in token use**.
 
 That figure is a single observed run, not a controlled benchmark. There is no
 committed paired baseline/treatment artifact behind it, and it will vary by

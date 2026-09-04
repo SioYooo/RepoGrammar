@@ -46,11 +46,15 @@
   bounded observation claim `swift_xctest_method_shape` with five kinds.
   Counts may fall only via source-backed replacement facts — the import
   appearing or the superclass spelling changing. No Swift semantic provider
-  slot exists or is registered, so module-qualified `XCTest.XCTestCase`
-  identity, indirect ancestry, extension-added methods, and execution
-  remain irreducible `UNKNOWN`s recorded as the anchor's standing
-  `provider_resolved=false` assumption rather than being filled from
-  ambient state.
+  slot exists or is registered, and the repository's zero-external-dependency
+  constraint admits none, so module-qualified `XCTest.XCTestCase` identity,
+  indirect ancestry, extension-added methods, and execution stay undischarged
+  — recorded as the anchor's standing `provider_resolved=false` assumption
+  rather than being filled from ambient state. Every claim above is a refusal
+  or binding claim that fires only on an unadmitted or unbound construct, so
+  a clean positive corpus emits no residual at all: `xctest_exact_tests`
+  measures `total_unknowns: 0`, and there is nothing there for the `unknowns`
+  surface to classify on either axis.
 - [x] Exact family with support at least three — the parser emits the fixed
   `swift.xctest.test_method` support target (engine
   `repogrammar-swift-xctest-parser`, method
@@ -208,7 +212,7 @@ as such in ADR-0048 D6.
 | Owned source IR / external symbols | Owned module/class/method units for the ADR-0048 anchor, projected to Class/Method with containment edges; external symbols stay absent, and module identity, indirect ancestry, extensions, macros, and generated code are unresolved. |
 | Library Contracts | Registry infrastructure exists, production packs = 0; inventory never creates a behavior contract. |
 | Exact family / fixtures | One exact family target, `swift.xctest.test_method` over the bounded XCTest anchor under role `framework:xctest.test`, family id `family:swift:swift_test_method:framework_xctest_test`, support bar three pinned explicitly for `swift`. Eight admitted anchors across three anchor-bearing fixtures (three, two, three, as the parser's tests assert); `xctest_exact_tests` and `xctest_throwing_tests` each form the family at support 3 through the product CLI, while `xctest_setup_override`'s two anchors sit under the bar and the lookalike/unbound/conditional/degraded/low-support matrix forms nothing. Resolved/unresolved pairs do not exist, because there is no Swift provider. |
-| Primary UNKNOWN cases | `swift_syntax_admission` (unterminated string/comment/backtick, raw string, non-ASCII code, attribute argument, generic declaration, accessor, unadmitted member/file/header/hash shapes, unbalanced structure, resource ceilings), `swift_dialect_invariance` (`unadmitted_regex_literal`, blocking-direction `ConflictingFacts`), `swift_conditional_compilation` (`conditional_compilation_region`), `swift_xctest_class_binding` (`test_methods_without_testcase_base`), `swift_xctest_import_binding` (`testcase_without_xctest_import`), `swift_xctest_method_shape` (`static_test_method`, `test_method_with_parameters`, `test_method_non_void_return`, `test_method_rethrows`, `free_test_function`), plus the inventory lane's `swift_dependency_inventory` tokens. No Swift semantic provider slot exists, so identity residuals are irreducible under current constraints. |
+| Primary UNKNOWN cases | `swift_syntax_admission` (unterminated string/comment/backtick, raw string, non-ASCII code, attribute argument, generic declaration, accessor, unadmitted member/file/header/hash shapes, unbalanced structure, resource ceilings), `swift_dialect_invariance` (`unadmitted_regex_literal`, blocking-direction `ConflictingFacts`), `swift_conditional_compilation` (`conditional_compilation_region`), `swift_xctest_class_binding` (`test_methods_without_testcase_base`), `swift_xctest_import_binding` (`testcase_without_xctest_import`), `swift_xctest_method_shape` (`static_test_method`, `test_method_with_parameters`, `test_method_non_void_return`, `test_method_rethrows`, `free_test_function`), plus the inventory lane's `swift_dependency_inventory` tokens. No Swift semantic provider slot exists and the dependency constraint admits none, so the identity obligations cannot be discharged in practice; they ride each anchor as the standing `provider_resolved=false` assumption. Every listed claim fires only on an unadmitted or unbound construct, so a clean positive corpus emits no residual: `xctest_exact_tests` measures `total_unknowns: 0`. |
 | Source-free / security | Only `.swift` bytes are read beyond the existing inventory; every fact, note, assumption, kind, and diagnostic is a fixed source-free string, asserted over both an anchored and an unbound workspace at the module boundary; input is bounded by byte, token, unit, header, interpolation-depth, and recursion ceilings; no toolchain, manifest, macro, plugin, child process, repository code, or network runs. |
 | Completion state / counted | `structural_substrate`; strict gate count `8/9` with gate 9 open on the commit-shape ruling; Top-20 complete = no. |
 

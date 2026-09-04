@@ -58,8 +58,20 @@
   with its provider-fallback policy. No entry blocks the family claim at
   repository level: whole-file abstentions drop only their own file's
   anchors, and every other obligation excludes the affected declaration.
-  No PHP semantic provider slot exists or is registered, so the residuals
-  are irreducible under current constraints.
+  The registry records the two standing residuals under
+  `no_php_provider_irreducible`: no PHP semantic provider slot exists or is
+  registered, the repository's zero-external-dependency constraint admits
+  none, and ADR-0024 forbids executing PHP, so the obligation cannot be
+  discharged in practice. The product's `unknowns` surface answers a
+  different question and reports them on its own axis — on
+  `phpunit_exact_tests` it emits `recoverable_unknowns: 13`,
+  `irreducible_unknowns: 0`, with `not_implemented_in_current_version`
+  recovery for the six `framework_semantic_provider` residuals — that
+  generic mechanism token is claimed by a registered but unintegrated
+  provider slot — and `manual_review_required` for the six
+  `import_resolution_provider` residuals, which no slot claims, plus the
+  inventory lane's one governance residual. Both statements are true of the
+  same facts.
 - [x] Exact family with support at least three in the product support gate —
   fixed support target `phpunit.TestMethod`, framework adapter registry
   `src/rust/adapters/frameworks/php.rs` with role
@@ -178,7 +190,7 @@ counted as supported.
 | Owned source IR / external symbols | Owned units exist for the ADR-0047 anchor only (`php_file` module, `php_test_class`, `php_test_method`); external symbols, cross-file ancestry, trait methods, dynamic includes, generated proxies, and runtime mutation are unresolved or non-claims. |
 | Library Contracts | Registry exists, production packs = 0; inventory never creates a behavior contract. |
 | Exact family / fixtures | One family target, `framework:phpunit.test_method` over the `phpunit.TestMethod` anchor, family token `php.phpunit.test_method`, family id `family:php:php_test_method:framework_phpunit_test_method`, support bar three pinned explicitly for `php`. Measured: positive (three marker styles, in-file chain) forms the family with support 6; lookalike (five lookalike classes/functions, zero anchors), low-support (two anchors), and parse-degraded (two whole-file abstentions) index complete and form none. Resolved/unresolved pairs do not exist, because there is no PHP provider. |
-| Primary UNKNOWN cases | `php_test_parse` (unadmitted construct, unterminated literal, byte/depth/unit bounds), `php_dialect_invariance` (attribute spanning lines), `php_phpunit_testcase_ancestry` (markers without a resolved TestCase-suffixed terminus), `php_phpunit_test_method_shape` (markered method outside the admitted shape), `php_phpunit_data_provider_obligation` (provider attachment), `php_trait_test_origin` (trait import in a test class), and the standing `php_phpunit_runtime_selection` and `php_phpunit_base_name_binding` on every anchor, plus the inventory lane's `php_dependency_inventory` tokens from ADR-0024. All source-semantic residuals share one fallback: no PHP semantic provider slot exists or is registered, so they classify irreducible under current constraints. |
+| Primary UNKNOWN cases | `php_test_parse` (unadmitted construct, unterminated literal, byte/depth/unit bounds), `php_dialect_invariance` (attribute spanning lines), `php_phpunit_testcase_ancestry` (markers without a resolved TestCase-suffixed terminus), `php_phpunit_test_method_shape` (markered method outside the admitted shape), `php_phpunit_data_provider_obligation` (provider attachment), `php_trait_test_origin` (trait import in a test class), and the standing `php_phpunit_runtime_selection` and `php_phpunit_base_name_binding` on every anchor, plus the inventory lane's `php_dependency_inventory` tokens from ADR-0024. The two standing residuals (`php_phpunit_runtime_selection`, `php_phpunit_base_name_binding`) share one fallback, `no_php_provider_irreducible`: no PHP semantic provider slot exists or is registered and the dependency constraint admits none, so the obligation cannot be discharged in practice. The `unknowns` surface classifies the same residuals on its own axis — measured on `phpunit_exact_tests`, `recoverable_unknowns: 13`, `irreducible_unknowns: 0`, `by_recovery_code` = `manual_review_required` 7 (the six `import_resolution_provider` residuals plus the inventory lane's governance residual), `not_implemented_in_current_version` 6 (the `framework_semantic_provider` residuals). |
 | Source-free / security | Only prologue-bearing `.php` bytes are read; no source text, identifier, literal, or absolute path reaches the parse surface (asserted over every fixture through the product dispatch); diagnostics are fixed strings; input is bounded by bytes, units, and nesting depth; nothing executes. |
 | Completion state / counted | `structural_substrate`; strict gate count `8/9` with gate 9 open on the commit-shape ruling; Top-20 complete = no. |
 

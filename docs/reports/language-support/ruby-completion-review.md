@@ -63,10 +63,14 @@
   `UnresolvedImport` when a file on an admitted path declares direct `test_*`
   instance methods in a class whose in-file chain never reaches
   `Minitest::Test` or `ActiveSupport::TestCase`. No Ruby semantic provider
-  slot exists or is registered, so the identity residuals are irreducible
-  under current constraints; they ride each anchor as the standing
-  `provider_resolved=false` assumption and the bounded `minitest_require=`
-  context token rather than as per-anchor `UNKNOWN` facts.
+  slot exists or is registered and the repository's zero-external-dependency
+  constraint admits none, so the identity obligations cannot be discharged in
+  practice; they ride each anchor as the standing `provider_resolved=false`
+  assumption and the bounded `minitest_require=` context token rather than as
+  per-anchor `UNKNOWN` facts. Every claim above fires only on an unadmitted
+  or unbound construct, so a clean positive corpus emits no residual at all:
+  `minitest_exact_tests` measures `total_unknowns: 0`, and there is nothing
+  there for the `unknowns` surface to classify on either axis.
 - [x] Exact family with support at least three in the product support gate —
   the frontend emits the fixed `ruby.minitest.test_method` support target
   (engine `repogrammar-ruby-minitest-parser`, method
@@ -224,7 +228,7 @@ assumption.
 | Owned source IR / external symbols | Owned units for the ADR-0049 anchor only (`ruby_minitest_test_class`, `ruby_minitest_test_method`, plus the file's module unit), projected with module and class-to-method containment. External symbols stay absent; `require`/`load`/`autoload` graphs, constant rebinding, refinements, metaprogramming, inherited and dynamically defined tests, and gem ownership are unresolved or non-claims. |
 | Library Contracts | Registry infrastructure exists, production packs = 0; inventory rows and anchors create no behavior contract. |
 | Exact family / fixtures | One family target, `framework:minitest.test_method` over the `ruby.minitest.test_method` anchor, family id `family:ruby:ruby_minitest_test_method:framework_minitest_test_method`, support bar three pinned explicitly for `ruby`. Measured: positive corpus support 8; lookalike (one anchor), low-support (two anchors), and four parse-degraded abstentions form no family and index complete. Resolved/unresolved pairs do not exist, because there is no Ruby provider. |
-| Primary UNKNOWN cases | `ruby_parse` (`unadmitted_ruby_construct`, `unterminated_string`, `unterminated_regexp`, `unterminated_percent_literal`, `unterminated_heredoc`, `ruby_structural_failure`, `source_byte_limit`, `parser_depth_limit`, `parser_resource_limit`), `ruby_lexical_invariance` (`ruby_slash_disambiguation`, `ruby_heredoc_disambiguation`), `ruby_minitest_superclass` (`test_methods_without_minitest_base`), plus the inventory lane's `ruby_dependency_inventory` tokens from ADR-0022. All source-semantic residuals share one fallback: no Ruby semantic provider slot exists or is registered and ADR-0022 forbids executing Ruby or its tooling, so they classify irreducible under current constraints. |
+| Primary UNKNOWN cases | `ruby_parse` (`unadmitted_ruby_construct`, `unterminated_string`, `unterminated_regexp`, `unterminated_percent_literal`, `unterminated_heredoc`, `ruby_structural_failure`, `source_byte_limit`, `parser_depth_limit`, `parser_resource_limit`), `ruby_lexical_invariance` (`ruby_slash_disambiguation`, `ruby_heredoc_disambiguation`), `ruby_minitest_superclass` (`test_methods_without_minitest_base`), plus the inventory lane's `ruby_dependency_inventory` tokens from ADR-0022. All source-semantic residuals share one fallback: no Ruby semantic provider slot exists or is registered, ADR-0022 forbids executing Ruby or its tooling, and the dependency constraint admits none, so the obligation cannot be discharged in practice. Every listed claim fires only on an unadmitted or unbound construct, so a clean positive corpus emits no residual: `minitest_exact_tests` measures `total_unknowns: 0`. |
 | Source-free / security | Only runner-scoped `.rb` bytes cross the source-store boundary; no source text, identifier, literal, or absolute path reaches a fact, note, assumption, diagnostic, or unit id (asserted over the whole fixture matrix through the product dispatch); notes are fixed strings that pass the stored-assumption content rules; input is bounded by bytes, 4,096 units, 256 region-nesting levels, and eight superclass hops; nothing executes. |
 | Completion state / counted | `structural_substrate`; strict gate count `8/9` with gate 9 open on the commit-shape ruling; Top-20 complete = no. |
 
