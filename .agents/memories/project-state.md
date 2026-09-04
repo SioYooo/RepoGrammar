@@ -1,5 +1,65 @@
 # Project State
 
+## Five bounded test-framework frontends, audited and corrected — 2026-09-05
+
+ADR-0047 through ADR-0051 land bounded hand-written frontends for PHP/PHPUnit,
+Swift/XCTest, Ruby/Minitest, Go/testing and Fortran/test-drive. Each explicitly
+supersedes the family closure in its preflight ADR (0024, 0025, 0022, 0021)
+after reading that ADR's evidence ladder: the forbidden rung is text or regex
+matching, and a parser over a declared subset with whole-file abstain-or-admit
+semantics is the same intermediate rung R, VB.NET, Delphi, Ada and MATLAB
+already claim. All five now stand at eight of nine ADR-0020 gates.
+
+A wiring audit against the known silent-failure checklist found seven defects
+that broke no build and failed no test. `min_family_support` fell through to the
+shared default of two for all five lanes, so a pair of anchors formed a family
+the reviews said must not form. `family_eligible_kind` spelled the Fortran kind
+`fortran_testdrive_subroutine` while the frontend emits
+`fortran_test_drive_subroutine`, so that family could never form at all. The
+Ruby slash-disambiguation note embedded a bare `/`, which
+`validate_semantic_text_field` refuses as an embedded absolute path, so `index`
+failed outright on a committed degraded fixture. The Ruby positive fixture used
+a `%`-literal inside an interpolation, which the declared subset refuses, so the
+file abstained whole-file and the corpus silently lost four of nine anchors.
+`is_class_like`/`is_method_like` omitted the PHP and Ruby pairs, dropping every
+class-to-method containment edge. `family.rs` imported the Go anchor-engine
+constants from the retired ADR-0041 scanner instead of the dispatched ADR-0050
+parser, so Go unknowns never classified and both Go claim-impact classifiers
+were dead against product data. The repo-shape stats allowlists omitted all five
+languages.
+
+The durable lesson is that none of these is reachable from a parser unit test,
+because those call the parser directly and never cross the storage or family
+boundary. Every lane now has product-level tests that run init/index/families
+over each committed fixture and assert the exact support number, and the
+low-support fixtures carry two anchors so they pin the 2-vs-3 boundary rather
+than merely sitting under it. `DERIVED_SUPPORT_DERIVERS` replaces the per-lane
+copy-paste in both the full-index and incremental-sync paths, so that
+particular two-call-site hazard is now structurally impossible.
+
+Swift's framework role was renamed from `framework:swift.xctest.test` to
+`framework:xctest.test`: the token is the leading segment after `framework:`,
+so the old spelling made the framework token the language name.
+
+Gate 9 is open for all eleven landed lanes. The maintainer ruled on 2026-09-05
+that ADR-0020 G9's frontend/IR and UNKNOWN/provider submodules must land as
+separate atomic commits. The six earlier lanes are not rewritten, and these five
+arrived as one integrated slice whose frontends emit their typed UNKNOWNs
+inline, so splitting would mean authoring intermediate states rather than
+re-slicing existing ones. No language is at nine of nine.
+
+The maintainer also confirmed on 2026-09-05 that the zero-external-dependency
+constraint stands. That makes 20/20 unreachable: C, C++, Java, C# and Rust need
+clang, javac or JDT, Roslyn and rust-analyzer for gate 2 or 4; Python needs
+Pyrefly or Pyright; Scratch needs a vetted deflate. Assembly is capped by
+explicit maintainer direction. JavaScript and TypeScript remain the only lanes
+that are open under the constraint and unattempted.
+
+`readiness_language_scopes()` in `application/query.rs` was deliberately NOT
+extended to the new lanes. That list carries a `language_scope`/`preview_status`
+product claim, unlike the internal repo-shape counting scopes, so extending it
+needs its own decision.
+
 ## opencode global live writer — 2026-09-04
 
 opencode is promoted to the third live agent target (global scope only) as the

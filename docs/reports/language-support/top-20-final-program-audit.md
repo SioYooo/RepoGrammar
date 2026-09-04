@@ -1,6 +1,6 @@
 # Top-20 language and third-party-library final program audit
 
-- Date: 2026-08-01; continuation audited 2026-08-14 and 2026-08-15
+- Date: 2026-08-01; continuations audited 2026-08-14, 2026-08-15, 2026-09-04, and 2026-09-05
 - Branch: `feat/top-20-language-library-support`
 - Protected baseline: `86dba38ada7fe5646b5ab8770e2ad4183e8d22d7`
 - Verdict: `PARTIAL_AUDITED_PROGRESS`
@@ -57,6 +57,7 @@ The accepted terminal label is partial audited progress. `COMPLETE`,
 | 2026-08-14 R5 — SQL readiness | source-free/leakage audit across `status`, `doctor`, `stats`, `unknowns`, `families`, `files`, and MCP; corrected the dialect recovery mechanism | SQL gate 7 closes; 8/9, gate 9 left to a maintainer ruling |
 | 2026-09-04 R6 — MATLAB Gate 1 selection | deterministic `.m`/`mpackage.json` selection with MATLAB-only `codegen`/`slprj`/`sccprj` generated-output exclusions, ADR-0046 D4c dialect abstention re-verified, and lane symlink/invalid-bytes discovery tests | MATLAB gate 1 closes; 8/9, gate 9 left to the completion audit |
 | 2026-09-04 R7 — R obligation registry | `R_OBLIGATION_REGISTRY` in the testthat frontend declares every claim-scoped typed `UNKNOWN` (identity blocking obligations, conditional reach, description literal, parse bounds, standing callee-binding and block-NSE residuals, triggered S3/S4 dispatch and native/package-symbol unknowns) with recorded provider fallbacks; all emission routes through the table and registry/determinism/count tests pin it | R gate 4 closes; 8/9, gate 9 (final completion audit with linked prerequisite SHAs) remains |
+| 2026-09-05 R8 — five bounded frontends audited and corrected | ADR-0047..0051 land bounded PHP/PHPUnit, Swift/XCTest, Ruby/Minitest, Go/testing and Fortran/test-drive frontends. A wiring audit against the silent-failure checklist found and fixed seven defects no test caught: `min_family_support` fell through to the shared default of two for all five lanes; `family_eligible_kind` spelled the Fortran kind `fortran_testdrive_subroutine` while the frontend emits `fortran_test_drive_subroutine`, so that family could never form; the Ruby slash-disambiguation note embedded a bare `/` that the semantic-fact validator refuses, so `index` failed outright on the committed degraded fixture; the Ruby positive fixture used a %-literal inside an interpolation, which the declared subset refuses, silently abstaining a third of its anchors; `is_class_like`/`is_method_like` omitted the PHP and Ruby pairs, dropping every class-to-method containment edge; `family.rs` classified Go unknowns against the retired ADR-0041 scanner's engine identity, making both Go claim-impact classifiers dead against product data; and the repo-shape stats allowlists omitted all five languages. Product-level fixture tests, the four-predicate scope invariant, a containment-pair guard, an engine-identity guard, an all-lanes support-bar test, and an extended role-overlap guard now pin each one. Low-support fixtures carry two anchors so they pin the 2-vs-3 boundary rather than merely sitting under it, and the Swift role was renamed to `framework:xctest.test` to match the framework-not-language token convention every peer follows | PHP, Swift, Ruby, Go and Fortran reach 8/9; gate 9 stays open for all five under the 2026-09-05 split-commit ruling |
 
 ## Strict language matrix
 
@@ -84,14 +85,14 @@ means a recorded ADR decision closed the lane.
 | 10 | Rust | `structural_substrate` | 3/9 | `zero_dependency_excluded` | Cargo manifest/project-model declarations only | no |
 | 11 | Delphi/Object Pascal | `structural_substrate` | 8/9 | `open_under_zero_dependency` | literal Delphi package declarations only | no |
 | 12 | Scratch | `not_started`; prerequisite `NO_GO` | 1/9 | `no_go` | no product dependency inventory | no |
-| 13 | Go | `discovered_only` | 2/9 | `open_under_zero_dependency` | bounded `go.mod` declarations only | no |
-| 14 | PHP | `discovered_only` | 1/9 | `open_under_zero_dependency` | Composer manifest plus lock rows, without coherence | no |
-| 15 | Swift | `discovered_only` | 1/9 | `open_under_zero_dependency` | SwiftPM schema-2/3 lock pins only | no |
+| 13 | Go | `structural_substrate` | 8/9 | `open_under_zero_dependency` | bounded `go.mod` declarations only | no |
+| 14 | PHP | `structural_substrate` | 8/9 | `open_under_zero_dependency` | Composer manifest plus lock rows, without coherence | no |
+| 15 | Swift | `structural_substrate` | 8/9 | `open_under_zero_dependency` | SwiftPM schema-2/3 lock pins only | no |
 | 16 | Ada | `structural_substrate` | 8/9 | `open_under_zero_dependency` | unconditional literal Alire declarations only | no |
 | 17 | Assembly | `structural_substrate` | 1/9 | `zero_dependency_excluded` | no native/system dependency consumer | no |
 | 18 | MATLAB | `structural_substrate` | 8/9 | `open_under_zero_dependency` | bounded R2024b+ add-on manifest declarations only | no |
-| 19 | Fortran | `discovered_only` | 2/9 | `open_under_zero_dependency` | literal root fpm declarations only | no |
-| 20 | Ruby | `discovered_only` | 2/9 | `open_under_zero_dependency` | direct `Gemfile.lock` declaration inventory only | no |
+| 19 | Fortran | `structural_substrate` | 8/9 | `open_under_zero_dependency` | literal root fpm declarations only | no |
+| 20 | Ruby | `structural_substrate` | 8/9 | `open_under_zero_dependency` | direct `Gemfile.lock` declaration inventory only | no |
 | extra | TypeScript | `structural_substrate` | 3/9 | `open_under_zero_dependency` | root npm manifest declarations only | no |
 
 The machine-readable authority for these rows is

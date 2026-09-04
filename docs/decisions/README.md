@@ -53,3 +53,11 @@ Current accepted ADRs:
 - ADR-0041: Bounded Go test-declaration frontend.
 - ADR-0042: Bounded R testthat frontend.
 - ADR-0043: Bounded VB.NET MSTest frontend.
+- ADR-0044: Bounded Delphi DUnitX frontend.
+- ADR-0045: Bounded Ada AUnit frontend.
+- ADR-0046: Bounded MATLAB `matlab.unittest` frontend.
+- ADR-0047: Bounded PHP PHPUnit frontend.
+- ADR-0048: Bounded Swift XCTest frontend.
+- ADR-0049: Bounded Ruby Minitest frontend.
+- ADR-0050: Bounded Go testing frontend.
+- ADR-0051: Bounded Fortran test-drive frontend.
