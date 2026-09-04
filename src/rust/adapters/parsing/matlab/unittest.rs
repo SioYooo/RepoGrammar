@@ -527,7 +527,7 @@ impl LineLexer<'_, '_> {
                 b'.' if bytes.get(index + 1) == Some(&b'.')
                     && bytes.get(index + 2) == Some(&b'.') =>
                 {
-                    return true
+                    return true;
                 }
                 // `\` at end of line is an Octave continuation and a MATLAB
                 // syntax error, so the statement extent differs between them.

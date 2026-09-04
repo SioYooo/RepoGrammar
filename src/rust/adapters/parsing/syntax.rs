@@ -2725,10 +2725,11 @@ describe("users", () => {
         assert!(targets.contains("tsconfig.root_dir:src"));
         assert!(targets.contains("tsconfig.root_dir:generated"));
         assert!(targets.contains("tsconfig.jsx:react-jsx"));
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "project_config=root_dirs")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "project_config=root_dirs")
+        }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("../secret"));
         assert!(!debug.contains("tsconfig.root_dir:src/*"));

@@ -2558,15 +2558,13 @@ def test_users(client, status, missing_fixture):
             .as_ref()
             .map(SymbolId::as_str)
             == Some("app.services.UserService.list_orders")));
-        assert!(!report.semantic_facts.iter().any(|fact| fact
-            .target
-            .as_ref()
-            .map(SymbolId::as_str)
-            == Some("service.list_orders")
-            && fact
-                .assumptions
-                .iter()
-                .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.target.as_ref().map(SymbolId::as_str) == Some("service.list_orders")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")
+        }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Unknown
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
@@ -4465,10 +4463,11 @@ project_includes = ["src"]
         assert!(targets.contains(&Some("python.project_config.project_name.demo-api")));
         assert!(targets.contains(&Some("python.project_config.source_root.src.lib")));
         assert!(targets.contains(&Some("python.project_config.tool_section.pyright")));
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "python_config_source_root=src/lib")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "python_config_source_root=src/lib")
+        }));
         assert!(report.semantic_facts.iter().all(|fact| {
             fact.kind == SemanticFactKind::ProjectConfig
                 && fact.certainty == FactCertainty::Structural

@@ -1274,13 +1274,15 @@ parse_macro!(ParserState);
                     .is_some_and(|target| target.as_str() == "repogrammar.rust.parser_adapter")
             })
             .collect::<Vec<_>>();
-        assert!(parser_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "rust_attribute_shape=derive")));
+        assert!(parser_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "rust_attribute_shape=derive")
+        }));
         assert!(parser_facts.iter().any(|fact| {
             fact.assumptions.iter().any(|assumption| {
-                assumption == "rust_signature_shape=async_unsafe_generic_receiver_mut_ref_returns_value"
+                assumption
+                    == "rust_signature_shape=async_unsafe_generic_receiver_mut_ref_returns_value"
             }) && fact
                 .assumptions
                 .iter()
@@ -1358,14 +1360,13 @@ path = "src/rust/benches/unknowns.rs"
                 "missing Cargo project config target {target}"
             );
         }
-        assert!(report
-            .semantic_facts
-            .iter()
-            .any(|fact| fact.kind == SemanticFactKind::Unknown
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
                 && fact
                     .target
                     .as_ref()
-                    .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")));
+                    .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")
+        }));
     }
 
     #[test]
@@ -1525,10 +1526,11 @@ pub struct Item {
             SemanticFactKind::Symbol,
             "serde.Deserialize"
         ));
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "serde_attr_shape=rename_all")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "serde_attr_shape=rename_all")
+        }));
         // Derive-macro expansion stays a non-blocking honesty subclaim.
         assert!(has_unknown_claim(
             &report,
@@ -1825,10 +1827,11 @@ pub fn router() -> Router {
             })
             .count();
         assert_eq!(route_anchors, 3);
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "http_method=GET")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "http_method=GET")
+        }));
     }
 
     #[test]

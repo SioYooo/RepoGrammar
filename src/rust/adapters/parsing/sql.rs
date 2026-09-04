@@ -716,14 +716,8 @@ mod tests {
                 "CREATE TABLE a (id INTEGER);\nINSERT INTO a VALUES (E'\\n');\n",
                 "escape_string_constant",
             ),
-            (
-                "CREATE TABLE `a` (id INTEGER);\n",
-                "backtick_quoted_token",
-            ),
-            (
-                "CREATE TABLE a (tags TEXT[]);\n",
-                "bracket_quoted_token",
-            ),
+            ("CREATE TABLE `a` (id INTEGER);\n", "backtick_quoted_token"),
+            ("CREATE TABLE a (tags TEXT[]);\n", "bracket_quoted_token"),
             (
                 "/* outer /* inner */ */\nCREATE TABLE a (id INTEGER);\n",
                 "nested_block_comment",
@@ -738,7 +732,11 @@ mod tests {
             ),
         ] {
             let parsed = output(text);
-            assert_eq!(anchors(&parsed), 0, "{expected}: anchors survived divergence");
+            assert_eq!(
+                anchors(&parsed),
+                0,
+                "{expected}: anchors survived divergence"
+            );
             assert_eq!(
                 parsed.report.units.len(),
                 1,
