@@ -40,6 +40,19 @@ the gap with a plausible guess.
 > **The promise:** less source rereading without pretending uncertain static
 > evidence is fact.
 
+The index is pre-computed structure an agent would otherwise re-derive by
+reading files: one lookup returns the compatible implementations, their
+provenance, and the smallest set of source still worth reading. In one recorded
+demo run, the same agent task used **52% fewer tokens** with RepoGrammar
+supplying family context first than it did reading source broadly.
+
+That figure is a single observed run, not a controlled benchmark. There is no
+committed paired baseline/treatment artifact behind it, and it will vary by
+repository, task, and agent — see
+[growth readiness](https://github.com/SioYooo/RepoGrammar/blob/main/docs/reports/public-preview-growth-readiness.md)
+for the measurement bar this project holds itself to before calling a number
+measured.
+
 ```text
 repository source
       │
@@ -196,7 +209,7 @@ only agent integrations, and
 `repogrammar uninit --project /path/to/repository --yes` to remove one
 repository's local index.
 
-## Five-minute judge testing path
+## Five-minute verification path
 
 After cloning this repository and completing the installation above, run the
 following commands from the RepoGrammar repository root. This path exercises
@@ -243,9 +256,9 @@ codex mcp get repogrammar --json
 cat "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
 ```
 
-For the full recorded judge journey—including a target-repository patch,
+For the full end-to-end walkthrough—including a target-repository patch,
 runtime test, stale-evidence rejection, explicit sync, and cleanup—follow the
-[Build Week demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md).
+[demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/demo-runbook.md).
 
 ## What you get
 
@@ -346,9 +359,8 @@ helped plan and review the work; Codex implemented and tested scoped changes;
 the human maintainer owns the product insight, architecture, evidence policy,
 scope, review, merge authority, and public approvals.
 
-OpenAI Build Week is a launch milestone, not the product boundary. Competition
-recording and submission material stays in the
-[demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/build-week-demo.md)
+Recording and launch copy stays in the
+[demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/demo-runbook.md)
 and [launch kit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md),
 leaving this README focused on the developer tool.
 

@@ -2,8 +2,8 @@
 
 This transcript was captured on 2026-07-16 from commit `73770e6` with a debug
 build reporting `0.2.0-preview.0`. It is retained only as an immutable historical
-audit record for the old terminal visual. It is **not** the current Build Week
-demo, current release evidence, current judge path, or current protocol.
+audit record for the old terminal visual. It is **not** the current demo,
+current release evidence, current review path, or current protocol.
 
 No result line has been rewritten since capture. The `check` output therefore
 shows the legacy `CONTEXT_ONLY` advisory form. Current releases replace that
@@ -12,7 +12,7 @@ form with static-alignment certificates: an alignment-status token plus
 hashes, generation id, line ranges, or token estimate in a current recording.
 
 The canonical current real-repository workflow is the
-[Build Week Demo Runbook](build-week-demo.md).
+[Demo Runbook](demo-runbook.md).
 
 ```text
 repogrammar 0.2.0-preview.0
@@ -27,7 +27,7 @@ not inspect or modify the developer's real Codex or Claude Code configuration.
 
 These commands document how the old fixture capture was produced. They are not
 the current public-package rehearsal path and should not be used for the final
-Build Week recording.
+demo recording.
 
 ```bash
 cargo build --bin repogrammar

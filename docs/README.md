@@ -24,8 +24,8 @@ development, and governance documentation.
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
 - `promotion/`: public-preview launch copy and promotion guardrails.
-- `demo/`: recording and live-demo runbooks; the Build Week runbook is the
-  canonical under-three-minute submission script and evidence checklist.
+- `demo/`: recording and live-demo runbooks; `demo/demo-runbook.md` is the
+  canonical under-three-minute demo script and evidence checklist.
 - `../algorithms/paper/`: metadata-only archive of algorithm and supply-chain
   references used to design implementation milestones.
 - `roadmap.md`: current staged implementation plan and deferred work.
@@ -97,8 +97,8 @@ context lives under `.agents/memories/`.
   `quickstart-codex.md`, `quickstart-claude.md`, `quickstart-opencode.md`,
   `limitations.md`,
   `examples/python-fastapi-pytest.md`, and `promotion/launch-kit.md`.
-- Build Week demo and Developer Tools evidence:
-  `demo/build-week-demo.md`, `quickstart-codex.md`, and
+- Demo script and Developer Tools evidence:
+  `demo/demo-runbook.md`, `quickstart-codex.md`, and
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
@@ -108,7 +108,7 @@ context lives under `.agents/memories/`.
   `release/stable-v0.4.2-release-checklist.md`.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
-- Build Week zero-friction onboarding authority and execution evidence:
+- Zero-friction onboarding authority and execution evidence:
   `decisions/ADR-0026-zero-friction-onboarding-orchestration.md`,
   `plans/build-week-zero-friction-onboarding-plan.md`. The ADR freezes new
   language/framework/provider scope and preserves install, repo-local state,

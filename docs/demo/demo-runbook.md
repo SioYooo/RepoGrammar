@@ -1,9 +1,10 @@
-# Build Week Demo Runbook
+# Demo Runbook
 
-This is the canonical recording and rehearsal plan for the OpenAI Build Week
-demo. It uses a real, permissively licensed FastAPI repository at an immutable
-commit and the exact public RepoGrammar `0.4.0` npm package. The target cut is
-90–120 seconds with spoken audio and must remain under three minutes.
+This is the canonical recording and rehearsal plan for the RepoGrammar
+product demo. It uses a real, permissively licensed FastAPI repository at an
+immutable commit and the exact public RepoGrammar `0.4.0` npm package. The
+target cut is 90–120 seconds with spoken audio and must remain under three
+minutes.
 
 The demo shows one narrow product claim: RepoGrammar gives Codex
 repository-local, source-backed implementation-family context and a bounded
@@ -46,7 +47,7 @@ Do not record the final take until every applicable gate passes:
 - [ ] The final YouTube URL works signed out and the video remains under 03:00.
 
 If any release or identity gate fails, stop. Do not fall back to a source build
-for the final judge/recording path and do not describe an unpublished package as
+for the final recording path and do not describe an unpublished package as
 public.
 
 ## Target repository and attribution
@@ -498,18 +499,11 @@ Keep the final cut honest and readable:
 5. Disclosure: the pilot observed 0/4 proactive A3 adoption, so this demo uses
    explicit instructions and an explicit prompt; it does not claim spontaneous
    agent adoption.
-6. Collaboration attribution: the human maintainer supplied the core insight,
-   architecture, evidence policy, scope, review, and merge authority; ChatGPT
-   on GPT-5.6 supported planning, review, scope refinement, and claim audit;
-   Codex on GPT-5.6 supported implementation, tests, documentation, and release
-   tooling.
-7. End card: `Local-first · Source-backed · Bounded reads · Typed UNKNOWN`.
+6. End card: `Local-first · Source-backed · Bounded reads · Typed UNKNOWN`.
 
 The historical `0.2.0-preview.0` fixture transcript remains available only as
 an audit record in [Historical Verified CLI Transcript](verified-cli-transcript.md).
 It is not the current demo, current protocol, or current visual authority.
 
-**Human work still required:** record and edit the video, add English narration
-and captions, upload to YouTube, verify signed-out access, run Codex `/feedback`
-in the final session, and add the verified video URL and Session ID to the
-submission materials.
+**Human work still required:** record and edit the video, add English
+narration and captions, upload to YouTube, and verify signed-out access.

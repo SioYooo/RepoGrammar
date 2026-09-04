@@ -59,10 +59,10 @@ and refuses foreign or malformed marker content. It does not create
 
 Open Codex in the configured repository. Use `/mcp` to confirm the
 `repogrammar` server is connected. Use `/model` and select an available
-GPT-5.6 family option for the Build Week demo; model names and availability can
-vary by account and Codex surface, so do not hardcode a hidden or unavailable
-slug. The official Codex slash-command reference describes `/model` as the
-current-task model selector.
+GPT-5.6 family option; model names and availability can vary by account and
+Codex surface, so do not hardcode a hidden or unavailable slug. The official
+Codex slash-command reference describes `/model` as the current-task model
+selector.
 
 Ask:
 
@@ -84,9 +84,9 @@ Codex development/demo reasoning surface, while RepoGrammar is the local MCP
 developer tool supplying conservative repository context. No OpenAI API key is
 required by RepoGrammar.
 
-## Capture The Build Week Feedback Session ID
+## Capture The Codex Feedback Session ID
 
-Keep the exact Codex task used to build or validate the submission open:
+Keep the exact Codex task used to build or validate this work open:
 
 1. Type `/status` and record the visible task identifier for internal traceability.
 2. Type `/feedback` in that same task.
@@ -95,13 +95,13 @@ Keep the exact Codex task used to build or validate the submission open:
 4. Submit the feedback and copy the Session ID shown by the confirmation into:
    `Feedback Session ID: <paste verified /feedback Session ID here>`.
 5. If the client does not display a Session ID, leave the placeholder and ask
-   the event/support channel which identifier is accepted. Do not substitute
+   the Codex support channel which identifier is accepted. Do not substitute
    the `/status` task ID without confirmation.
 
 Official Codex documentation says `/feedback` opens the feedback dialog and
 can optionally include logs; it does not promise in the public reference that
 every client displays a Session ID. The guarded placeholder avoids inventing
-submission evidence.
+feedback evidence.
 
 References:
 
