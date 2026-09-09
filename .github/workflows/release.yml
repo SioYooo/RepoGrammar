@@ -227,7 +227,7 @@ jobs:
   prepare_github_release:
     name: Prepare GitHub release assets
     needs: [classify, build, package_installer, package_npm]
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'preview'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -329,7 +329,8 @@ jobs:
   stage_npm_stable:
     name: Stage immutable npm stable launcher
     needs: [classify, package_npm, prepare_github_release]
-    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable'
+    # Maintainer decision 2026-09-09: v0.5.0 is GitHub-only; never stage npm.
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' && false
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

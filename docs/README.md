@@ -18,7 +18,7 @@ development, and governance documentation.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
 - `release/`: maintainer-owned release runbooks. The stable `0.5.0` candidate checklist
-  is the canonical two-phase immutable publication gate; the stable `0.4.3`
+  is the canonical GitHub-only publication gate; the stable `0.4.3`
   checklist and earlier checklists remain historical release evidence.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
@@ -110,7 +110,7 @@ context lives under `.agents/memories/`.
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
-- Stable `0.5.0` candidate two-phase immutable publication gate:
+- Stable `0.5.0` candidate GitHub-only publication gate:
   `release/stable-v0.5.0-release-checklist.md`.
 - Stable `0.4.3` publication evidence remains in
   `release/stable-v0.4.3-release-checklist.md`.

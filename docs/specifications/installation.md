@@ -137,37 +137,34 @@ insufficient. The published `install.sh` asset must also have a matching
 `.sha256` checksum asset. `install.ps1` is not published for either channel.
 Installers must fail instead of silently installing an artifact that omits the
 bundled Python worker.
-Manual release-workflow dispatch is build-only and cannot publish, even when a
-tag is selected as its ref. It is a rehearsal only: its artifacts are not
-publication candidates. Only a pushed tag is a publication event and the tag
-run is the sole source of candidate bytes. Before candidate creation, complete
-Git history must prove the tag is the exact version tag at the current
-`origin/main` commit and Cargo, Cargo lockfile, and npm manifest versions must
-match. Preview and stable tags both use the same stage-only npm Trusted
-Publisher, protected `npm-release` GitHub environment, and one exact package
-tarball produced and smoked in that tag run. They do not use a traditional npm
-write token. The staging package spec must begin with `./` and name that exact
-local tarball; a bare relative path is forbidden because npm may parse it as
-GitHub shorthand instead of local package input. The tag run uploads a private
-GitHub draft and privately stages npm; a human reviews those exact candidates
-before making either registry public. The GitHub draft contains exactly four
-archives, their four checksums, `install.sh`, its checksum, and
-`npm-candidate-manifest.json` (11 assets). A
-full tag-run rerun refuses any existing release or draft instead of replacing
-candidate files; rerunning only failed staging jobs remains available. Stable
-publication then publishes the complete GitHub draft as an immutable normal
-release, requires human 2FA to approve the npm stage, and runs a separate
-read-only finalizer with the exact tag-run id and attempt. Because the two
-registries cannot publish atomically, any failure must remain visibly partial
-until GitHub immutability, npm integrity/provenance, and public product smokes
-are independently verified. Workflow success or local packaging never proves
-that either registry publication occurred.
+The maintainer's 2026-09-09 decision makes `0.5.0` a GitHub-only release.
+A successful manual `release.yml` dispatch with `mode=build-only` at the exact
+release source commit supplies the candidate bytes. Record its run id, attempt,
+source SHA, four successful native build/smoke jobs, and installer artifact.
+Cargo, Cargo lockfile, and npm source manifest versions must agree, but npm is
+not published and existing registry versions and dist-tags remain untouched.
+The stable npm staging job is explicitly disabled, including on tag pushes;
+preview publication retains its existing protected OIDC staging rules.
+
+Publish the retained four archives, their four checksums, `install.sh`, and its
+checksum as exactly ten assets at immutable `v0.5.0`. Do not repack or rebuild
+between review and upload. Require the tag commit to equal the successful
+build-only run's source SHA, then download the public assets, compare them with
+the retained bytes, verify checksums and GitHub release/asset attestations, and
+smoke the matching public native archive and installer. The exact checklist is
+[the 0.5.0 release gate](../release/stable-v0.5.0-release-checklist.md).
+
+The earlier dual-channel npm finalizer remains compatibility infrastructure.
+Automatic draft creation is limited to preview tags and retains eleven assets
+including an npm manifest; stable tags cannot create a competing draft. Do not dispatch
+`stable-release-finalize.yml` as the 0.5.0 completion gate or claim npm
+publication. A successful build alone does not prove GitHub publication.
+
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
 candidate and post-publication documentation should pin `v0.5.0` for
 reproducible acquisition. Public-install claims may identify `v0.5.0` as the
-latest verified public stable only after its GitHub, npm, provenance, and
-finalizer evidence all pass. When a `latest` or explicit artifact lookup fails,
+latest verified GitHub release only after the GitHub-only checklist passes. When a `latest` or explicit artifact lookup fails,
 installers must report
 that the release artifact was not found, suggest the exact
 `--version <release-tag>`, and mention `REPOGRAMMAR_RELEASE_DIR` for local
@@ -202,7 +199,7 @@ npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
 to the independently verified public `0.4.3` GitHub Release and npm package;
 the source manifest by itself remains insufficient evidence. The `0.5.0`
-candidate is not a public release until its independent finalizer passes.
+candidate is not a public release until its GitHub-only checklist passes.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:

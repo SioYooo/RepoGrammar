@@ -1792,10 +1792,18 @@ Before cutting a stable or preview tag or opening release-readiness changes,
 contributors should run the normal local gate plus a source-checkout smoke
 matrix that exercises installation boundaries without live machine writes.
 
-Release-policy tests must cover both npm channels. Preview requires the exact
+For 0.5.0, the maintainer selected GitHub-only binary publication. The release
+checklist requires ten assets from an exact successful build-only run, native
+smokes, checksums, and immutable GitHub verification; npm publication and its
+dual-channel finalizer are outside this release. The installer contract also
+locks out stable npm staging and automatic stable draft creation. The following
+npm-channel tests preserve the older compatibility tools, not a requirement to
+publish 0.5.0 to npm.
+
+Release-policy compatibility tests cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. The current stable gate requires exact `latest=0.5.0`, exact
+state. The retained dual-channel verifier requires exact `latest=0.5.0`, exact
 `preview=0.2.0-preview.0`, the preview, prior public `0.4.3`, and new stable
 versions in the registry inventory, the explicit absence of the failed or
 abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates, and a

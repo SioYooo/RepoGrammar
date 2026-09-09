@@ -908,8 +908,10 @@ require_workflow_match "$PREPARE_RELEASE_JOB" 'fail_on_unmatched_files:[[:space:
   "missing candidate assets must fail release preparation"
 require_workflow_match "$PREPARE_RELEASE_JOB" 'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228' \
   "the privileged GitHub release action must be pinned to the reviewed commit"
+require_workflow_match "$PREPARE_RELEASE_JOB" "^    if: github\.event_name == 'push' && github\.ref_type == 'tag' && needs\.classify\.outputs\.channel == 'preview'$" \
+  "GitHub-only stable releases must not race an automatic dual-channel draft"
 require_workflow_match "$PREPARE_RELEASE_JOB" 'draft:[[:space:]]+true' \
-  "both release channels must remain draft-only before npm staging"
+  "automatic preview releases must remain draft-only before npm staging"
 require_workflow_match "$PREPARE_RELEASE_JOB" 'prerelease:[[:space:]]+\$\{\{[[:space:]]*needs\.classify\.outputs\.channel[[:space:]]*==[[:space:]]*.*preview' \
   "GitHub prerelease truth must follow the typed release channel"
 require_workflow_absence "$PREPARE_RELEASE_JOB" 'install\.ps1|windows|Windows' \
@@ -935,8 +937,10 @@ require_workflow_match "$STAGE_PREVIEW_JOB" '^[[:space:]]+npm stage publish.*--t
   "preview must stage the retained package with preview and provenance"
 require_workflow_match "$STAGE_PREVIEW_JOB" '^[[:space:]]+package_file="\./npm-candidate/sioyooo-repogrammar-\$\{\{ needs\.classify\.outputs\.version \}\}\.tgz"' \
   "preview staging must use an explicit relative local tarball path"
+require_workflow_match "$STAGE_STABLE_JOB" "^    if: github\.event_name == 'push' && github\.ref_type == 'tag' && needs\.classify\.outputs\.channel == 'stable' && false$" \
+  "GitHub-only stable releases must keep npm staging explicitly disabled"
 require_workflow_match "$STAGE_STABLE_JOB" '^[[:space:]]+npm stage publish \./npm-candidate/sioyooo-repogrammar-0\.5\.0\.tgz --access public --tag latest --provenance' \
-  "stable must use the one exact registered staging command"
+  "disabled stable compatibility job must retain its registered staging command"
 require_workflow_absence "$RELEASE_WORKFLOW" 'NPM_TOKEN|NODE_AUTH_TOKEN|npm[[:space:]]+publish|npm[[:space:]]+stage[[:space:]]+(approve|reject)|npm[[:space:]]+dist-tag' \
   "release automation must remain token-free, stage-only, and unable to approve or mutate tags"
 
