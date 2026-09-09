@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-## 0.5.0 — release candidate
+## 0.5.0 — GitHub binary release candidate
 
 ### Changed
+
+- 0.5.0 is distributed as native GitHub Release binaries and the verified
+  installer. npm publication is deferred; its previous 0.4.3 channel remains.
 
 - Terminal indexing now renders a width-bounded colored progress bar with real
   stage counts; plain logs and JSON remain compatible. `init` and concise help

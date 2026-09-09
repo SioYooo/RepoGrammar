@@ -1,134 +1,106 @@
-# Stable v0.5.0 Release Checklist
+# v0.5.0 GitHub-only Release Checklist
 
-This is the canonical two-phase publication gate for RepoGrammar `0.5.0`.
-It follows the immutable public `0.4.3` release and collects the reviewed
-post-release analysis changes, autosync efficiency improvements, and public
-README refresh. Language and framework claims remain bounded by their existing
-qualification evidence.
+The maintainer authorized GitHub-only publication on 2026-09-09. Publish the
+compiled Linux/macOS binaries and installer on GitHub. Do not stage or publish
+npm, change npm dist-tags, or require npm 2FA for this release. The existing npm
+package tests and local pack remain compatibility checks.
 
-Status: `CANDIDATE_NOT_PUBLISHED`. Candidate workflow, asset verification,
-GitHub publication, npm stage approval with maintainer 2FA, and the public
-finalizer are pending. This document is a checklist, not release evidence.
+Status: `CANDIDATE_NOT_PUBLISHED`. This checklist does not establish publication,
+measured battery savings, runtime equivalence, or additional language support.
 
-This checklist does not claim production readiness, 1.0 API stability, sound
-static analysis, runtime equivalence, measured token savings, Windows support,
-or any language/framework support beyond the documented bounded evidence.
+## Source and build gate
 
-## Immutable identities
+- Preserve user changes, untracked work, and all historical releases.
+- Cargo, Cargo.lock, and package.json must agree on `0.5.0`.
+- Run the repository's required fmt, clippy, full Rust tests, repo-guard,
+  Python/TypeScript worker tests, npm launcher tests, installer tests,
+  `npm pack --dry-run`, `git diff --check`, and mirrored-guide equality check.
+- Merge and synchronize the reviewed release commit to `origin/main`.
+- Confirm `v0.5.0` has no local/remote tag or GitHub release/draft. Never replace
+  an occupied version or rewrite an existing tag.
+- Confirm `stage_npm_stable` retains its explicit `&& false` guard. Tag pushes
+  must not accidentally stage an npm candidate. Preview gates remain unchanged.
 
-- Cargo, Cargo lockfile, and npm manifest versions are exactly `0.5.0`.
-- The publication tag is annotated `v0.5.0` at the exact fetched
-  `origin/main` commit after all local gates pass.
-- The retained npm candidate is exactly
-  `sioyooo-repogrammar-0.5.0.tgz` and is never repacked before approval.
-- The final public dist-tags must be exactly `latest=0.5.0` and
-  `preview=0.2.0-preview.0`.
-- Public inventory must retain `0.2.0-preview.0`, `0.2.2`, `0.4.0`, `0.4.1`,
-  `0.4.2`, `0.4.3`, and `0.5.0`; abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2`
-  remain absent.
-- Any source correction after tag creation consumes `0.5.0` and requires a new
-  unoccupied patch-forward version. Never move the tag or replace assets.
-
-## Pre-tag occupancy and source gate
-
-- Fetch `origin/main`, prune, and fetch tags. Require a clean worktree and
-  `HEAD == origin/main`.
-- Require no local/remote `v0.5.0` tag, no GitHub release or draft for the tag,
-  no public npm `0.5.0`, and no retained private npm stage for that version.
-  Public registry metadata cannot prove private stage absence; the maintainer
-  checks authenticated stage state separately.
-- Preserve the immutable `v0.4.3` tag, assets, npm package, provenance, and
-  finalizer evidence as historical predecessor authority.
-
-## Local release-candidate gate
-
-Run on the exact release commit:
+Dispatch the existing four-platform build:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo run --quiet --bin repo-guard -- check
-cargo run --quiet --bin repo-guard -- check-diff --base origin/main --head HEAD
-python3 src/workers/python/worker.test.py
-node src/workers/typescript/worker.test.js
-node src/npm/repogrammar.test.js
-bash src/install/repogrammar-install.test.sh
-npm pack --dry-run
-git diff --check
-cmp -s AGENTS.md CLAUDE.md
+gh workflow run release.yml --repo SioYooo/RepoGrammar --ref main -f mode=build-only
 ```
 
-The gate must prove that:
+Record the exact successful run id, run attempt, and full source SHA. Require
+`event=workflow_dispatch`, `conclusion=success`, and the reviewed source SHA.
+All four native builds must pass their packaged-product smoke, including product
+uninstall; both Linux builds must pass their declared glibc floor checks.
+The installer artifact and its checksum must come from this same run.
 
-- `install.sh --install-cli-only` downloads the exact platform archive and
-  checksum, validates the archive, installs the binary and bundled worker, and
-  creates the product receipt without creating `.repogrammar/` or agent wiring;
-- optional agent wiring is a separate `repogrammar install` operation;
-- after installer acquisition, a writable Conda-like directory placed first on
-  PATH cannot redirect a bare `repogrammar install`; the validated receipt's
-  command path remains authoritative and the earlier PATH directory is untouched;
-- `repogrammar init --project <path> --yes` creates the repository index and
-  starts autosync by default, while `--no-autosync` is deterministic for CI;
-- release workflow, finalizer, repository guard, npm launcher, installer hint,
-  README, and canonical docs all agree on `0.5.0`.
+## Retained candidate gate
 
-## Candidate tag workflow
+Download these artifacts from that exact run, never from an unspecified latest
+run:
 
-1. Create annotated `v0.5.0` at exact `origin/main` and push only that tag.
-2. The tag workflow reruns all gates, builds the four supported native archives,
-   retains four checksums, packages `install.sh` plus checksum, packs and smokes
-   the exact npm tarball, and creates one private GitHub draft.
-3. The draft contains exactly 11 assets: four archives, four archive checksums,
-   `install.sh`, `install.sh.sha256`, and `npm-candidate-manifest.json`.
-4. The protected OIDC job runs exactly:
+- `repogrammar-x86_64-unknown-linux-gnu.tar.gz`
+- `repogrammar-aarch64-unknown-linux-gnu.tar.gz`
+- `repogrammar-x86_64-apple-darwin.tar.gz`
+- `repogrammar-aarch64-apple-darwin.tar.gz`
+- `repogrammar-installer`
 
-   ```text
-   npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance
-   ```
+The publication inventory is exactly ten files: four native archives, their
+four `.sha256` sidecars, `install.sh`, and `install.sh.sha256`. Verify every
+checksum. Exclude npm tarballs and `npm-candidate-manifest.json` from this
+GitHub-only inventory. Preserve retained bytes and run identity for comparison;
+do not repack or rebuild the candidate.
 
-5. Record the exact successful tag-run id/attempt, npm stage id, candidate SRI,
-   tag object, and tag commit. Workflow logs are not approval authority.
+## Publish the exact candidate
 
-## Candidate review and public approval
+Create annotated `v0.5.0` at the exact successful build's source SHA. Upload only
+the ten reviewed files to a normal, non-prerelease GitHub draft and inspect the
+inventory before publishing it immutably. Automatic draft creation is limited
+to preview tags, and stable npm staging is explicitly disabled. A stable tag
+push can repeat verification/build jobs but cannot create a competing draft or
+stage npm. Use only the retained successful build-only run's artifacts.
 
-- Verify the tag SHA equals the merged release commit and tag-run `head_sha`.
-- Verify every matrix build, packaged smoke, npm smoke, checksum, and retained
-  candidate manifest from the same run.
-- Publish the complete GitHub draft as a normal immutable release.
-- Re-download and verify all 11 public assets and attestations.
-- Approve the exact npm `0.5.0` stage through the maintainer 2FA boundary.
-  CI cannot approve, reject, reuse, or inspect private stages.
-- Wait for npm package bytes, SRI, provenance, inventory, and dist-tags to
-  converge. Do not repair tags with ad-hoc writes.
+Record the annotated tag object, dereferenced commit, release id/URL, and
+publication timestamp. Any source correction after tagging requires a new
+unoccupied version; never move the tag or replace public assets.
 
-## Read-only finalizer
+## Public verification gate
 
-Dispatch `.github/workflows/stable-release-finalize.yml` from `main` with the
-exact successful candidate run id and attempt. Its checkout remains pinned to
-immutable `v0.5.0`. It must verify:
+- Download the ten public assets into a fresh directory.
+- Require exactly the expected inventory, immutable normal release state, and
+  tag commit equality with the retained build source SHA.
+- Compare every public asset byte-for-byte with its retained counterpart and
+  verify all SHA-256 sidecars.
+- Run `gh release verify v0.5.0 --repo SioYooo/RepoGrammar --format json` and
+  `gh release verify-asset v0.5.0 <asset> --repo SioYooo/RepoGrammar --format json`
+  for every public asset; retain the results.
+- Unpack the matching public native archive and run:
 
-- public immutable GitHub release and exactly 11 attested assets;
-- retained/public npm manifest and registry SRI equality;
-- provenance bound to `.github/workflows/release.yml`, `refs/tags/v0.5.0`, the
-  release commit, and exact run id/attempt;
-- public native archive smoke;
-- public `install.sh` binary acquisition followed by a separate live
-  `repogrammar init` in an isolated repository;
-- pinned and `latest` npm version plus separate live repository init lanes;
-- preview still resolves `0.2.0-preview.0`.
+```bash
+cargo run --quiet --locked --bin repo-guard -- smoke-packaged-artifact \
+  --binary "$UNPACKED/repogrammar" \
+  --worker "$UNPACKED/workers/python/worker.py" \
+  --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
+  --expected-version 0.5.0 \
+  --require-product-uninstall
+```
 
-Publication is complete only when the finalizer emits exactly
-`STABLE_RELEASE_READY`.
+- Run the downloaded, verified public installer in an isolated HOME and install
+  directories, verify `repogrammar 0.5.0`, and initialize an isolated fixture
+  repository with `--yes --no-autosync`. Keep the real machine installation and
+  working repository untouched during this verification.
+- Read public npm metadata before and after publication to confirm it was not
+  changed; do not attempt to repair or reconcile dist-tags.
+
+Record `GITHUB_RELEASE_READY` only after these gates pass. The historical
+`STABLE_RELEASE_READY` dual-channel finalizer requires npm evidence and is not
+this release's completion criterion. Report npm explicitly as not published.
 
 ## Evidence record
 
-Record the release commit, annotated tag object, candidate run id and attempt,
-exact npm stage id, retained/public SRI, immutable release URL, 11-asset
-verification, npm provenance, and finalizer run URL here after execution.
-No release SHA, successful workflow, or publication is asserted yet.
-
-- Candidate run: pending.
-- GitHub immutable publication: pending.
-- npm maintainer 2FA approval: pending.
-- Public finalizer verdict: pending; required result `STABLE_RELEASE_READY`.
+- Source commit and annotated tag object: pending.
+- Successful build-only run id and attempt: pending.
+- Ten retained/public asset checksums and byte comparison: pending.
+- Immutable GitHub release URL and attestations: pending.
+- Public native and isolated installer/init smoke: pending.
+- npm: not published; registry and dist-tags unchanged.
+- Verdict: `CANDIDATE_NOT_PUBLISHED`.

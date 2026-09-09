@@ -3,6 +3,18 @@
 `repo-guard` is a repository governance CLI implemented in
 `src/rust/bin/repo_guard.rs`. It is separate from the RepoGrammar product runtime.
 
+## GitHub-only 0.5.0 publication
+
+The maintainer's 2026-09-09 release instruction selects GitHub binary assets
+only. Follow `docs/release/stable-v0.5.0-release-checklist.md`: use an exact-SHA
+successful build-only run, retain four native archives and their checksums plus
+the installer/checksum, and verify the immutable public GitHub release.
+Stable npm staging and automatic stable draft creation are disabled. Existing
+npm packing, provenance, dist-tag, and dual-channel finalizer commands remain
+compatibility tools; they do not gate or describe 0.5.0 GitHub-only completion.
+Do not run them to change npm state or manufacture `STABLE_RELEASE_READY`.
+The prior npm `latest=0.4.3` is preserved.
+
 ## Commands
 
 ```text
@@ -66,10 +78,11 @@ The check command verifies:
 - the release workflow classifies preview versus stable through `repo-guard`,
   keeps manual dispatch build-only, and creates one exact npm candidate that
   downstream jobs download rather than repack;
-- preview and stable both create draft GitHub Releases and then use Node 24,
-  npm 11.18.0, and Trusted Publisher OIDC to stage that candidate. They contain
-  no traditional npm token, direct publish, approval, rejection, or dist-tag
-  mutation authority;
+- preview tags create draft GitHub Releases and use Node 24, npm 11.18.0,
+  and Trusted Publisher OIDC to stage that candidate. Stable npm staging is
+  explicitly disabled and automatic draft creation is preview-only under the
+  2026-09-09 GitHub-only decision. Neither path contains a traditional npm token,
+  direct publish, approval, rejection, or dist-tag mutation authority;
 - preview staging has one registered assignment for its exact
   `./npm-candidate/...tgz` local tarball, and stable staging has one registered
   literal command for `./npm-candidate/sioyooo-repogrammar-0.5.0.tgz`; a bare
@@ -370,12 +383,19 @@ verification.
 
 ## Staged publication boundary
 
-A preview or stable tag first attaches all native assets to a draft GitHub
+Version `0.5.0` follows the [GitHub-only checklist](../release/stable-v0.5.0-release-checklist.md):
+retain a successful build-only run and manually publish ten verified assets.
+The installer contract tests require both the exact disabled stable-stage
+condition and the preview-only automatic-draft condition. The retained stable
+staging command and dual-channel finalizer are compatibility infrastructure,
+not authorization to publish npm or the completion gate for this version.
+
+A preview tag first attaches all native assets to a draft GitHub
 Release. Only then does the workflow stage the exact retained npm tarball with
 the protected `npm-release` environment, Trusted Publisher OIDC, Node 24, and
 npm 11.18.0. Neither path reads `NPM_TOKEN`/`NODE_AUTH_TOKEN` or directly
-publishes. A maintainer publishes the complete GitHub release (as a prerelease
-for preview), approves the matching npm stage with 2FA, and then runs the
+publishes. A maintainer publishes the complete GitHub prerelease, approves the matching
+npm stage with 2FA, and then runs the
 read-only channel verifier.
 
 A rerun after successful staging may fail because npm already reserved the
