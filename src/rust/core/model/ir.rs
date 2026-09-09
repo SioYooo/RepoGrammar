@@ -105,7 +105,9 @@ impl IrNodeKind {
             CodeUnitKind::PydanticModel => Self::PydanticModel,
             CodeUnitKind::SqlAlchemyModel => Self::SqlAlchemyModel,
             CodeUnitKind::SqlAlchemyRepositoryMethod => Self::SqlAlchemyRepositoryMethod,
-            CodeUnitKind::DjangoModel | CodeUnitKind::DjangoTest => Self::Class,
+            CodeUnitKind::DjangoModel
+            | CodeUnitKind::DjangoTest
+            | CodeUnitKind::MarshmallowSchema => Self::Class,
             CodeUnitKind::DjangoUrlPattern
             | CodeUnitKind::FlaskRoute
             | CodeUnitKind::ClickCommand
@@ -116,7 +118,9 @@ impl IrNodeKind {
             CodeUnitKind::SpringComponent
             | CodeUnitKind::SpringBootApplication
             | CodeUnitKind::SpringDataRepository => Self::Class,
-            CodeUnitKind::AspNetController | CodeUnitKind::EfCoreDbContext => Self::Class,
+            CodeUnitKind::AspNetController
+            | CodeUnitKind::EfCoreDbContext
+            | CodeUnitKind::FluentValidationValidator => Self::Class,
             CodeUnitKind::AspNetControllerAction
             | CodeUnitKind::AspNetMinimalApiRoute
             | CodeUnitKind::EfCoreEntitySet
@@ -128,11 +132,13 @@ impl IrNodeKind {
             | CodeUnitKind::Catch2TestCase
             | CodeUnitKind::DoctestTestCase
             | CodeUnitKind::BoostTestCase
-            | CodeUnitKind::BoostTestSuite => Self::Method,
+            | CodeUnitKind::BoostTestSuite
+            | CodeUnitKind::CppUnitSuiteRegistration => Self::Method,
             CodeUnitKind::JpaEntity
             | CodeUnitKind::JpaMappedSuperclass
             | CodeUnitKind::JpaEmbeddable
-            | CodeUnitKind::JaxrsResourceClass => Self::Class,
+            | CodeUnitKind::JaxrsResourceClass
+            | CodeUnitKind::ServletHttpServlet => Self::Class,
             CodeUnitKind::Junit5TestMethod
             | CodeUnitKind::Junit4TestMethod
             | CodeUnitKind::TestngTestMethod
@@ -145,6 +151,30 @@ impl IrNodeKind {
             }
             CodeUnitKind::RustImplBlock => Self::Class,
             CodeUnitKind::RustFunction | CodeUnitKind::RustTestFunction => Self::Function,
+            CodeUnitKind::GoFunction | CodeUnitKind::GoTestFunction => Self::Function,
+            // A testthat block is a call with a body, not a declared function,
+            // class, or method; this IR vocabulary names no such concept, so the
+            // kind projection abstains the way Rust use items already do.
+            CodeUnitKind::RTestThatBlock => Self::Unknown,
+            CodeUnitKind::VbTestClass => Self::Class,
+            CodeUnitKind::VbTestMethod => Self::Method,
+            CodeUnitKind::DelphiTestFixture => Self::Class,
+            CodeUnitKind::DelphiTestProcedure => Self::Method,
+            // An AUnit registration is a call, not a declared function,
+            // class, or method; this IR vocabulary names no such concept,
+            // so the projection abstains the way testthat blocks do.
+            CodeUnitKind::AdaTestRegistration => Self::Unknown,
+            CodeUnitKind::MatlabTestClass => Self::Class,
+            CodeUnitKind::MatlabTestMethod => Self::Method,
+            CodeUnitKind::RubyMinitestTestClass => Self::Class,
+            CodeUnitKind::RubyMinitestTestMethod => Self::Method,
+            CodeUnitKind::PhpTestClass => Self::Class,
+            CodeUnitKind::PhpTestMethod => Self::Method,
+            CodeUnitKind::SwiftTestClass => Self::Class,
+            CodeUnitKind::SwiftTestMethod => Self::Method,
+            // A test-drive test is a declared subroutine, so the IR projects
+            // it as a function the way Go test functions are projected.
+            CodeUnitKind::FortranTestDriveSubroutine => Self::Function,
             CodeUnitKind::RustMethod
             | CodeUnitKind::RustTraitMethod
             | CodeUnitKind::RustAssociatedFunction => Self::Method,
@@ -152,8 +182,15 @@ impl IrNodeKind {
             CodeUnitKind::SerdeModel
             | CodeUnitKind::ThiserrorErrorEnum
             | CodeUnitKind::ClapParser => Self::Class,
-            CodeUnitKind::TokioEntry | CodeUnitKind::TokioTest => Self::Function,
+            CodeUnitKind::TokioEntry
+            | CodeUnitKind::TokioTest
+            | CodeUnitKind::TracingInstrument => Self::Function,
             CodeUnitKind::AxumRoute => Self::Method,
+            // A SQL statement is not a function, class, or method, and this IR
+            // vocabulary names no statement concept. The node keeps its range,
+            // provenance, and containment edge; only the kind projection
+            // abstains, the same way Rust use items and macro invocations do.
+            CodeUnitKind::SqlStatement | CodeUnitKind::SqlTableDefinition => Self::Unknown,
             CodeUnitKind::ProjectConfig => Self::ProjectConfig,
             CodeUnitKind::Unknown => Self::Unknown,
         }

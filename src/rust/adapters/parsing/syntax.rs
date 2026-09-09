@@ -5,13 +5,15 @@
 
 use super::{ir_edges_for_units, ir_nodes_for_units, tsjs::TSJS_ANCHOR_ENGINE};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
+    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencyVersion, Evidence,
+    FactCertainty, FactOrigin, Language, PackageIdentity, Provenance, SemanticFact,
+    SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    SourceDocument, SourceParser,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -22,7 +24,7 @@ pub struct SyntaxCodeUnitParser;
 impl SourceParser for SyntaxCodeUnitParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
         if document.language == Language::TsJsConfig {
-            return tsjs_project_config_report(document);
+            return tsjs_project_config_output(document).map(|output| output.report);
         }
         if !matches!(
             document.language,
@@ -41,7 +43,7 @@ impl SourceParser for SyntaxCodeUnitParser {
         context: &ParserProjectContext,
     ) -> Result<ParseReport, ParseError> {
         if document.language == Language::TsJsConfig {
-            return tsjs_project_config_report(document);
+            return tsjs_project_config_output(document).map(|output| output.report);
         }
         if !matches!(
             document.language,
@@ -53,16 +55,32 @@ impl SourceParser for SyntaxCodeUnitParser {
         scanner.scan()?;
         scanner.finish()
     }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        if document.language == Language::TsJsConfig {
+            return tsjs_project_config_output(document);
+        }
+        self.parse_with_context(document, context)
+            .map(SourceParseOutput::from_report)
+    }
 }
 
-fn tsjs_project_config_report(document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
-    let unit = project_config_unit(&document)?;
+fn tsjs_project_config_output(
+    document: SourceDocument<'_>,
+) -> Result<SourceParseOutput, ParseError> {
+    let unit = super::project_config_unit(&document, Language::TsJsConfig)?;
     let mut semantic_facts = Vec::new();
+    let mut dependencies = Vec::new();
     let mut diagnostics = Vec::new();
     if document.path.ends_with(".json") {
         match serde_json::from_str::<Value>(document.text) {
             Ok(value) => {
                 semantic_facts.extend(tsjs_json_project_config_facts(&document, &unit, &value)?);
+                dependencies.extend(tsjs_json_dependencies(&document, &unit, &value)?);
             }
             Err(_) => {
                 semantic_facts.push(tsjs_project_config_unknown_fact(
@@ -104,35 +122,16 @@ fn tsjs_project_config_report(document: SourceDocument<'_>) -> Result<ParseRepor
     let units = vec![unit];
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
     let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
-    Ok(ParseReport {
-        units,
-        ir_nodes,
-        ir_edges,
-        semantic_facts,
-        diagnostics,
-    })
-}
-
-fn project_config_unit(document: &SourceDocument<'_>) -> Result<CodeUnit, ParseError> {
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let id = CodeUnitId::new(format!(
-        "unit:{}#project_config:0-{}:0",
-        document.path,
-        document.text.len()
-    ))
-    .map_err(ParseError::Internal)?;
-    Ok(CodeUnit {
-        id,
-        language: Language::TsJsConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
+    Ok(SourceParseOutput {
+        report: ParseReport {
+            units,
+            ir_nodes,
+            ir_edges,
+            semantic_facts,
+            diagnostics,
+        },
+        python_interface_hash: None,
+        dependencies,
     })
 }
 
@@ -159,7 +158,12 @@ fn tsjs_json_project_config_facts(
     )?);
     if document.path == "package.json" {
         if let Some(object) = object {
-            for field in ["dependencies", "devDependencies", "peerDependencies"] {
+            for field in [
+                "dependencies",
+                "devDependencies",
+                "optionalDependencies",
+                "peerDependencies",
+            ] {
                 if let Some(dependencies) = object.get(field).and_then(Value::as_object) {
                     for package in dependencies.keys() {
                         facts.push(tsjs_project_config_fact(
@@ -229,6 +233,104 @@ fn tsjs_json_project_config_facts(
         }
     }
     Ok(facts)
+}
+
+fn tsjs_json_dependencies(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    value: &Value,
+) -> Result<Vec<DependencyRecord>, ParseError> {
+    if document.path != "package.json" {
+        return Ok(Vec::new());
+    }
+    let Some(object) = value.as_object() else {
+        return Ok(Vec::new());
+    };
+    let peer_meta = object
+        .get("peerDependenciesMeta")
+        .and_then(Value::as_object);
+    let mut dependencies = Vec::new();
+    for (field, scope, optional_by_field) in [
+        ("dependencies", DependencyScope::Runtime, false),
+        ("devDependencies", DependencyScope::Development, false),
+        ("optionalDependencies", DependencyScope::Runtime, true),
+        ("peerDependencies", DependencyScope::Unknown, false),
+    ] {
+        let Some(entries) = object.get(field).and_then(Value::as_object) else {
+            continue;
+        };
+        for (package_name, requirement_value) in entries {
+            if !is_bounded_npm_package_name(package_name) {
+                continue;
+            }
+            let package = PackageIdentity::new(DependencyEcosystem::Npm, package_name)
+                .map_err(ParseError::Internal)?;
+            let requirement = requirement_value
+                .as_str()
+                .and_then(|value| DependencyVersion::new(value).ok());
+            let optional_by_meta = field == "peerDependencies"
+                && peer_meta
+                    .and_then(|meta| meta.get(package_name))
+                    .and_then(Value::as_object)
+                    .and_then(|entry| entry.get("optional"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+            dependencies.push(
+                DependencyRecord::new(
+                    package,
+                    requirement,
+                    None,
+                    scope,
+                    optional_by_field || optional_by_meta,
+                    DependencyDirectness::Direct,
+                    DependencyEvidenceLevel::ManifestDeclared,
+                    Evidence::new(
+                        unit.id.clone(),
+                        unit.range.clone(),
+                        unit.provenance.clone(),
+                        format!("bounded package.json {field} declaration"),
+                    )
+                    .map_err(ParseError::Internal)?,
+                )
+                .map_err(ParseError::Internal)?,
+            );
+        }
+    }
+    dependencies.sort_by(|left, right| {
+        (
+            left.package.name.as_str(),
+            left.scope.as_str(),
+            left.optional,
+            left.requirement.as_ref().map(DependencyVersion::as_str),
+        )
+            .cmp(&(
+                right.package.name.as_str(),
+                right.scope.as_str(),
+                right.optional,
+                right.requirement.as_ref().map(DependencyVersion::as_str),
+            ))
+    });
+    Ok(dependencies)
+}
+
+fn is_bounded_npm_package_name(value: &str) -> bool {
+    if value.is_empty() || value.len() > 214 || !value.is_ascii() {
+        return false;
+    }
+    fn valid_component(component: &str) -> bool {
+        !component.is_empty()
+            && component.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b'_' | b'.' | b'~')
+            })
+    }
+    match value.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, name)| valid_component(scope) && valid_component(name)),
+        None => !value.contains('/') && valid_component(value),
+    }
 }
 
 fn tsjs_project_config_root_dir(root_dir: &str) -> Option<String> {
@@ -2172,15 +2274,31 @@ fn exact_call_head(rhs: &str, head: &str) -> bool {
     rhs.starts_with(head) && rhs[head.len()..].trim_start().starts_with('(')
 }
 
+/// Offset of a bare call to `function_name` on this line, if any.
+///
+/// A member call is not a bare call. `test.describe(...)`, `suite.it(...)`, and
+/// `runner?.test(...)` all read the runner name off some object, and this
+/// scanner's whole gate is the import binding of a bare identifier -- so
+/// matching a member access would attribute another object's method to the
+/// imported runner. Playwright makes that concrete: its suites are written
+/// `test.describe(...)`, which must not be read as an ambient `describe`.
 fn call_offset(line: &str, function_name: &str) -> Option<usize> {
     line.match_indices(function_name)
         .find(|(offset, _)| {
             has_identifier_boundaries(line, *offset, function_name.len())
+                && !is_member_access(line, *offset)
                 && line[*offset + function_name.len()..]
                     .trim_start()
                     .starts_with('(')
         })
         .map(|(offset, _)| offset)
+}
+
+fn is_member_access(line: &str, offset: usize) -> bool {
+    offset
+        .checked_sub(1)
+        .and_then(|index| line.as_bytes().get(index))
+        .is_some_and(|byte| *byte == b'.')
 }
 
 fn classify_callable(
@@ -2455,6 +2573,82 @@ describe("users", () => {
     }
 
     #[test]
+    fn package_json_emits_typed_dependency_inventory_with_scopes_and_requirements() {
+        let output = SyntaxCodeUnitParser
+            .parse_with_context_output(
+                SourceDocument {
+                    path: "package.json",
+                    language: Language::TsJsConfig,
+                    content_hash: ContentHash::new(
+                        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    )
+                    .expect("valid hash"),
+                    repository_revision: RepositoryRevision::new("UNKNOWN")
+                        .expect("valid revision"),
+                    text: r#"{
+                        "dependencies":{"express":"^4"},
+                        "devDependencies":{"vitest":"^3"},
+                        "optionalDependencies":{"fsevents":"~2.3"},
+                        "peerDependencies":{"@scope/plugin":"^1"},
+                        "peerDependenciesMeta":{"@scope/plugin":{"optional":true}}
+                    }"#,
+                },
+                &ParserProjectContext::default(),
+            )
+            .expect("parse typed package inventory");
+
+        assert_eq!(output.dependencies.len(), 4);
+        let dependency = |name: &str| {
+            output
+                .dependencies
+                .iter()
+                .find(|dependency| dependency.package.name == name)
+                .expect("dependency exists")
+        };
+        assert_eq!(
+            dependency("express").package.ecosystem,
+            DependencyEcosystem::Npm
+        );
+        assert_eq!(dependency("express").scope, DependencyScope::Runtime);
+        assert_eq!(
+            dependency("express")
+                .requirement
+                .as_ref()
+                .map(DependencyVersion::as_str),
+            Some("^4")
+        );
+        assert_eq!(dependency("vitest").scope, DependencyScope::Development);
+        assert!(dependency("fsevents").optional);
+        assert_eq!(dependency("@scope/plugin").scope, DependencyScope::Unknown);
+        assert!(dependency("@scope/plugin").optional);
+        assert!(output.dependencies.iter().all(|dependency| {
+            dependency.directness == DependencyDirectness::Direct
+                && dependency.evidence_level == DependencyEvidenceLevel::ManifestDeclared
+                && dependency.evidence.provenance.path == "package.json"
+        }));
+    }
+
+    #[test]
+    fn npm_package_name_contract_is_bounded_and_conservative() {
+        for accepted in ["express", "@types/node", "package_name", "a.b-c~d"] {
+            assert!(is_bounded_npm_package_name(accepted), "{accepted}");
+        }
+        for rejected in [
+            "",
+            "@scope",
+            "scope/name",
+            "@scope/",
+            "@/name",
+            "BadName",
+            "bad name",
+            "../escape",
+        ] {
+            assert!(!is_bounded_npm_package_name(rejected), "{rejected}");
+        }
+        assert!(!is_bounded_npm_package_name(&"a".repeat(215)));
+    }
+
+    #[test]
     fn tsjs_scoped_package_dependencies_stay_structural_config_not_family_support() {
         // Scoped packages such as `@types/node` and `@prisma/client` must not
         // break JSON project-config parsing, and their mere presence in
@@ -2531,10 +2725,11 @@ describe("users", () => {
         assert!(targets.contains("tsconfig.root_dir:src"));
         assert!(targets.contains("tsconfig.root_dir:generated"));
         assert!(targets.contains("tsconfig.jsx:react-jsx"));
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "project_config=root_dirs")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "project_config=root_dirs")
+        }));
         let debug = format!("{:?}", report.semantic_facts);
         assert!(!debug.contains("../secret"));
         assert!(!debug.contains("tsconfig.root_dir:src/*"));

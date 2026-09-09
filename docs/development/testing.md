@@ -33,6 +33,33 @@ allowed.
   native test process status.
 - Tests must not modify real repository files unless the test is explicitly
   exercising a temporary copy.
+
+### Local Cargo build-cache lifecycle
+
+Cargo `target/` directories in the primary checkout and registered Git
+worktrees are disposable generated output, not project history, durable agent
+state, or release evidence. Commits, committed fixtures and reports, and
+explicitly archived evidence remain authoritative.
+
+- Complete the required validation for a coherent workstream before cleaning
+  its build cache; do not rebuild solely to prove that generated files were
+  removed.
+- A target is eligible for cleanup only after resolving its exact Cargo target
+  directory, proving the path is Git-ignored and contains no tracked files,
+  preserving all unrelated dirty or untracked work, and confirming that no
+  build, test, product, IDE, or agent process has an open file below it.
+- Prefer `cargo clean --manifest-path <exact-worktree>/Cargo.toml --profile dev`
+  when preserving release artifacts. Use a full `cargo clean` only after
+  confirming that no installed command, MCP configuration, release check, or
+  active task resolves into `target/release` and that the checkout can rebuild
+  the artifact when next required.
+- Cleaning a Cargo cache never authorizes deleting a registered worktree, Git
+  refs or metadata, `.repogrammar/`, fixtures, experiment evidence, logs,
+  source files, or user-authored untracked files. Never replace the exact Cargo
+  command with a broad recursive path deletion.
+- Record the cleanup scope plus before/after allocated sizes in the task report.
+  Keep one-machine paths and byte counts out of canonical product claims; the
+  durable repository rule is this lifecycle and safety gate.
 - Process-boundary tests that rely on inherited child pipes must make child
   lifetime and signal handling explicit instead of depending on
   platform-specific wrapper behavior.
@@ -125,38 +152,60 @@ allowed.
   `.mypy_cache`, `.ruff_cache`, `build`, `dist`, and `site-packages`,
   including nested path segments where applicable, and Git-ignored `.py` files
   in root and parent-worktree subdirectory projects.
-- Go discovery-only coverage must include stable `go`/`go-config` tokens,
+- Go discovery/config coverage must include stable `go`/`go-config` tokens,
   `.go` source and `_test.go` inventory, root/nested `go.mod` and `go.work`,
   normalized-path rejection, dot/underscore, `vendor`, and `testdata` path
   classification, the dated GOOS/GOARCH suffix-shape snapshot without ambient
   selection, exact/plus-one 1 MiB behavior, symlink refusal, deterministic and
-  source-free persistence, and incremental zero-parse metadata deltas for Go
-  source/config additions, removals, and modifications while those tokens are
-  absent from `ParserProjectContext`. Mixed repositories must retain their
+  source-free `.go` persistence, and incremental zero-parse metadata deltas for
+  Go source additions, removals, and modifications. Root/nested `go.mod`
+  coverage must include direct/indirect `require` declarations, allowed quoted
+  path/version strings, rejected quoted directive/go/toolchain/godebug positions,
+  strict module-path/SemVer/major-suffix boundaries, duplicate/conflicting
+  omission, exact/plus-one byte/line/token/directive/dependency ceilings with
+  typed resource UNKNOWNs, malformed fail-closed behavior, replace/exclude/
+  retract/toolchain/tool abstention, exact evidence ranges, persistence,
+  copy-forward, changed-manifest replacement, stale-row removal, and no
+  resolved-version claim. `go.work` must
+  produce only the scoped workspace UNKNOWN. Mixed repositories must retain their
   supported-language facts/families and `syntax_only_code_units` mode even on
   an unchanged round with zero parser attempts; tampered legacy Go claim rows
   must be omitted by generation-replacement copy-forward without being counted
-  as cleared dirty markers. The default all-Go product path must prove that its
-  source store is never called, warnings are aggregated by language token
-  without paths, and no units, facts, IR, or families are produced. Marker
-  scanning and Go project-context invalidation remain frontend/IR obligations.
-- PHP discovery-only coverage must include stable `php`/`php-config` tokens;
+  as cleared dirty markers. The default all-Go product path must prove that
+  `.go` source is never read or parsed, only `go-config` paths are read,
+  `go.work` emits only a scoped workspace UNKNOWN, notes and UNKNOWN metadata
+  are source-free, and no framework roles or families are produced. Marker
+  scanning and Go source project-context invalidation remain frontend/IR
+  obligations.
+- PHP source-free inventory coverage must include stable `php`/`php-config` tokens;
   exact case-sensitive `.php` and literal `.php` handling; exact root/nested
   `composer.json`, `composer.lock`, `phpunit.xml`, and `phpunit.xml.dist`
   basenames with configuration precedence; normalized-path rejection; deferred
   `.inc`/`.phtml`/`.phpt`/`.php.dist`/`artisan`/`composer.phar`/`auth.json`
   shapes; and PHP-only `.composer`/`.phpunit.cache` exclusions without globally
   pruning other languages. Exact `vendor` must remain globally excluded.
-  Coverage must include binary bytes, exact/plus-one size/resource limits,
-  symlink refusal, deterministic path/raw-byte-hash/size/token persistence, and
-  Git-aware discovery without source text or paths in warnings. PHP-only
-  indexing must bypass the source store and parser, emit at most one truthful
-  warning per accepted token, report `file_manifest_only`, and produce no unit,
-  IR, fact, typed `UNKNOWN`, family, or project model. Mixed repositories retain
-  `syntax_only_code_units`; incremental tests must prove token-based add/modify/
-  remove deltas and legacy-claim purge while preserving metadata. Autosync
-  retains its intentional Git-independent charging. Custom `vendor-dir`,
-  project-profile invalidation, and semantic admission remain later-stage tests.
+  Coverage must include binary bytes for PHP source and PHPUnit XML,
+  exact/plus-one size/resource limits, symlink refusal, deterministic
+  path/raw-byte-hash/size/token persistence, and Git-aware discovery without
+  source text or paths in warnings. PHP source and PHPUnit XML must bypass the
+  source store and parser and create no code unit, IR, semantic fact, typed
+  `UNKNOWN`, dependency, family, or project model. Exact `composer.json` and
+  `composer.lock` instead enter the bounded duplicate-key-rejecting JSON
+  metadata parser: tests must cover direct manifest scopes, lock rows with
+  unknown directness, bounded `dev-*` branch names containing slashes,
+  malformed/duplicate/over-budget input, platform and virtual package handling,
+  conflicting requirements, rejection of URL/path shapes, omission of source
+  URLs from dependency rows, and typed `php_dependency_inventory` abstention
+  without family evidence.
+  PHP-only indexing with only deferred source/PHPUnit inputs reports
+  `file_manifest_only`; any admitted Composer document owns project-config
+  units and reports `syntax_only_code_units`. Mixed repositories retain
+  `syntax_only_code_units`. Incremental tests must prove token-based add/modify/
+  remove deltas, dependency copy-forward/replacement/removal, and legacy-claim
+  purge while preserving metadata. Autosync retains its intentional
+  Git-independent charging. Custom `vendor-dir`, selected project profiles,
+  manifest/lock coherence, project-profile invalidation, and semantic admission
+  remain later-stage tests.
 - Ruby discovery-only coverage must include stable `ruby`/`ruby-config` tokens;
   configuration-before-source precedence for `gems.rb`; literal `.rb` and
   `.gemspec` basename handling; normalized-path and invalid-input rejection;
@@ -165,15 +214,20 @@ allowed.
   remain eligible to other languages. It must cover binary content, exact and
   plus-one size/resource limits, symlink refusal, deterministic path/hash/size/
   token persistence, and Git-aware discovery without source text or paths in
-  warnings. Ruby-only indexing must bypass the source store and parser, emit at
-  most one truthful warning per accepted token, report `file_manifest_only`
-  with a deferred parser, and produce no units, IR, facts, typed `UNKNOWN`s, or
-  families. Mixed repositories retain `syntax_only_code_units`. Incremental
-  tests must prove token-based add/modify/remove metadata deltas and purge
-  seeded legacy Ruby claims while preserving file metadata; autosync
-  fingerprint tests must prove its Git-ignore parity with manual discovery.
-  Ruby project-context invalidation remains a later frontend obligation.
-- Swift discovery-only coverage must include stable `swift`/`swift-config`
+  warnings. Ruby source and every Ruby config except exact `Gemfile.lock` must
+  bypass the source store and parser. Exact-lock tests must prove bounded direct
+  `DEPENDENCIES` extraction, strict name/requirement tokens, direct/optional/
+  scope/evidence fields, duplicate deduplication, conflict/malformed/source/
+  resource abstention, and absence of source/package text in public UNKNOWN
+  output. They must also prove persistence, copy-forward, replacement, and
+  removal over incremental edits. Gemfile, gems.rb, gemspec, gems.locked,
+  .ruby-version, Ruby,
+  Bundler, RubyGems, Rake, project code, children, and network must never run.
+  Deferred Ruby/config deltas remain incremental and purge seeded legacy claims;
+  exact `Gemfile.lock` changes parse file-locally.
+  Autosync retains its generic Git-independent conservative fingerprinting.
+- Swift discovery and bounded lock-inventory coverage must include stable
+  `swift`/`swift-config`
   tokens; exact case-sensitive `.swift` including basename `.swift`; exact
   root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and
   complete ASCII `Package@swift-M[.m[.p]].swift` grammar with configuration
@@ -182,15 +236,113 @@ allowed.
   exclusions without globally pruning other languages. It must cover binary
   bytes, exact/plus-one file and aggregate resource limits, source/config
   symlink refusal, deterministic path/raw-byte-hash/size/token persistence, and
-  Git-aware discovery without source/config leakage. Swift-only indexing must
-  bypass the source store and parser, emit at most one warning per token, report
-  `file_manifest_only`, and produce no units, IR, facts, typed `UNKNOWN`s,
-  project records, or families. Mixed repositories retain syntax mode;
+  Git-aware discovery without source/config leakage. Swift source,
+  `Package.swift`, version manifests, and `.swift-version` must bypass the
+  source store and parser, emit at most one warning per inventory-only token,
+  and produce no units, IR, facts, typed `UNKNOWN`s, project records, or
+  families. Exact `Package.resolved` must prove schema-2/3 admission,
+  decoded-duplicate-key rejection, inclusive depth/member/key/dependency
+  limits, exact semantic-version lock rows, unknown scope/directness, location
+  and revision non-retention, typed malformed/unsupported/conflict/resource
+  abstention, and zero family output. Mixed repositories retain syntax mode;
   incremental tests must prove add/modify/remove and unchanged metadata deltas,
   whole-manifest warning retention, and seeded legacy source/config claim purge.
   Autosync must track accepted Swift source/config and cross-language files below
   Swift-specific exclusions while ignoring excluded Swift candidates. Project-
   context invalidation remains a later frontend obligation.
+- Visual Basic .NET discovery and bounded project-inventory coverage must include
+  stable `visual-basic`/`visual-basic-config` tokens; exact lowercase `.vb` and
+  `.vbproj`; VB6 `.vbp`/`.frm`/`.bas`/`.cls` rejection; normalized-path
+  refusal; Visual-Basic-only `bin`/`.vs` exclusions; binary source bytes; exact
+  and plus-one discovery/XML/dependency limits; and source-store/parser bypass
+  for `.vb`. Exact project tests must cover direct literal
+  `PackageReference`, attribute/child versions, conditional child-version
+  omission, case-insensitive deduplication/conflict, SDK/import/property/
+  condition/update/remove/override abstention, malformed XML, DTD/entity and
+  invalid XML-character refusal, source-free typed UNKNOWNs, and no package or
+  path leakage. Incremental tests must prove dependency copy-forward,
+  replacement, removal, source-only zero-parse deltas, honest indexing mode,
+  zero families, and absence of MSBuild, NuGet, compiler, child-process, or
+  network execution.
+- Object Pascal/Delphi coverage must include stable `object-pascal` and
+  `delphi-config` tokens; exact lowercase `.pas`/`.dpr`/`.dpk` source and
+  `.dproj` configuration; explicit non-admission of Free Pascal/Lazarus
+  `.pp`/`.lpr`/`.lpi`/`.lpk`; normalized-path refusal; language-specific
+  `__history`/`__recovery` exclusions; binary source; exact and plus-one
+  discovery/XML/dependency limits; and source-store/parser bypass for all
+  source. Exact `.dproj` tests must cover literal semicolon-separated
+  `DCC_UsePackage` rows, runtime scope, unknown directness, case-insensitive
+  deduplication, conditions/imports/property chains, invalid path and compiled-
+  package values, malformed/DTD/entity input, source-free typed UNKNOWNs, and
+  no metadata leakage. Incremental and CLI tests must prove copy-forward,
+  replacement, removal, honest mode, zero families, and no Delphi/FPC/Lazarus/
+  MSBuild/compiler/package-manager execution.
+- Ada/Fortran discovery and dependency-inventory coverage must prove stable
+  source/config tokens, normalized exact-case path classification, the GNAT
+  default `.ads`/`.adb` boundary, frozen lowercase non-preprocessed Fortran
+  fixed/free forms, and explicit deferral of `.ada`, uppercase Fortran, `.fpp`,
+  `.fi`, and `.fii`. Tests must cover exact/plus-one discovery and parser byte
+  limits, bounded lines/records, non-UTF-8 source, zero SourceStore reads for
+  Ada/Fortran source and GPR, and no compiler/package-manager/project execution.
+  Exact `alire.toml` tests must cover unconditional direct strings, conditional
+  tables, pins, conflicts, malformed/resource failure, internal-lock abstention,
+  and path/secret non-leakage. Exact `fpm.toml` tests must cover runtime/dev
+  scopes, dotted namespace, inline git/path, target-specific/unsupported shapes,
+  conflict/resource UNKNOWN, and secret non-leakage. Product tests must prove
+  file-manifest-only CLI mode for deferred inputs, syntax mode for parsed
+  manifests, no family/support claims, and incremental copy-forward,
+  replacement, and removal of evidence-bound rows.
+- SQL discovery tests must cover exact `.sql` case, normalized-path rejection,
+  generic/migration/schema/catalog precedence, binary bytes, source-store/parser
+  zero-call behavior, deterministic raw-byte metadata, CLI
+  `file_manifest_only` mode, incremental replace/remove, legacy-claim purge, and
+  absence of SQL literals or absolute paths. Tests must prove that path labels
+  do not select PostgreSQL, SQLite, or another dialect and that no database,
+  client, migration tool, extension dependency, semantic fact, or family runs.
+- R discovery/config tests must cover exact `.R` and `.r`, `DESCRIPTION`,
+  `NAMESPACE`,
+  and `renv.lock`; R-specific managed-library/IDE exclusions; binary source;
+  source-store reads limited to the three metadata basenames; DCF continuation,
+  duplicate/malformed fields, official dependency fields, literal namespace
+  imports, bounded unique-member JSON, and exact explicit CRAN/Bioconductor
+  source/version admission. Byte, line, field, JSON, and dependency bounds need
+  exact/+1 tests. Remote/custom/URL/local sources must be omitted with typed
+  UNKNOWN and no value leakage. Persistence tests must cover unknown
+  directness, copy-forward, changed-lock replacement, stale-row removal, CLI
+  modes, and zero family/support output without invoking R, renv, profiles,
+  packages, native code, children, or network.
+- MATLAB coverage must prove exact lowercase `.m` and root/nested
+  `resources/mpackage.json` classification, normalized-path rejection, and
+  exclusion of candidates under exact `codegen`/`slprj`/`sccprj` path
+  components while ordinary same-named candidates stay selected. Parser tests
+  must cover the bounded `classdef`/`methods`/`matlab.unittest.TestCase`
+  anchor, whole-file abstention on non-admitted constructs, whitespace and
+  transpose handling, and degraded-parse refusal. Package tests must cover
+  shared duplicate-member/depth/key limits, schema 1.0.0/1.1.0, later-schema
+  abstention, validated name/UUID/version fields, direct `matlab_add_on`
+  declarations, conflicting and unsafe requirement omission, resource
+  ceilings, provider/contact non-retention, persistence, copy-forward,
+  replacement, removal, path-free UNKNOWN output, and zero family support
+  beyond the anchored `matlab.unittest` family. Tests must never require
+  MATLAB, Octave, Simulink, installation, child processes, or network access.
+- Assembly coverage must prove lowercase `.s` admission, uppercase `.S`
+  exclusion, unsupported NASM/MASM suffixes, normalized-path rejection, exact
+  byte/line/label/fact limits, CRLF handling, module/label/containment output,
+  selected directive/direct-call/direct-jump spellings, and unconditional typed
+  target-profile uncertainty. Macro/include/repetition, conditionals,
+  Intel-syntax, `.code16`, `.code32`, malformed, and over-budget cases must
+  abstain without source/path leakage. Product tests must prove persistence,
+  incremental replacement/removal, no execution or include reads, and zero
+  family support.
+- Scratch prerequisite tests must use synthetic in-memory archives and cover
+  classic central/local-header coherence, entry/aggregate/ratio/path/JSON limits,
+  traversal, backslash and drive paths, duplicate names, Unix symlinks,
+  encryption, unsupported compression, missing/duplicate root `project.json`,
+  malformed/duplicate/deep JSON, aggregate target/block/event/opcode/extension
+  counts, and source-free errors. Product discovery must separately prove that
+  `.sb3` remains `UnsupportedExtension`. These tests are not evidence of common
+  deflated Scratch support, execution semantics, a general ZIP reader, or a
+  production binary-input boundary.
 - SQLite storage tests must use temporary workspaces and cover idempotent
   migrations, required-table validation, WAL and foreign-key PRAGMAs,
   foreign-key enforcement, mutable top-level database creation, active
@@ -261,13 +413,21 @@ allowed.
   `sync` coverage must include project-context fallback when TS/JS, Python, or
   Rust source inventories change and must assert stale unresolved-import
   UNKNOWNs are not copied forward after a new repo-local import target appears.
-  Go, PHP, Ruby, and Swift inventory coverage must instead prove token-based incremental
-  add/modify/remove deltas for their source/configuration tokens, zero
-  source-store/parser calls for those paths, whole-manifest warning retention,
+  Go, PHP, Ruby, Visual Basic, Object Pascal/Delphi, Ada, and Fortran inventory coverage must
+  instead prove path-qualified
+  incremental add/modify/remove deltas for their deferred source/configuration
+  paths, zero source-store/parser calls for those paths, whole-manifest warning
+  retention,
   honest `file_manifest_only`/deferred-parser output for inventory-only and
   empty generations, syntax mode for unchanged mixed generations, and purge of
-  seeded legacy Go/PHP/Ruby/Swift units, IR, facts, derived support, and families while
-  file metadata survives.
+  seeded legacy inventory-only language units, IR, facts, derived support, and
+  families while file metadata survives. Visual Basic and Delphi project
+  metadata parsers must additionally prove evidence-bound dependency
+  copy-forward/replacement/removal while their source tokens remain unread.
+  Swift incremental coverage must separately prove zero-parse deltas for its
+  inventory-only paths, bounded parsing for changed `Package.resolved`, exact
+  once-only copy-forward of unchanged lock rows on unrelated edits, and purge
+  of seeded legacy Swift source claims while metadata survives.
   Progress renderer tests must also cover exact integer percentages and
   interactive TTY progress as single-line carriage-return updates with one
   final newline rather than one terminal line per event.
@@ -402,15 +562,32 @@ allowed.
   safe-origin promotion, support>=3 family gates, and rejection of structural
   parser anchors, substring targets, and wrong-origin facts as direct family
   support.
+- Java Maven inventory tests must separately cover exact root/nested `pom.xml`
+  discovery and `java-config` token stability; default-namespace attributes;
+  direct runtime/test declarations, literal range/version retention,
+  optionality, exact evidence ranges, deterministic ordering, persistence, and
+  incremental copy-forward/replacement/removal. Negative coverage must include
+  root/nested lookalikes, malformed/mismatched XML, duplicate attributes and
+  fields, duplicate dependency identities (including three or more repeats),
+  DTD/entity and element-prefix rejection, missing/dynamic coordinates,
+  inherited/interpolated versions, parent/dependency-management/BOM/profile/
+  reactor/plugin/artifact-variant/exclusion obligations, ambiguous scopes, and
+  exact/plus-one input-byte, XML depth/token/name/field, and dependency
+  ceilings. Tests must prove no effective
+  model, classpath, resolved graph, external symbol, family, or support claim
+  and must invoke no Maven, Gradle, javac/JDT, plugin, annotation processor,
+  project/dependency code, child process, cache, repository, or network path.
 - Java framework-deepening (Wave J1) tests must additionally cover exact
   imported/FQN JUnit 5/4 and TestNG test methods, JPA/Jakarta Persistence
   entities under dual `jakarta`/`javax` roots with jakarta-vs-javax
   non-clustering, JAX-RS/Jakarta REST `@Path` resource classes and verb methods
   with a verb-outside-`@Path` block, mixed JUnit 4/5 `@Test` conflict blocking,
   Lombok non-blocking generated-members `UNKNOWN`, Spring Data derived-query
-  metadata as non-support, the `test_annotation_lookalikes` negative smoke, and
-  the `java_junit_unresolved`/`java_junit_resolved` benchmark pair
-  (`java_test_annotation_model`).
+  metadata as non-support, the `test_annotation_lookalikes` negative smoke, the
+  `java_junit_unresolved`/`java_junit_resolved` benchmark pair
+  (`java_test_annotation_model`), and the `low_support` fixture, whose single
+  exact-anchored Spring MVC route must resolve its anchor while forming no
+  family and emitting no claim payload.
 - Java test-data-link tests must cover exact same-class/class-like JUnit
   `@MethodSource` scalar, array, direct-repeatable, blank/omitted same-name, and
   complete-set resolution; coexistence with `ValueSource`/`CsvSource`; exact
@@ -1018,7 +1195,10 @@ default `init` active-index bootstrap, `--state-only` lifecycle repair,
 default auto-sync-after-index sequencing, explicit `--no-autosync`, and
 bootstrap failure preservation, bounded redacted repo-local log tails,
 JSON-parsed bootstrap manifest validation,
-TS/JS, Python, Go, PHP, Ruby, and Swift discovery filtering/hash/path-safety behavior,
+TS/JS, Python, Go, PHP, Ruby, Swift, Visual Basic .NET, Object Pascal/Delphi,
+Ada, Fortran, SQL, R, MATLAB, and Assembly discovery filtering/hash/path-safety
+behavior, plus the disconnected Scratch archive-security prerequisite and
+negative `.sb3` product-discovery contract,
 SQLite storage migration and generation-activation safety behavior, validated
 semantic-fact/evidence storage substrate behavior, syntax-only code-unit
 extraction and storage bridging, source-read hash/path safety, storage-aware
@@ -1615,8 +1795,8 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. The current stable gate requires exact `latest=0.4.3`, exact
-`preview=0.2.0-preview.0`, the preview, prior public `0.4.2`, and new stable
+state. The current stable gate requires exact `latest=0.5.0`, exact
+`preview=0.2.0-preview.0`, the preview, prior public `0.4.3`, and new stable
 versions in the registry inventory, the explicit absence of the failed or
 abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates, and a
 retained-candidate SRI match. Any other prerelease under `preview`, any
@@ -1712,3 +1892,22 @@ Rust, worker, installer, and repo-guard gates:
 Unavailable optional scanners, missing lockfiles, and environment warnings such
 as multiple `repogrammar` executables on PATH must be reported in the release
 readiness summary. They are not silent passes.
+
+## Autosync efficiency regression gate
+
+The native watcher tests cover real source creation on macOS/Linux, bounded
+event coalescing, state/read noise, and event-loss fallback. Schedule tests use
+an injected `Instant` to prove the sixty-second reconciliation deadline,
+unacknowledged retry, and bounded idle/failure backoff. Fingerprint tests prove
+Git-ignored directory pruning before entry/depth admission while preserving
+tracked files, ignore negations, nested project roots, and complete conservative
+recovery after a late Git failure. These are correctness and work-count tests,
+not battery measurements. Native Linux evidence must come from Linux CI.
+
+The indexing demo is recorded from a real PTY using
+`src/experiments/record_index_demo.py` with optional development-only `pillow`
+and `pyte`. It creates a temporary fixture, runs the real `init`, stops only
+that fixture's daemon, and records playback timing and binary/output hashes in
+`docs/demo/index-progress.summary.json`. Re-record when visible progress or
+init output changes; inspect intermediate and final GIF frames. Playback time
+is not runtime performance evidence.

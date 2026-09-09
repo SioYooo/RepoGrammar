@@ -2,31 +2,54 @@
 
 use crate::adapters::frameworks::rust_general::rust_support_target_is_role_compatible;
 use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
+use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
+use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
+use crate::adapters::parsing::fortran::testdrive::{FORTRAN_ANCHOR_ENGINE, FORTRAN_ANCHOR_METHOD};
+use crate::adapters::parsing::go::testing::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
+use crate::adapters::parsing::matlab::unittest::{MATLAB_ANCHOR_ENGINE, MATLAB_ANCHOR_METHOD};
+use crate::adapters::parsing::php::phpunit::{PHP_ANCHOR_ENGINE, PHP_ANCHOR_METHOD};
 use crate::adapters::parsing::python::{
     python_project_config_parser_method, MAX_PYTHON_FRONTEND_INPUT_BYTES,
 };
+use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
+use crate::adapters::parsing::ruby::minitest::{RUBY_ANCHOR_ENGINE, RUBY_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
+use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
+use crate::adapters::parsing::swift::xctest::{SWIFT_ANCHOR_ENGINE, SWIFT_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
+use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::family::{
-    build_family_claims, cpp_support_target_is_role_compatible,
-    csharp_support_target_is_role_compatible, family_constraint_profile_record,
+    ada_support_target_is_role_compatible, build_family_claims,
+    cpp_support_target_is_role_compatible, csharp_support_target_is_role_compatible,
+    delphi_support_target_is_role_compatible, family_constraint_profile_record,
     family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
-    java_support_target_is_role_compatible, min_family_support,
-    python_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
+    fortran_support_target_is_role_compatible, go_support_target_is_role_compatible,
+    java_support_target_is_role_compatible, matlab_support_target_is_role_compatible,
+    min_family_support, php_support_target_is_role_compatible,
+    python_support_target_is_role_compatible, r_support_target_is_role_compatible,
+    ruby_support_target_is_role_compatible, sql_support_target_is_role_compatible,
+    swift_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
+    vb_support_target_is_role_compatible, ADA_DERIVED_SUPPORT_ENGINE, ADA_DERIVED_SUPPORT_METHOD,
     CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
-    CSHARP_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
-    RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE,
-    TSJS_DERIVED_SUPPORT_METHOD,
+    CSHARP_DERIVED_SUPPORT_METHOD, DELPHI_DERIVED_SUPPORT_ENGINE, DELPHI_DERIVED_SUPPORT_METHOD,
+    FORTRAN_DERIVED_SUPPORT_ENGINE, FORTRAN_DERIVED_SUPPORT_METHOD, GO_DERIVED_SUPPORT_ENGINE,
+    GO_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
+    MATLAB_DERIVED_SUPPORT_ENGINE, MATLAB_DERIVED_SUPPORT_METHOD, PHP_DERIVED_SUPPORT_ENGINE,
+    PHP_DERIVED_SUPPORT_METHOD, RUBY_DERIVED_SUPPORT_ENGINE, RUBY_DERIVED_SUPPORT_METHOD,
+    RUST_DERIVED_SUPPORT_ENGINE, RUST_DERIVED_SUPPORT_METHOD, R_DERIVED_SUPPORT_ENGINE,
+    R_DERIVED_SUPPORT_METHOD, SQL_DERIVED_SUPPORT_ENGINE, SQL_DERIVED_SUPPORT_METHOD,
+    SWIFT_DERIVED_SUPPORT_ENGINE, SWIFT_DERIVED_SUPPORT_METHOD, TSJS_DERIVED_SUPPORT_ENGINE,
+    TSJS_DERIVED_SUPPORT_METHOD, VB_DERIVED_SUPPORT_ENGINE, VB_DERIVED_SUPPORT_METHOD,
 };
 use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::proof_lattice::{derived_support_fact, DerivedSupportSpec};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, ContentHash, Evidence, FactCertainty, FactOrigin, IrEdge, IrNode,
-    Language, Provenance, RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange,
-    SymbolId,
+    CodeUnit, CodeUnitId, ContentHash, DependencyDirectness, DependencyEcosystem, DependencyRecord,
+    Evidence, FactCertainty, FactOrigin, IrEdge, IrNode, Language, Provenance, RepositoryRevision,
+    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::error::RepoGrammarError;
@@ -41,13 +64,14 @@ use crate::ports::file_discovery::{
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, GenerationEngineStampStore, IndexStorageLayout, IndexStore,
-    IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord, IndexedIrEdgeRecord,
-    IndexedIrNodeRecord, IndexedSemanticFactRecord, PythonModuleInterfaceStore,
-    STORAGE_SCHEMA_VERSION,
+    IndexStoreError, IndexedCodeUnitRecord, IndexedDependencyRecord, IndexedFileRecord,
+    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    PythonModuleInterfaceStore, STORAGE_SCHEMA_VERSION,
 };
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, ParserProjectFileContext, ParserTsJsPathAlias,
-    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
+    ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
+    ParserProjectFileContext, ParserTsJsPathAlias, PythonInterfaceProbe, SourceDocument,
+    SourceParseOutput, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -60,7 +84,7 @@ use crate::ports::semantic_worker::{
     SemanticWorker, SemanticWorkerError, SemanticWorkerOperation, SemanticWorkerOperationKind,
     SemanticWorkerRequest,
 };
-use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError};
+use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -98,34 +122,8 @@ pub struct IndexingOutcome {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexingGenerationMode {
-    FileManifestOnly,
-    SyntaxOnlyCodeUnits,
-}
-
-impl IndexingGenerationMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FileManifestOnly => "file_manifest_only",
-            Self::SyntaxOnlyCodeUnits => "syntax_only_code_units",
-        }
-    }
-
-    pub fn parser_status(self) -> &'static str {
-        match self {
-            Self::FileManifestOnly => "deferred",
-            Self::SyntaxOnlyCodeUnits => "syntax_only",
-        }
-    }
-
-    pub fn human_summary(self) -> &'static str {
-        match self {
-            Self::FileManifestOnly => "file manifest stored",
-            Self::SyntaxOnlyCodeUnits => "syntax-only code units stored",
-        }
-    }
-}
+use crate::core::policy::generation_mode::generation_mode_for_code_unit_count;
+pub use crate::core::policy::generation_mode::IndexingGenerationMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexingSyncMode {
@@ -745,6 +743,7 @@ where
     let mut indexed_code_units = Vec::new();
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
+    let mut degraded_python = false;
     let mut warnings = report.warnings.clone();
     extend_inventory_only_language_warnings(&mut warnings, &report);
     emit_progress(
@@ -755,7 +754,7 @@ where
     );
     let parser_context = parser_project_context(&request, &report, source_store, parser)?;
     for (index, file) in report.files.iter().enumerate() {
-        if discovered_language_is_inventory_only(file.language) {
+        if discovered_file_is_inventory_only(file) {
             emit_progress(
                 progress,
                 ProgressStage::SyntaxParsing,
@@ -764,18 +763,21 @@ where
             );
             continue;
         }
-        let source = source_store
-            .read_source(SourceReadRequest {
-                repository_root: request.repository_root.clone(),
-                path: file.path.clone(),
-                expected_content_hash: file.content_hash.clone(),
-                max_file_bytes: request.max_file_bytes,
-            })
-            .map_err(source_store_error)?;
+        let Some(source) = read_source_for_parsing(source_store, &request, file, &mut warnings)?
+        else {
+            emit_progress(
+                progress,
+                ProgressStage::SyntaxParsing,
+                "parsed source files",
+                known_work_units(index + 1, report.files.len()),
+            );
+            continue;
+        };
         parser_attempted_files += 1;
         let SourceParseOutput {
             report: parse_report,
             python_interface_hash,
+            dependencies,
         } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
@@ -821,6 +823,7 @@ where
             file,
             &source.text,
             parse_report,
+            dependencies,
             options.framework_roles,
             &mut warnings,
         )?;
@@ -833,12 +836,17 @@ where
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
+        degraded_python |=
+            parse_outcome.parse_degraded && file.language == DiscoveredLanguage::Python;
         emit_progress(
             progress,
             ProgressStage::SyntaxParsing,
             "parsed source files",
             known_work_units(index + 1, report.files.len()),
         );
+    }
+    if degraded_python {
+        extend_python_frontend_version_warning(&mut warnings, parser);
     }
     emit_progress(
         progress,
@@ -854,98 +862,19 @@ where
     sort_semantic_facts(&mut framework_role_facts);
     let framework_fact_count =
         record_semantic_facts(session.as_mut(), parser_fact_count, &framework_role_facts)?;
-    let mut derived_python_support_facts = derive_python_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_python_support_facts);
-    let derived_python_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count + framework_fact_count,
-        &derived_python_support_facts,
-    )?;
-    let mut derived_tsjs_support_facts = derive_tsjs_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_tsjs_support_facts);
-    let derived_tsjs_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count + framework_fact_count + derived_python_support_fact_count,
-        &derived_tsjs_support_facts,
-    )?;
-    let mut derived_java_support_facts = derive_java_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_java_support_facts);
-    let derived_java_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count,
-        &derived_java_support_facts,
-    )?;
-    let mut derived_csharp_support_facts = derive_csharp_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_csharp_support_facts);
-    let derived_csharp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count,
-        &derived_csharp_support_facts,
-    )?;
-    let mut derived_cpp_support_facts = derive_cpp_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_cpp_support_facts);
-    let derived_cpp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count,
-        &derived_cpp_support_facts,
-    )?;
-    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
-        &indexed_code_units,
-        &parser_semantic_facts,
-        &framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_rust_support_facts);
-    let derived_rust_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        parser_fact_count
-            + framework_fact_count
-            + derived_python_support_fact_count
-            + derived_tsjs_support_fact_count
-            + derived_java_support_fact_count
-            + derived_csharp_support_fact_count
-            + derived_cpp_support_fact_count,
-        &derived_rust_support_facts,
-    )?;
-    let local_support_fact_count = parser_fact_count
-        + framework_fact_count
-        + derived_python_support_fact_count
-        + derived_tsjs_support_fact_count
-        + derived_java_support_fact_count
-        + derived_csharp_support_fact_count
-        + derived_cpp_support_fact_count
-        + derived_rust_support_fact_count;
+    let mut derived_support_facts: Vec<Vec<SemanticFact>> = Vec::new();
+    let mut local_support_fact_count = parser_fact_count + framework_fact_count;
+    for derive in DERIVED_SUPPORT_DERIVERS {
+        let mut facts = derive(
+            &indexed_code_units,
+            &parser_semantic_facts,
+            &framework_role_facts,
+        )?;
+        sort_semantic_facts(&mut facts);
+        let count = record_semantic_facts(session.as_mut(), local_support_fact_count, &facts)?;
+        local_support_fact_count += count;
+        derived_support_facts.push(facts);
+    }
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1040,30 +969,15 @@ where
             "checking family candidates",
             WorkUnits::Unknown,
         );
-        let mut family_facts = Vec::with_capacity(
-            parser_semantic_facts.len()
-                + framework_role_facts.len()
-                + derived_python_support_facts.len()
-                + derived_tsjs_support_facts.len()
-                + derived_java_support_facts.len()
-                + derived_csharp_support_facts.len()
-                + derived_cpp_support_facts.len()
-                + derived_rust_support_facts.len()
-                + rust_provider_facts.len()
-                + worker_facts.len()
-                + derived_tsjs_provider_support_facts.len(),
-        );
+        let mut family_facts = Vec::new();
         family_facts.extend(parser_semantic_facts.iter().cloned());
         family_facts.extend(framework_role_facts.iter().cloned());
-        family_facts.extend(derived_python_support_facts);
-        family_facts.extend(derived_tsjs_support_facts);
-        family_facts.extend(derived_java_support_facts);
-        family_facts.extend(derived_csharp_support_facts);
-        family_facts.extend(derived_cpp_support_facts);
-        family_facts.extend(derived_rust_support_facts);
+        for facts in &derived_support_facts {
+            family_facts.extend(facts.iter().cloned());
+        }
         family_facts.extend(rust_provider_facts.iter().cloned());
-        family_facts.extend(worker_facts);
-        family_facts.extend(derived_tsjs_provider_support_facts);
+        family_facts.extend(worker_facts.iter().cloned());
+        family_facts.extend(derived_tsjs_provider_support_facts.iter().cloned());
         // Capture the base generation's family ids before the new generation is
         // activated, but only when there is a base generation to diff against.
         let base_family_ids = sync_report
@@ -1115,7 +1029,7 @@ where
     }
 
     Ok(IndexingOutcome {
-        indexing_mode: indexing_generation_mode(&report),
+        indexing_mode: generation_mode_for_code_unit_count(indexed_units),
         parser_attempted_files,
         indexed_units,
         // `local_support_fact_count` sums local parser/framework/derived facts;
@@ -1238,7 +1152,7 @@ fn sync_repository_with_optional_semantic_worker(
         let mut warnings = report.warnings.clone();
         extend_inventory_only_language_warnings(&mut warnings, &report);
         return Ok(IndexingOutcome {
-            indexing_mode: indexing_generation_mode(&report),
+            indexing_mode: generation_mode_for_code_unit_count(stats.indexed_code_unit_count),
             parser_attempted_files: 0,
             indexed_units: stats.indexed_code_unit_count,
             semantic_facts: stats.semantic_fact_count,
@@ -1543,6 +1457,21 @@ where
         indexed_code_units.push(unit.clone());
     }
 
+    // Static manifest dependencies belong to the unchanged code units that
+    // supplied their evidence and must survive an unrelated source edit.
+    // Cargo metadata is provider-resolved and is intentionally recomputed later
+    // in this generation, so copying it here would duplicate provider output.
+    for dependency in &snapshot.dependencies {
+        if dependency.ecosystem == DependencyEcosystem::Cargo.as_str()
+            || !unchanged_paths.contains(&dependency.path)
+            || inventory_only_paths.contains(&dependency.path)
+            || !copied_unit_ids.contains(&dependency.code_unit_id)
+        {
+            continue;
+        }
+        crate::application::storage::record_dependency(session.as_mut(), dependency)?;
+    }
+
     let mut copied_node_ids = BTreeSet::new();
     for node in &snapshot.ir_nodes {
         if !copied_unit_ids.contains(&node.code_unit_id) {
@@ -1572,6 +1501,7 @@ where
         if !unchanged_paths.contains(&record.path)
             || inventory_only_paths.contains(&record.path)
             || is_local_derived_support_record(record)
+            || is_rust_provider_record(record)
         {
             continue;
         }
@@ -1602,8 +1532,9 @@ where
     let mut parser_attempted_files = 0usize;
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
+    let mut degraded_python = false;
     for (index, file) in changed_files.iter().enumerate() {
-        if discovered_language_is_inventory_only(file.language) {
+        if discovered_file_is_inventory_only(file) {
             emit_progress(
                 progress,
                 ProgressStage::SyntaxParsing,
@@ -1612,18 +1543,21 @@ where
             );
             continue;
         }
-        let source = source_store
-            .read_source(SourceReadRequest {
-                repository_root: request.repository_root.clone(),
-                path: file.path.clone(),
-                expected_content_hash: file.content_hash.clone(),
-                max_file_bytes: request.max_file_bytes,
-            })
-            .map_err(source_store_error)?;
+        let Some(source) = read_source_for_parsing(source_store, &request, file, &mut warnings)?
+        else {
+            emit_progress(
+                progress,
+                ProgressStage::SyntaxParsing,
+                "parsed source files",
+                known_work_units(index + 1, changed_files.len()),
+            );
+            continue;
+        };
         parser_attempted_files += 1;
         let SourceParseOutput {
             report: parse_report,
             python_interface_hash,
+            dependencies,
         } = match parser.parse_with_context_output(
             SourceDocument {
                 path: &source.path,
@@ -1669,6 +1603,7 @@ where
             file,
             &source.text,
             parse_report,
+            dependencies,
             options.framework_roles,
             &mut warnings,
         )?;
@@ -1684,12 +1619,17 @@ where
         indexed_code_units.extend(parse_outcome.code_units);
         parser_semantic_facts.extend(parse_outcome.semantic_facts);
         framework_role_facts.extend(parse_outcome.framework_role_facts);
+        degraded_python |=
+            parse_outcome.parse_degraded && file.language == DiscoveredLanguage::Python;
         emit_progress(
             progress,
             ProgressStage::SyntaxParsing,
             "parsed source files",
             known_work_units(index + 1, changed_files.len()),
         );
+    }
+    if degraded_python {
+        extend_python_frontend_version_warning(&mut warnings, parser);
     }
     emit_progress(
         progress,
@@ -1715,78 +1655,18 @@ where
     let mut all_framework_role_facts = copied_framework_role_facts;
     all_framework_role_facts.extend(framework_role_facts.iter().cloned());
 
-    let mut derived_python_support_facts = derive_python_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_python_support_facts);
-    let derived_python_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_python_support_facts,
-    )?;
-    next_fact_offset += derived_python_support_fact_count;
-    let mut derived_tsjs_support_facts = derive_tsjs_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_tsjs_support_facts);
-    let derived_tsjs_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_tsjs_support_facts,
-    )?;
-    next_fact_offset += derived_tsjs_support_fact_count;
-    let mut derived_java_support_facts = derive_java_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_java_support_facts);
-    let derived_java_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_java_support_facts,
-    )?;
-    next_fact_offset += derived_java_support_fact_count;
-    let mut derived_csharp_support_facts = derive_csharp_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_csharp_support_facts);
-    let derived_csharp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_csharp_support_facts,
-    )?;
-    next_fact_offset += derived_csharp_support_fact_count;
-    let mut derived_cpp_support_facts = derive_cpp_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_cpp_support_facts);
-    let derived_cpp_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_cpp_support_facts,
-    )?;
-    next_fact_offset += derived_cpp_support_fact_count;
-    let mut derived_rust_support_facts = derive_rust_framework_support_facts(
-        &indexed_code_units,
-        &all_parser_facts,
-        &all_framework_role_facts,
-    )?;
-    sort_semantic_facts(&mut derived_rust_support_facts);
-    let derived_rust_support_fact_count = record_semantic_facts(
-        session.as_mut(),
-        next_fact_offset,
-        &derived_rust_support_facts,
-    )?;
-    next_fact_offset += derived_rust_support_fact_count;
+    let mut derived_support_facts: Vec<Vec<SemanticFact>> = Vec::new();
+    for derive in DERIVED_SUPPORT_DERIVERS {
+        let mut facts = derive(
+            &indexed_code_units,
+            &all_parser_facts,
+            &all_framework_role_facts,
+        )?;
+        sort_semantic_facts(&mut facts);
+        let count = record_semantic_facts(session.as_mut(), next_fact_offset, &facts)?;
+        next_fact_offset += count;
+        derived_support_facts.push(facts);
+    }
     // Recompute provider-resolved TS/JS support from the copied-forward worker
     // facts so incremental-sync family support matches a full rebuild for
     // unchanged files instead of silently dropping it.
@@ -1803,22 +1683,38 @@ where
         next_fact_offset,
         &derived_tsjs_provider_support_facts,
     )?;
-    let local_support_fact_count = copied_semantic_records.len()
-        + parser_fact_count
-        + framework_fact_count
-        + derived_python_support_fact_count
-        + derived_tsjs_support_fact_count
-        + derived_java_support_fact_count
-        + derived_csharp_support_fact_count
-        + derived_cpp_support_fact_count
-        + derived_rust_support_fact_count
-        + derived_tsjs_provider_support_fact_count;
+    next_fact_offset += derived_tsjs_provider_support_fact_count;
+    let local_support_fact_count = copied_semantic_records.len() + next_fact_offset;
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
         "recorded local support facts",
         known_work_units(local_support_fact_count, local_support_fact_count),
     );
+
+    // Cargo project-model facts and dependency records are provider outputs,
+    // not immutable parser records. Re-run the safe `--no-deps` provider from
+    // the complete copied-plus-reparsed code-unit set so an incremental sync
+    // converges with a full rebuild and never drops or preserves stale package
+    // inventory. The base generation's Cargo provider facts were intentionally
+    // excluded from copy-forward above.
+    let rust_provider_facts = record_rust_provider_facts(
+        &request,
+        &indexed_code_units,
+        options.rust_provider,
+        session.as_mut(),
+        &mut warnings,
+        next_fact_offset,
+    )?;
+    let rust_provider_fact_count = rust_provider_facts.len();
+    if rust_provider_fact_count > 0 {
+        emit_progress(
+            progress,
+            ProgressStage::SemanticResolution,
+            "recorded rust provider facts",
+            known_work_units(rust_provider_fact_count, rust_provider_fact_count),
+        );
+    }
     emit_progress(
         progress,
         ProgressStage::SemanticResolution,
@@ -1850,26 +1746,14 @@ where
             "checking family candidates",
             WorkUnits::Unknown,
         );
-        let mut family_facts = Vec::with_capacity(
-            all_parser_facts.len()
-                + all_framework_role_facts.len()
-                + derived_python_support_facts.len()
-                + derived_tsjs_support_facts.len()
-                + derived_java_support_facts.len()
-                + derived_csharp_support_facts.len()
-                + derived_cpp_support_facts.len()
-                + derived_rust_support_facts.len()
-                + derived_tsjs_provider_support_facts.len(),
-        );
-        family_facts.extend(all_parser_facts);
-        family_facts.extend(all_framework_role_facts);
-        family_facts.extend(derived_python_support_facts);
-        family_facts.extend(derived_tsjs_support_facts);
-        family_facts.extend(derived_java_support_facts);
-        family_facts.extend(derived_csharp_support_facts);
-        family_facts.extend(derived_cpp_support_facts);
-        family_facts.extend(derived_rust_support_facts);
-        family_facts.extend(derived_tsjs_provider_support_facts);
+        let mut family_facts = Vec::new();
+        family_facts.extend(all_parser_facts.iter().cloned());
+        family_facts.extend(all_framework_role_facts.iter().cloned());
+        for facts in &derived_support_facts {
+            family_facts.extend(facts.iter().cloned());
+        }
+        family_facts.extend(rust_provider_facts.iter().cloned());
+        family_facts.extend(derived_tsjs_provider_support_facts.iter().cloned());
         // The incremental path always resyncs from an active base generation, so
         // its family ids are always available to diff against.
         let base_family_ids = base_generation_family_ids(family_store)?;
@@ -1909,10 +1793,10 @@ where
     );
 
     Ok(IndexingOutcome {
-        indexing_mode: indexing_generation_mode(&report),
+        indexing_mode: generation_mode_for_code_unit_count(indexed_code_units.len()),
         parser_attempted_files,
         indexed_units: indexed_code_units.len(),
-        semantic_facts: local_support_fact_count,
+        semantic_facts: local_support_fact_count + rust_provider_fact_count,
         discovered_files: report.files.len(),
         skipped_paths: report.skipped.len(),
         active_generation: Some(generation.generation_id),
@@ -1931,7 +1815,22 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | CSHARP_DERIVED_SUPPORT_ENGINE
             | CPP_DERIVED_SUPPORT_ENGINE
             | RUST_DERIVED_SUPPORT_ENGINE
+            | SQL_DERIVED_SUPPORT_ENGINE
+            | R_DERIVED_SUPPORT_ENGINE
+            | VB_DERIVED_SUPPORT_ENGINE
+            | DELPHI_DERIVED_SUPPORT_ENGINE
+            | ADA_DERIVED_SUPPORT_ENGINE
+            | MATLAB_DERIVED_SUPPORT_ENGINE
+            | PHP_DERIVED_SUPPORT_ENGINE
+            | SWIFT_DERIVED_SUPPORT_ENGINE
+            | RUBY_DERIVED_SUPPORT_ENGINE
+            | GO_DERIVED_SUPPORT_ENGINE
+            | FORTRAN_DERIVED_SUPPORT_ENGINE
     )
+}
+
+fn is_rust_provider_record(record: &IndexedSemanticFactRecord) -> bool {
+    record.origin_engine == RustProviderKind::CargoMetadata.as_str()
 }
 
 fn next_semantic_fact_offset(records: &[IndexedSemanticFactRecord]) -> usize {
@@ -2194,13 +2093,13 @@ fn sync_delta_forces_full_context_excluding_python_modules(delta: &SyncDelta) ->
     let added_or_removed = delta
         .added_files
         .iter()
-        .filter(|file| !discovered_language_is_inventory_only(file.language))
+        .filter(|file| !discovered_file_is_inventory_only(file))
         .map(|file| file.path.as_str())
         .chain(
             delta
                 .removed_files
                 .iter()
-                .filter(|file| !indexed_language_is_inventory_only(&file.language))
+                .filter(|file| !indexed_file_is_inventory_only(file))
                 .map(|file| file.path.as_str()),
         )
         .any(sync_path_requires_full_project_context);
@@ -2211,7 +2110,7 @@ fn sync_delta_forces_full_context_excluding_python_modules(delta: &SyncDelta) ->
     let modified = delta
         .modified_files
         .iter()
-        .filter(|file| !discovered_language_is_inventory_only(file.language))
+        .filter(|file| !discovered_file_is_inventory_only(file))
         .any(|file| {
             modified_file_requires_full_project_context(file)
                 && !is_interface_eligible_python_module(file)
@@ -2299,7 +2198,11 @@ fn sync_path_requires_full_project_context(path: &str) -> bool {
             | "setup.cfg"
             | "Cargo.toml"
             | "Cargo.lock"
+            // ADR-0042 reads DESCRIPTION into the parser project context, so a
+            // change to it changes how every admitted R file parses.
+            | "DESCRIPTION"
     ) || path == "conftest.py"
+        || path.ends_with("/DESCRIPTION")
         || path.ends_with("/conftest.py")
         || path.ends_with("/Cargo.toml")
         || path.ends_with("/Cargo.lock")
@@ -2350,6 +2253,10 @@ struct ParseStorageOutcome {
     code_units: Vec<IndexedCodeUnitRecord>,
     semantic_facts: Vec<SemanticFact>,
     framework_role_facts: Vec<SemanticFact>,
+    /// The frontend reported an error diagnostic for this file, so its unit set
+    /// is incomplete. Carried on the outcome so the run can explain the cause
+    /// once at the end instead of per file.
+    parse_degraded: bool,
 }
 
 fn parser_project_context(
@@ -2393,6 +2300,7 @@ fn parser_project_context(
     let tsjs_package_dependencies =
         tsjs_package_dependencies_from_project_config(request, report, source_store)?;
     let tsjs_has_test_runner_context = tsjs_has_test_runner_context(report, source_store, request)?;
+    let r_declares_testthat = r_declares_testthat(report, source_store, request)?;
     let rust_module_paths = rust_module_paths(report);
     let mut rust_cargo_files = Vec::new();
     for file in &report.files {
@@ -2442,6 +2350,7 @@ fn parser_project_context(
         tsjs_root_dirs,
         tsjs_package_dependencies,
         tsjs_has_test_runner_context,
+        r_declares_testthat,
         rust_module_paths,
         rust_cargo_files,
     })
@@ -2655,6 +2564,66 @@ fn tsjs_project_config_root_dir(root_dir: &str) -> Option<String> {
     Some(normalized.to_string())
 }
 
+/// True when any discovered `DESCRIPTION` declares `testthat` in one of the
+/// official dependency fields ADR-0036 already parses.
+///
+/// ADR-0042 makes this a precondition for every R test anchor: a directory
+/// named `tests/testthat` in a project that does not depend on testthat
+/// establishes nothing.
+fn r_declares_testthat(
+    report: &FileDiscoveryReport,
+    source_store: &impl SourceStore,
+    request: &IndexingRequest,
+) -> Result<bool, RepoGrammarError> {
+    for file in report.files.iter().filter(|file| {
+        file.language == DiscoveredLanguage::RConfig
+            && file.path.rsplit('/').next() == Some("DESCRIPTION")
+    }) {
+        let source = source_store
+            .read_source(SourceReadRequest {
+                repository_root: request.repository_root.clone(),
+                path: file.path.clone(),
+                expected_content_hash: file.content_hash.clone(),
+                max_file_bytes: request.max_file_bytes,
+            })
+            .map_err(source_store_error)?;
+        if description_declares_testthat(&source.text) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether a DCF `DESCRIPTION` names `testthat` in a dependency field.
+///
+/// Field bodies continue on indented lines, so the scan tracks whether it is
+/// inside one of the five official fields rather than matching the package name
+/// anywhere in the file.
+fn description_declares_testthat(text: &str) -> bool {
+    const DEPENDENCY_FIELDS: [&str; 5] =
+        ["Depends", "Imports", "Suggests", "Enhances", "LinkingTo"];
+    let mut in_dependency_field = false;
+    for line in text.lines() {
+        let continues = line.starts_with(' ') || line.starts_with('\t');
+        if !continues {
+            in_dependency_field = line
+                .split_once(':')
+                .is_some_and(|(field, _)| DEPENDENCY_FIELDS.contains(&field.trim()));
+        }
+        if !in_dependency_field {
+            continue;
+        }
+        let body = line.split_once(':').map_or(line, |(_, rest)| rest);
+        if body
+            .split(',')
+            .any(|entry| entry.split('(').next().unwrap_or(entry).trim() == "testthat")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn tsjs_has_test_runner_context(
     report: &FileDiscoveryReport,
     source_store: &impl SourceStore,
@@ -2819,14 +2788,37 @@ fn record_parse_report(
     file: &DiscoveredFile,
     text: &str,
     mut parse_report: ParseReport,
+    mut dependencies: Vec<DependencyRecord>,
     framework_roles: Option<&dyn FrameworkRoleDetector>,
     warnings: &mut Vec<String>,
 ) -> Result<ParseStorageOutcome, RepoGrammarError> {
-    for _diagnostic in parse_report.diagnostics {
-        warnings.push(format!(
-            "parse diagnostic for {}: syntax-only parser reported a diagnostic",
-            file.path
-        ));
+    // An error diagnostic means the frontend could not build a complete unit set
+    // for this file, so the units it did return are a floor rather than the whole
+    // file. Downstream family analysis must not read the resulting absence of a
+    // code unit as evidence that the construct is absent, which is exactly what a
+    // shared token with recoverable warnings would invite, so a degraded file gets
+    // its own low-cardinality token. Diagnostic messages and the frontend-reported
+    // path stay out of both warnings: both are frontend free text and can quote
+    // source or absolute host paths. One token per file is enough, because the
+    // text carries no per-diagnostic detail to distinguish repeats.
+    let mut reported_degraded = false;
+    for diagnostic in &parse_report.diagnostics {
+        match diagnostic.severity {
+            ParseDiagnosticSeverity::Error => {
+                if !reported_degraded {
+                    reported_degraded = true;
+                    warnings.push(format!(
+                        "parse degraded for {}: frontend reported an error diagnostic; \
+                         missing code units are not evidence that a construct is absent",
+                        file.path
+                    ));
+                }
+            }
+            ParseDiagnosticSeverity::Warning => warnings.push(format!(
+                "parse diagnostic for {}: syntax-only parser reported a diagnostic",
+                file.path
+            )),
+        }
     }
     parse_report.units.sort_by(|left, right| {
         (
@@ -2859,6 +2851,12 @@ fn record_parse_report(
     sort_semantic_facts(&mut parse_report.semantic_facts);
     for fact in &parse_report.semantic_facts {
         validate_parser_semantic_fact(file, text, &parse_report.units, fact)?;
+    }
+    dependencies.sort_by(|left, right| {
+        dependency_record_sort_key(left).cmp(&dependency_record_sort_key(right))
+    });
+    for dependency in &dependencies {
+        validate_parser_dependency(file, text, &parse_report.units, dependency)?;
     }
     let framework_role_facts = match framework_roles {
         Some(detector) => detector
@@ -2904,11 +2902,13 @@ fn record_parse_report(
             },
         )?;
     }
+    record_dependencies(session, &dependencies)?;
     Ok(ParseStorageOutcome {
         indexed_units: count,
         code_units,
         semantic_facts: parse_report.semantic_facts,
         framework_role_facts,
+        parse_degraded: reported_degraded,
     })
 }
 
@@ -2993,6 +2993,11 @@ fn record_rust_provider_facts(
     };
     let unknown_count = output.unknowns.len();
     let unknown_facts = rust_provider_unknown_facts(&provider_request, &output)?;
+    let mut dependencies = output.dependencies;
+    dependencies.sort_by(|left, right| {
+        dependency_record_sort_key(left).cmp(&dependency_record_sort_key(right))
+    });
+    record_dependencies(session, &dependencies)?;
     let mut facts = output.facts;
     facts.extend(unknown_facts);
     if unknown_count > 0 {
@@ -3003,6 +3008,120 @@ fn record_rust_provider_facts(
     sort_semantic_facts(&mut facts);
     record_semantic_facts(session, fact_id_offset, &facts)?;
     Ok(facts)
+}
+
+type DependencyRecordSortKey<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    Option<&'a str>,
+    Option<&'a str>,
+    bool,
+    DependencyDirectness,
+    &'a str,
+    usize,
+    usize,
+    &'a str,
+);
+
+fn dependency_record_sort_key(dependency: &DependencyRecord) -> DependencyRecordSortKey<'_> {
+    (
+        dependency.package.ecosystem.as_str(),
+        &dependency.package.name,
+        dependency.scope.as_str(),
+        dependency.requirement.as_ref().map(|value| value.as_str()),
+        dependency
+            .resolved_version
+            .as_ref()
+            .map(|value| value.as_str()),
+        dependency.optional,
+        dependency.directness,
+        &dependency.evidence.provenance.path,
+        dependency.evidence.range.start_byte,
+        dependency.evidence.range.end_byte,
+        dependency.evidence.code_unit_id.as_str(),
+    )
+}
+
+fn record_dependencies(
+    session: &mut dyn GenerationWriteSession,
+    dependencies: &[DependencyRecord],
+) -> Result<usize, RepoGrammarError> {
+    for dependency in dependencies {
+        crate::application::storage::record_dependency(
+            session,
+            &IndexedDependencyRecord {
+                dependency_id: dependency_record_id(dependency),
+                ecosystem: dependency.package.ecosystem.as_str().to_string(),
+                package_name: dependency.package.name.clone(),
+                requirement: dependency
+                    .requirement
+                    .as_ref()
+                    .map(|value| value.as_str().to_string()),
+                resolved_version: dependency
+                    .resolved_version
+                    .as_ref()
+                    .map(|value| value.as_str().to_string()),
+                scope: dependency.scope.as_str().to_string(),
+                optional: dependency.optional,
+                directness: dependency.directness.as_str().to_string(),
+                evidence_level: dependency.evidence_level.as_str().to_string(),
+                platform_target: dependency.platform_target.clone(),
+                alias: dependency.alias.clone(),
+                code_unit_id: dependency.evidence.code_unit_id.as_str().to_string(),
+                path: dependency.evidence.provenance.path.clone(),
+                content_hash: dependency.evidence.provenance.content_hash.clone(),
+                start_byte: dependency.evidence.range.start_byte,
+                end_byte: dependency.evidence.range.end_byte,
+                note: dependency.evidence.note.clone(),
+            },
+        )?;
+    }
+    Ok(dependencies.len())
+}
+
+/// The stored identity of one dependency declaration.
+///
+/// Every field the row persists must feed this hash. A field that is stored but
+/// not hashed lets two genuinely different declarations collide on one primary
+/// key, which fails the whole write rather than losing a row quietly — see the
+/// platform-target and alias inputs below.
+fn dependency_record_id(dependency: &DependencyRecord) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        dependency.package.ecosystem.as_str(),
+        dependency.package.name.as_str(),
+        dependency.scope.as_str(),
+        dependency.evidence_level.as_str(),
+        dependency.platform_target.as_deref().unwrap_or(""),
+        dependency.alias.as_deref().unwrap_or(""),
+        dependency
+            .requirement
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or(""),
+        dependency
+            .resolved_version
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or(""),
+        dependency.evidence.provenance.path.as_str(),
+        dependency.evidence.code_unit_id.as_str(),
+        dependency.evidence.provenance.content_hash.as_str(),
+    ] {
+        hasher.update(b"\0");
+        hasher.update(value.as_bytes());
+    }
+    hasher.update([u8::from(dependency.optional)]);
+    hasher.update(dependency.directness.as_str().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(dependency.evidence.range.start_byte.to_string().as_bytes());
+    hasher.update(b":");
+    hasher.update(dependency.evidence.range.end_byte.to_string().as_bytes());
+    format!(
+        "dependency:{}",
+        bytes_to_lower_hex(hasher.finalize().as_ref())
+    )
 }
 
 fn rust_provider_manifest_candidates(
@@ -3207,6 +3326,35 @@ fn sanitize_semantic_assumption(value: &str) -> String {
         sanitized
     }
 }
+
+type DerivedSupportDeriver = fn(
+    &[IndexedCodeUnitRecord],
+    &[SemanticFact],
+    &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError>;
+
+/// Every language's derived framework-support pass, in the exact order their
+/// facts are recorded into a generation. Recording order is part of the fact
+/// offset contract, so the table order must not change between releases.
+const DERIVED_SUPPORT_DERIVERS: &[DerivedSupportDeriver] = &[
+    derive_python_framework_support_facts,
+    derive_tsjs_framework_support_facts,
+    derive_java_framework_support_facts,
+    derive_csharp_framework_support_facts,
+    derive_cpp_framework_support_facts,
+    derive_rust_framework_support_facts,
+    derive_sql_framework_support_facts,
+    derive_r_framework_support_facts,
+    derive_vb_framework_support_facts,
+    derive_delphi_framework_support_facts,
+    derive_ada_framework_support_facts,
+    derive_matlab_framework_support_facts,
+    derive_php_framework_support_facts,
+    derive_swift_framework_support_facts,
+    derive_ruby_framework_support_facts,
+    derive_go_framework_support_facts,
+    derive_fortran_framework_support_facts,
+];
 
 fn derive_python_framework_support_facts(
     code_units: &[IndexedCodeUnitRecord],
@@ -4551,6 +4699,755 @@ fn derive_rust_framework_support_facts(
     Ok(derived)
 }
 
+fn derive_sql_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "sql"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_sql_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "sql" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if sql_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_sql_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn derive_vb_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "visual-basic"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_vb_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "visual-basic" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if vb_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_vb_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_vb_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == VB_ANCHOR_ENGINE
+        && fact.origin.method == VB_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_vb_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_vbnet_mstest_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: VB_DERIVED_SUPPORT_ENGINE,
+            method: VB_DERIVED_SUPPORT_METHOD,
+            note: "bounded VB.NET MSTest attribute anchor support",
+            assumptions,
+        },
+    )
+}
+
+fn derive_matlab_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "matlab"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_matlab_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "matlab" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if matlab_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_matlab_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_matlab_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == MATLAB_ANCHOR_ENGINE
+        && fact.origin.method == MATLAB_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_matlab_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_matlab_unittest_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: MATLAB_DERIVED_SUPPORT_ENGINE,
+            method: MATLAB_DERIVED_SUPPORT_METHOD,
+            note: "bounded MATLAB matlab.unittest anchor support",
+            assumptions,
+        },
+    )
+}
+
+fn derive_ada_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "ada"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_ada_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "ada" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if ada_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_ada_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_ada_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == ADA_ANCHOR_ENGINE
+        && fact.origin.method == ADA_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_ada_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_ada_aunit_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: ADA_DERIVED_SUPPORT_ENGINE,
+            method: ADA_DERIVED_SUPPORT_METHOD,
+            note: "bounded Ada AUnit registration anchor support",
+            assumptions,
+        },
+    )
+}
+
+fn derive_php_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "php",
+        PHP_ANCHOR_ENGINE,
+        PHP_ANCHOR_METHOD,
+        php_support_target_is_role_compatible,
+        PHP_DERIVED_SUPPORT_ENGINE,
+        PHP_DERIVED_SUPPORT_METHOD,
+        "bounded PHPUnit anchor support",
+        "derived_from=bounded_php_phpunit_anchors",
+    )
+}
+
+fn derive_swift_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "swift",
+        SWIFT_ANCHOR_ENGINE,
+        SWIFT_ANCHOR_METHOD,
+        swift_support_target_is_role_compatible,
+        SWIFT_DERIVED_SUPPORT_ENGINE,
+        SWIFT_DERIVED_SUPPORT_METHOD,
+        "bounded XCTest anchor support",
+        "derived_from=bounded_swift_xctest_anchors",
+    )
+}
+
+fn derive_ruby_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "ruby",
+        RUBY_ANCHOR_ENGINE,
+        RUBY_ANCHOR_METHOD,
+        ruby_support_target_is_role_compatible,
+        RUBY_DERIVED_SUPPORT_ENGINE,
+        RUBY_DERIVED_SUPPORT_METHOD,
+        "bounded Minitest anchor support",
+        "derived_from=bounded_ruby_minitest_anchors",
+    )
+}
+
+fn derive_go_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "go",
+        GO_ANCHOR_ENGINE,
+        GO_ANCHOR_METHOD,
+        go_support_target_is_role_compatible,
+        GO_DERIVED_SUPPORT_ENGINE,
+        GO_DERIVED_SUPPORT_METHOD,
+        "bounded go.testing anchor support",
+        "derived_from=bounded_go_testing_anchors",
+    )
+}
+
+fn derive_fortran_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    derive_bounded_frontend_support_facts(
+        code_units,
+        parser_facts,
+        framework_role_facts,
+        "fortran",
+        FORTRAN_ANCHOR_ENGINE,
+        FORTRAN_ANCHOR_METHOD,
+        fortran_support_target_is_role_compatible,
+        FORTRAN_DERIVED_SUPPORT_ENGINE,
+        FORTRAN_DERIVED_SUPPORT_METHOD,
+        "bounded test-drive anchor support",
+        "derived_from=bounded_fortran_testdrive_anchors",
+    )
+}
+
+/// The shared shape of every bounded-frontend lane's derived-support pass:
+/// structural anchor facts from the lane's parser, one framework role per
+/// unit, no blocking UNKNOWN on that unit, and a role-compatible target
+/// become one derived support fact per (unit, target).
+#[allow(clippy::too_many_arguments)]
+fn derive_bounded_frontend_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+    unit_language: &str,
+    anchor_engine: &str,
+    anchor_method: &str,
+    target_is_role_compatible: fn(&str, &str) -> Option<bool>,
+    derived_engine: &str,
+    derived_method: &str,
+    derived_note: &str,
+    derived_from_assumption: &str,
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == unit_language
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !(fact.kind == SemanticFactKind::Symbol
+            && fact.certainty == FactCertainty::Structural
+            && fact.origin.engine == anchor_engine
+            && fact.origin.method == anchor_method
+            && fact.target.is_some())
+        {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != unit_language || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        let assumptions = vec![
+            derived_from_assumption.to_string(),
+            format!("framework_role={framework_role}"),
+            "provider_resolved=false".to_string(),
+        ];
+        derived.push(derived_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            &fact.evidence.provenance.repository_revision,
+            DerivedSupportSpec {
+                engine: derived_engine,
+                method: derived_method,
+                note: derived_note,
+                assumptions,
+            },
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn derive_delphi_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "object-pascal"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_delphi_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "object-pascal" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if delphi_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_delphi_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_delphi_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == DELPHI_ANCHOR_ENGINE
+        && fact.origin.method == DELPHI_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_delphi_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_delphi_dunitx_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: DELPHI_DERIVED_SUPPORT_ENGINE,
+            method: DELPHI_DERIVED_SUPPORT_METHOD,
+            note: "bounded Delphi DUnitX attribute anchor support",
+            assumptions,
+        },
+    )
+}
+
+fn derive_r_framework_support_facts(
+    code_units: &[IndexedCodeUnitRecord],
+    parser_facts: &[SemanticFact],
+    framework_role_facts: &[SemanticFact],
+) -> Result<Vec<SemanticFact>, RepoGrammarError> {
+    let unit_by_id = code_units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit))
+        .collect::<BTreeMap<_, _>>();
+    let role_by_unit = framework_role_targets_by_unit(framework_role_facts);
+    let blocked_units =
+        framework_support_blocked_units(code_units, parser_facts, &role_by_unit, |language| {
+            language == "r"
+        });
+    let mut seen = BTreeSet::new();
+    let mut derived = Vec::new();
+
+    for fact in parser_facts {
+        if !is_r_structural_anchor_fact(fact) {
+            continue;
+        }
+        let code_unit_id = fact.evidence.code_unit_id.as_str();
+        let Some(unit) = unit_by_id.get(code_unit_id) else {
+            continue;
+        };
+        if unit.language != "r" || !parser_fact_evidence_is_within_unit(fact, unit) {
+            continue;
+        }
+        let Some(framework_role) = role_by_unit
+            .get(code_unit_id)
+            .and_then(single_framework_role)
+        else {
+            continue;
+        };
+        if blocked_units.contains(code_unit_id) {
+            continue;
+        }
+        let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
+            continue;
+        };
+        if r_support_target_is_role_compatible(target, framework_role) != Some(true) {
+            continue;
+        }
+        if !seen.insert((unit.id.clone(), target.to_string())) {
+            continue;
+        }
+        derived.push(derived_r_framework_support_fact(
+            unit,
+            fact.kind.clone(),
+            target,
+            framework_role,
+            &fact.evidence.provenance.repository_revision,
+        )?);
+    }
+
+    Ok(derived)
+}
+
+fn is_r_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == R_ANCHOR_ENGINE
+        && fact.origin.method == R_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_r_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let assumptions = vec![
+        "derived_from=bounded_r_testthat_anchors".to_string(),
+        format!("framework_role={framework_role}"),
+        "provider_resolved=false".to_string(),
+    ];
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: R_DERIVED_SUPPORT_ENGINE,
+            method: R_DERIVED_SUPPORT_METHOD,
+            note: "bounded R testthat block anchor support",
+            assumptions,
+        },
+    )
+}
+
+fn is_sql_structural_anchor_fact(fact: &SemanticFact) -> bool {
+    fact.kind == SemanticFactKind::Symbol
+        && fact.certainty == FactCertainty::Structural
+        && fact.origin.engine == SQL_ANCHOR_ENGINE
+        && fact.origin.method == SQL_ANCHOR_METHOD
+        && fact.target.is_some()
+}
+
+fn derived_sql_framework_support_fact(
+    unit: &IndexedCodeUnitRecord,
+    kind: SemanticFactKind,
+    target: &str,
+    framework_role: &str,
+    repository_revision: &RepositoryRevision,
+) -> Result<SemanticFact, RepoGrammarError> {
+    let mut assumptions = vec![
+        "provider_resolved=false".to_string(),
+        "derived_from=bounded_sql_ddl_anchors".to_string(),
+        // The anchor holds under either declared dialect; which one this file
+        // targets is still unproven and is never claimed by this support fact.
+        "sql_dialect_profile=unproven".to_string(),
+        format!("framework_role={framework_role}"),
+    ];
+    assumptions.sort();
+    assumptions.dedup();
+
+    derived_support_fact(
+        unit,
+        kind,
+        target,
+        repository_revision,
+        DerivedSupportSpec {
+            engine: SQL_DERIVED_SUPPORT_ENGINE,
+            method: SQL_DERIVED_SUPPORT_METHOD,
+            note: "bounded dialect-invariant SQL DDL anchor support",
+            assumptions,
+        },
+    )
+}
+
 fn is_rust_structural_anchor_fact(fact: &SemanticFact) -> bool {
     matches!(
         fact.kind,
@@ -5064,6 +5961,51 @@ fn validate_parser_semantic_fact(
     Ok(())
 }
 
+fn validate_parser_dependency(
+    file: &DiscoveredFile,
+    text: &str,
+    units: &[CodeUnit],
+    dependency: &DependencyRecord,
+) -> Result<(), RepoGrammarError> {
+    if dependency.evidence_level == crate::core::model::DependencyEvidenceLevel::ProviderResolved {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser dependency records cannot claim provider resolution".to_string(),
+        ));
+    }
+    if dependency.evidence.provenance.path != file.path {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency for a different path".to_string(),
+        ));
+    }
+    if dependency.evidence.provenance.content_hash != file.content_hash {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency with mismatched content hash".to_string(),
+        ));
+    }
+    if dependency.evidence.range.end_byte > text.len() {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency range outside source bounds".to_string(),
+        ));
+    }
+    let Some(unit) = units
+        .iter()
+        .find(|unit| unit.id.as_str() == dependency.evidence.code_unit_id.as_str())
+    else {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency for an unknown code unit".to_string(),
+        ));
+    };
+    if dependency.evidence.range.start_byte < unit.range.start_byte
+        || dependency.evidence.range.end_byte > unit.range.end_byte
+        || dependency.evidence.provenance != unit.provenance
+    {
+        return Err(RepoGrammarError::InvalidInput(
+            "parser returned a dependency that does not match its code unit evidence".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn is_python_parser_graph_derived_fact(fact: &SemanticFact) -> bool {
     if fact.certainty != FactCertainty::DataflowDerived
         || fact.origin.engine != "python"
@@ -5148,6 +6090,10 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::PythonConfig => Language::PythonConfig,
         DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
         DiscoveredLanguage::Java => Language::Java,
+        DiscoveredLanguage::JavaConfig => Language::JavaConfig,
+        DiscoveredLanguage::Matlab => Language::Matlab,
+        DiscoveredLanguage::MatlabConfig => Language::MatlabConfig,
+        DiscoveredLanguage::Assembly => Language::Assembly,
         DiscoveredLanguage::CSharp => Language::CSharp,
         DiscoveredLanguage::C => Language::C,
         DiscoveredLanguage::Cpp => Language::Cpp,
@@ -5160,50 +6106,175 @@ fn language_from_discovered(language: DiscoveredLanguage) -> Language {
         DiscoveredLanguage::RubyConfig => Language::RubyConfig,
         DiscoveredLanguage::Swift => Language::Swift,
         DiscoveredLanguage::SwiftConfig => Language::SwiftConfig,
+        DiscoveredLanguage::VisualBasic => Language::VisualBasic,
+        DiscoveredLanguage::VisualBasicConfig => Language::VisualBasicConfig,
+        DiscoveredLanguage::ObjectPascal => Language::ObjectPascal,
+        DiscoveredLanguage::DelphiConfig => Language::DelphiConfig,
+        DiscoveredLanguage::Ada => Language::Ada,
+        DiscoveredLanguage::AdaConfig => Language::AdaConfig,
+        DiscoveredLanguage::Fortran => Language::Fortran,
+        DiscoveredLanguage::FortranConfig => Language::FortranConfig,
+        DiscoveredLanguage::Sql
+        | DiscoveredLanguage::SqlMigration
+        | DiscoveredLanguage::SqlSchema
+        | DiscoveredLanguage::SqlCatalog => Language::Sql,
+        DiscoveredLanguage::R => Language::R,
+        DiscoveredLanguage::RConfig => Language::RConfig,
         DiscoveredLanguage::Rust => Language::Rust,
         DiscoveredLanguage::RustConfig => Language::RustConfig,
     }
 }
 
-fn discovered_language_is_inventory_only(language: DiscoveredLanguage) -> bool {
-    language_token_is_inventory_only(language.as_str())
-}
-
-fn indexed_language_is_inventory_only(language: &str) -> bool {
+/// The single authority for whether a file is inventory-only: recognized by
+/// discovery, but never decoded, parsed, or turned into code units.
+///
+/// Both the discovery-side and the indexed-record-side callers route through
+/// this one classifier. Keeping the decision here — rather than reimplementing
+/// it per record type — is what stops a newly added inventory-only language
+/// from being wired into one path and silently forgotten on the other.
+fn file_is_inventory_only(language: &str, path: &str) -> bool {
+    if language == DiscoveredLanguage::SwiftConfig.as_str() {
+        return path.rsplit('/').next() != Some("Package.resolved");
+    }
+    if language == DiscoveredLanguage::PhpConfig.as_str() {
+        return !is_composer_dependency_config_path(path);
+    }
+    if language == DiscoveredLanguage::RubyConfig.as_str() {
+        return !is_ruby_dependency_config_path(path);
+    }
+    if language == DiscoveredLanguage::AdaConfig.as_str() {
+        return !is_ada_dependency_config_path(path);
+    }
+    if language == DiscoveredLanguage::FortranConfig.as_str() {
+        return false;
+    }
+    if language == DiscoveredLanguage::RConfig.as_str() {
+        return !is_r_dependency_config_path(path);
+    }
+    if language == DiscoveredLanguage::R.as_str() {
+        // ADR-0042 admits only testthat's own runner paths; every other R byte
+        // stays inventory.
+        return !crate::adapters::parsing::r::testthat::is_testthat_path(path);
+    }
+    if language == DiscoveredLanguage::Matlab.as_str() {
+        // ADR-0046 admits every discovered `.m` file: matlab.unittest
+        // discovers tests by class shape and defines no file set.
+        return !crate::adapters::parsing::matlab::unittest::is_matlab_source_path(path);
+    }
+    if language == DiscoveredLanguage::Ada.as_str() {
+        // ADR-0045 admits only `.adb` bodies. `.ads` specs stay inventory,
+        // and ADR-0033's `.gpr` boundary is untouched.
+        return !crate::adapters::parsing::ada::aunit::is_ada_body_path(path);
+    }
+    if language == DiscoveredLanguage::ObjectPascal.as_str() {
+        // ADR-0044 admits only `.pas` units. `.dpr` programs and `.dpk`
+        // packages stay inventory, and ADR-0032's instruction that the
+        // `.dpk` `requires` clause is never read stays intact.
+        return !crate::adapters::parsing::delphi::dunitx::is_pascal_unit_path(path);
+    }
+    if language == DiscoveredLanguage::Go.as_str() {
+        // ADR-0050 admits only `*_test.go` through the bounded parser. The
+        // filename is part of the anchor's meaning, not a convenience filter:
+        // `go test` compiles only those files as tests, so the same signature
+        // elsewhere is not a test.
+        return !crate::adapters::parsing::go::testing::is_go_test_path(path);
+    }
+    if language == DiscoveredLanguage::Php.as_str() {
+        // ADR-0047 admits every `.php` path; the `<?php` prologue gate is
+        // byte-level inside the parser, not a path rule.
+        return !crate::adapters::parsing::php::phpunit::is_phpunit_source_path(path);
+    }
+    if language == DiscoveredLanguage::Ruby.as_str() {
+        // ADR-0049 admits only the runner-scoped Minitest test paths.
+        return !crate::adapters::parsing::ruby::minitest::is_minitest_path(path);
+    }
+    if language == DiscoveredLanguage::Swift.as_str() {
+        // ADR-0048 D1 admits every discovered `.swift` file.
+        return false;
+    }
+    if language == DiscoveredLanguage::Fortran.as_str() {
+        // ADR-0051 admits the admitted free-form Fortran suffixes only.
+        return !crate::adapters::parsing::fortran::testdrive::is_free_form_fortran_path(path);
+    }
     language_token_is_inventory_only(language)
 }
 
-fn language_token_is_inventory_only(language: &str) -> bool {
+fn discovered_file_is_inventory_only(file: &DiscoveredFile) -> bool {
+    file_is_inventory_only(file.language.as_str(), &file.path)
+}
+
+fn indexed_file_is_inventory_only(file: &IndexedFileRecord) -> bool {
+    file_is_inventory_only(&file.language, &file.path)
+}
+
+fn is_composer_dependency_config_path(path: &str) -> bool {
     matches!(
-        language,
-        "go" | "go-config"
-            | "php"
-            | "php-config"
-            | "ruby"
-            | "ruby-config"
-            | "swift"
-            | "swift-config"
+        path.rsplit('/').next().unwrap_or(path),
+        "composer.json" | "composer.lock"
     )
+}
+
+fn is_ruby_dependency_config_path(path: &str) -> bool {
+    path.rsplit('/').next().unwrap_or(path) == "Gemfile.lock"
+}
+
+fn is_ada_dependency_config_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "alire.toml" | "alire.lock"
+    )
+}
+
+fn is_r_dependency_config_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "DESCRIPTION" | "NAMESPACE" | "renv.lock"
+    )
+}
+
+fn language_token_is_inventory_only(language: &str) -> bool {
+    matches!(language, "ada-config")
 }
 
 fn inventory_only_paths(report: &FileDiscoveryReport) -> BTreeSet<String> {
     report
         .files
         .iter()
-        .filter(|file| discovered_language_is_inventory_only(file.language))
+        .filter(|file| discovered_file_is_inventory_only(file))
         .map(|file| file.path.clone())
         .collect()
 }
 
-fn indexing_generation_mode(report: &FileDiscoveryReport) -> IndexingGenerationMode {
-    if report
-        .files
-        .iter()
-        .all(|file| discovered_language_is_inventory_only(file.language))
-    {
-        IndexingGenerationMode::FileManifestOnly
-    } else {
-        IndexingGenerationMode::SyntaxOnlyCodeUnits
+/// Explain a degraded Python parse once per run by naming the syntax boundary
+/// that most often causes it.
+///
+/// The Python worker is a checked-in script executed by the host interpreter, so
+/// the frontend can only parse grammar that interpreter already knows: on a host
+/// implementing Python 3.9, `match`, `except*`, and PEP 695 generics are ordinary
+/// syntax errors, and every file using them degrades. Without this the operator
+/// sees a list of degraded files and no way to tell "unparseable by this host"
+/// from "genuinely broken source".
+///
+/// The probe reads `sys.version_info`, which every conforming implementation
+/// supplies, so the warning names the Python language version the host
+/// interpreter implements and never asserts which implementation it is.
+///
+/// This reports a fact and deliberately defines no minimum version and refuses
+/// no input: choosing a supported-version floor is a product decision, not one
+/// this warning may make. An unavailable version is reported as `UNKNOWN` rather
+/// than guessed.
+fn extend_python_frontend_version_warning(warnings: &mut Vec<String>, parser: &impl SourceParser) {
+    let warning = match parser.python_frontend_version() {
+        Some(version) => format!(
+            "python frontend syntax boundary: the host Python interpreter implements \
+             Python {version}, which cannot parse syntax introduced after that version"
+        ),
+        None => {
+            "python frontend syntax boundary: the host interpreter version is UNKNOWN".to_string()
+        }
+    };
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
     }
 }
 
@@ -5213,7 +6284,7 @@ fn extend_inventory_only_language_warnings(
 ) {
     let mut tokens = BTreeSet::new();
     for file in &report.files {
-        if discovered_language_is_inventory_only(file.language) {
+        if discovered_file_is_inventory_only(file) {
             tokens.insert(file.language.as_str());
         }
     }
@@ -5227,6 +6298,35 @@ fn extend_inventory_only_language_warnings(
 
 fn discovery_error(error: FileDiscoveryError) -> RepoGrammarError {
     RepoGrammarError::InvalidInput(error.to_string())
+}
+
+/// Read one discovered file for parsing, or abstain from it.
+///
+/// `Ok(None)` means the file's bytes are not UTF-8, so no frontend in this
+/// product can read it. That is a property of the one file, not of the run, so
+/// the index warns and keeps going rather than failing: one latin-1 SQL dump or
+/// binary blob under a source extension must not make a whole repository
+/// unindexable. Every other read failure stays fatal, because it means
+/// discovery and the filesystem disagree about what is there.
+fn read_source_for_parsing(
+    source_store: &dyn SourceStore,
+    request: &IndexingRequest,
+    file: &DiscoveredFile,
+    warnings: &mut Vec<String>,
+) -> Result<Option<SourceText>, RepoGrammarError> {
+    match source_store.read_source(SourceReadRequest {
+        repository_root: request.repository_root.clone(),
+        path: file.path.clone(),
+        expected_content_hash: file.content_hash.clone(),
+        max_file_bytes: request.max_file_bytes,
+    }) {
+        Ok(source) => Ok(Some(source)),
+        Err(SourceStoreError::NonUtf8(_)) => {
+            warnings.push(format!("parser skipped non-UTF-8 source: {}", file.path));
+            Ok(None)
+        }
+        Err(error) => Err(source_store_error(error)),
+    }
 }
 
 fn source_store_error(error: SourceStoreError) -> RepoGrammarError {
@@ -5382,6 +6482,18 @@ mod tests {
                 .push(document.path.to_string());
             RepoGrammarSourceParser::default().parse_with_context(document, context)
         }
+
+        fn parse_with_context_output(
+            &self,
+            document: SourceDocument<'_>,
+            context: &ParserProjectContext,
+        ) -> Result<SourceParseOutput, ParseError> {
+            self.paths
+                .lock()
+                .expect("record parser path")
+                .push(document.path.to_string());
+            RepoGrammarSourceParser::default().parse_with_context_output(document, context)
+        }
     }
 
     struct PythonContractMismatchParser;
@@ -5394,6 +6506,169 @@ mod tests {
 
     fn strict_hash(value: &str) -> ContentHash {
         ContentHash::new(value).expect("valid strict hash")
+    }
+
+    #[test]
+    fn declarations_differing_only_by_platform_target_or_alias_get_distinct_ids() {
+        // A Cargo manifest may declare one crate under several `cfg(...)` target
+        // tables, or bind it to several aliases. Those declarations are equal in
+        // every other field and share one manifest evidence range, so if the id
+        // does not hash the discriminators they collide on
+        // `PRIMARY KEY (generation_id, dependency_id)` and abort the whole sync.
+        fn cargo_record() -> DependencyRecord {
+            DependencyRecord::new(
+                crate::core::model::PackageIdentity::new(DependencyEcosystem::Cargo, "libc")
+                    .expect("package identity"),
+                Some(crate::core::model::DependencyVersion::new("^0.2").expect("requirement")),
+                None,
+                crate::core::model::DependencyScope::Runtime,
+                false,
+                DependencyDirectness::Direct,
+                crate::core::model::DependencyEvidenceLevel::ManifestDeclared,
+                Evidence::new(
+                    CodeUnitId::new("unit:Cargo.toml:0").expect("code unit id"),
+                    SourceRange::new(0, 10).expect("range"),
+                    Provenance::new(
+                        "Cargo.toml",
+                        strict_hash(
+                            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                        ),
+                        RepositoryRevision::new("UNKNOWN").expect("revision"),
+                    )
+                    .expect("provenance"),
+                    "Cargo metadata dependency declaration",
+                )
+                .expect("evidence"),
+            )
+            .expect("dependency record")
+        }
+
+        let unscoped = cargo_record();
+        let unix = cargo_record()
+            .with_platform_target("cfg(unix)")
+            .expect("platform target");
+        let windows = cargo_record()
+            .with_platform_target("cfg(windows)")
+            .expect("platform target");
+        let aliased = cargo_record().with_alias("libc_alias").expect("alias");
+
+        let ids = [&unscoped, &unix, &windows, &aliased]
+            .into_iter()
+            .map(dependency_record_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ids.len(),
+            4,
+            "each distinct declaration needs its own stored identity"
+        );
+
+        // An unscoped, unaliased record keeps a stable identity regardless of
+        // how the discriminators are represented internally.
+        assert_eq!(
+            dependency_record_id(&unscoped),
+            dependency_record_id(&cargo_record())
+        );
+    }
+
+    #[test]
+    fn discovered_and_indexed_inventory_only_classifiers_share_one_decision() {
+        // Both record types must route through `file_is_inventory_only`. A pair
+        // that disagrees means the decision was reimplemented for one caller,
+        // which is how a new inventory-only language gets wired into discovery
+        // and forgotten on the indexed-record path.
+        const CASES: &[(DiscoveredLanguage, &str, bool)] = &[
+            // Path-sensitive config lanes: the dependency input is parsed, every
+            // other path under the same language token stays inventory-only.
+            (DiscoveredLanguage::SwiftConfig, "Package.resolved", false),
+            (DiscoveredLanguage::SwiftConfig, "Package.swift", true),
+            (DiscoveredLanguage::PhpConfig, "composer.json", false),
+            (DiscoveredLanguage::PhpConfig, "composer.lock", false),
+            (DiscoveredLanguage::PhpConfig, "phpunit.xml", true),
+            (DiscoveredLanguage::RubyConfig, "Gemfile.lock", false),
+            (DiscoveredLanguage::RubyConfig, "Gemfile", true),
+            (DiscoveredLanguage::AdaConfig, "alire.toml", false),
+            (DiscoveredLanguage::AdaConfig, "alire.lock", false),
+            (DiscoveredLanguage::AdaConfig, "demo.gpr", true),
+            (DiscoveredLanguage::RConfig, "DESCRIPTION", false),
+            (DiscoveredLanguage::RConfig, "NAMESPACE", false),
+            (DiscoveredLanguage::RConfig, "renv.lock", false),
+            (DiscoveredLanguage::RConfig, ".Rprofile", true),
+            // Path-insensitive lanes.
+            (DiscoveredLanguage::FortranConfig, "fpm.toml", false),
+            (DiscoveredLanguage::Go, "cmd/demo/main.go", true),
+            (DiscoveredLanguage::Go, "pkg/strings_test.go", false),
+            (DiscoveredLanguage::GoConfig, "go.mod", false),
+            // ADR-0049 admits only runner-scoped Minitest paths; an app
+            // model stays inventory.
+            (DiscoveredLanguage::Ruby, "app/models/user.rb", true),
+            (DiscoveredLanguage::Ruby, "test/unit/user_test.rb", false),
+            // ADR-0048 D1 admits every discovered `.swift` file.
+            (DiscoveredLanguage::Swift, "Sources/App/main.swift", false),
+            (DiscoveredLanguage::VisualBasic, "src/Program.vb", false),
+            // ADR-0044 admits `.pas` units and leaves programs and packages
+            // as inventory, so the suffix decides within one language token.
+            (DiscoveredLanguage::ObjectPascal, "src/Unit1.pas", false),
+            (DiscoveredLanguage::ObjectPascal, "src/App.dpr", true),
+            (DiscoveredLanguage::ObjectPascal, "packages/Tools.dpk", true),
+            // ADR-0045 admits `.adb` bodies and leaves specs as inventory,
+            // so the suffix decides within one language token.
+            (DiscoveredLanguage::Ada, "ada/main.adb", false),
+            (DiscoveredLanguage::Ada, "ada/main.ads", true),
+            // ADR-0051 admits the free-form suffixes; fixed-form and
+            // preprocessed spellings stay inventory.
+            (DiscoveredLanguage::Fortran, "fortran/free.f90", false),
+            (DiscoveredLanguage::Fortran, "fortran/fixed.f", true),
+            (DiscoveredLanguage::Fortran, "fortran/pre.fpp", true),
+            // ADR-0047 admits every `.php` path; the prologue gate is
+            // byte-level inside the parser, not a path rule.
+            (DiscoveredLanguage::Php, "src/HealthCheck.php", false),
+            (DiscoveredLanguage::R, "R/main.R", true),
+            // ADR-0046 admits every `.m` file: matlab.unittest discovers
+            // tests by class shape and defines no file set.
+            (DiscoveredLanguage::Matlab, "solver.m", false),
+            // Languages with a real source frontend are never inventory-only.
+            (DiscoveredLanguage::Python, "app/main.py", false),
+            (DiscoveredLanguage::Rust, "src/lib.rs", false),
+            (DiscoveredLanguage::Assembly, "boot.s", false),
+            (DiscoveredLanguage::Sql, "schema.sql", false),
+            (
+                DiscoveredLanguage::SqlMigration,
+                "db/migrations/1.sql",
+                false,
+            ),
+            (DiscoveredLanguage::SqlSchema, "schema.sql", false),
+            (DiscoveredLanguage::SqlCatalog, "catalog.sql", false),
+        ];
+
+        for (language, path, expected) in CASES {
+            let discovered = DiscoveredFile {
+                path: (*path).to_string(),
+                language: *language,
+                content_hash: strict_hash(
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                ),
+                size_bytes: 1,
+            };
+            let indexed = IndexedFileRecord {
+                path: (*path).to_string(),
+                content_hash: discovered.content_hash.clone(),
+                size_bytes: discovered.size_bytes,
+                language: language.as_str().to_string(),
+            };
+
+            assert_eq!(
+                discovered_file_is_inventory_only(&discovered),
+                *expected,
+                "discovered classification for {} {path}",
+                language.as_str()
+            );
+            assert_eq!(
+                indexed_file_is_inventory_only(&indexed),
+                *expected,
+                "indexed classification for {} {path}",
+                language.as_str()
+            );
+        }
     }
 
     fn assert_active_pydantic_validator_evidence(store: &impl IndexStore) {
@@ -6279,8 +7554,7 @@ mod tests {
         assert_eq!(report.reparsed_files, 1);
     }
 
-    const PY_APP_BODY_DEFAULT: &str =
-        "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n";
+    const PY_APP_BODY_DEFAULT: &str = "def current_tenant() -> str:\n    return \"default\"\n\n\ndef list_ids() -> list[int]:\n    return []\n";
 
     #[test]
     fn python_body_edit_stable_interface_takes_incremental_fast_path() {
@@ -6779,20 +8053,40 @@ mod tests {
             "Package.resolved",
             ".swift-version",
             "nested/Package@swift-6.3.3.swift",
+            "query.sql",
+            "db/migrations/001.sql",
+            "schema.sql",
+            "main.R",
+            "NAMESPACE",
+            "renv.lock",
+            "nested/renv.lock",
         ] {
             assert!(!sync_path_requires_full_project_context(path), "{path}");
+        }
+        // ADR-0042 reads DESCRIPTION into the parser project context, so it
+        // decides how every admitted R file parses and cannot be file-local.
+        for path in ["DESCRIPTION", "pkg/DESCRIPTION"] {
+            assert!(sync_path_requires_full_project_context(path), "{path}");
         }
     }
 
     #[test]
-    fn default_index_persists_source_free_go_inventory_without_claim_inputs() {
+    fn default_index_reads_go_test_files_and_configs_but_never_ordinary_go_source() {
         let workspace = TempWorkspace::new("indexing-go-discovery-only");
         fs::create_dir_all(workspace.path().join("pkg")).expect("create Go package");
+        fs::create_dir_all(workspace.path().join("nested")).expect("create nested Go module");
         fs::write(
             workspace.path().join("go.mod"),
-            "module example.test/secret-module\n",
+            "module example.test/root\n\
+             require example.test/direct v1.2.3\n\
+             require example.test/indirect v1.0.0 // indirect\n",
         )
         .expect("write go.mod");
+        fs::write(
+            workspace.path().join("nested/go.mod"),
+            "module example.test/nested\nrequire example.test/nested-lib v1.0.0\n",
+        )
+        .expect("write nested go.mod");
         fs::write(workspace.path().join("go.work"), "go 1.25\n").expect("write go.work");
         fs::write(workspace.path().join("pkg/main.go"), [0xff, 0xfe, 0xfd])
             .expect("write Go source");
@@ -6805,7 +8099,7 @@ mod tests {
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
         let detector = SyntaxFrameworkRoleDetector;
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
         let mut progress_events = Vec::new();
         let mut progress = |event: ProgressEvent| progress_events.push(event);
 
@@ -6821,29 +8115,45 @@ mod tests {
             )
             .expect("index Go inventory");
 
-        assert_eq!(outcome.discovered_files, 4);
+        assert_eq!(outcome.discovered_files, 5);
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(outcome.indexed_units, 0);
-        assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        // ADR-0041 admits `*_test.go` and nothing else, so `pkg/main.go` is
+        // still never decoded while `pkg/main_test.go` now is. That file
+        // declares no testing import and no `*testing.T` parameter, so it
+        // yields a module and a plain function and anchors nothing.
+        assert_eq!(outcome.parser_attempted_files, 4);
+        assert_eq!(outcome.indexed_units, 5);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "go.mod".to_string(),
+                "go.work".to_string(),
+                "nested/go.mod".to_string(),
+                "pkg/main_test.go".to_string(),
+            ]
+        );
+        assert!(
+            !store
+                .list_active_code_units()
+                .expect("read units")
+                .units
+                .iter()
+                .any(|unit| unit.kind == "go_test_function"),
+            "a file with no testing import declares no test"
+        );
         assert_eq!(
             outcome.warnings,
-            vec![
-                "parser skipped unsupported language token: go".to_string(),
-                "parser skipped unsupported language token: go-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: go".to_string()]
         );
         assert!(progress_events
             .iter()
             .any(|event| event.message == "deferred inventory-only files"));
-        assert!(!progress_events
+        assert!(progress_events
             .iter()
             .any(|event| event.message == "parsed source files"));
-        assert!(!format!("{outcome:?}").contains("secret-module"));
         assert!(!format!("{outcome:?}").contains(workspace.path().to_string_lossy().as_ref()));
 
         let files = store
@@ -6858,23 +8168,72 @@ mod tests {
             vec![
                 ("go.mod", "go-config"),
                 ("go.work", "go-config"),
+                ("nested/go.mod", "go-config"),
                 ("pkg/main.go", "go"),
                 ("pkg/main_test.go", "go"),
             ]
         );
         let files_debug = format!("{files:?}");
-        assert!(!files_debug.contains("secret-module"));
         assert!(!files_debug.contains(workspace.path().to_string_lossy().as_ref()));
-        assert!(store
-            .list_active_code_units()
-            .expect("read Go units")
-            .units
-            .is_empty());
-        assert!(store
+        let units = store.list_active_code_units().expect("read Go units").units;
+        assert_eq!(units.len(), 5);
+        assert!(units
+            .iter()
+            .filter(|unit| unit.language == "go-config")
+            .all(|unit| unit.kind == "project_config" && !unit.path.ends_with(".go")));
+        // Every Go-source unit comes from the one admitted filename.
+        assert!(units
+            .iter()
+            .filter(|unit| unit.language == "go")
+            .all(|unit| unit.path == "pkg/main_test.go"));
+        let facts = store
             .list_active_semantic_facts()
-            .expect("read Go facts")
-            .facts
-            .is_empty());
+            .expect("read Go config UNKNOWN")
+            .facts;
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].kind, "UNKNOWN");
+        assert_eq!(facts[0].target.as_deref(), Some("BuildVariantAmbiguity"));
+        assert!(facts[0]
+            .assumptions
+            .contains(&"affected_claim=go_dependency_inventory".to_string()));
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Go module dependencies");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.ecosystem.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.requirement.as_deref(),
+                    dependency.directness.as_str(),
+                    dependency.evidence_level.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "go_modules",
+                    "example.test/direct",
+                    Some("v1.2.3"),
+                    "direct",
+                    "manifest_declared"
+                ),
+                (
+                    "go_modules",
+                    "example.test/indirect",
+                    Some("v1.0.0"),
+                    "transitive",
+                    "manifest_declared"
+                ),
+                (
+                    "go_modules",
+                    "example.test/nested-lib",
+                    Some("v1.0.0"),
+                    "direct",
+                    "manifest_declared"
+                ),
+            ]
+        );
         assert!(store
             .list_active_families()
             .expect("read Go families")
@@ -6883,7 +8242,137 @@ mod tests {
     }
 
     #[test]
-    fn default_index_persists_source_free_ruby_inventory_without_claim_inputs() {
+    fn default_index_skips_undecodable_sql_reads_r_metadata_and_keeps_r_source_inventory_only() {
+        let workspace = TempWorkspace::new("indexing-sql-r-inventory");
+        fs::create_dir_all(workspace.path().join("db/migrations"))
+            .expect("create SQL migration dir");
+        fs::create_dir_all(workspace.path().join("R")).expect("create R source dir");
+        fs::write(workspace.path().join("query.sql"), [0xff, 0xfe, 0xfd])
+            .expect("write generic SQL inventory");
+        fs::write(workspace.path().join("schema.sql"), [0xff, 0xfe, 0xfd])
+            .expect("write schema SQL inventory");
+        fs::write(
+            workspace.path().join("db/migrations/001_init.sql"),
+            [0xff, 0xfe, 0xfd],
+        )
+        .expect("write migration SQL inventory");
+        fs::write(workspace.path().join("R/main.R"), [0xff, 0xfe, 0xfd])
+            .expect("write binary R source inventory");
+        fs::write(
+            workspace.path().join("DESCRIPTION"),
+            "Package: demo\nImports: jsonlite\n",
+        )
+        .expect("write DESCRIPTION");
+        fs::write(
+            workspace.path().join("NAMESPACE"),
+            "importFrom(jsonlite, fromJSON)\n",
+        )
+        .expect("write NAMESPACE");
+        fs::write(
+            workspace.path().join("renv.lock"),
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"},"BiocGenerics":{"Package":"BiocGenerics","Version":"0.50.0","Source":"Bioconductor"},"private":{"Package":"private","Version":"1.0","Source":"GitHub","RemoteUrl":"https://user:UNIQUE_SECRET@example.invalid/repo"}}}"#,
+        )
+        .expect("write renv lock");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let source_store = RecordingSourceStore::new();
+
+        let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index SQL/R inventory");
+
+        assert_eq!(outcome.discovered_files, 7);
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 3);
+        assert_eq!(outcome.indexed_units, 3);
+        // ADR-0040 admits SQL to the frontend, so these paths are now read
+        // instead of deferred. Their bytes are not UTF-8, so each is skipped
+        // with a warning and contributes no code unit: one undecodable file
+        // must not fail the run, and must not read as a clean empty parse.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                // Read once for the parser project context (ADR-0042's testthat
+                // gate) and once by the r-config parser, the same way
+                // package.json is read for the TS/JS runner context.
+                "DESCRIPTION".to_string(),
+                "DESCRIPTION".to_string(),
+                "NAMESPACE".to_string(),
+                "db/migrations/001_init.sql".to_string(),
+                "query.sql".to_string(),
+                "renv.lock".to_string(),
+                "schema.sql".to_string(),
+            ]
+        );
+        for path in ["db/migrations/001_init.sql", "query.sql", "schema.sql"] {
+            assert!(
+                outcome
+                    .warnings
+                    .contains(&format!("parser skipped non-UTF-8 source: {path}")),
+                "warnings={:?}",
+                outcome.warnings
+            );
+        }
+        let files = store
+            .list_active_indexed_files()
+            .expect("read SQL/R file inventory");
+        assert_eq!(
+            files
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("DESCRIPTION", "r-config"),
+                ("NAMESPACE", "r-config"),
+                ("R/main.R", "r"),
+                ("db/migrations/001_init.sql", "sql-migration"),
+                ("query.sql", "sql"),
+                ("renv.lock", "r-config"),
+                ("schema.sql", "sql-schema"),
+            ]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read R dependencies");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.ecosystem.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.resolved_version.as_deref(),
+                    dependency.directness.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("bioconductor", "BiocGenerics", Some("0.50.0"), "unknown"),
+                ("cran", "jsonlite", Some("1.8.8"), "unknown"),
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("read SQL/R families")
+            .families
+            .is_empty());
+        let debug = format!("{outcome:?}{files:?}{dependencies:?}");
+        assert!(!debug.contains("UNIQUE_SECRET"));
+        assert!(!debug.contains("example.invalid"));
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn default_index_persists_source_free_deferred_ruby_inventory_without_claim_inputs() {
         let workspace = TempWorkspace::new("indexing-ruby-discovery-only");
         fs::create_dir_all(workspace.path().join("gems")).expect("create Ruby config dir");
         fs::create_dir_all(workspace.path().join("lib")).expect("create Ruby source dir");
@@ -6952,21 +8441,30 @@ mod tests {
                 ("lib/main.rb", "ruby"),
             ]
         );
-        assert!(store
-            .list_active_code_units()
-            .expect("read Ruby units")
-            .units
-            .is_empty());
-        assert!(store
-            .list_active_ir_graph()
-            .expect("read Ruby IR")
-            .nodes
-            .is_empty());
-        assert!(store
-            .list_active_semantic_facts()
-            .expect("read Ruby facts")
-            .facts
-            .is_empty());
+        assert_eq!(
+            store
+                .list_active_code_units()
+                .expect("read Ruby units")
+                .units
+                .len(),
+            0
+        );
+        assert_eq!(
+            store
+                .list_active_ir_graph()
+                .expect("read Ruby IR")
+                .nodes
+                .len(),
+            0
+        );
+        assert_eq!(
+            store
+                .list_active_semantic_facts()
+                .expect("read Ruby facts")
+                .facts
+                .len(),
+            0
+        );
         assert!(store
             .list_active_families()
             .expect("read Ruby families")
@@ -6979,17 +8477,209 @@ mod tests {
     }
 
     #[test]
-    fn default_index_persists_source_free_php_inventory_without_claim_inputs() {
+    fn ada_fortran_inventory_is_source_free_incremental_and_claim_free() {
+        let workspace = TempWorkspace::new("indexing-ada-fortran-inventory");
+        fs::create_dir_all(workspace.path().join("ada")).expect("create Ada source dir");
+        fs::create_dir_all(workspace.path().join("fortran")).expect("create Fortran source dir");
+        fs::create_dir_all(workspace.path().join("alire")).expect("create Alire dir");
+        fs::write(workspace.path().join("ada/main.adb"), [0xff, 0xfe, 0xfd])
+            .expect("write binary Ada body");
+        fs::write(
+            workspace.path().join("ada/main.ads"),
+            "ADA_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("write Ada specification");
+        fs::write(
+            workspace.path().join("demo.gpr"),
+            "GPR_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("write GPR inventory");
+        fs::write(
+            workspace.path().join("alire.toml"),
+            "[[depends-on]]\ngnatcoll = \"^25.0\"\n",
+        )
+        .expect("write Alire manifest");
+        fs::write(
+            workspace.path().join("alire/alire.lock"),
+            "LOCK_SECRET_MUST_NOT_LEAK=/private/example\n",
+        )
+        .expect("write Alire lock inventory");
+        fs::write(
+            workspace.path().join("fortran/main.f90"),
+            "FORTRAN_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("write free-form Fortran source");
+        fs::write(
+            workspace.path().join("fortran/legacy.f"),
+            [0xff, 0xfe, 0xfd],
+        )
+        .expect("write binary fixed-form Fortran source");
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            "[dependencies]\nstdlib = \"*\"\n",
+        )
+        .expect("write fpm manifest");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let source_store = RecordingSourceStore::new();
+
+        let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index Ada/Fortran inventory");
+        assert_eq!(outcome.discovered_files, 8);
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 4);
+        assert_eq!(
+            // ADR-0045 admits `.adb` (undecodable, read then skipped) and
+            // ADR-0051 admits the free-form `.f90`; the `.ads` spec, the
+            // `.gpr`, and the fixed-form `.f` stay unread.
+            source_store.paths(),
+            vec![
+                "ada/main.adb".to_string(),
+                "alire.toml".to_string(),
+                "alire/alire.lock".to_string(),
+                "fortran/main.f90".to_string(),
+                "fpm.toml".to_string(),
+            ]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Ada/Fortran dependencies");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.ecosystem.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.scope.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("alire", "gnatcoll", "runtime"),
+                ("fpm", "stdlib", "runtime")
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("read Ada/Fortran families")
+            .families
+            .is_empty());
+        let debug = format!("{outcome:?}{dependencies:?}");
+        for secret in [
+            "ADA_SOURCE_MUST_NOT_BE_READ",
+            "GPR_SOURCE_MUST_NOT_BE_READ",
+            "FORTRAN_SOURCE_MUST_NOT_BE_READ",
+            "LOCK_SECRET_MUST_NOT_LEAK",
+            "/private/example",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+
+        fs::write(
+            workspace.path().join("fortran/main.f90"),
+            "EDITED_FORTRAN_SOURCE_MUST_NOT_BE_READ",
+        )
+        .expect("edit admitted Fortran source");
+        let copied = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("copy manifest dependency rows forward");
+        let copy_report = copied.sync_report.expect("copy-forward report");
+        assert_eq!(copy_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(copy_report.modified_files, 1);
+        // ADR-0051 admits the free-form source, so the edit is reparsed by
+        // the bounded frontend; the manifest rows still copy forward.
+        assert_eq!(copy_report.reparsed_files, 1);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied dependencies")
+                .dependencies
+                .len(),
+            2
+        );
+
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            "[dependencies]\njson-fortran = \"~9.0\"\n",
+        )
+        .expect("replace fpm dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace fpm dependency inventory");
+        let replace_report = replaced.sync_report.expect("replace report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced dependencies");
+        assert!(dependencies
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.package_name == "json-fortran"));
+        assert!(!dependencies
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.package_name == "stdlib"));
+
+        fs::remove_file(workspace.path().join("alire.toml")).expect("remove Alire manifest");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove Alire dependency inventory");
+        let remove_report = removed.sync_report.expect("removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read dependencies after removal");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].ecosystem, "fpm");
+        assert!(store
+            .list_active_families()
+            .expect("read families after removal")
+            .families
+            .is_empty());
+    }
+
+    #[test]
+    fn default_index_persists_source_free_php_composer_dependencies_without_family_claims() {
         let workspace = TempWorkspace::new("indexing-php-discovery-only");
         fs::create_dir_all(workspace.path().join("src")).expect("create PHP source dir");
         fs::write(
             workspace.path().join("composer.json"),
-            "must-not-be-decoded-or-evaluated",
+            r#"{"description":"UNIQUE_SOURCE_SENTINEL","require":{"acme/runtime":"^1.2"},"require-dev":{"phpunit/phpunit":"^11"}}"#,
         )
         .expect("write Composer manifest");
         fs::write(
             workspace.path().join("composer.lock"),
-            "must-not-be-decoded-or-evaluated",
+            r#"{"packages":[{"name":"acme/runtime","version":"1.2.3","source":{"url":"UNIQUE_SOURCE_SENTINEL"}}],"packages-dev":[{"name":"phpunit/phpunit","version":"11.5.0"}]}"#,
         )
         .expect("write Composer lock");
         fs::write(
@@ -7002,7 +8692,7 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
 
         let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -7017,17 +8707,26 @@ mod tests {
         assert_eq!(outcome.discovered_files, 4);
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(outcome.indexed_units, 0);
-        assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 2);
+        assert_eq!(outcome.indexed_units, 2);
+        assert_eq!(outcome.semantic_facts, 1);
+        // ADR-0047 admits every `.php` path, so the undecodable source is
+        // read once and skipped; the phpunit.xml config stays inventory.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "composer.json".to_string(),
+                "composer.lock".to_string(),
+                "src/main.php".to_string()
+            ]
+        );
         assert_eq!(
             outcome.warnings,
             vec![
-                "parser skipped unsupported language token: php".to_string(),
                 "parser skipped unsupported language token: php-config".to_string(),
+                "parser skipped non-UTF-8 source: src/main.php".to_string(),
             ]
         );
 
@@ -7047,34 +8746,154 @@ mod tests {
                 ("src/main.php", "php"),
             ]
         );
-        assert!(store
-            .list_active_code_units()
-            .expect("read PHP units")
-            .units
-            .is_empty());
-        assert!(store
-            .list_active_ir_graph()
-            .expect("read PHP IR")
-            .nodes
-            .is_empty());
-        assert!(store
-            .list_active_semantic_facts()
-            .expect("read PHP facts")
-            .facts
-            .is_empty());
+        assert_eq!(
+            store
+                .list_active_code_units()
+                .expect("read PHP units")
+                .units
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .list_active_ir_graph()
+                .expect("read PHP IR")
+                .nodes
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .list_active_semantic_facts()
+                .expect("read PHP facts")
+                .facts
+                .len(),
+            1
+        );
         assert!(store
             .list_active_families()
             .expect("read PHP families")
             .families
             .is_empty());
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Composer dependencies");
+        assert_eq!(dependencies.dependencies.len(), 4);
+        assert!(dependencies
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.ecosystem == "composer"));
+        let dependency_debug = format!("{dependencies:?}");
+        assert!(!dependency_debug.contains("UNIQUE_SOURCE_SENTINEL"));
+        assert!(!dependency_debug.contains("example.invalid"));
         let debug = format!("{outcome:?}{files:?}");
-        assert!(!debug.contains("must-not-be-decoded-or-evaluated"));
+        assert!(!debug.contains("UNIQUE_SOURCE_SENTINEL"));
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+
+        fs::write(
+            workspace.path().join("src/main.php"),
+            b"<?php // unrelated inventory-only edit\n",
+        )
+        .expect("edit admitted PHP source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally copy Composer dependency inventory");
+        let sync_report = synced.sync_report.expect("incremental sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.modified_files, 1);
+        // ADR-0047 admits `.php`, so the edit is reparsed by the bounded
+        // frontend; a comment-only file anchors nothing and claims nothing.
+        assert_eq!(sync_report.reparsed_files, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "composer.json".to_string(),
+                "composer.lock".to_string(),
+                "src/main.php".to_string(),
+                "src/main.php".to_string()
+            ]
+        );
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Composer dependencies")
+                .dependencies
+                .len(),
+            4
+        );
+
+        fs::write(
+            workspace.path().join("composer.json"),
+            r#"{"require":{"acme/replaced":"^2"},"require-dev":{"phpunit/phpunit":"^11"}}"#,
+        )
+        .expect("replace Composer manifest requirement");
+        let reparsed = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace Composer dependency inventory");
+        let reparse_report = reparsed.sync_report.expect("Composer reparse report");
+        assert_eq!(reparse_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(reparse_report.modified_files, 1);
+        assert_eq!(reparse_report.reparsed_files, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "composer.json".to_string(),
+                "composer.lock".to_string(),
+                "src/main.php".to_string(),
+                "src/main.php".to_string(),
+                "composer.json".to_string(),
+            ]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Composer dependencies");
+        assert!(dependencies.dependencies.iter().any(|dependency| {
+            dependency.path == "composer.json" && dependency.package_name == "acme/replaced"
+        }));
+        assert!(!dependencies.dependencies.iter().any(|dependency| {
+            dependency.path == "composer.json" && dependency.package_name == "acme/runtime"
+        }));
+
+        fs::remove_file(workspace.path().join("composer.lock")).expect("remove Composer lockfile");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove Composer lockfile dependencies");
+        let remove_report = removed.sync_report.expect("Composer removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Composer dependencies after lock removal");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(dependencies
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.path == "composer.json"));
+        assert!(store
+            .list_active_families()
+            .expect("read PHP families after lock removal")
+            .families
+            .is_empty());
     }
 
     #[test]
     fn default_index_persists_source_free_swift_inventory_without_claim_inputs() {
-        let workspace = TempWorkspace::new("indexing-swift-discovery-only");
+        let workspace = TempWorkspace::new("indexing-swift-frontend");
         fs::create_dir_all(workspace.path().join("Sources/App")).expect("create Swift source dir");
         fs::create_dir_all(workspace.path().join("nested"))
             .expect("create nested Swift package dir");
@@ -7083,11 +8902,6 @@ mod tests {
             "must-not-be-decoded-or-evaluated",
         )
         .expect("write Swift package manifest");
-        fs::write(
-            workspace.path().join("Package.resolved"),
-            "must-not-be-decoded-or-evaluated",
-        )
-        .expect("write Swift package lock");
         fs::write(
             workspace.path().join(".swift-version"),
             "must-not-select-a-toolchain",
@@ -7102,11 +8916,11 @@ mod tests {
             workspace.path().join("Sources/App/main.swift"),
             [0xff, 0xfe, 0xfd],
         )
-        .expect("write binary Swift source");
+        .expect("write undecodable Swift source");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
 
         let outcome = index_repository_with_discovery_parser_frameworks_families_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -7118,7 +8932,7 @@ mod tests {
         )
         .expect("index Swift inventory");
 
-        assert_eq!(outcome.discovered_files, 5);
+        assert_eq!(outcome.discovered_files, 4);
         assert_eq!(
             outcome.indexing_mode,
             IndexingGenerationMode::FileManifestOnly
@@ -7126,12 +8940,18 @@ mod tests {
         assert_eq!(outcome.parser_attempted_files, 0);
         assert_eq!(outcome.indexed_units, 0);
         assert_eq!(outcome.semantic_facts, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        // ADR-0048 admits every `.swift` file, so the source is read once and
+        // skipped when it does not decode; the executable manifests stay
+        // inventory and are never read.
+        assert_eq!(
+            source_store.paths(),
+            vec!["Sources/App/main.swift".to_string()]
+        );
         assert_eq!(
             outcome.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parser skipped non-UTF-8 source: Sources/App/main.swift".to_string(),
             ]
         );
 
@@ -7146,7 +8966,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (".swift-version", "swift-config"),
-                ("Package.resolved", "swift-config"),
                 ("Package.swift", "swift-config"),
                 ("Sources/App/main.swift", "swift"),
                 ("nested/Package@swift-6.3.3.swift", "swift-config"),
@@ -7244,7 +9063,7 @@ mod tests {
     }
 
     #[test]
-    fn ruby_only_first_sync_reports_file_manifest_and_zero_reparsed_files() {
+    fn ruby_only_first_sync_defers_source_and_executable_config() {
         let workspace = TempWorkspace::new("indexing-ruby-first-sync");
         fs::write(workspace.path().join("main.rb"), "puts :inventory\n")
             .expect("write Ruby source");
@@ -7270,7 +9089,15 @@ mod tests {
             IndexingGenerationMode::FileManifestOnly
         );
         assert_eq!(outcome.parser_attempted_files, 0);
+        assert_eq!(outcome.indexed_units, 0);
         assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            outcome.warnings,
+            vec![
+                "parser skipped unsupported language token: ruby".to_string(),
+                "parser skipped unsupported language token: ruby-config".to_string(),
+            ]
+        );
         let report = outcome.sync_report.expect("sync fallback report");
         assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
         assert_eq!(
@@ -7285,11 +9112,12 @@ mod tests {
     fn php_only_first_sync_reports_file_manifest_and_zero_reparsed_files() {
         let workspace = TempWorkspace::new("indexing-php-first-sync");
         fs::write(workspace.path().join("main.php"), "<?php\n").expect("write PHP source");
-        fs::write(workspace.path().join("composer.json"), "not-json\n").expect("write PHP config");
+        fs::write(workspace.path().join("phpunit.xml"), "not-xml\n")
+            .expect("write deferred PHPUnit config");
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
 
         let outcome = sync_repository_with_discovery_parser_frameworks_and_store(
             IndexingRequest::new(workspace.path().display().to_string()),
@@ -7301,12 +9129,14 @@ mod tests {
         )
         .expect("first PHP sync");
 
+        // ADR-0047 admits `main.php`; a prologue-only file yields its module
+        // unit, anchors nothing, and reparses nothing.
         assert_eq!(
             outcome.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(outcome.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(source_store.paths(), vec!["main.php".to_string()]);
         let report = outcome.sync_report.expect("sync fallback report");
         assert_eq!(report.sync_mode, IndexingSyncMode::FullRebuildFallback);
         assert_eq!(
@@ -7314,7 +9144,8 @@ mod tests {
             Some("missing_active_generation")
         );
         assert_eq!(report.added_files, 2);
-        assert_eq!(report.reparsed_files, 0);
+        // The fallback rebuild counts its one parse.
+        assert_eq!(report.reparsed_files, 1);
     }
 
     #[test]
@@ -7327,7 +9158,7 @@ mod tests {
         let state = workspace.path().join(".repogrammar");
         create_index_state(&state);
         let store = SqliteIndexStore::new(&state);
-        let source_store = RejectingSourceStore::new();
+        let source_store = RecordingSourceStore::new();
         let request = || IndexingRequest::new(workspace.path().display().to_string());
 
         let first = sync_repository_with_discovery_parser_frameworks_and_store(
@@ -7340,17 +9171,22 @@ mod tests {
         )
         .expect("first Swift sync");
 
+        // ADR-0048 admits `main.swift`; a top-level-statement file abstains
+        // outside the subset with exactly its module unit and one typed
+        // UNKNOWN, and the executable manifest is never read.
         assert_eq!(
             first.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(first.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(first.parser_attempted_files, 1);
+        assert_eq!(source_store.paths(), vec!["main.swift".to_string()]);
         assert_eq!(
             first.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parse degraded for main.swift: frontend reported an error diagnostic; \
+                 missing code units are not evidence that a construct is absent"
+                    .to_string(),
             ]
         );
         let first_report = first.sync_report.expect("first Swift sync report");
@@ -7363,7 +9199,8 @@ mod tests {
             Some("missing_active_generation")
         );
         assert_eq!(first_report.added_files, 2);
-        assert_eq!(first_report.reparsed_files, 0);
+        // The fallback rebuild counts its one degraded parse.
+        assert_eq!(first_report.reparsed_files, 1);
 
         let unchanged = sync_repository_with_discovery_parser_frameworks_and_store(
             request(),
@@ -7377,16 +9214,12 @@ mod tests {
 
         assert_eq!(
             unchanged.indexing_mode,
-            IndexingGenerationMode::FileManifestOnly
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
         assert_eq!(unchanged.parser_attempted_files, 0);
-        assert_eq!(source_store.calls.load(Ordering::SeqCst), 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: swift".to_string(),
-                "parser skipped unsupported language token: swift-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: swift-config".to_string(),]
         );
         let unchanged_report = unchanged.sync_report.expect("unchanged Swift sync report");
         assert_eq!(unchanged_report.sync_mode, IndexingSyncMode::Incremental);
@@ -7453,19 +9286,16 @@ mod tests {
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(added.parser_attempted_files, 0);
+        assert_eq!(added.parser_attempted_files, 2);
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(added_report.added_files, 3);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
-        assert_eq!(added_report.reparsed_files, 0);
+        assert_eq!(added_report.reparsed_files, 2);
         assert_eq!(
             added.warnings,
-            vec![
-                "parser skipped unsupported language token: go".to_string(),
-                "parser skipped unsupported language token: go-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: go".to_string()]
         );
         assert_eq!(
             store
@@ -7477,13 +9307,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["go.mod", "go.work", "main.go", "server.ts"]
         );
-        assert_eq!(
-            store
-                .list_active_semantic_facts()
-                .expect("list facts after add")
-                .facts,
-            expected_facts
-        );
+        let facts_after_add = store
+            .list_active_semantic_facts()
+            .expect("list facts after add")
+            .facts;
+        assert_eq!(facts_after_add.len(), expected_facts.len() + 1);
+        assert!(facts_after_add.iter().any(|fact| {
+            fact.path == "go.work"
+                && fact.kind == "UNKNOWN"
+                && fact
+                    .assumptions
+                    .contains(&"affected_claim=go_dependency_inventory".to_string())
+        }));
         assert_eq!(
             store
                 .list_active_families()
@@ -7507,10 +9342,7 @@ mod tests {
         assert_eq!(unchanged_report.reparsed_files, 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: go".to_string(),
-                "parser skipped unsupported language token: go-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: go".to_string()]
         );
 
         fs::write(
@@ -7531,20 +9363,25 @@ mod tests {
             modified.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(modified.parser_attempted_files, 0);
+        assert_eq!(modified.parser_attempted_files, 2);
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
         assert_eq!(modified_report.modified_files, 3);
         assert_eq!(modified_report.removed_files, 0);
-        assert_eq!(modified_report.reparsed_files, 0);
-        assert_eq!(
-            store
-                .list_active_semantic_facts()
-                .expect("list facts after modify")
-                .facts,
-            expected_facts
-        );
+        assert_eq!(modified_report.reparsed_files, 2);
+        let facts_after_modify = store
+            .list_active_semantic_facts()
+            .expect("list facts after modify")
+            .facts;
+        assert_eq!(facts_after_modify.len(), expected_facts.len() + 1);
+        assert!(facts_after_modify.iter().any(|fact| {
+            fact.path == "go.work"
+                && fact.kind == "UNKNOWN"
+                && fact
+                    .assumptions
+                    .contains(&"affected_claim=go_dependency_inventory".to_string())
+        }));
         assert_eq!(
             store
                 .list_active_families()
@@ -7596,22 +9433,16 @@ mod tests {
         );
 
         for path in source_store.paths() {
-            assert!(
-                !indexed_language_path_is_go(&path),
-                "source read Go path {path}"
-            );
+            assert!(!path.ends_with(".go"), "source read Go source path {path}");
         }
         for path in parser.paths() {
-            assert!(
-                !indexed_language_path_is_go(&path),
-                "parser saw Go path {path}"
-            );
+            assert!(!path.ends_with(".go"), "parser saw Go source path {path}");
         }
     }
 
     #[test]
-    fn mixed_repo_ruby_inventory_deltas_stay_incremental_and_preserve_non_ruby_claims() {
-        let workspace = TempWorkspace::new("indexing-ruby-incremental-inventory");
+    fn mixed_repo_ruby_source_inventory_deltas_stay_incremental() {
+        let workspace = TempWorkspace::new("indexing-ruby-source-incremental-inventory");
         fs::write(
             workspace.path().join("server.ts"),
             "import express from 'express';\n\
@@ -7654,10 +9485,8 @@ mod tests {
         assert_eq!(expected_families.len(), 1);
 
         fs::write(workspace.path().join("main.rb"), "puts :inventory\n").expect("add Ruby source");
-        fs::write(workspace.path().join("Gemfile"), "source 'unused'\n").expect("add Gemfile");
-        fs::write(workspace.path().join("gems.rb"), "source 'unused'\n").expect("add gems.rb");
         let added = sync_with_families(request(), &source_store, &parser, &detector, &store)
-            .expect("sync added Ruby inventory");
+            .expect("sync added Ruby source inventory");
         assert_eq!(
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
@@ -7665,16 +9494,13 @@ mod tests {
         assert_eq!(added.parser_attempted_files, 0);
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
-        assert_eq!(added_report.added_files, 3);
+        assert_eq!(added_report.added_files, 1);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
         assert_eq!(added_report.reparsed_files, 0);
         assert_eq!(
             added.warnings,
-            vec![
-                "parser skipped unsupported language token: ruby".to_string(),
-                "parser skipped unsupported language token: ruby-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: ruby".to_string()]
         );
         assert_eq!(
             store
@@ -7702,15 +9528,13 @@ mod tests {
         assert_eq!(unchanged_report.reparsed_files, 0);
 
         fs::write(workspace.path().join("main.rb"), "puts :changed\n").expect("modify Ruby source");
-        fs::write(workspace.path().join("Gemfile"), "source 'changed'\n").expect("modify Gemfile");
-        fs::write(workspace.path().join("gems.rb"), "source 'changed'\n").expect("modify gems.rb");
         let modified = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync modified Ruby inventory");
         assert_eq!(modified.parser_attempted_files, 0);
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
-        assert_eq!(modified_report.modified_files, 3);
+        assert_eq!(modified_report.modified_files, 1);
         assert_eq!(modified_report.removed_files, 0);
         assert_eq!(modified_report.reparsed_files, 0);
 
@@ -7719,10 +9543,7 @@ mod tests {
             sync_with_families(request(), &source_store, &parser, &detector, &store)
                 .expect("sync removed Ruby source inventory");
         assert_eq!(source_removed.parser_attempted_files, 0);
-        assert_eq!(
-            source_removed.warnings,
-            vec!["parser skipped unsupported language token: ruby-config".to_string()]
-        );
+        assert!(source_removed.warnings.is_empty());
         let source_removed_report = source_removed
             .sync_report
             .expect("source removal sync report");
@@ -7742,32 +9563,12 @@ mod tests {
                 .iter()
                 .map(|file| file.path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Gemfile", "gems.rb", "server.ts"]
+            vec!["server.ts"]
         );
-
-        for path in ["Gemfile", "gems.rb"] {
-            fs::remove_file(workspace.path().join(path)).expect("remove Ruby config inventory");
-        }
-        let configs_removed =
-            sync_with_families(request(), &source_store, &parser, &detector, &store)
-                .expect("sync removed Ruby config inventory");
-        assert_eq!(configs_removed.parser_attempted_files, 0);
-        assert!(configs_removed.warnings.is_empty());
-        let configs_removed_report = configs_removed
-            .sync_report
-            .expect("config removal sync report");
-        assert_eq!(
-            configs_removed_report.sync_mode,
-            IndexingSyncMode::Incremental
-        );
-        assert_eq!(configs_removed_report.added_files, 0);
-        assert_eq!(configs_removed_report.modified_files, 0);
-        assert_eq!(configs_removed_report.removed_files, 2);
-        assert_eq!(configs_removed_report.reparsed_files, 0);
         assert_eq!(
             store
                 .list_active_families()
-                .expect("list families after Ruby removal")
+                .expect("list families after Ruby source removal")
                 .families,
             expected_families
         );
@@ -7820,8 +9621,8 @@ mod tests {
         assert_eq!(expected_families.len(), 1);
 
         fs::write(workspace.path().join("main.php"), "<?php\n").expect("add PHP source");
-        fs::write(workspace.path().join("composer.json"), "not-json\n")
-            .expect("add Composer config");
+        fs::write(workspace.path().join("phpunit.xml.dist"), "not-xml\n")
+            .expect("add deferred PHPUnit dist config");
         fs::write(workspace.path().join("phpunit.xml"), "not-xml\n").expect("add PHPUnit config");
         let added = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync added PHP inventory");
@@ -7829,19 +9630,18 @@ mod tests {
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(added.parser_attempted_files, 0);
+        // ADR-0047 admits `main.php`, so the added source is parsed; the
+        // RecordingParser returns an empty report and claims nothing.
+        assert_eq!(added.parser_attempted_files, 1);
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(added_report.added_files, 3);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
-        assert_eq!(added_report.reparsed_files, 0);
+        assert_eq!(added_report.reparsed_files, 1);
         assert_eq!(
             added.warnings,
-            vec![
-                "parser skipped unsupported language token: php".to_string(),
-                "parser skipped unsupported language token: php-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: php-config".to_string(),]
         );
         assert_eq!(
             store
@@ -7867,10 +9667,7 @@ mod tests {
         assert_eq!(unchanged.parser_attempted_files, 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: php".to_string(),
-                "parser skipped unsupported language token: php-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: php-config".to_string(),]
         );
         let unchanged_report = unchanged.sync_report.expect("unchanged sync report");
         assert_eq!(unchanged_report.sync_mode, IndexingSyncMode::Incremental);
@@ -7881,8 +9678,8 @@ mod tests {
 
         fs::write(workspace.path().join("main.php"), "<?php // changed\n")
             .expect("modify PHP source");
-        fs::write(workspace.path().join("composer.json"), "changed\n")
-            .expect("modify Composer config");
+        fs::write(workspace.path().join("phpunit.xml.dist"), "changed\n")
+            .expect("modify deferred PHPUnit dist config");
         fs::write(workspace.path().join("phpunit.xml"), "changed\n")
             .expect("modify PHPUnit config");
         let modified = sync_with_families(request(), &source_store, &parser, &detector, &store)
@@ -7891,20 +9688,19 @@ mod tests {
             modified.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(modified.parser_attempted_files, 0);
+        // ADR-0047 admits `main.php`, so its edit is reparsed; the configs
+        // stay inventory.
+        assert_eq!(modified.parser_attempted_files, 1);
         assert_eq!(
             modified.warnings,
-            vec![
-                "parser skipped unsupported language token: php".to_string(),
-                "parser skipped unsupported language token: php-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: php-config".to_string(),]
         );
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
         assert_eq!(modified_report.modified_files, 3);
         assert_eq!(modified_report.removed_files, 0);
-        assert_eq!(modified_report.reparsed_files, 0);
+        assert_eq!(modified_report.reparsed_files, 1);
 
         fs::remove_file(workspace.path().join("main.php")).expect("remove PHP source inventory");
         let source_removed =
@@ -7927,7 +9723,7 @@ mod tests {
         assert_eq!(source_removed_report.removed_files, 1);
         assert_eq!(source_removed_report.reparsed_files, 0);
 
-        for path in ["composer.json", "phpunit.xml"] {
+        for path in ["phpunit.xml.dist", "phpunit.xml"] {
             fs::remove_file(workspace.path().join(path)).expect("remove PHP config inventory");
         }
         let configs_removed =
@@ -7960,8 +9756,24 @@ mod tests {
                 .families,
             expected_families
         );
-        assert_eq!(source_store.paths(), vec!["server.ts".to_string()]);
-        assert_eq!(parser.paths(), vec!["server.ts".to_string()]);
+        // `main.php` was read when added and when modified (ADR-0047); the
+        // removal itself reads nothing.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.php".to_string(),
+                "main.php".to_string()
+            ]
+        );
+        assert_eq!(
+            parser.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.php".to_string(),
+                "main.php".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -8011,35 +9823,59 @@ mod tests {
         fs::write(workspace.path().join("main.swift"), "fatalError()\n").expect("add Swift source");
         fs::write(workspace.path().join("Package.swift"), "not-evaluated\n")
             .expect("add Swift package manifest");
-        fs::write(workspace.path().join("Package.resolved"), "not-decoded\n")
-            .expect("add Swift package lock");
         let added = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync added Swift inventory");
         assert_eq!(
             added.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(added.parser_attempted_files, 0);
+        // ADR-0048 admits `main.swift`, so the added source is parsed. A
+        // top-level statement file is outside the declared subset and
+        // abstains whole-file with an error diagnostic, which surfaces as the
+        // shared parse-degraded warning.
+        assert_eq!(added.parser_attempted_files, 1);
         assert_eq!(
             added.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parse degraded for main.swift: frontend reported an error diagnostic; \
+                 missing code units are not evidence that a construct is absent"
+                    .to_string(),
             ]
         );
         let added_report = added.sync_report.expect("added sync report");
         assert_eq!(added_report.sync_mode, IndexingSyncMode::Incremental);
-        assert_eq!(added_report.added_files, 3);
+        assert_eq!(added_report.added_files, 2);
         assert_eq!(added_report.modified_files, 0);
         assert_eq!(added_report.removed_files, 0);
-        assert_eq!(added_report.reparsed_files, 0);
-        assert_eq!(
-            store
-                .list_active_semantic_facts()
-                .expect("list facts after Swift add")
-                .facts,
-            expected_facts
-        );
+        assert_eq!(added_report.reparsed_files, 1);
+        // Every pre-existing claim survives; the admitted-but-outside-subset
+        // Swift file adds exactly one typed UNKNOWN and no family claims.
+        // Generation-local fact ids shift with the insertion, so presence is
+        // compared on the identity fields, not the record ids.
+        let fact_identity = |fact: &IndexedSemanticFactRecord| {
+            (
+                fact.kind.clone(),
+                fact.subject.clone(),
+                fact.target.clone(),
+                fact.certainty.clone(),
+                fact.origin_engine.clone(),
+                fact.origin_method.clone(),
+                fact.path.clone(),
+            )
+        };
+        let facts_after_add = store
+            .list_active_semantic_facts()
+            .expect("list facts after Swift add")
+            .facts;
+        assert_eq!(facts_after_add.len(), expected_facts.len() + 1);
+        assert!(facts_after_add
+            .iter()
+            .any(|fact| fact.path == "main.swift" && fact.kind == "UNKNOWN"));
+        let identities_after: Vec<_> = facts_after_add.iter().map(fact_identity).collect();
+        for expected in &expected_facts {
+            assert!(identities_after.contains(&fact_identity(expected)));
+        }
         assert_eq!(
             store
                 .list_active_families()
@@ -8057,10 +9893,7 @@ mod tests {
         assert_eq!(unchanged.parser_attempted_files, 0);
         assert_eq!(
             unchanged.warnings,
-            vec![
-                "parser skipped unsupported language token: swift".to_string(),
-                "parser skipped unsupported language token: swift-config".to_string(),
-            ]
+            vec!["parser skipped unsupported language token: swift-config".to_string(),]
         );
         let unchanged_report = unchanged.sync_report.expect("unchanged sync report");
         assert_eq!(unchanged_report.sync_mode, IndexingSyncMode::Incremental);
@@ -8076,28 +9909,30 @@ mod tests {
         .expect("modify Swift source");
         fs::write(workspace.path().join("Package.swift"), "changed\n")
             .expect("modify Swift package manifest");
-        fs::write(workspace.path().join("Package.resolved"), "changed\n")
-            .expect("modify Swift package lock");
         let modified = sync_with_families(request(), &source_store, &parser, &detector, &store)
             .expect("sync modified Swift inventory");
         assert_eq!(
             modified.indexing_mode,
             IndexingGenerationMode::SyntaxOnlyCodeUnits
         );
-        assert_eq!(modified.parser_attempted_files, 0);
+        // ADR-0048 admits `main.swift`, so its edit is reparsed and abstains
+        // again outside the subset; the manifest stays inventory.
+        assert_eq!(modified.parser_attempted_files, 1);
         assert_eq!(
             modified.warnings,
             vec![
-                "parser skipped unsupported language token: swift".to_string(),
                 "parser skipped unsupported language token: swift-config".to_string(),
+                "parse degraded for main.swift: frontend reported an error diagnostic; \
+                 missing code units are not evidence that a construct is absent"
+                    .to_string(),
             ]
         );
         let modified_report = modified.sync_report.expect("modified sync report");
         assert_eq!(modified_report.sync_mode, IndexingSyncMode::Incremental);
         assert_eq!(modified_report.added_files, 0);
-        assert_eq!(modified_report.modified_files, 3);
+        assert_eq!(modified_report.modified_files, 2);
         assert_eq!(modified_report.removed_files, 0);
-        assert_eq!(modified_report.reparsed_files, 0);
+        assert_eq!(modified_report.reparsed_files, 1);
 
         fs::remove_file(workspace.path().join("main.swift"))
             .expect("remove Swift source inventory");
@@ -8121,9 +9956,8 @@ mod tests {
         assert_eq!(source_removed_report.removed_files, 1);
         assert_eq!(source_removed_report.reparsed_files, 0);
 
-        for path in ["Package.swift", "Package.resolved"] {
-            fs::remove_file(workspace.path().join(path)).expect("remove Swift config inventory");
-        }
+        fs::remove_file(workspace.path().join("Package.swift"))
+            .expect("remove Swift config inventory");
         let configs_removed =
             sync_with_families(request(), &source_store, &parser, &detector, &store)
                 .expect("sync removed Swift config inventory");
@@ -8138,7 +9972,7 @@ mod tests {
         );
         assert_eq!(configs_removed_report.added_files, 0);
         assert_eq!(configs_removed_report.modified_files, 0);
-        assert_eq!(configs_removed_report.removed_files, 2);
+        assert_eq!(configs_removed_report.removed_files, 1);
         assert_eq!(configs_removed_report.reparsed_files, 0);
         assert_eq!(
             store
@@ -8154,8 +9988,138 @@ mod tests {
                 .families,
             expected_families
         );
-        assert_eq!(source_store.paths(), vec!["server.ts".to_string()]);
-        assert_eq!(parser.paths(), vec!["server.ts".to_string()]);
+        // `main.swift` was read when added and when modified (ADR-0048); the
+        // removal itself reads nothing.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.swift".to_string(),
+                "main.swift".to_string()
+            ]
+        );
+        assert_eq!(
+            parser.paths(),
+            vec![
+                "server.ts".to_string(),
+                "main.swift".to_string(),
+                "main.swift".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn incremental_sync_replaces_and_removes_r_lock_dependencies_while_undecodable_sql_stays_unit_free(
+    ) {
+        let workspace = TempWorkspace::new("indexing-sql-r-incremental");
+        fs::write(
+            workspace.path().join("DESCRIPTION"),
+            "Package: demo\nImports: jsonlite\n",
+        )
+        .expect("write DESCRIPTION");
+        fs::write(workspace.path().join("query.sql"), [0xff, 0xfe, 0xfd])
+            .expect("write SQL inventory");
+        let lock_path = workspace.path().join("renv.lock");
+        fs::write(
+            &lock_path,
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"}}}"#,
+        )
+        .expect("write base renv lock");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_families_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index base SQL/R inventory");
+        let base_dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read base R dependencies");
+        assert_eq!(base_dependencies.dependencies.len(), 1);
+        assert_eq!(
+            base_dependencies.dependencies[0]
+                .resolved_version
+                .as_deref(),
+            Some("1.8.8")
+        );
+
+        fs::write(workspace.path().join("query.sql"), [0xaa, 0xbb, 0xcc])
+            .expect("modify SQL inventory");
+        fs::write(
+            &lock_path,
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.9.0","Source":"Repository","Repository":"CRAN"},"BiocGenerics":{"Package":"BiocGenerics","Version":"0.52.0","Source":"Bioconductor"}}}"#,
+        )
+        .expect("replace renv lock");
+        let modified = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync modified SQL/R inventory");
+        assert_eq!(
+            modified.sync_report.as_ref().map(|report| report.sync_mode),
+            Some(IndexingSyncMode::Incremental)
+        );
+        assert_eq!(modified.parser_attempted_files, 1);
+        let replaced = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced R dependencies");
+        assert_eq!(replaced.dependencies.len(), 2);
+        assert!(replaced.dependencies.iter().any(|dependency| {
+            dependency.package_name == "jsonlite"
+                && dependency.resolved_version.as_deref() == Some("1.9.0")
+        }));
+        assert!(!replaced
+            .dependencies
+            .iter()
+            .any(|dependency| { dependency.resolved_version.as_deref() == Some("1.8.8") }));
+
+        fs::remove_file(&lock_path).expect("remove renv lock");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync removed renv lock");
+        assert_eq!(
+            removed.sync_report.as_ref().map(|report| report.sync_mode),
+            Some(IndexingSyncMode::Incremental)
+        );
+        assert_eq!(removed.parser_attempted_files, 0);
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after removal")
+                .dependencies
+                .is_empty()
+        );
+        assert!(store
+            .list_active_code_units()
+            .expect("read units after lock removal")
+            .units
+            .iter()
+            .any(|unit| unit.path == "DESCRIPTION"));
+        // ADR-0040 admits SQL to the frontend, so a changed `.sql` path is now
+        // read. These bytes are not UTF-8, so every attempt is skipped with a
+        // warning and no SQL code unit is ever stored.
+        assert!(source_store.paths().iter().any(|path| path == "query.sql"));
+        assert!(!store
+            .list_active_code_units()
+            .expect("read units after lock removal")
+            .units
+            .iter()
+            .any(|unit| unit.path == "query.sql"));
     }
 
     #[test]
@@ -8508,8 +10472,8 @@ mod tests {
     fn incremental_sync_purges_legacy_claim_records_for_inventory_only_php_paths() {
         let workspace = TempWorkspace::new("indexing-php-purge-legacy-claims");
         fs::write(workspace.path().join("main.php"), "<?php\n").expect("write PHP inventory");
-        fs::write(workspace.path().join("composer.json"), "not-json\n")
-            .expect("write PHP config inventory");
+        fs::write(workspace.path().join("phpunit.xml"), "not-xml\n")
+            .expect("write deferred PHPUnit config inventory");
         fs::write(workspace.path().join("Stable.java"), "class Stable {}\n")
             .expect("write unrelated Java source");
         let state = workspace.path().join(".repogrammar");
@@ -8541,7 +10505,7 @@ mod tests {
         let php_config = active
             .files
             .iter()
-            .find(|file| file.path == "composer.json")
+            .find(|file| file.path == "phpunit.xml")
             .expect("PHP config metadata");
         let connection =
             Connection::open(state.join("repogrammar.sqlite")).expect("open repository database");
@@ -8587,7 +10551,7 @@ mod tests {
             .execute(
                 "INSERT INTO code_units \
                  (generation_id, code_unit_id, path, language, kind, start_byte, end_byte, content_hash) \
-                 VALUES (?1, 'unit:composer.json#module:0-1:legacy', 'composer.json', \
+                 VALUES (?1, 'unit:phpunit.xml#module:0-1:legacy', 'phpunit.xml', \
                          'php-config', 'module', 0, 1, ?2)",
                 params![active.generation_id, php_config.content_hash.as_str()],
             )
@@ -8597,7 +10561,7 @@ mod tests {
                 "INSERT INTO evidence \
                  (generation_id, evidence_id, code_unit_id, path, content_hash, start_byte, end_byte, note) \
                  VALUES (?1, 'evidence:legacy-php-config', \
-                         'unit:composer.json#module:0-1:legacy', 'composer.json', ?2, 0, 1, \
+                         'unit:phpunit.xml#module:0-1:legacy', 'phpunit.xml', ?2, 0, 1, \
                          'legacy tampered PHP config evidence')",
                 params![active.generation_id, php_config.content_hash.as_str()],
             )
@@ -8608,7 +10572,7 @@ mod tests {
                  (generation_id, fact_id, kind, subject, target, certainty, origin_engine, \
                   origin_engine_version, origin_method, assumptions_json, evidence_id) \
                  VALUES (?1, 'semantic-fact:legacy-php-config', 'PROJECT_CONFIG', \
-                         'unit:composer.json#module:0-1:legacy', \
+                         'unit:phpunit.xml#module:0-1:legacy', \
                          'php.composer.project_scope', 'STRUCTURAL', 'legacy-php-config', '0', \
                          'tampered', '[]', 'evidence:legacy-php-config')",
                 params![active.generation_id],
@@ -8669,25 +10633,28 @@ mod tests {
         assert!(active_after_purge
             .files
             .iter()
-            .any(|file| file.path == "composer.json" && file.language == "php-config"));
+            .any(|file| file.path == "phpunit.xml" && file.language == "php-config"));
+        // ADR-0047 admits `main.php`, so its records copy forward like any
+        // unchanged admitted path; only the still-inventory `phpunit.xml`
+        // claims are purged as legacy.
         assert!(!store
             .list_active_code_units()
             .expect("read units after purge")
             .units
             .iter()
-            .any(|unit| matches!(unit.path.as_str(), "main.php" | "composer.json")));
+            .any(|unit| unit.path.as_str() == "phpunit.xml"));
         assert!(!store
             .list_active_ir_graph()
             .expect("read IR after purge")
             .nodes
             .iter()
-            .any(|node| node.code_unit_id == "unit:main.php#module:0-1:legacy"));
+            .any(|node| node.code_unit_id == "unit:phpunit.xml#module:0-1:legacy"));
         assert!(!store
             .list_active_semantic_facts()
             .expect("read facts after purge")
             .facts
             .iter()
-            .any(|fact| matches!(fact.path.as_str(), "main.php" | "composer.json")));
+            .any(|fact| fact.path.as_str() == "phpunit.xml"));
         assert!(!store
             .list_active_families()
             .expect("read families after purge")
@@ -8700,10 +10667,8 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM evidence \
                  WHERE generation_id = ?1 \
-                   AND (path IN ('main.php', 'composer.json') \
-                        OR evidence_id IN ('evidence:legacy-php', \
-                                           'evidence:legacy-php-config', \
-                                           'evidence:legacy-php-family'))",
+                   AND (path = 'phpunit.xml' \
+                        OR evidence_id IN ('evidence:legacy-php-config'))",
                 params![active_after_purge.generation_id],
                 |row| row.get(0),
             )
@@ -8712,11 +10677,11 @@ mod tests {
         assert!(source_store
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.php" | "composer.json")));
+            .all(|path| path.as_str() != "phpunit.xml"));
         assert!(parser
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.php" | "composer.json")));
+            .all(|path| path.as_str() != "phpunit.xml"));
     }
 
     #[test]
@@ -8898,27 +10863,27 @@ mod tests {
             .files
             .iter()
             .any(|file| file.path == "Package.swift" && file.language == "swift-config"));
+        // ADR-0048 admits `main.swift`, so its records copy forward like any
+        // unchanged admitted path; only the still-inventory `Package.swift`
+        // claims are purged as legacy.
         assert!(!store
             .list_active_code_units()
             .expect("read units after purge")
             .units
             .iter()
-            .any(|unit| matches!(unit.path.as_str(), "main.swift" | "Package.swift")));
+            .any(|unit| unit.path.as_str() == "Package.swift"));
         assert!(!store
             .list_active_ir_graph()
             .expect("read IR after purge")
             .nodes
             .iter()
-            .any(|node| matches!(
-                node.code_unit_id.as_str(),
-                "unit:main.swift#module:0-1:legacy" | "unit:Package.swift#module:0-1:legacy"
-            )));
+            .any(|node| node.code_unit_id.as_str() == "unit:Package.swift#module:0-1:legacy"));
         assert!(!store
             .list_active_semantic_facts()
             .expect("read facts after purge")
             .facts
             .iter()
-            .any(|fact| matches!(fact.path.as_str(), "main.swift" | "Package.swift")));
+            .any(|fact| fact.path.as_str() == "Package.swift"));
         assert!(!store
             .list_active_families()
             .expect("read families after purge")
@@ -8931,10 +10896,8 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM evidence \
                  WHERE generation_id = ?1 \
-                   AND (path IN ('main.swift', 'Package.swift') \
-                        OR evidence_id IN ('evidence:legacy-swift', \
-                                           'evidence:legacy-swift-config', \
-                                           'evidence:legacy-swift-family'))",
+                   AND (path = 'Package.swift' \
+                        OR evidence_id IN ('evidence:legacy-swift-config'))",
                 params![active_after_purge.generation_id],
                 |row| row.get(0),
             )
@@ -8943,11 +10906,11 @@ mod tests {
         assert!(source_store
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.swift" | "Package.swift")));
+            .all(|path| path.as_str() != "Package.swift"));
         assert!(parser
             .paths()
             .iter()
-            .all(|path| !matches!(path.as_str(), "main.swift" | "Package.swift")));
+            .all(|path| path.as_str() != "Package.swift"));
     }
 
     fn indexed_language_path_is_go(path: &str) -> bool {
@@ -9230,6 +11193,64 @@ mod tests {
                     assumptions: Vec::new(),
                 }],
                 diagnostics: Vec::new(),
+            })
+        }
+    }
+
+    struct ParserResolvedDependencyParser;
+
+    impl SourceParser for ParserResolvedDependencyParser {
+        fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+            let unit = parser_unit(
+                &document,
+                "unit:a.ts#module:0-all",
+                document.path,
+                document.content_hash.clone(),
+                0,
+                document.text.len(),
+            );
+            let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+            Ok(ParseReport {
+                units: vec![unit],
+                ir_nodes: vec![ir_node],
+                ir_edges: Vec::new(),
+                semantic_facts: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+
+        fn parse_with_context_output(
+            &self,
+            document: SourceDocument<'_>,
+            _context: &ParserProjectContext,
+        ) -> Result<SourceParseOutput, ParseError> {
+            let report = self.parse(document)?;
+            let unit = &report.units[0];
+            let dependency = DependencyRecord::new(
+                crate::core::model::PackageIdentity::new(DependencyEcosystem::Npm, "express")
+                    .map_err(ParseError::Internal)?,
+                None,
+                Some(
+                    crate::core::model::DependencyVersion::new("4.21.2")
+                        .map_err(ParseError::Internal)?,
+                ),
+                crate::core::model::DependencyScope::Runtime,
+                false,
+                DependencyDirectness::Direct,
+                crate::core::model::DependencyEvidenceLevel::ProviderResolved,
+                Evidence::new(
+                    unit.id.clone(),
+                    unit.range.clone(),
+                    unit.provenance.clone(),
+                    "parser must not claim provider resolution",
+                )
+                .map_err(ParseError::Internal)?,
+            )
+            .map_err(ParseError::Internal)?;
+            Ok(SourceParseOutput {
+                report,
+                python_interface_hash: None,
+                dependencies: vec![dependency],
             })
         }
     }
@@ -10611,10 +12632,11 @@ mod tests {
                 .expect("derive exact adapter support");
 
             assert_eq!(derived.len(), 3, "{role} should derive support");
-            assert!(derived.iter().all(|fact| fact
-                .assumptions
-                .iter()
-                .any(|assumption| assumption == &format!("derived_from={derived_from}"))));
+            assert!(derived.iter().all(|fact| {
+                fact.assumptions
+                    .iter()
+                    .any(|assumption| assumption == &format!("derived_from={derived_from}"))
+            }));
             let mut family_facts = role_facts;
             family_facts.extend(derived);
             let report = build_family_claims(&units, &family_facts);
@@ -11849,6 +13871,1414 @@ mod tests {
     }
 
     #[test]
+    fn package_json_dependencies_are_persisted_without_family_claims() {
+        let workspace = TempWorkspace::new("indexing-npm-dependencies");
+        fs::write(
+            workspace.path().join("package.json"),
+            r#"{"dependencies":{"express":"^4"},"devDependencies":{"vitest":"^3"}}"#,
+        )
+        .expect("write package manifest");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index package dependencies");
+
+        assert_eq!(outcome.active_generation.as_deref(), Some("gen-000001"));
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read npm dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.ecosystem.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                        dependency.scope.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("npm", "express", Some("^4"), "runtime"),
+                ("npm", "vitest", Some("^3"), "development"),
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &SyntaxCodeUnitParser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("incremental sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.modified_files, 1);
+        assert_eq!(sync_report.unchanged_files, 1);
+        assert_eq!(sync_report.reparsed_files, 1);
+
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied npm dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["express", "vitest"]
+        );
+    }
+
+    #[test]
+    fn static_setup_py_dependencies_persist_and_copy_forward_without_execution() {
+        let workspace = TempWorkspace::new("indexing-pypi-dependencies");
+        fs::write(
+            workspace.path().join("setup.py"),
+            "from setuptools import setup\n\
+             setup(install_requires=['Requests>=2'])\n\
+             raise RuntimeError('must never execute setup.py')\n",
+        )
+        .expect("write static setup.py");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index static setup.py dependency");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read PyPI dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.ecosystem.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![("pypi", "requests", Some(">=2"))]
+        );
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        assert_eq!(
+            synced.sync_report.expect("sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied PyPI dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "requests");
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+    }
+
+    #[test]
+    fn cpp_manifest_dependencies_persist_and_copy_forward_without_execution() {
+        let workspace = TempWorkspace::new("indexing-cpp-dependencies");
+        fs::write(
+            workspace.path().join("vcpkg.json"),
+            r#"{"dependencies":[{"name":"boost-test","version>=":"1.87.0"}]}"#,
+        )
+        .expect("write vcpkg manifest");
+        fs::write(
+            workspace.path().join("conanfile.txt"),
+            "[requires]\nfmt/10.1.1\n",
+        )
+        .expect("write Conan manifest");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded C/C++ manifest dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read C/C++ dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.ecosystem.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                        dependency.scope.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("conan", "fmt", Some("10.1.1"), "unknown"),
+                ("vcpkg", "boost-test", Some(">=1.87.0"), "unknown"),
+            ]
+        );
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.reparsed_files, 1);
+
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied C/C++ dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+    }
+
+    #[test]
+    fn maven_dependencies_persist_copy_forward_replace_and_remove_incrementally() {
+        let workspace = TempWorkspace::new("indexing-maven-dependencies");
+        fs::create_dir_all(workspace.path().join("module")).expect("create Maven module");
+        fs::write(
+            workspace.path().join("pom.xml"),
+            "<project><dependencies><dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.12.1</version><scope>test</scope></dependency></dependencies></project>",
+        )
+        .expect("write root POM");
+        fs::write(
+            workspace.path().join("module/pom.xml"),
+            "<project><dependencies><dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>33.4.8-jre</version></dependency></dependencies></project>",
+        )
+        .expect("write nested POM");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write unrelated TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index Maven dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Maven dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.path.as_str(),
+                        dependency.package_name.as_str(),
+                        dependency.requirement.as_deref(),
+                        dependency.scope.as_str(),
+                    )
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (
+                    "module/pom.xml",
+                    "com.google.guava:guava",
+                    Some("33.4.8-jre"),
+                    "runtime",
+                ),
+                (
+                    "pom.xml",
+                    "org.junit.jupiter:junit-jupiter",
+                    Some("5.12.1"),
+                    "test",
+                ),
+            ])
+        );
+        assert!(dependencies.dependencies.iter().all(|dependency| {
+            dependency.ecosystem == "maven"
+                && dependency.directness == "direct"
+                && dependency.evidence_level == "manifest_declared"
+                && dependency.resolved_version.is_none()
+                && dependency.start_byte < dependency.end_byte
+                && !dependency.note.contains("<dependency>")
+        }));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let unrelated = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("copy Maven dependency records through unrelated edit");
+        assert_eq!(
+            unrelated.sync_report.expect("sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Maven dependencies")
+                .dependencies
+                .len(),
+            2
+        );
+
+        fs::write(
+            workspace.path().join("module/pom.xml"),
+            "<project><dependencies><dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.19.2</version></dependency></dependencies></project>",
+        )
+        .expect("replace nested Maven dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace nested Maven dependency incrementally");
+        assert_eq!(
+            replaced.sync_report.expect("replace sync report").sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        let packages = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Maven inventory")
+            .dependencies
+            .into_iter()
+            .map(|dependency| dependency.package_name)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            packages,
+            BTreeSet::from([
+                "com.fasterxml.jackson.core:jackson-databind".to_string(),
+                "org.junit.jupiter:junit-jupiter".to_string(),
+            ])
+        );
+
+        fs::remove_file(workspace.path().join("pom.xml")).expect("remove root POM");
+        sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove root Maven dependency incrementally");
+        let remaining = crate::application::storage::list_active_dependencies(&store)
+            .expect("read remaining Maven inventory")
+            .dependencies;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].package_name,
+            "com.fasterxml.jackson.core:jackson-databind"
+        );
+    }
+
+    #[test]
+    fn matlab_dependencies_and_assembly_unknowns_persist_without_family_support() {
+        let workspace = TempWorkspace::new("indexing-matlab-assembly-inventory");
+        fs::create_dir_all(workspace.path().join("resources"))
+            .expect("create MATLAB package resources");
+        let package = |dependency_name: &str, dependency_id: &str, requirement: &str| {
+            format!(
+                r#"{{"name":"DemoPkg","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0","dependencies":[{{"name":"{dependency_name}","compatibleVersions":"{requirement}","id":"{dependency_id}"}}],"provider":{{"email":"secret@example.invalid"}}}}"#
+            )
+        };
+        fs::write(
+            workspace.path().join("resources/mpackage.json"),
+            package(
+                "CornersPkg",
+                "e6c4123e-0068-42be-aef2-00d49d1509f5",
+                ">1.0.0",
+            ),
+        )
+        .expect("write MATLAB package definition");
+        fs::write(
+            workspace.path().join("start.s"),
+            ".text\nentry:\n call helper\n.include \"secret.inc\"\n",
+        )
+        .expect("write assembly source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded MATLAB and assembly inventory");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read MATLAB dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.path, "resources/mpackage.json");
+        assert_eq!(dependency.ecosystem, "matlab_add_on");
+        assert_eq!(
+            dependency.package_name,
+            "CornersPkg@e6c4123e-0068-42be-aef2-00d49d1509f5"
+        );
+        assert_eq!(dependency.requirement.as_deref(), Some(">1.0.0"));
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.scope, "unknown");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert!(dependency.resolved_version.is_none());
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+        let unknowns = store
+            .list_active_semantic_facts()
+            .expect("list facts")
+            .facts
+            .into_iter()
+            .filter(|fact| fact.kind == "UNKNOWN")
+            .collect::<Vec<_>>();
+        assert!(unknowns.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|value| value == "assembly_unknown_kind=unproven_target_profile")
+        }));
+        let debug = format!("{unknowns:?}");
+        assert!(!debug.contains("secret.inc"));
+        assert!(!debug.contains("secret@example.invalid"));
+
+        fs::write(
+            workspace.path().join("resources/mpackage.json"),
+            package(
+                "MathPkg",
+                "ec63e40a-8625-46d7-aae9-31a6a6c699e2",
+                ">=3.1.0 <4.0.0",
+            ),
+        )
+        .expect("replace MATLAB dependency");
+        sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace MATLAB dependency incrementally");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced MATLAB dependency")
+            .dependencies;
+        assert_eq!(dependencies.len(), 1);
+        assert!(dependencies[0].package_name.starts_with("MathPkg@"));
+
+        fs::remove_file(workspace.path().join("resources/mpackage.json"))
+            .expect("remove MATLAB package definition");
+        sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove MATLAB dependency incrementally");
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read removed MATLAB dependency inventory")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn go_module_dependencies_persist_copy_forward_and_replace_incrementally() {
+        let workspace = TempWorkspace::new("indexing-go-module-dependencies");
+        fs::create_dir_all(workspace.path().join("nested")).expect("create nested module");
+        fs::write(
+            workspace.path().join("go.mod"),
+            "module example.test/root\n\
+             require example.test/root-direct v1.2.3\n\
+             require example.test/shared v1.0.0 // indirect\n",
+        )
+        .expect("write root go.mod");
+        fs::write(
+            workspace.path().join("nested/go.mod"),
+            "module example.test/nested\nrequire example.test/nested-only v1.0.0\n",
+        )
+        .expect("write nested go.mod");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write unrelated TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index root and nested go.mod dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Go module dependency inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| (
+                    dependency.path.as_str(),
+                    dependency.package_name.as_str(),
+                    dependency.requirement.as_deref(),
+                    dependency.directness.as_str(),
+                    dependency.scope.as_str(),
+                    dependency.evidence_level.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "nested/go.mod",
+                    "example.test/nested-only",
+                    Some("v1.0.0"),
+                    "direct",
+                    "unknown",
+                    "manifest_declared",
+                ),
+                (
+                    "go.mod",
+                    "example.test/root-direct",
+                    Some("v1.2.3"),
+                    "direct",
+                    "unknown",
+                    "manifest_declared",
+                ),
+                (
+                    "go.mod",
+                    "example.test/shared",
+                    Some("v1.0.0"),
+                    "transitive",
+                    "unknown",
+                    "manifest_declared",
+                ),
+            ]
+        );
+        assert!(dependencies.dependencies.iter().all(|dependency| {
+            dependency.ecosystem == "go_modules"
+                && dependency.resolved_version.is_none()
+                && !dependency.optional
+                && dependency.start_byte < dependency.end_byte
+                && dependency.note == "bounded go.mod require declaration"
+        }));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let unrelated = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("copy Go module dependencies through unrelated edit");
+        let unrelated_report = unrelated.sync_report.expect("unrelated sync report");
+        assert_eq!(unrelated_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(unrelated_report.reparsed_files, 1);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Go dependencies")
+                .dependencies
+                .len(),
+            3
+        );
+
+        fs::write(
+            workspace.path().join("nested/go.mod"),
+            "module example.test/nested\nrequire example.test/replacement v1.1.0\n",
+        )
+        .expect("replace nested manifest dependency");
+        let manifest_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace nested Go dependency");
+        let manifest_report = manifest_edit.sync_report.expect("manifest sync report");
+        assert_eq!(manifest_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(manifest_report.modified_files, 1);
+        assert_eq!(manifest_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Go dependencies");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "example.test/replacement",
+                "example.test/root-direct",
+                "example.test/shared",
+            ]
+        );
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+
+        fs::remove_file(workspace.path().join("nested/go.mod")).expect("remove nested Go manifest");
+        let nested_removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove nested Go dependencies");
+        let nested_removed_report = nested_removed.sync_report.expect("nested removal report");
+        assert_eq!(
+            nested_removed_report.sync_mode,
+            IndexingSyncMode::Incremental
+        );
+        assert_eq!(nested_removed_report.removed_files, 1);
+        assert_eq!(nested_removed_report.reparsed_files, 0);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read Go dependencies after nested removal")
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["example.test/root-direct", "example.test/shared"]
+        );
+
+        fs::remove_file(workspace.path().join("go.mod")).expect("remove root Go manifest");
+        let root_removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove root Go dependencies");
+        let root_removed_report = root_removed.sync_report.expect("root removal report");
+        assert_eq!(root_removed_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(root_removed_report.removed_files, 1);
+        assert_eq!(root_removed_report.reparsed_files, 0);
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read Go dependencies after root removal")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn swift_lock_dependencies_persist_with_unknown_directness_and_copy_forward() {
+        let workspace = TempWorkspace::new("indexing-swift-lock-dependencies");
+        fs::write(
+            workspace.path().join("Package.resolved"),
+            r#"{"pins":[{"identity":"swift-argument-parser","kind":"remoteSourceControl","location":"https://example.invalid/private","state":{"revision":"abc","version":"1.5.0"}}],"version":3}"#,
+        )
+        .expect("write SwiftPM lockfile");
+        fs::write(
+            workspace.path().join("Package.swift"),
+            "fatalError(\"must not execute\")\n",
+        )
+        .expect("write executable SwiftPM manifest");
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 1;\n",
+        )
+        .expect("write TypeScript source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded SwiftPM lockfile dependencies");
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read SwiftPM dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "swift_package_manager");
+        assert_eq!(dependency.package_name, "swift-argument-parser");
+        assert_eq!(dependency.resolved_version.as_deref(), Some("1.5.0"));
+        assert_eq!(dependency.directness, "unknown");
+        assert_eq!(dependency.evidence_level, "lockfile_resolved");
+        assert!(!format!("{dependency:?}").contains("example.invalid"));
+
+        fs::write(
+            workspace.path().join("app.ts"),
+            "export const current = 2;\n",
+        )
+        .expect("edit unrelated TypeScript source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated TypeScript edit");
+        let sync_report = synced.sync_report.expect("sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied SwiftPM dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+
+        fs::write(
+            workspace.path().join("Package.resolved"),
+            r#"{"pins":[{"identity":"swift-log","state":{"revision":"def","version":"1.6.2"}}],"version":3}"#,
+        )
+        .expect("replace SwiftPM lockfile pin");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace SwiftPM lockfile dependencies");
+        let replace_report = replaced.sync_report.expect("replace sync report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced SwiftPM dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "swift-log");
+        assert_eq!(
+            dependencies.dependencies[0].resolved_version.as_deref(),
+            Some("1.6.2")
+        );
+
+        fs::remove_file(workspace.path().join("Package.resolved"))
+            .expect("remove SwiftPM lockfile");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove SwiftPM lockfile dependencies");
+        let remove_report = removed.sync_report.expect("remove sync report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependency inventory after lock removal")
+                .dependencies
+                .is_empty()
+        );
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+    }
+
+    #[test]
+    fn gemfile_lock_dependencies_persist_and_copy_forward_without_execution_or_source_leakage() {
+        let workspace = TempWorkspace::new("indexing-rubygems-dependencies");
+        fs::write(
+            workspace.path().join("Gemfile.lock"),
+            concat!(
+                "GIT\n",
+                "  remote: https://user:secret@example.invalid/private.git\n",
+                "  revision: deadbeef\n",
+                "  specs:\n",
+                "    private (1.0.0)\n",
+                "GEM\n",
+                "  remote: https://rubygems.org/\n",
+                "  specs:\n",
+                "    rack (3.1.8)\n",
+                "PLATFORMS\n",
+                "  ruby\n",
+                "DEPENDENCIES\n",
+                "  private!\n",
+                "  rack (~> 3.1)\n",
+                "BUNDLED WITH\n",
+                "   2.6.2\n",
+            ),
+        )
+        .expect("write Gemfile.lock");
+        fs::write(
+            workspace.path().join("Gemfile"),
+            "raise 'secret executable config must not be read'\n",
+        )
+        .expect("write deferred executable Gemfile");
+        fs::write(workspace.path().join("main.rb"), [0xff, 0xfe, 0xfd])
+            .expect("write deferred binary Ruby source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded Gemfile.lock dependency inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(source_store.paths(), vec!["Gemfile.lock".to_string()]);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read RubyGems dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "rubygems");
+        assert_eq!(dependency.package_name, "rack");
+        assert_eq!(dependency.requirement.as_deref(), Some("~> 3.1"));
+        assert_eq!(dependency.resolved_version, None);
+        assert_eq!(dependency.scope, "unknown");
+        assert!(!dependency.optional);
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        let dependency_debug = format!("{dependencies:?}");
+        assert!(!dependency_debug.contains("secret"));
+        assert!(!dependency_debug.contains("private"));
+        assert!(!dependency_debug.contains("example.invalid"));
+        let public_debug = format!("{outcome:?}");
+        assert!(!public_debug.contains("secret"));
+        assert!(!public_debug.contains("private"));
+        assert!(!public_debug.contains("rack"));
+        assert!(store
+            .list_active_families()
+            .expect("list families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("main.rb"), [0xff, 0xfe, 0xfc])
+            .expect("edit unrelated deferred Ruby source");
+        let synced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally sync unrelated deferred Ruby edit");
+        let sync_report = synced.sync_report.expect("sync report");
+        assert_eq!(sync_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(sync_report.reparsed_files, 0);
+        assert_eq!(source_store.paths(), vec!["Gemfile.lock".to_string()]);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read copied RubyGems dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "rack");
+
+        fs::write(
+            workspace.path().join("Gemfile.lock"),
+            "DEPENDENCIES\n  rake (>= 13)\n",
+        )
+        .expect("replace Gemfile.lock dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally replace RubyGems dependency inventory");
+        let replace_report = replaced.sync_report.expect("replace sync report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec!["Gemfile.lock".to_string(), "Gemfile.lock".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced RubyGems dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "rake");
+        assert_eq!(
+            dependencies.dependencies[0].requirement.as_deref(),
+            Some(">= 13")
+        );
+
+        fs::remove_file(workspace.path().join("Gemfile.lock")).expect("remove Gemfile.lock");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("incrementally remove RubyGems dependency inventory");
+        let remove_report = removed.sync_report.expect("remove sync report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert_eq!(
+            source_store.paths(),
+            vec!["Gemfile.lock".to_string(), "Gemfile.lock".to_string()]
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependency inventory after lock removal")
+                .dependencies
+                .is_empty()
+        );
+        assert!(store
+            .list_active_families()
+            .expect("list families after lock removal")
+            .families
+            .is_empty());
+    }
+
+    #[test]
+    fn vbproj_dependencies_persist_incrementally_while_undecodable_vb_source_is_skipped() {
+        let workspace = TempWorkspace::new("indexing-vbproj-dependencies");
+        fs::write(
+            workspace.path().join("App.vbproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="[13.0.3]"/></ItemGroup></Project>"#,
+        )
+        .expect("write vbproj");
+        fs::write(workspace.path().join("Program.vb"), [0xff, 0xfe, 0xfd])
+            .expect("write deferred binary VB source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded vbproj dependency inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        // ADR-0043 admits `.vb` source to the bounded MSTest scanner, so this
+        // file is now read instead of deferred. Its bytes are not UTF-8, so it
+        // is skipped with a warning and contributes no unit.
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec!["App.vbproj".to_string(), "Program.vb".to_string()]
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["parser skipped non-UTF-8 source: Program.vb".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read NuGet dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "nuget");
+        assert_eq!(dependency.package_name, "Newtonsoft.Json");
+        assert_eq!(dependency.requirement.as_deref(), Some("[13.0.3]"));
+        assert_eq!(dependency.resolved_version, None);
+        assert_eq!(dependency.scope, "unknown");
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert!(store
+            .list_active_families()
+            .expect("list VB families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("Program.vb"), [0xff, 0xfe, 0xfc])
+            .expect("edit deferred VB source");
+        let source_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync VB source metadata edit");
+        let source_report = source_edit.sync_report.expect("VB source sync report");
+        assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(source_report.modified_files, 1);
+        assert_eq!(source_report.reparsed_files, 0);
+        // The edited `.vb` is read again and skipped again, so it is recorded
+        // twice overall and still reparses nothing.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "App.vbproj".to_string(),
+                "Program.vb".to_string(),
+                "Program.vb".to_string()
+            ]
+        );
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied NuGet dependency")
+                .dependencies[0]
+                .package_name,
+            "Newtonsoft.Json"
+        );
+
+        fs::write(
+            workspace.path().join("App.vbproj"),
+            r#"<Project><ItemGroup><PackageReference Include="xunit"><Version>2.9.3</Version></PackageReference></ItemGroup></Project>"#,
+        )
+        .expect("replace vbproj dependency");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace NuGet dependency inventory");
+        let replace_report = replaced.sync_report.expect("vbproj replacement report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced NuGet dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].package_name, "xunit");
+
+        fs::remove_file(workspace.path().join("App.vbproj")).expect("remove vbproj");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove NuGet dependency inventory");
+        let remove_report = removed.sync_report.expect("vbproj removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            // `.vb` is admitted, but this one does not decode, so the generation
+            // holds no unit and says so. Every path answers this from the recorded
+            // unit count, so `index` and a later query cannot disagree.
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after vbproj removal")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn csproj_dependencies_persist_incrementally_while_undecodable_cs_source_is_skipped() {
+        let workspace = TempWorkspace::new("indexing-csproj-dependencies");
+        fs::write(
+            workspace.path().join("App.csproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="[13.0.3]"/></ItemGroup></Project>"#,
+        )
+        .expect("write csproj");
+        fs::write(workspace.path().join("Program.cs"), [0xff, 0xfe, 0xfd])
+            .expect("write undecodable C# source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded csproj dependency inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        // The undecodable `.cs` is skipped with a warning and contributes no
+        // unit, so the generation holds exactly the csproj project-config
+        // unit.
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        assert_eq!(
+            source_store.paths(),
+            vec!["App.csproj".to_string(), "Program.cs".to_string()]
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["parser skipped non-UTF-8 source: Program.cs".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read NuGet dependency inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "nuget");
+        assert_eq!(dependency.package_name, "Newtonsoft.Json");
+        assert_eq!(dependency.requirement.as_deref(), Some("[13.0.3]"));
+        assert_eq!(dependency.resolved_version, None);
+        assert_eq!(dependency.scope, "unknown");
+        assert_eq!(dependency.directness, "direct");
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert!(store
+            .list_active_families()
+            .expect("list C# families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("Program.cs"), [0xff, 0xfe, 0xfc])
+            .expect("edit undecodable C# source");
+        let source_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync C# source metadata edit");
+        let source_report = source_edit.sync_report.expect("C# source sync report");
+        assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(source_report.modified_files, 1);
+        assert_eq!(source_report.reparsed_files, 0);
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied NuGet dependency")
+                .dependencies[0]
+                .package_name,
+            "Newtonsoft.Json"
+        );
+
+        fs::remove_file(workspace.path().join("App.csproj")).expect("remove csproj");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove NuGet dependency inventory");
+        let remove_report = removed.sync_report.expect("csproj removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            // The `.cs` stays undecodable, so the generation holds no unit and
+            // every path answers the generation mode from that unit count.
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after csproj removal")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dproj_runtime_packages_persist_incrementally_beside_an_undecodable_pascal_unit() {
+        let workspace = TempWorkspace::new("indexing-dproj-dependencies");
+        fs::write(
+            workspace.path().join("App.dproj"),
+            r#"<Project><PropertyGroup><DCC_UsePackage>rtl;vcl</DCC_UsePackage></PropertyGroup></Project>"#,
+        )
+        .expect("write dproj");
+        fs::write(workspace.path().join("Unit1.pas"), [0xff, 0xfe, 0xfd])
+            .expect("write deferred binary Object Pascal source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let parser = RepoGrammarSourceParser::default();
+        let source_store = RecordingSourceStore::new();
+        let request = || IndexingRequest::new(workspace.path().display().to_string());
+
+        let outcome = index_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("index bounded dproj package inventory");
+        assert_eq!(
+            outcome.indexing_mode,
+            IndexingGenerationMode::SyntaxOnlyCodeUnits
+        );
+        assert_eq!(outcome.parser_attempted_files, 1);
+        assert_eq!(outcome.indexed_units, 1);
+        // ADR-0044 admits `.pas`, so the unit is now read; these bytes are not
+        // UTF-8, so it is read and then skipped rather than never read.
+        assert_eq!(
+            source_store.paths(),
+            vec!["App.dproj".to_string(), "Unit1.pas".to_string()]
+        );
+        assert_eq!(
+            outcome.warnings,
+            vec!["parser skipped non-UTF-8 source: Unit1.pas".to_string()]
+        );
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read Delphi package inventory");
+        assert_eq!(dependencies.dependencies.len(), 2);
+        assert!(dependencies.dependencies.iter().all(|dependency| {
+            dependency.ecosystem == "delphi_package"
+                && dependency.scope == "runtime"
+                && dependency.directness == "unknown"
+                && dependency.evidence_level == "manifest_declared"
+                && dependency.requirement.is_none()
+                && dependency.resolved_version.is_none()
+        }));
+        assert!(store
+            .list_active_families()
+            .expect("list Delphi families")
+            .families
+            .is_empty());
+
+        fs::write(workspace.path().join("Unit1.pas"), [0xff, 0xfe, 0xfc])
+            .expect("edit deferred Object Pascal source");
+        let source_edit = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("sync Object Pascal source metadata edit");
+        let source_report = source_edit
+            .sync_report
+            .expect("Object Pascal source sync report");
+        assert_eq!(source_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(source_report.modified_files, 1);
+        assert_eq!(source_report.reparsed_files, 0);
+        // The edited unit is read again and skipped again: it still decodes to
+        // nothing, so no unit is reparsed.
+        assert_eq!(
+            source_store.paths(),
+            vec![
+                "App.dproj".to_string(),
+                "Unit1.pas".to_string(),
+                "Unit1.pas".to_string()
+            ]
+        );
+        assert_eq!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read copied Delphi package inventory")
+                .dependencies
+                .len(),
+            2
+        );
+
+        fs::write(
+            workspace.path().join("App.dproj"),
+            r#"<Project><PropertyGroup><DCC_UsePackage>rtl;Example.Runtime</DCC_UsePackage></PropertyGroup></Project>"#,
+        )
+        .expect("replace dproj packages");
+        let replaced = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("replace Delphi package inventory");
+        let replace_report = replaced.sync_report.expect("dproj replacement report");
+        assert_eq!(replace_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(replace_report.modified_files, 1);
+        assert_eq!(replace_report.reparsed_files, 1);
+        let dependencies = crate::application::storage::list_active_dependencies(&store)
+            .expect("read replaced Delphi package inventory");
+        assert_eq!(
+            dependencies
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.package_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Example.Runtime", "rtl"]
+        );
+
+        fs::remove_file(workspace.path().join("App.dproj")).expect("remove dproj");
+        let removed = sync_repository_with_discovery_parser_frameworks_and_store(
+            request(),
+            &FilesystemFileDiscovery,
+            &source_store,
+            &parser,
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("remove Delphi package inventory");
+        let remove_report = removed.sync_report.expect("dproj removal report");
+        assert_eq!(remove_report.sync_mode, IndexingSyncMode::Incremental);
+        assert_eq!(remove_report.removed_files, 1);
+        assert_eq!(remove_report.reparsed_files, 0);
+        assert_eq!(
+            // `.pas` is admitted, but this one does not decode, so the generation
+            // holds no unit and says so. Every path answers this from the recorded
+            // unit count, so `index` and a later query cannot disagree.
+            removed.indexing_mode,
+            IndexingGenerationMode::FileManifestOnly
+        );
+        assert!(
+            crate::application::storage::list_active_dependencies(&store)
+                .expect("read dependencies after dproj removal")
+                .dependencies
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn parser_semantic_facts_cannot_claim_semantic_certainty() {
         let workspace = TempWorkspace::new("indexing-parser-semantic-fact");
         fs::write(
@@ -11873,6 +15303,32 @@ mod tests {
             error
                 .to_string()
                 .contains("parser semantic facts must stay structural or unknown"),
+            "unexpected error: {error}"
+        );
+        assert!(!state.join("current-generation").exists());
+    }
+
+    #[test]
+    fn parser_dependencies_cannot_claim_provider_resolution() {
+        let workspace = TempWorkspace::new("indexing-parser-resolved-dependency");
+        fs::write(workspace.path().join("a.ts"), "export const a = 1;\n").expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let error = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &ParserResolvedDependencyParser,
+            &store,
+        )
+        .expect_err("parser-origin provider resolution must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("parser dependency records cannot claim provider resolution"),
             "unexpected error: {error}"
         );
         assert!(!state.join("current-generation").exists());
@@ -14154,8 +17610,7 @@ mod tests {
         fs::create_dir_all(workspace.path().join("app/users")).expect("create next dirs");
         let source = "import service from '@app/service';\nexport * from './barrel';\n";
         let repository = "import { prisma } from './db';\nprisma.user.findMany();\n";
-        let drizzle_repository =
-            "import { db } from './drizzle-db';\nimport { users } from './schema';\ndb.select().from(users);\n";
+        let drizzle_repository = "import { db } from './drizzle-db';\nimport { users } from './schema';\ndb.select().from(users);\n";
         let target = "export const service = true;\n";
         let barrel = "export const value = true;\n";
         let db = "export const prisma = {};\n";
@@ -15145,6 +18600,197 @@ extraPaths = ["src/lib", "C:/secret"]
     }
 
     #[test]
+    fn error_diagnostics_mark_the_file_parse_degraded_without_exposing_frontend_text() {
+        // Only an error diagnostic means the returned unit set is incomplete. A
+        // degraded file has to stay distinguishable from a cleanly parsed one that
+        // simply has no match, or family analysis silently reads absence as
+        // evidence of absence.
+        struct DegradedDiagnosticParser;
+
+        impl SourceParser for DegradedDiagnosticParser {
+            fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                let unit = parser_unit(
+                    &document,
+                    "unit:src/a.ts#module:0-1",
+                    document.path,
+                    document.content_hash.clone(),
+                    0,
+                    1,
+                );
+                let ir_node = IrNode::from_code_unit(&unit).map_err(ParseError::Internal)?;
+                let diagnostic = |severity, ordinal: usize| ParseDiagnostic {
+                    path: "/tmp/absolute/source.ts".to_string(),
+                    range: None,
+                    severity,
+                    message: format!("UNIQUE_SOURCE_SENTINEL_DO_NOT_LEAK {ordinal}"),
+                };
+                Ok(ParseReport {
+                    units: vec![unit],
+                    ir_nodes: vec![ir_node],
+                    ir_edges: Vec::new(),
+                    semantic_facts: Vec::new(),
+                    diagnostics: vec![
+                        diagnostic(ParseDiagnosticSeverity::Error, 0),
+                        diagnostic(ParseDiagnosticSeverity::Error, 1),
+                        diagnostic(ParseDiagnosticSeverity::Warning, 2),
+                    ],
+                })
+            }
+        }
+
+        let workspace = TempWorkspace::new("indexing-degraded-diagnostic");
+        fs::write(workspace.path().join("a.ts"), "x").expect("write source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &DegradedDiagnosticParser,
+            &store,
+        )
+        .expect("index with degraded diagnostic");
+
+        let degraded: Vec<&String> = outcome
+            .warnings
+            .iter()
+            .filter(|warning| warning.starts_with("parse degraded for a.ts"))
+            .collect();
+        assert_eq!(
+            degraded.len(),
+            1,
+            "repeated error diagnostics collapse to one file-level token: {:?}",
+            outcome.warnings
+        );
+        assert!(degraded[0].contains("not evidence that a construct is absent"));
+        // A recoverable diagnostic keeps the weaker token, so the two never merge.
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("parse diagnostic for a.ts")));
+        // The interpreter boundary explains Python degradation only; a degraded
+        // TypeScript file must not drag it in.
+        assert!(!outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("python frontend syntax boundary")));
+        for warning in &outcome.warnings {
+            assert!(!warning.contains("UNIQUE_SOURCE_SENTINEL"));
+            assert!(!warning.contains("/tmp/absolute"));
+            assert!(!warning.contains(workspace.path().to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn python_syntax_errors_reach_indexing_as_a_parse_degraded_warning() {
+        // CPython is the only frontend that reports an error diagnostic, and it
+        // returns no code units at all for an unparseable module. That is exactly
+        // the case that must not read as a clean parse with nothing to report, so
+        // assert the real frontend reaches the degraded token end to end rather
+        // than trusting the synthetic-parser test alone.
+        let workspace = TempWorkspace::new("indexing-python-parse-degraded");
+        fs::write(workspace.path().join("broken.py"), "def broken(:\n")
+            .expect("write broken python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &PythonAstParser::default(),
+            &store,
+        )
+        .expect("index broken python");
+
+        assert_eq!(
+            outcome.indexed_units, 0,
+            "an unparseable module yields no units, which is why the token matters"
+        );
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.starts_with("parse degraded for broken.py")),
+            "warnings={:?}",
+            outcome.warnings
+        );
+        // A degraded Python file is only actionable once the run says which
+        // interpreter bounded it: on an older host, modern syntax degrades here
+        // and nowhere else explains why. The probe reads `sys.version_info`, so
+        // the boundary names a Python language version, never an implementation.
+        assert!(
+            outcome.warnings.iter().any(|warning| warning.starts_with(
+                "python frontend syntax boundary: the host Python interpreter implements Python"
+            )),
+            "warnings={:?}",
+            outcome.warnings
+        );
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("CPython")),
+            "the syntax boundary must not assert an interpreter implementation: {:?}",
+            outcome.warnings
+        );
+        for warning in &outcome.warnings {
+            assert!(!warning.contains(workspace.path().to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn modern_python_syntax_degrades_on_an_older_host_interpreter() {
+        // This is the case the boundary warning exists for: the file is valid
+        // Python, but the host interpreter predates the grammar. Assert the pair
+        // that must always travel together — a degraded file plus the version
+        // that explains it — without hardcoding a host version, so the test still
+        // holds on a newer interpreter that parses this source cleanly.
+        let workspace = TempWorkspace::new("indexing-python-modern-syntax");
+        fs::write(
+            workspace.path().join("modern.py"),
+            "match command:\n    case 1:\n        pass\n",
+        )
+        .expect("write modern python source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+
+        let outcome = index_repository_with_discovery_parser_and_store(
+            IndexingRequest::new(workspace.path().display().to_string()),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &PythonAstParser::default(),
+            &store,
+        )
+        .expect("index modern python");
+
+        let degraded = outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("parse degraded for modern.py"));
+        let boundary = outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("python frontend syntax boundary"));
+        assert_eq!(
+            degraded, boundary,
+            "a degraded Python file and its interpreter boundary must be reported together: {:?}",
+            outcome.warnings
+        );
+        if !degraded {
+            assert!(
+                outcome.indexed_units > 0,
+                "a host that parses this syntax must produce units: {:?}",
+                outcome.warnings
+            );
+        }
+    }
+
+    #[test]
     fn source_read_failure_preserves_previous_active_generation() {
         struct FailingSourceStore;
 
@@ -15195,9 +18841,11 @@ extraPaths = ["src/lib", "C:/secret"]
         impl SourceParser for BadUnitParser {
             fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
                 let (path, hash, end_byte) = match self.0 {
-                    BadUnitMode::DifferentPath => {
-                        ("src/other.ts", document.content_hash.clone(), document.text.len())
-                    }
+                    BadUnitMode::DifferentPath => (
+                        "src/other.ts",
+                        document.content_hash.clone(),
+                        document.text.len(),
+                    ),
                     BadUnitMode::MismatchedHash => (
                         document.path,
                         strict_hash(
@@ -15205,9 +18853,11 @@ extraPaths = ["src/lib", "C:/secret"]
                         ),
                         document.text.len(),
                     ),
-                    BadUnitMode::OutOfBoundsRange => {
-                        (document.path, document.content_hash.clone(), document.text.len() + 1)
-                    }
+                    BadUnitMode::OutOfBoundsRange => (
+                        document.path,
+                        document.content_hash.clone(),
+                        document.text.len() + 1,
+                    ),
                 };
                 Ok(ParseReport {
                     units: vec![parser_unit(
@@ -15685,7 +19335,7 @@ extraPaths = ["src/lib", "C:/secret"]
                     active_generation: Some(self.active_generation.borrow().clone()),
                     schema_version: Some(STORAGE_SCHEMA_VERSION),
                     code_unit_count: Some(0),
-                    dependency_record_count: Some(0),
+                    derived_record_dependency_count: Some(0),
                     dirty_record_count: Some(0),
                     journal_mode: Some("wal".to_string()),
                     foreign_keys_enabled: Some(true),

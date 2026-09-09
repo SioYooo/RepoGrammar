@@ -39,3 +39,26 @@ Current accepted ADRs:
 - ADR-0027: Init starts repository auto-sync by default.
 - ADR-0028: Ownership-aware product uninstall and agent disconnect.
 - ADR-0029: Additive candidate-set resolution cardinality.
+- ADR-0030: Language-neutral dependency inventory and reviewed library semantics.
+- ADR-0031: VB.NET source-free discovery and NuGet inventory.
+- ADR-0032: Delphi-qualified Object Pascal discovery and package inventory.
+- ADR-0033: Ada source-free discovery and Alire inventory.
+- ADR-0034: Fortran source-form discovery and fpm inventory.
+- ADR-0035: SQL source-free artifact inventory and dialect abstention.
+- ADR-0036: R static package metadata inventory.
+- ADR-0037: MATLAB R2024b+ package inventory preflight.
+- ADR-0038: Bounded GNU-as x86-64 ELF AT&T assembly substrate.
+- ADR-0039: Scratch 3 `.sb3` archive integration NO-GO.
+- ADR-0040: Dialect-invariant bounded SQL DDL frontend.
+- ADR-0041: Bounded Go test-declaration frontend.
+- ADR-0042: Bounded R testthat frontend.
+- ADR-0043: Bounded VB.NET MSTest frontend.
+- ADR-0044: Bounded Delphi DUnitX frontend.
+- ADR-0045: Bounded Ada AUnit frontend.
+- ADR-0046: Bounded MATLAB `matlab.unittest` frontend.
+- ADR-0047: Bounded PHP PHPUnit frontend.
+- ADR-0048: Bounded Swift XCTest frontend.
+- ADR-0049: Bounded Ruby Minitest frontend.
+- ADR-0050: Bounded Go testing frontend.
+- ADR-0051: Bounded Fortran test-drive frontend.
+- ADR-0052: Readiness-scope admission for bounded-frontend lanes (Proposed).

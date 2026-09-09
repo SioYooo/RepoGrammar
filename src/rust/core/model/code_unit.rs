@@ -2,7 +2,13 @@
 
 use super::provenance::Provenance;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Identity of one analyzable source unit.
+///
+/// The ordering is the identifier's byte order and exists so callers can key
+/// ordered collections by code unit. It is a deterministic collation key only:
+/// two ids comparing adjacent says nothing about the units being related,
+/// nested, or near each other in a file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeUnitId(String);
 
 impl CodeUnitId {
@@ -47,6 +53,10 @@ pub enum Language {
     PythonConfig,
     TsJsConfig,
     Java,
+    JavaConfig,
+    Matlab,
+    MatlabConfig,
+    Assembly,
     CSharp,
     C,
     Cpp,
@@ -59,6 +69,17 @@ pub enum Language {
     RubyConfig,
     Swift,
     SwiftConfig,
+    VisualBasic,
+    VisualBasicConfig,
+    ObjectPascal,
+    DelphiConfig,
+    Ada,
+    AdaConfig,
+    Fortran,
+    FortranConfig,
+    Sql,
+    R,
+    RConfig,
     Rust,
     RustConfig,
     Unknown(String),
@@ -73,6 +94,10 @@ impl Language {
             Self::PythonConfig => "python-config",
             Self::TsJsConfig => "tsjs-config",
             Self::Java => "java",
+            Self::JavaConfig => "java-config",
+            Self::Matlab => "matlab",
+            Self::MatlabConfig => "matlab-config",
+            Self::Assembly => "assembly",
             Self::CSharp => "csharp",
             Self::C => "c",
             Self::Cpp => "cpp",
@@ -85,6 +110,17 @@ impl Language {
             Self::RubyConfig => "ruby-config",
             Self::Swift => "swift",
             Self::SwiftConfig => "swift-config",
+            Self::VisualBasic => "visual-basic",
+            Self::VisualBasicConfig => "visual-basic-config",
+            Self::ObjectPascal => "object-pascal",
+            Self::DelphiConfig => "delphi-config",
+            Self::Ada => "ada",
+            Self::AdaConfig => "ada-config",
+            Self::Fortran => "fortran",
+            Self::FortranConfig => "fortran-config",
+            Self::Sql => "sql",
+            Self::R => "r",
+            Self::RConfig => "r-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
             Self::Unknown(value) => value.as_str(),
@@ -127,6 +163,7 @@ pub enum CodeUnitKind {
     PytestTest,
     PytestFixture,
     PydanticModel,
+    MarshmallowSchema,
     SqlAlchemyModel,
     SqlAlchemyRepositoryMethod,
     DjangoModel,
@@ -146,6 +183,7 @@ pub enum CodeUnitKind {
     AspNetMinimalApiRoute,
     EfCoreDbContext,
     EfCoreEntitySet,
+    FluentValidationValidator,
     XunitTestMethod,
     NunitTestMethod,
     MstestTestMethod,
@@ -155,6 +193,7 @@ pub enum CodeUnitKind {
     DoctestTestCase,
     BoostTestCase,
     BoostTestSuite,
+    CppUnitSuiteRegistration,
     QtObjectClass,
     Junit5TestMethod,
     Junit4TestMethod,
@@ -164,6 +203,24 @@ pub enum CodeUnitKind {
     JpaEmbeddable,
     JaxrsResourceClass,
     JaxrsResourceMethod,
+    ServletHttpServlet,
+    GoFunction,
+    GoTestFunction,
+    RTestThatBlock,
+    VbTestClass,
+    VbTestMethod,
+    DelphiTestFixture,
+    DelphiTestProcedure,
+    AdaTestRegistration,
+    MatlabTestClass,
+    MatlabTestMethod,
+    RubyMinitestTestClass,
+    RubyMinitestTestMethod,
+    PhpTestClass,
+    PhpTestMethod,
+    SwiftTestClass,
+    SwiftTestMethod,
+    FortranTestDriveSubroutine,
     RustModule,
     RustInlineModule,
     RustExternalModule,
@@ -184,6 +241,9 @@ pub enum CodeUnitKind {
     TokioTest,
     ClapParser,
     AxumRoute,
+    TracingInstrument,
+    SqlStatement,
+    SqlTableDefinition,
     ProjectConfig,
     Unknown,
 }
@@ -224,6 +284,7 @@ impl CodeUnitKind {
             Self::PytestTest => "pytest_test",
             Self::PytestFixture => "pytest_fixture",
             Self::PydanticModel => "pydantic_model",
+            Self::MarshmallowSchema => "marshmallow_schema",
             Self::SqlAlchemyModel => "sqlalchemy_model",
             Self::SqlAlchemyRepositoryMethod => "sqlalchemy_repository_method",
             Self::DjangoModel => "django_model",
@@ -243,6 +304,7 @@ impl CodeUnitKind {
             Self::AspNetMinimalApiRoute => "aspnet_minimal_api_route",
             Self::EfCoreDbContext => "efcore_db_context",
             Self::EfCoreEntitySet => "efcore_entity_set",
+            Self::FluentValidationValidator => "fluentvalidation_validator",
             Self::XunitTestMethod => "xunit_test_method",
             Self::NunitTestMethod => "nunit_test_method",
             Self::MstestTestMethod => "mstest_test_method",
@@ -252,6 +314,7 @@ impl CodeUnitKind {
             Self::DoctestTestCase => "doctest_test_case",
             Self::BoostTestCase => "boost_test_case",
             Self::BoostTestSuite => "boost_test_suite",
+            Self::CppUnitSuiteRegistration => "cppunit_suite_registration",
             Self::QtObjectClass => "qt_object_class",
             Self::Junit5TestMethod => "junit5_test_method",
             Self::Junit4TestMethod => "junit4_test_method",
@@ -261,6 +324,24 @@ impl CodeUnitKind {
             Self::JpaEmbeddable => "jpa_embeddable",
             Self::JaxrsResourceClass => "jaxrs_resource_class",
             Self::JaxrsResourceMethod => "jaxrs_resource_method",
+            Self::ServletHttpServlet => "servlet_http_servlet",
+            Self::GoFunction => "go_function",
+            Self::GoTestFunction => "go_test_function",
+            Self::RTestThatBlock => "r_test_that_block",
+            Self::VbTestClass => "vb_test_class",
+            Self::VbTestMethod => "vb_test_method",
+            Self::DelphiTestFixture => "delphi_test_fixture",
+            Self::DelphiTestProcedure => "delphi_test_procedure",
+            Self::AdaTestRegistration => "ada_test_registration",
+            Self::MatlabTestClass => "matlab_test_class",
+            Self::MatlabTestMethod => "matlab_test_method",
+            Self::RubyMinitestTestClass => "ruby_minitest_test_class",
+            Self::RubyMinitestTestMethod => "ruby_minitest_test_method",
+            Self::PhpTestClass => "php_test_class",
+            Self::PhpTestMethod => "php_test_method",
+            Self::SwiftTestClass => "swift_test_class",
+            Self::SwiftTestMethod => "swift_test_method",
+            Self::FortranTestDriveSubroutine => "fortran_test_drive_subroutine",
             Self::RustModule => "rust_module",
             Self::RustInlineModule => "rust_inline_module",
             Self::RustExternalModule => "rust_external_module",
@@ -281,6 +362,9 @@ impl CodeUnitKind {
             Self::TokioTest => "tokio_test",
             Self::ClapParser => "clap_parser",
             Self::AxumRoute => "axum_route",
+            Self::TracingInstrument => "tracing_instrument",
+            Self::SqlStatement => "sql_statement",
+            Self::SqlTableDefinition => "sql_table_definition",
             Self::ProjectConfig => "project_config",
             Self::Unknown => "unknown",
         }
@@ -304,6 +388,22 @@ mod tests {
     #[test]
     fn rejects_empty_code_unit_ids() {
         assert!(CodeUnitId::new("   ").is_err());
+    }
+
+    #[test]
+    fn code_unit_ids_order_by_identifier_bytes() {
+        let mut ids = [
+            CodeUnitId::new("unit:src/b.py:0").expect("id"),
+            CodeUnitId::new("unit:src/a.py:10").expect("id"),
+            CodeUnitId::new("unit:src/a.py:2").expect("id"),
+        ];
+        ids.sort();
+
+        assert_eq!(
+            ids.iter().map(CodeUnitId::as_str).collect::<Vec<_>>(),
+            ["unit:src/a.py:10", "unit:src/a.py:2", "unit:src/b.py:0"],
+            "ordering is byte collation of the id, not source position"
+        );
     }
 
     #[test]
@@ -343,9 +443,20 @@ mod tests {
         assert_eq!(Language::PhpConfig.as_str(), "php-config");
         assert_eq!(Language::Ruby.as_str(), "ruby");
         assert_eq!(Language::RubyConfig.as_str(), "ruby-config");
+        assert_eq!(Language::Sql.as_str(), "sql");
+        assert_eq!(Language::R.as_str(), "r");
+        assert_eq!(Language::RConfig.as_str(), "r-config");
         assert_eq!(Language::Swift.as_str(), "swift");
         assert_eq!(Language::SwiftConfig.as_str(), "swift-config");
+        assert_eq!(Language::VisualBasic.as_str(), "visual-basic");
+        assert_eq!(Language::VisualBasicConfig.as_str(), "visual-basic-config");
+        assert_eq!(Language::ObjectPascal.as_str(), "object-pascal");
+        assert_eq!(Language::DelphiConfig.as_str(), "delphi-config");
         assert_eq!(Language::Java.as_str(), "java");
+        assert_eq!(Language::JavaConfig.as_str(), "java-config");
+        assert_eq!(Language::Matlab.as_str(), "matlab");
+        assert_eq!(Language::MatlabConfig.as_str(), "matlab-config");
+        assert_eq!(Language::Assembly.as_str(), "assembly");
         assert_eq!(CodeUnitKind::SpringMvcRoute.as_str(), "spring_mvc_route");
         assert_eq!(CodeUnitKind::SpringComponent.as_str(), "spring_component");
         assert_eq!(

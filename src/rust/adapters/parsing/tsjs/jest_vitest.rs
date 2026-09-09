@@ -4,7 +4,13 @@ use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 use crate::ports::parser::SourceDocument;
 use std::collections::BTreeSet;
 
-pub(super) const RUNNER_MODULES: [&str; 4] = ["vitest", "@jest/globals", "mocha", "node:test"];
+pub(super) const RUNNER_MODULES: [&str; 5] = [
+    "vitest",
+    "@jest/globals",
+    "mocha",
+    "node:test",
+    "@playwright/test",
+];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TestRunnerCallNames {
@@ -143,6 +149,18 @@ fn runner_kind_and_target(module: &str, original: &str, is_suite: bool) -> (&'st
                 "node_test.describe"
             } else {
                 "node_test.test"
+            }
+            .to_string(),
+        ),
+        // Playwright exports `test` but no bare `describe`: its suites are
+        // written `test.describe(...)`, a member call this detector does not
+        // anchor. Only the test case is claimed here.
+        "@playwright/test" => (
+            "playwright",
+            if is_suite {
+                "playwright.describe"
+            } else {
+                "playwright.test"
             }
             .to_string(),
         ),

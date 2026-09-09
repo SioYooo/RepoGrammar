@@ -5,8 +5,10 @@
 //! executes build scripts or procedural macros.
 
 use crate::core::model::{
-    CodeUnitId, Evidence, FactCertainty, FactOrigin, Provenance, RepositoryRevision, SemanticFact,
-    SemanticFactKind, SourceRange, SymbolId, TypedUnknown, UnknownClass, UnknownReasonCode,
+    CodeUnitId, DependencyEcosystem, DependencyEvidenceLevel, DependencyRecord, DependencyScope,
+    DependencyVersion, Evidence, FactCertainty, FactOrigin, PackageIdentity, Provenance,
+    RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId, TypedUnknown,
+    UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use crate::ports::rust_provider::RustProviderError;
@@ -242,6 +244,7 @@ pub fn parse_cargo_metadata_output(
         .map(|candidate| (candidate.path.as_str(), candidate))
         .collect::<BTreeMap<_, _>>();
     let mut facts = Vec::new();
+    let mut dependencies = Vec::new();
     let mut unknowns = Vec::new();
     if let Some(root_candidate) = request.candidates.first() {
         facts.push(cargo_project_fact(
@@ -307,14 +310,17 @@ pub fn parse_cargo_metadata_output(
             &provenance,
             &package_token,
         )?);
-        facts.extend(dependency_facts(
-            package,
-            candidate,
-            &provenance,
-            &package_token,
-        )?);
+        let (dependency_facts, dependency_records) =
+            dependency_facts(package, candidate, &provenance, &package_token)?;
+        facts.extend(dependency_facts);
+        dependencies.extend(dependency_records);
     }
-    Ok(RustProviderOutput::facts(provenance, facts, unknowns))
+    Ok(RustProviderOutput::with_dependencies(
+        provenance,
+        facts,
+        dependencies,
+        unknowns,
+    ))
 }
 
 fn validate_request_shape(request: &RustProviderRequest) -> Result<(), CargoMetadataProviderError> {
@@ -420,11 +426,12 @@ fn dependency_facts(
     candidate: &RustProviderCandidate,
     provenance: &RustProviderProvenance,
     package_token: &str,
-) -> Result<Vec<SemanticFact>, CargoMetadataProviderError> {
+) -> Result<(Vec<SemanticFact>, Vec<DependencyRecord>), CargoMetadataProviderError> {
     let Some(dependencies) = package.get("dependencies").and_then(Value::as_array) else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let mut facts = Vec::new();
+    let mut records = Vec::new();
     for dependency in dependencies {
         let dependency = dependency.as_object().ok_or_else(|| {
             CargoMetadataProviderError::ProtocolViolation(
@@ -442,23 +449,89 @@ fn dependency_facts(
             .get("optional")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let requirement = dependency
+            .get("req")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(DependencyVersion::new)
+            .transpose()
+            .map_err(CargoMetadataProviderError::ProtocolViolation)?;
+        // Cargo emits one entry per declaration, so the same crate appears once
+        // per `[target.'cfg(...)'.dependencies]` table and once per alias. Those
+        // entries are identical in every other field, so dropping `target` and
+        // `rename` here would make two distinct declarations indistinguishable.
+        let platform_target = dependency
+            .get("target")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        let alias = dependency
+            .get("rename")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        let mut assumptions = vec![
+            "cargo_fact=dependency".to_string(),
+            format!("package_token={package_token}"),
+            format!("dependency_name={}", sanitize_metadata(name)),
+            format!("dependency_kind={}", stable_token(kind)),
+            format!("optional={optional}"),
+            "cargo_metadata_no_deps=true".to_string(),
+        ];
+        if let Some(platform_target) = platform_target {
+            // The predicate is recorded verbatim and is never evaluated: this
+            // stage resolves no target, so whether it holds stays unknown.
+            assumptions.push(format!(
+                "dependency_platform_target={}",
+                sanitize_metadata(platform_target)
+            ));
+        }
+        if let Some(alias) = alias {
+            assumptions.push(format!("dependency_alias={}", sanitize_metadata(alias)));
+        }
+        let discriminators = cargo_dependency_discriminators(platform_target, alias);
         facts.push(cargo_project_fact(
             candidate,
             provenance,
-            &format!("dependency:{package_token}:{dependency_token}"),
-            &format!("cargo.dependency.{package_token}.{dependency_token}"),
+            &format!(
+                "dependency:{package_token}:{dependency_token}{}",
+                join_discriminators(&discriminators, ':')
+            ),
+            &format!(
+                "cargo.dependency.{package_token}.{dependency_token}{}",
+                join_discriminators(&discriminators, '.')
+            ),
             "Cargo metadata dependency scope",
-            [
-                "cargo_fact=dependency".to_string(),
-                format!("package_token={package_token}"),
-                format!("dependency_name={}", sanitize_metadata(name)),
-                format!("dependency_kind={}", stable_token(kind)),
-                format!("optional={optional}"),
-                "cargo_metadata_no_deps=true".to_string(),
-            ],
+            assumptions,
         )?);
+        let mut record = DependencyRecord::new(
+            PackageIdentity::new(DependencyEcosystem::Cargo, name)
+                .map_err(CargoMetadataProviderError::ProtocolViolation)?,
+            requirement,
+            None,
+            match kind {
+                "normal" => DependencyScope::Runtime,
+                "dev" => DependencyScope::Development,
+                "build" => DependencyScope::Build,
+                _ => DependencyScope::Unknown,
+            },
+            optional,
+            crate::core::model::DependencyDirectness::Direct,
+            DependencyEvidenceLevel::ManifestDeclared,
+            candidate_evidence(candidate, "Cargo metadata dependency declaration")?,
+        )
+        .map_err(CargoMetadataProviderError::ProtocolViolation)?;
+        if let Some(platform_target) = platform_target {
+            record = record
+                .with_platform_target(platform_target)
+                .map_err(CargoMetadataProviderError::ProtocolViolation)?;
+        }
+        if let Some(alias) = alias {
+            record = record
+                .with_alias(alias)
+                .map_err(CargoMetadataProviderError::ProtocolViolation)?;
+        }
+        records.push(record);
     }
-    Ok(facts)
+    Ok((facts, records))
 }
 
 fn cargo_project_fact(
@@ -484,23 +557,59 @@ fn cargo_project_fact(
             method: CARGO_METADATA_METHOD.to_string(),
         },
         certainty: FactCertainty::Semantic,
-        evidence: Evidence::new(
-            CodeUnitId::new(candidate.code_unit_id.as_str())
-                .map_err(CargoMetadataProviderError::InvalidRequest)?,
-            SourceRange::new(candidate.range.start_byte, candidate.range.end_byte)
-                .map_err(CargoMetadataProviderError::InvalidRequest)?,
-            Provenance::new(
-                &candidate.path,
-                candidate.content_hash.clone(),
-                RepositoryRevision::new(UNKNOWN_REVISION)
-                    .map_err(CargoMetadataProviderError::InvalidRequest)?,
-            )
-            .map_err(CargoMetadataProviderError::InvalidRequest)?,
-            note,
-        )
-        .map_err(CargoMetadataProviderError::InvalidRequest)?,
+        evidence: candidate_evidence(candidate, note)?,
         assumptions,
     })
+}
+
+/// The stable tokens that distinguish declarations of one package inside one
+/// manifest.
+///
+/// The package/dependency pair alone is not unique: a crate declared under two
+/// `cfg(...)` target tables, or bound to two aliases, yields several
+/// declarations that share it. Callers append these tokens using their own
+/// separator, so an undiscriminated declaration keeps exactly the subject and
+/// target it had before selectors were modelled.
+fn cargo_dependency_discriminators(
+    platform_target: Option<&str>,
+    alias: Option<&str>,
+) -> Vec<String> {
+    let mut discriminators = Vec::new();
+    if let Some(platform_target) = platform_target {
+        discriminators.push(format!("target_{}", stable_token(platform_target)));
+    }
+    if let Some(alias) = alias {
+        discriminators.push(format!("alias_{}", stable_token(alias)));
+    }
+    discriminators
+}
+
+fn join_discriminators(discriminators: &[String], separator: char) -> String {
+    discriminators
+        .iter()
+        .map(|discriminator| format!("{separator}{discriminator}"))
+        .collect()
+}
+
+fn candidate_evidence(
+    candidate: &RustProviderCandidate,
+    note: &str,
+) -> Result<Evidence, CargoMetadataProviderError> {
+    Evidence::new(
+        CodeUnitId::new(candidate.code_unit_id.as_str())
+            .map_err(CargoMetadataProviderError::InvalidRequest)?,
+        SourceRange::new(candidate.range.start_byte, candidate.range.end_byte)
+            .map_err(CargoMetadataProviderError::InvalidRequest)?,
+        Provenance::new(
+            &candidate.path,
+            candidate.content_hash.clone(),
+            RepositoryRevision::new(UNKNOWN_REVISION)
+                .map_err(CargoMetadataProviderError::InvalidRequest)?,
+        )
+        .map_err(CargoMetadataProviderError::InvalidRequest)?,
+        note,
+    )
+    .map_err(CargoMetadataProviderError::InvalidRequest)
 }
 
 fn project_model_unknown(
@@ -510,6 +619,7 @@ fn project_model_unknown(
 ) -> RustProviderOutput {
     RustProviderOutput {
         facts: Vec::new(),
+        dependencies: Vec::new(),
         unknowns: vec![TypedUnknown::new(
             UnknownClass::Recoverable,
             reason,
@@ -664,14 +774,14 @@ mod tests {
       "manifest_path": "{root_manifest}",
       "targets": [{{"name": "root_crate", "kind": ["lib"]}}],
       "features": {{"default": ["serde"], "cli": []}},
-      "dependencies": [{{"name": "serde", "kind": null, "optional": false}}]
+      "dependencies": [{{"name": "serde", "req": "^1", "kind": null, "optional": false}}]
     }},
     {{
       "name": "member-crate",
       "manifest_path": "{member_manifest}",
       "targets": [{{"name": "member_bin", "kind": ["bin"]}}],
       "features": {{"default": []}},
-      "dependencies": [{{"name": "anyhow", "kind": "dev", "optional": true}}]
+      "dependencies": [{{"name": "anyhow", "req": "1", "kind": "dev", "optional": true}}]
     }}
   ],
   "workspace_members": ["root-crate 0.1.0", "member-crate 0.1.0"],
@@ -680,6 +790,83 @@ mod tests {
   "version": 1
 }}"#
         )
+    }
+
+    /// Real `cargo metadata --no-deps` output for a manifest that declares one
+    /// crate under two `cfg(...)` targets and one aliased crate. Every field
+    /// this provider reads is identical across the two `libc` entries; only
+    /// `target` distinguishes them.
+    fn target_scoped_metadata(root_manifest: &str) -> String {
+        format!(
+            r#"{{
+  "packages": [
+    {{
+      "name": "root-crate",
+      "manifest_path": "{root_manifest}",
+      "targets": [{{"name": "root_crate", "kind": ["lib"]}}],
+      "features": {{"default": []}},
+      "dependencies": [
+        {{"name": "libc", "req": "^0.2", "kind": null, "optional": false, "target": "cfg(unix)"}},
+        {{"name": "libc", "req": "^0.2", "kind": null, "optional": false, "target": "cfg(windows)"}},
+        {{"name": "serde", "req": "^1", "kind": null, "optional": false, "rename": "codec"}}
+      ]
+    }}
+  ],
+  "workspace_members": ["root-crate 0.1.0"],
+  "resolve": null,
+  "target_directory": "target",
+  "version": 1
+}}"#
+        )
+    }
+
+    #[test]
+    fn target_scoped_and_renamed_cargo_dependencies_stay_distinct_declarations() {
+        let output = parse_cargo_metadata_output(
+            &target_scoped_metadata("Cargo.toml"),
+            Path::new("E:/repo"),
+            request(vec![candidate("Cargo.toml", 0)]),
+            "1.88.0",
+        )
+        .expect("cargo metadata output should parse");
+
+        let libc = output
+            .dependencies
+            .iter()
+            .filter(|record| record.package.name == "libc")
+            .collect::<Vec<_>>();
+        assert_eq!(libc.len(), 2, "both cfg-scoped declarations must survive");
+        let mut predicates = libc
+            .iter()
+            .map(|record| record.platform_target.as_deref().expect("cfg predicate"))
+            .collect::<Vec<_>>();
+        predicates.sort_unstable();
+        assert_eq!(predicates, vec!["cfg(unix)", "cfg(windows)"]);
+        // The predicate is recorded, never evaluated: neither row may claim to
+        // be the resolved, active one.
+        assert!(libc.iter().all(|record| !record.optional));
+
+        let renamed = output
+            .dependencies
+            .iter()
+            .find(|record| record.package.name == "serde")
+            .expect("renamed declaration");
+        assert_eq!(renamed.alias.as_deref(), Some("codec"));
+        assert_eq!(renamed.platform_target, None);
+
+        // Distinct declarations must also keep distinct fact subjects, or the
+        // fact write collides the same way the dependency row would.
+        let dependency_subjects = output
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.assumptions
+                    .iter()
+                    .any(|assumption| assumption == "cargo_fact=dependency")
+            })
+            .map(|fact| fact.subject.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(dependency_subjects.len(), 3);
     }
 
     #[test]
@@ -697,6 +884,27 @@ mod tests {
 
         assert!(output.provenance.is_some());
         assert!(output.unknowns.is_empty());
+        assert_eq!(output.dependencies.len(), 2);
+        assert_eq!(
+            output.dependencies[0].package.ecosystem,
+            DependencyEcosystem::Cargo
+        );
+        assert_eq!(output.dependencies[0].package.name, "serde");
+        assert_eq!(
+            output.dependencies[0]
+                .requirement
+                .as_ref()
+                .map(DependencyVersion::as_str),
+            Some("^1")
+        );
+        assert_eq!(output.dependencies[0].scope, DependencyScope::Runtime);
+        assert_eq!(
+            output.dependencies[0].evidence_level,
+            DependencyEvidenceLevel::ManifestDeclared
+        );
+        assert_eq!(output.dependencies[1].package.name, "anyhow");
+        assert_eq!(output.dependencies[1].scope, DependencyScope::Development);
+        assert!(output.dependencies[1].optional);
         let targets = output
             .facts
             .iter()

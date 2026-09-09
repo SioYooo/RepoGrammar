@@ -11,8 +11,8 @@ use crate::ports::family_store::{
     WriteSessionStats,
 };
 use crate::ports::index_store::{
-    GenerationHandle, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
-    IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
+    GenerationHandle, IndexStoreError, IndexedCodeUnitRecord, IndexedDependencyRecord,
+    IndexedFileRecord, IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord,
 };
 use std::cell::RefCell;
 use std::fs;
@@ -105,6 +105,14 @@ impl GenerationWriteSession for FakeWriteSession {
     fn record_semantic_fact(
         &mut self,
         _fact: &IndexedSemanticFactRecord,
+    ) -> Result<(), IndexStoreError> {
+        self.note();
+        Ok(())
+    }
+
+    fn record_dependency(
+        &mut self,
+        _dependency: &IndexedDependencyRecord,
     ) -> Result<(), IndexStoreError> {
         self.note();
         Ok(())

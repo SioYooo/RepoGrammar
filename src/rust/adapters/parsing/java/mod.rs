@@ -26,6 +26,8 @@ use tree_sitter::{Node, Parser};
 pub(crate) mod jaxrs;
 pub(crate) mod jpa;
 pub(crate) mod junit;
+pub(crate) mod maven;
+pub(crate) mod servlet;
 pub(crate) mod spring;
 pub(crate) mod test_data;
 
@@ -220,6 +222,10 @@ impl<'a> JavaTreeScanner<'a> {
         let jaxrs_anchor = (spring_anchor.is_none() && jpa_anchor.is_none())
             .then(|| jaxrs::resource_class_anchor(&annotations, &self.imports))
             .flatten();
+        let servlet_anchor =
+            (spring_anchor.is_none() && jpa_anchor.is_none() && jaxrs_anchor.is_none())
+                .then(|| servlet::servlet_class_anchor(&annotations, &self.imports))
+                .flatten();
 
         let kind = if let Some(anchor) = spring_anchor.as_ref() {
             match anchor.anchor_kind {
@@ -230,6 +236,8 @@ impl<'a> JavaTreeScanner<'a> {
             anchor.kind.clone()
         } else if jaxrs_anchor.is_some() {
             CodeUnitKind::JaxrsResourceClass
+        } else if let Some(anchor) = servlet_anchor.as_ref() {
+            anchor.kind.clone()
         } else {
             CodeUnitKind::Class
         };
@@ -328,6 +336,22 @@ impl<'a> JavaTreeScanner<'a> {
                 jaxrs::resource_class_assumptions(anchor, &annotations, slice, &self.imports),
                 "bounded Java JAX-RS resource path annotation anchor",
             )?);
+        } else if let Some(anchor) = servlet_anchor.as_ref() {
+            self.semantic_facts.push(structural_anchor_fact(
+                &self.document,
+                &unit,
+                SemanticFactKind::Type,
+                anchor.target,
+                servlet::servlet_class_assumptions(anchor, &annotations, slice),
+                "bounded Java Servlet annotation anchor",
+            )?);
+            self.push_unknown(
+                &unit,
+                UnknownReasonCode::FrameworkMagic,
+                "java_servlet_container_mapping",
+                "servlet_container_mapping",
+                "Servlet URL mapping, web.xml overrides, filter chains, and load-on-startup are container behavior",
+            )?;
         } else if spring::contains_spring_known_annotation_name(&annotations) {
             self.push_unknown(
                 &unit,
@@ -335,6 +359,14 @@ impl<'a> JavaTreeScanner<'a> {
                 "java_spring_annotation_binding",
                 "spring_class_annotation_unresolved_import",
                 "Spring class annotation simple name lacks an exact import or FQN",
+            )?;
+        } else if servlet::contains_known_servlet_annotation_name(&annotations) {
+            self.push_unknown(
+                &unit,
+                UnknownReasonCode::UnresolvedImport,
+                "java_servlet_annotation_binding",
+                "servlet_class_annotation_unresolved_import",
+                "Servlet class annotation simple name lacks an exact import or FQN",
             )?;
         } else if jpa::contains_known_entity_annotation_name(&annotations) {
             self.push_unknown(

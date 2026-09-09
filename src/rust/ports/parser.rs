@@ -2,7 +2,8 @@
 //! RepoGrammar types before returning.
 
 use crate::core::model::{
-    CodeUnit, ContentHash, IrEdge, IrNode, Language, RepositoryRevision, SemanticFact, SourceRange,
+    CodeUnit, ContentHash, DependencyRecord, IrEdge, IrNode, Language, RepositoryRevision,
+    SemanticFact, SourceRange,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,10 @@ pub struct ParserProjectContext {
     pub tsjs_root_dirs: Vec<String>,
     pub tsjs_package_dependencies: Vec<String>,
     pub tsjs_has_test_runner_context: bool,
+    /// The repository's `DESCRIPTION` declares `testthat`. ADR-0042 makes this
+    /// a precondition for any R test anchor, so a change to `DESCRIPTION` must
+    /// force a full rebuild rather than a file-local reparse.
+    pub r_declares_testthat: bool,
     pub rust_module_paths: Vec<String>,
     pub rust_cargo_files: Vec<ParserProjectFileContext>,
 }
@@ -51,13 +56,15 @@ pub struct ParseReport {
 }
 
 /// Parser output that carries indexing-only metadata alongside the normalized
-/// report. Most frontends return no Python interface hash; the Python frontend
-/// supplies the exact hash already computed by its `parse_document` request so
-/// indexing can persist it without launching a second worker process.
+/// report. Most frontends return no Python interface hash or dependency rows;
+/// the Python frontend supplies the exact interface hash already computed by
+/// its `parse_document` request, while bounded non-executing manifest frontends
+/// may supply language-neutral dependency records for persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceParseOutput {
     pub report: ParseReport,
     pub python_interface_hash: Option<String>,
+    pub dependencies: Vec<DependencyRecord>,
 }
 
 impl SourceParseOutput {
@@ -65,6 +72,7 @@ impl SourceParseOutput {
         Self {
             report,
             python_interface_hash: None,
+            dependencies: Vec::new(),
         }
     }
 }
@@ -123,7 +131,8 @@ pub trait SourceParser {
 
     /// Parse with project context and return any indexing-only metadata emitted
     /// by that same frontend request. The default preserves existing parser
-    /// behavior; only the Python frontend currently attaches metadata.
+    /// behavior; bounded manifest frontends attach only metadata validated from
+    /// supplied repository bytes.
     fn parse_with_context_output(
         &self,
         document: SourceDocument<'_>,
@@ -141,5 +150,27 @@ pub trait SourceParser {
     /// full rebuild, never to the incremental path.
     fn extract_python_interface(&self, _path: &str, _text: &str) -> PythonInterfaceProbe {
         PythonInterfaceProbe::Unverified
+    }
+
+    /// The Python language version the host interpreter implements, as
+    /// `major.minor.patch`. It bounds which Python syntax this frontend can parse
+    /// at all.
+    ///
+    /// The Python worker is a checked-in script executed by the host interpreter,
+    /// so the frontend can only parse grammar that interpreter already knows: a
+    /// host implementing Python 3.9 rejects `match`, `except*`, and PEP 695
+    /// generics as plain syntax errors. That makes the version a real analysis
+    /// boundary rather than environment trivia, and reporting it is what turns an
+    /// unexplained degraded file into an actionable one.
+    ///
+    /// This is a language version, not an implementation identity: implementations
+    /// other than CPython accept the same grammar for the version they report, so
+    /// callers must not describe it as a CPython version.
+    ///
+    /// `None` for any parser that does not analyze Python and whenever the version
+    /// cannot be established; callers must report the boundary as unknown rather
+    /// than guessing a version.
+    fn python_frontend_version(&self) -> Option<String> {
+        None
     }
 }

@@ -38,11 +38,45 @@ production-readiness claim.
   does not claim rustc-level or general Rust semantic analysis.
 - Java/Spring support is structural preview only and does not execute classpath,
   build, DI, proxy, or generated repository semantics.
-- Go is discovered-only and unsupported: `.go`, `go.mod`, and `go.work` may
-  appear in source-free file inventory, but RepoGrammar does not read them for
-  parsing or emit Go units, facts, IR, families, or readiness claims. Go-only
-  generations are file-manifest-only; incremental inventory does not imply Go
-  project-context or semantic support.
+- Go is discovered-only and unsupported. `.go` source remains source-free
+  inventory and is never read or parsed. Root/nested `go.mod` and `go.work`
+  enter a bounded non-executing project-config lane: configuration units,
+  declaration-only `go_modules` dependencies, and dependency-inventory-scoped
+  UNKNOWNs may be stored, but no module graph, resolved version, Go-source
+  semantics, framework role, family, or readiness claim is produced. Static
+  config updates are incremental; this auxiliary inventory does not imply Go
+  language support.
+- Ada is unsupported. Only default `.ads`/`.adb` source names are inventoried;
+  alternative GPR naming is unresolved, and GPR bytes are never read. Under
+  ADR-0045 a bounded frontend parses `.adb` bodies against a declared subset and
+  admits one AUnit `Register_Routine` shape; anything outside that subset --
+  generics, tasking, representation clauses, subunits, `gnatprep` input,
+  edition-selecting pragmas, edition-sensitive reserved words -- makes the whole
+  file abstain with a typed UNKNOWN, so a file with no anchor is not evidence
+  that it registers nothing. No Ada edition, GPR profile, or project model is
+  selected, and no routine is resolved. Bounded `alire.toml` declarations may
+  produce auxiliary `alire` dependency rows, while conditional/pinned/lock
+  semantics remain typed UNKNOWN. This does not imply Ada, library, or
+  readiness support.
+- Fortran is discovered-only and unsupported. Only the frozen lowercase,
+  non-preprocessed fixed/free-form suffix set is inventoried. A bounded
+  `fpm.toml` subset may produce auxiliary `fpm` dependency rows; preprocessing,
+  dotted/inline/target dependency shapes, compiler semantics, families, and
+  readiness remain unresolved.
+- SQL is discovered-only and unsupported. Exact `.sql` paths are source-free
+  generic/migration/schema/catalog inventory, not statements or dialect proof.
+  Dialect remains UNKNOWN; no SQL bytes are decoded, no database or migration
+  tool is contacted, and no code unit, semantic UNKNOWN, dependency, family,
+  provider, support, or readiness exists.
+- R is discovered-only and unsupported. Exact `.R` and `.r` source is never
+  decoded.
+  Bounded `DESCRIPTION`/`NAMESPACE` parsing cannot prove CRAN versus
+  Bioconductor, so ambiguous declarations remain typed inventory UNKNOWN and
+  produce no dependency row. Exact `renv.lock` admits only explicit CRAN or
+  Bioconductor package/version records with unknown scope/directness. Custom,
+  remote, URL, and local-path sources are omitted without retaining values.
+  No R/renv/profile/package/native/project code executes and no R family,
+  provider, support, or readiness exists.
 
 ## UNKNOWN Is Expected
 

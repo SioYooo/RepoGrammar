@@ -272,67 +272,150 @@ third-party and generated artifacts must not enter family evidence by accident.
 
 The current discovery substrate enforces these defaults for `.ts`, `.tsx`,
 `.js`, `.jsx`, `.py`, `.java`, `.cs`, `.c`/`.h`, `.cc`/`.cpp`/`.cxx`/`.hh`/
-`.hpp`/`.hxx`, `.go`, `.php`, `.rb`, and `.rs` files (C# discovery skips the MSBuild
+`.hpp`/`.hxx`, `.go`, `.php`, `.rb`, `.swift`, `.ads`/`.adb`, accepted lowercase
+Fortran, `.sql`, `.R`, `.r`, and `.rs` files (C# discovery skips the MSBuild
 `obj/` output directory and stores the `csharp` language token; C/C++ discovery
 skips the CLion `cmake-build-debug`/`cmake-build-release` directories and stores
 the `c`, `cpp`, and `cpp-config` language tokens; no schema change is required for a new
 language token). It returns repo-relative
 metadata and skip reasons, and `index`, `resync`, and `sync` store the current discovered file
 manifest in the mutable SQLite database under the next building generation id.
+Exact root/nested Maven `pom.xml` files use the distinct `java-config` token.
+Their supplied bytes may store one project-config unit/IR node, bounded
+source-free `java_dependency_inventory` UNKNOWN facts, and direct
+`manifest_declared` `maven` dependency rows. Literal versions remain
+requirements, resolved version is absent, and evidence ranges cover only the
+corresponding direct declaration inside the same config unit. The bounded
+reader does not store parent/property/profile/BOM/plugin values or source text
+and does not produce classpath, artifact, family, framework, or support rows.
+Because its output is file-local, changed POM evidence reparses incrementally,
+unchanged rows copy with their unchanged unit, and removed POMs retain no stale
+dependency row.
 Go uses the distinct `go` token for `.go` and `go-config` for root or nested
-`go.mod`/`go.work`. Those inventory-only records store only path, strict hash,
-size, and token; the indexing loop skips source reads and parsing and therefore
-stores no Go code units, IR, facts, or families. A Go-only or empty active
-generation is `file_manifest_only`; mixed generations with parser-capable
-tokens remain `syntax_only_code_units`. Parser-attempt and `reparsed_files`
-counts measure actual parser dispatches, so Go inventory contributes zero. The full rebuild path stores
+`go.mod`/`go.work`. `.go` records store only path, strict hash, size, and token;
+the indexing loop skips their source reads and parsing. `go-config` bytes enter
+the bounded static parser and may store a `project_config` unit/IR node,
+claim-scoped typed UNKNOWN facts, and `manifest_declared` `go_modules`
+dependency rows. They store no resolved version, framework role, or family.
+Go-source-only and empty active generations are `file_manifest_only`; a
+generation containing config units is `syntax_only_code_units`. Parser-attempt
+and `reparsed_files` counts include actual `go-config` dispatches but never `.go`
+inventory. The full rebuild path stores
 syntax-only `code_units` containing repo-relative path, language, kind,
 start/end byte range, and content hash only for parser-supported discovered
 files. Incremental `sync` copy-forwards those records for unchanged active
 paths and reparses added or modified paths only when the project-context gate
-passes. While `go` and `go-config` are inventory-only and absent from
-`ParserProjectContext`, their add/modify/delete deltas remain incremental and
-the copy path filters every unit, IR record, fact, derived-support input, and
-family associated with current Go inventory paths. The frontend must restore
-token-based context invalidation when it adds Go project semantics.
+passes. `.go` deltas remain inventory-only and the copy path filters every unit,
+IR record, fact, derived-support input, and family associated with those paths.
+The static `go-config` parser consumes only the current file bytes, so unchanged
+config units/facts/dependencies copy forward and added/modified configs reparse
+incrementally; removed or modified manifests cannot retain stale dependency
+rows. A future cross-file Go frontend must restore token-based context
+invalidation when it adds Go source semantics.
 
 Ruby uses `ruby` for exact `.rb` paths and `ruby-config` for the accepted
 root/nested `Gemfile`, `Gemfile.lock`, `gems.rb`, `gems.locked`,
-`.ruby-version`, and `.gemspec`-suffix paths. Those tokens follow the same
-inventory-only persistence contract: path, strict raw-byte hash, size, and token
-only, with zero source-store/parser dispatch and no unit, IR, fact, `UNKNOWN`, or
-family. Ruby-only active generations are `file_manifest_only`; mixed generations
-remain `syntax_only_code_units`. Ruby inventory deltas remain incremental while
-the tokens are absent from `ParserProjectContext`, and copy-forward filters all
-claim-bearing records for current Ruby inventory paths. The frontend must add
-its Ruby context and restore token-based invalidation before cross-file semantic
-records exist.
+`.ruby-version`, and `.gemspec`-suffix paths. Ruby source and every config
+except exact `Gemfile.lock` persist only path, strict raw-byte hash, size, and
+token, with zero source-store/parser dispatch and no claim-bearing record.
+Exact lock bytes dispatch to a bounded pure Rust parser and store one
+project-config unit plus source-free typed `UNKNOWN`s where required. The
+lock may store strict direct `rubygems` dependency rows from `DEPENDENCIES`;
+scope is unknown, resolved version is absent, directness is direct, and evidence
+is `manifest_declared`. Unsupported-source, malformed, conflict, and resource
+details are not stored in public UNKNOWN text. Exact lock changes parse
+file-locally, while unrelated incremental Ruby/config edits copy forward
+unchanged evidence-bound dependency rows. Deferred Ruby deltas remain
+inventory-only and copy-forward filters their legacy claim-bearing records. No
+Ruby source IR, family, support, or readiness record exists.
 
 PHP uses `php` for exact `.php` paths and `php-config` for exact root/nested
 `composer.json`, `composer.lock`, `phpunit.xml`, and `phpunit.xml.dist`
-basenames. Those tokens persist only path, strict raw-byte hash, size, and token,
-with zero source-store/parser dispatch and no unit, IR, fact, `UNKNOWN`, family,
-or project-model record. PHP-only active generations are `file_manifest_only`;
-mixed generations remain `syntax_only_code_units`. PHP inventory deltas remain
-incremental while the tokens are absent from `ParserProjectContext`, and copy-
-forward filters claim-bearing records for current PHP inventory paths. Exact
-`.composer`/`.phpunit.cache` exclusions are PHP-only; exact `vendor` remains
-globally excluded. A later bounded project model must add context invalidation
-and apply validated custom vendor/cache exclusions before semantic records
-exist.
+basenames. PHP source and PHPUnit XML persist only path, strict raw-byte hash,
+size, and token, with zero source-store/parser dispatch and no claim-bearing
+records. Exact `composer.json` and `composer.lock` instead produce bounded
+`PROJECT_CONFIG` units, inventory-only typed `UNKNOWN`, and schema-v14
+`composer` dependency rows. Manifest rows are direct `manifest_declared`
+runtime/development requirements; lock rows have `unknown` directness and
+`lockfile_resolved` entries and do not prove installation, runtime selection,
+or manifest coherence. PHP-only active generations with a Composer document
+are `syntax_only_code_units`; those containing only deferred PHP/PHPUnit inputs
+are `file_manifest_only`. PHP deltas remain incremental while the tokens are
+absent from `ParserProjectContext`; unchanged Composer units, UNKNOWN evidence,
+and dependency rows copy forward, while claim-bearing records for deferred PHP
+paths remain filtered. Exact `.composer`/`.phpunit.cache` exclusions are
+PHP-only; exact `vendor` remains globally excluded. A later selected project
+model must add context invalidation and apply validated custom vendor/cache
+exclusions before PHP semantic records exist.
 
 Swift uses `swift` for exact `.swift` paths and `swift-config` for exact
 root/nested `Package.swift`, `Package.resolved`, `.swift-version`, and complete
-ASCII `Package@swift-M[.m[.p]].swift` basenames. Those tokens persist only
-bounded path, strict raw-byte hash, size, and token, with zero source-store/
-parser dispatch and no unit, IR, fact, `UNKNOWN`, family, or project-model
-record. Swift-only active generations are `file_manifest_only`; mixed
-generations remain `syntax_only_code_units`. Swift inventory deltas remain
-incremental while the tokens are absent from `ParserProjectContext`, and copy-
-forward filters all claim-bearing records for current Swift inventory paths.
+ASCII `Package@swift-M[.m[.p]].swift` basenames. Swift source, executable
+manifests, version manifests, and `.swift-version` persist only bounded path,
+strict raw-byte hash, size, and token, with zero source-store/parser dispatch
+and no unit, IR, fact, `UNKNOWN`, dependency, family, or project-model record.
+Exact `Package.resolved` is the sole static-metadata exception: an admitted
+schema-2/3 file stores a project-config unit, typed inventory facts, and
+SwiftPM lock rows with exact semantic versions and unknown scope/directness.
+Swift-only active generations without an admitted lock remain
+`file_manifest_only`; generations containing a parsed lock own syntax/project-
+config records. Swift deltas remain incremental while these tokens are absent
+from `ParserProjectContext`, and copy-forward filters claim-bearing records for
+inventory-only Swift paths while preserving unchanged lock evidence exactly
+once.
 Exact `.build`/`.swiftpm` exclusions are Swift-only and do not globally prune
 other languages. A later bounded project model must add context invalidation
 before cross-file semantic records exist.
+
+Visual Basic .NET uses `visual-basic` for exact lowercase `.vb` source and
+`visual-basic-config` for exact lowercase `.vbproj` files. Source records store
+only bounded path, strict raw-byte hash, size, and token, with no source-store
+or parser dispatch. Exact project files may store one project-config unit,
+source-free `visual_basic_dependency_inventory` facts, and literal
+`manifest_declared` NuGet rows with direct directness, unknown scope, optional
+literal requirement, and no resolved version. Exact `bin`/`.vs` exclusions are
+Visual-Basic-only; VB6 formats are not admitted. Unchanged project rows copy
+forward once, project modifications replace their rows, and removal cannot
+retain stale dependencies.
+
+Object Pascal uses the dialect-neutral `object-pascal` token for exact
+lowercase `.pas`, `.dpr`, and `.dpk` source. Only exact lowercase `.dproj`
+files use `delphi-config` and may store one project-config unit, scoped
+`delphi_dependency_inventory` facts, and literal Delphi runtime-package rows
+with `manifest_declared` evidence and unknown directness. Source is never read;
+`.pp`/`.lpr`/`.lpi`/`.lpk` do not fall through to Delphi. Exact `__history` and
+`__recovery` exclusions are language-specific. Incremental copy-forward,
+replacement, and removal follow the same evidence-bound project-config rules.
+Neither token can create source IR, a family, or support/readiness state.
+
+Ada uses `ada` for exact lowercase `.ads`/`.adb` and `ada-config` for exact
+lowercase `.gpr`, `alire.toml`, and `alire.lock` basenames. Source and GPR paths
+persist only metadata and bypass SourceStore/parser dispatch. Exact Alire
+manifest/lock paths store project-config units and typed inventory facts;
+unconditional direct manifest strings may additionally store schema-v14
+`alire` rows. Lock rows are never inferred from the internal Alire format.
+Fortran uses `fortran` for the frozen lowercase non-preprocessed fixed/free form
+suffixes and `fortran-config` for exact `fpm.toml`. Source paths remain metadata-
+only; the manifest may store one project-config unit, typed inventory facts,
+and schema-v14 scoped direct `fpm` rows. Both languages remain absent from
+`ParserProjectContext`, so deferred deltas are incremental, claim-bearing legacy
+records are filtered, and unchanged static-manifest evidence copies exactly once.
+SQL uses `sql`, `sql-migration`, `sql-schema`, and `sql-catalog`. Every SQL
+record stores only path, strict raw-byte hash, size, and token. SQL bytes are
+not decoded, no code-unit/evidence/dependency row is created, and SQL-only
+generations remain `file_manifest_only`. Incremental replacement/removal cannot
+copy forward legacy claim-bearing rows for these inventory-only paths.
+
+R uses `r` for exact `.R`/`.r` and `r-config` for exact `DESCRIPTION`,
+`NAMESPACE`,
+and `renv.lock`. R source stores only file metadata. Configs store one bounded
+project-config unit, source-free structural/UNKNOWN facts, and, for exact
+explicit renv sources only, schema-v14 `cran` or `bioconductor` dependency rows
+with resolved version and unknown scope/directness. Unchanged rows copy forward;
+modified configs replace evidence-bound records; removal cascades them. Remote,
+URL, custom-repository, and local-path values are never persisted. R-source-only
+generations are `file_manifest_only`; admitted configs make the generation
+`syntax_only_code_units` without family/support rows.
 
 Other source-inventory or config changes still fall back to a full rebuild.
 Source snippets and absolute paths are not stored by default syntax-only
@@ -474,8 +557,10 @@ use targeted active-generation queries and expose only repo-relative metadata,
 code-unit rows, or validated fact metadata needed by that command. They must
 not load the full active claim-input snapshot merely to count files, list code
 units, or list fact inventory. The internal claim-input snapshot uses the same
-active generation and validation rules, but remains reserved for family and
-freshness gates and unavailable through CLI/MCP.
+active generation and validation rules and also hydrates dependency rows so
+incremental indexing can copy unchanged static-manifest evidence. It remains
+reserved for family, freshness, and generation-lifecycle gates and unavailable
+through CLI/MCP.
 
 Schema migrations are versioned by `schema_migrations`. Before writing a new
 generation, the adapter must refuse to open a database whose stored maximum
@@ -535,9 +620,10 @@ repositories must be refused rather than deleted; users and agents should run
 `repogrammar resync` first to create mutable SQLite storage.
 
 The initial schema stores schema metadata, generation rows, indexed files,
-syntax-only code-unit records, IR nodes and edges, semantic facts, families,
-family members, variation slots, evidence links, derived-record dependency
-rows, and dirty-record markers. The full rebuild command path populates indexed
+syntax-only code-unit records, IR nodes and edges, semantic facts,
+language-neutral package dependency records, families, family members,
+variation slots, evidence links, derived-record dependency rows, and
+dirty-record markers. The full rebuild command path populates indexed
 files, syntax-only code units, CodeUnit-derived IR nodes, conservative IR
 containment edges, optional semantic-worker facts, and exact-anchor
 `DATAFLOW_DERIVED` support facts derived in the application layer. Incremental
@@ -563,7 +649,8 @@ classifications are evidence-backed), and validation before activation.
 The lifecycle report's `dirty_records_cleared` count covers persisted dirty
 marker rows actually cleared in the building generation. Incremental
 generation-by-replacement omission of claim-bearing records is a copy-forward
-filter, not dirty-marker cleanup, so purging legacy Go, PHP, Ruby, or Swift
+filter, not dirty-marker cleanup, so purging legacy Go, PHP, Ruby, Swift, Ada,
+or Fortran
 claims from inventory-only paths leaves that count at zero.
 Path replacement in a building generation is transactional and fail-closed:
 unchanged file metadata is treated as an idempotent no-op, while changed file
@@ -574,11 +661,74 @@ derived records. Path removal follows the same fail-closed rule: absent paths
 are a no-op, existing paths are deleted through the indexed-file row, and any
 derived records that depended on the removed path are marked dirty before the
 cascade.
-The current storage schema version is `10`. Existing pre-release schema `1`
-through `9` generation databases are treated as stale: reads refuse them with a
+The current storage schema version is `14`. Existing pre-release schema `1`
+through `13` generation databases are treated as stale: reads refuse them with a
 typed schema-outdated error recommending `repogrammar resync`, and the
 full-rebuild path recreates the mutable database rather than upgrading it in
 place.
+Schema `11` added the `dependency_records` table for the ADR-0030
+language-neutral dependency inventory. Each row is generation-scoped and
+source-evidence-bound with `PRIMARY KEY (generation_id, dependency_id)` and
+cascading foreign keys to its generation, code unit, and indexed file. The
+table stores the closed ecosystem, scope, and evidence-level tokens; bounded
+package name; optional requirement and resolved version; directness and
+optionality flags; and the evidence path, hash, byte range, and note. A
+`lockfile_resolved` row must carry a resolved version. Application and storage
+validation both reject unknown tokens, invalid paths or hashes, evidence ranges
+outside the same-generation code unit, and source/code-unit/file hash mismatch.
+
+Schema `12` adds distinct closed `vcpkg` and `conan` ecosystem tokens. This
+prevents equal package names from separate C/C++ registries from becoming one
+identity. Because the repository database is fully derived, an existing schema
+11 database follows the same explicit stale-read/full-resync-rebuild policy as
+all earlier schemas; no user-authored data is migrated or discarded.
+
+Schema `13` replaces the ambiguous dependency `direct` boolean with the closed
+`directness` token: `direct`, `transitive`, or `unknown`. This prevents a
+lockfile that lacks root-manifest relation data from being persisted as falsely
+transitive. Existing manifest producers write `direct`; bounded SwiftPM
+`Package.resolved` schema-2/3 pins write `unknown`. All write, activation, and
+read paths reject values outside the closed vocabulary.
+
+Schema `14` adds the nullable `platform_target` and `alias` columns, which carry
+the manifest-stated declaration selectors verbatim: the platform/configuration
+predicate that scopes a declaration (a Cargo `[target.'cfg(...)'.dependencies]`
+table key) and the local alias a manifest binds a package to (a Cargo `rename`).
+`NULL` means the manifest stated none; it never means "applies on every
+platform", because no reader evaluates the predicate. Both columns are bounded
+untrusted text validated on write and on read.
+
+These are also identity fields. One package may be declared several times in one
+manifest — once per `cfg(...)` table, once per alias — and those declarations
+are otherwise identical, down to a shared manifest evidence range. The stored
+`dependency_id` therefore hashes every persisted field including these two.
+Omitting them made distinct declarations collide on
+`PRIMARY KEY (generation_id, dependency_id)`, which failed the whole write.
+Their absence from the record-uniqueness key had the same effect one layer up,
+where a snapshot rejected a valid manifest as containing duplicate records.
+
+Dependency writes also create an `external_dependency`
+`derived_record_dependencies` row. Replacing or removing the evidence path
+therefore dirties the record until bounded recomputation rewrites it, and
+generation validation remains fail-closed. `DependencyStore` exposes a
+deterministically ordered internal active-generation read model and revalidates
+every hydrated row. Writers include the safe Cargo metadata stage and bounded
+static-manifest parser output such as root npm `package.json` and Python
+`pyproject.toml`/`setup.cfg`/static-`setup.py` declarations, plus bounded root
+`vcpkg.json` names/minimum requirements and exact Conan 2.31.1 `[requires]`
+references, and exact root/nested Maven `pom.xml` direct declarations. Exact
+SwiftPM schema-2/3 `Package.resolved` pins are lockfile rows;
+package location, revision, directness, scope, install state, and runtime
+selection remain unavailable or explicitly unknown.
+Bounded Alire `[[depends-on]]` and root fpm dependency strings use the existing
+closed `alire` and `fpm` ecosystem tokens; both are direct
+`manifest_declared` rows and neither proves selected, installed, resolved, or
+runtime-used packages. Alire lockfiles emit no rows.
+Incremental indexing recomputes provider-owned Cargo rows and copies a static
+row only when its unchanged evidence code unit also copies. There is
+intentionally no public CLI/MCP raw package-name projection in this schema
+slice; such a surface requires its own source-free product contract.
+
 Schema `10` adds the `python_module_interfaces` table, which persists one Python
 module interface hash per indexed `.py` module for the incremental-sync
 interface-hash gate (see `docs/specifications/indexing-pipeline.md`). Each row is

@@ -3,6 +3,34 @@
 This specification defines the initial domain vocabulary. The Rust-core bootstrap
 implements only minimal types and placeholders.
 
+## Dependency and library semantics
+
+ADR-0030 separates four evidence layers: manifest dependency inventory,
+lockfile resolution, semantic-provider external-symbol resolution, and reviewed
+library behavior contracts. The language-neutral owned types live in
+`src/rust/core/model/dependency.rs`.
+
+A `DependencyRecord` carries one package identity, optional version requirement
+and resolved version, scope, three-state directness (`direct`, `transitive`, or
+`unknown`), optionality, the strongest dependency evidence level, and
+repository evidence. `DependencySnapshot` is deterministic and rejects
+duplicate inventory records. `ExternalSymbolId` is always qualified by a
+package identity. `LibraryContract` is explicit, revisioned, non-empty, and
+limited to a finite set of exact resolved versions; inventory never synthesizes
+one. `LibraryContractRegistry` sorts contracts deterministically and rejects
+duplicate ids or overlapping package/version/capability claims.
+
+Manifest declarations must not be described as installed, resolved, or
+behaviorally understood. Lockfile records require a resolved version but still
+do not prove runtime selection. Provider failures remain typed `UNKNOWN`, and
+reviewed library contracts remain separate auditable artifacts whose version
+and compatibility must be checked at the point of use. Registry lookup refuses
+manifest-only or versionless dependency evidence. A successful lookup is still
+not behavior or family proof: the caller must independently establish the exact
+source anchor and any package-qualified external symbol obligation. The core
+does not compare opaque cross-ecosystem ranges; wider version ranges require a
+separately qualified ecosystem-native matcher.
+
 ## CodeUnit
 
 A `CodeUnit` is a repository-owned analyzable source unit such as a function,
@@ -27,36 +55,134 @@ be represented as `python-config` language files with `project_config` code
 units so each config artifact shares the same generation, hash, and evidence
 validation boundary. Their structural parser methods are `tomllib`,
 `configparser`, and `cpython_ast`; `setup.py` is parsed, never executed.
-Go discovery defines stable `go` and `go-config` language tokens so `.go` and
-root/nested `go.mod`/`go.work` file records can be persisted source-free. Those
-tokens are inventory-only in the current product: source reads and parsing are
-skipped, and no Go `CodeUnit`, IR, semantic fact, or family is created. The
-token's presence is not support evidence. Go-only and empty generations are
-`file_manifest_only`; a mixed generation remains `syntax_only_code_units`
-because its non-Go parser-capable tokens still own code-unit semantics.
+Go discovery defines stable `go` and `go-config` language tokens. `.go` remains
+inventory-only: source reads and parsing are skipped, and it creates no Go
+`CodeUnit`, IR, semantic fact, or family. Discovered root/nested `go.mod` and
+`go.work` files enter a bounded static project-config parser. `go.mod` may create
+`project_config` units plus language-neutral, `manifest_declared` `go_modules`
+dependency records; unresolved or unsupported inventory semantics create typed
+UNKNOWNs scoped only to `go_dependency_inventory`. `go.work` always creates
+that scoped workspace UNKNOWN. These config records are not language, library,
+framework, resolution, or family evidence. A generation containing config units
+is `syntax_only_code_units`; Go-source-only and empty generations remain
+`file_manifest_only`.
 Ruby discovery likewise defines stable `ruby` and `ruby-config` tokens for
-bounded `.rb` and accepted root/nested project/configuration paths. They are
-inventory-only: only repository-relative path, strict hash, byte size, and token
-are persisted; no Ruby `CodeUnit`, IR, semantic fact, typed `UNKNOWN`, or family
-exists. Ruby-only generations are `file_manifest_only`, while a mixed generation
-remains `syntax_only_code_units`. The tokens prove file inventory only and do
-not select a Ruby engine, project root, dependency graph, or support state.
+bounded `.rb` and accepted root/nested project/configuration paths. Ruby
+source and every config except exact `Gemfile.lock` remain inventory-only.
+The exact lock produces a project-config unit and may emit source-free
+`ruby_dependency_inventory` `UNKNOWN`s plus bounded direct `rubygems`
+`DependencyRecord`s from its unique `DEPENDENCIES` section. Those records are
+manifest declarations with unknown scope, directness `direct`, and no resolved
+version. Executable Gemfile/gemspec DSLs are never read by the parser, evaluated,
+or turned into dependency records.
+No Ruby source IR, framework fact, family, engine/root selection, semantic
+support state, or readiness claim exists.
 PHP discovery defines stable `php` and `php-config` tokens for exact `.php`
-paths and exact accepted Composer/PHPUnit configuration basenames. They are
-inventory-only: only repository-relative path, strict raw-byte hash, byte size,
-and token are persisted; no PHP `CodeUnit`, IR, semantic fact, typed `UNKNOWN`,
-or family exists. PHP-only generations are `file_manifest_only`; mixed
-generations remain `syntax_only_code_units`. The tokens prove file inventory
-only and do not select a PHP profile, Composer project, PHPUnit version,
-dependency graph, custom vendor directory, or support state.
+paths and exact accepted Composer/PHPUnit configuration basenames. PHP source
+and PHPUnit XML remain inventory-only: only repository-relative path, strict
+raw-byte hash, byte size, and token are persisted. Exact `composer.json` and
+`composer.lock` may additionally create bounded `ProjectConfig` units/IR,
+ADR-0030 `composer` dependency records, and `php_dependency_inventory` typed
+`UNKNOWN`. Those records describe static declarations or lock entries only;
+they do not select a PHP profile, Composer project, PHPUnit version, installed
+or runtime dependency graph, custom vendor directory, family, or support state.
+PHP-only generations with Composer evidence are `syntax_only_code_units`;
+those with only deferred PHP/PHPUnit inventory remain `file_manifest_only`.
 Swift discovery defines stable `swift` and `swift-config` tokens for exact
-`.swift` paths and exact accepted SwiftPM/toolchain-selector basenames. They are
-inventory-only: only bounded repository-relative path, strict raw-byte hash,
-byte size, and token are persisted; no Swift `CodeUnit`, IR, semantic fact,
-typed `UNKNOWN`, project model, or family exists. Swift-only generations are
-`file_manifest_only`; mixed generations remain `syntax_only_code_units`. The
-tokens prove file inventory only and do not select a manifest, package target,
-toolchain, SDK, XCTest identity, dependency graph, or support state.
+`.swift` paths and exact accepted SwiftPM/toolchain-selector basenames. Swift
+source and executable/toolchain config remain inventory-only. Exact
+`Package.resolved` files additionally receive a bounded static project-config
+unit and may own schema-2/3 SwiftPM lock rows with exact recorded versions,
+unknown scope, and unknown directness. Typed uncertainty covers malformed,
+unsupported, conflicting, and over-budget pins. No Swift source frontend,
+manifest evaluation, family, selected target/toolchain/SDK, installed graph, or
+support state follows from that lock inventory.
+MATLAB discovery defines stable `matlab` and `matlab-config` tokens for exact
+lowercase `.m` paths and exact root/nested `resources/mpackage.json` paths.
+MATLAB source remains inventory-only. An admitted package definition may create
+one `project_config` unit and direct `matlab_add_on` dependency declarations
+whose identity is the validated package name plus UUID, whose requirement is
+the bounded `compatibleVersions` text, and whose resolved version is absent.
+Malformed, unsupported-schema, conflicting, or over-budget package metadata
+becomes typed `matlab_dependency_inventory` uncertainty. These records do not
+prove MATLAB syntax, dependency resolution, installation, libraries, external
+symbols, toolboxes, Simulink behavior, families, or support.
+Assembly discovery defines one stable `assembly` token only for lowercase `.s`.
+Its bounded candidate scanner may represent the file as a module and source-
+visible labels as generic `unknown` code units, with containment IR and selected
+structural spellings. Every Assembly file also owns a typed unproven-target-
+profile UNKNOWN. No record proves a dialect, architecture, ABI, object format,
+instruction validity, symbol resolution, reachability, linked behavior, family,
+or support.
+Scratch has no `Language` or `DiscoveredLanguage` value. The disconnected `.sb3`
+archive preflight returns aggregate counts only and creates no domain record;
+therefore it is a security prerequisite, not Scratch discovery or support.
+Java discovery defines a separate `java-config` token for exact root/nested
+`pom.xml` inputs. Each admitted file may create one `project_config` unit and
+bounded `maven` `DependencyRecord`s only for literal direct
+`project/dependencies/dependency` declarations. Package identity is
+`groupId:artifactId`; literal versions are requirements, resolved version is
+absent, directness is `direct`, and optionality/scope are retained only where
+the static declaration proves them. Effective-model concerns such as parent
+inheritance, properties, dependency management/BOMs, profiles, reactor modules,
+artifact variants, exclusions, and plugins remain typed UNKNOWN scoped to
+`java_dependency_inventory`. These records prove no classpath, artifact,
+external symbol, framework role, build, installation, or runtime selection.
+Visual Basic discovery defines stable `visual-basic` and
+`visual-basic-config` tokens for exact `.vb` and `.vbproj` paths. The scope is
+VB.NET only; VB6 formats are not aliases. `.vb` source remains unread
+inventory. Exact `.vbproj` files may own a bounded project-config unit, direct
+`nuget` manifest rows from literal direct-root `PackageReference` declarations,
+and `visual_basic_dependency_inventory` UNKNOWN for MSBuild evaluation,
+malformed/conflicting metadata, or resource limits. The rows have unknown
+scope, no resolved version, and prove no restore, installed graph, framework,
+source semantics, family, or support state.
+Object Pascal source discovery uses `object-pascal` for exact `.pas`, `.dpr`,
+and `.dpk`; the generic token does not choose Delphi versus Free Pascal. Exact
+`.dproj` uses the distinct `delphi-config` token. A bounded static project-config
+parser may inventory literal `DCC_UsePackage` values as runtime
+`delphi_package` manifest rows with unknown directness and no version, plus
+`delphi_dependency_inventory` UNKNOWN. `.dpk` source stays unread, and
+`.pp`/`.lpr`/`.lpi`/`.lpk` remain deferred. No compiler, MSBuild, package
+manager, source frontend, family, dialect equivalence, or support state follows.
+Ada discovery defines stable `ada` and `ada-config` tokens. Only exact lowercase
+GNAT-default `.ads` and `.adb` sources are admitted; those bytes and exact `.gpr`
+project files remain inventory-only. Exact `alire.toml` may own one
+`ProjectConfig` unit, `ada_dependency_inventory` typed UNKNOWNs, and bounded
+direct runtime `manifest_declared` `alire` records from unconditional
+`[[depends-on]]` string entries. `alire.lock` owns a config unit and an internal-
+schema UNKNOWN but no dependency identity. None of these records proves GPR
+naming selection, lock resolution, Ada semantics, library behavior, a family,
+support, or readiness.
+Fortran discovery defines stable `fortran` and `fortran-config` tokens. The
+source token covers only the frozen non-preprocessed lowercase fixed/free-form
+suffix set and remains inventory-only. Exact `fpm.toml` may own one
+`ProjectConfig` unit, `fortran_dependency_inventory` typed UNKNOWNs, and bounded
+direct `manifest_declared` `fpm` records: root `[dependencies]` maps to runtime
+scope and root `[dev-dependencies]` to development scope. Dotted namespace,
+git/path, target-specific, preprocessing, and environment selection remain
+unresolved. No Fortran source IR, family, support, or readiness state exists.
+SQL discovery defines stable `sql`, `sql-migration`, `sql-schema`, and
+`sql-catalog` file tokens, which persist path, strict raw-byte hash, size, and
+source-free artifact classification and prove no dialect or semantic role. All
+map to the internal SQL language identity, which ADR-0040 routes to a bounded
+DDL frontend. Admitted files own a `module` unit and one `sql_statement` or
+`sql_table_definition` unit per top-level statement, with IR containment edges.
+The dialect stays contractually UNKNOWN: the frontend scans only constructs
+PostgreSQL 16 and SQLite 3 lex identically, so its anchors never rest on the
+selection it cannot make. A construct the two spell differently degrades the
+whole file to its module unit plus a `ConflictingFacts` UNKNOWN, because a
+diverged token stream leaves every later statement boundary unproven. No table,
+column, index, or literal text reaches a unit id, fact, or public surface.
+R discovery defines stable `r` and `r-config` tokens. Exact `.R` and `.r`
+source is
+inventory-only. Exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` create bounded
+`project_config` units and claim-scoped `r_dependency_inventory` UNKNOWNs.
+Only explicit renv CRAN/Bioconductor identities become dependency rows with
+resolved versions, unknown scope, unknown directness, and `lockfile_resolved`
+evidence. DESCRIPTION/NAMESPACE direct declarations are not dependency rows
+when their ecosystem cannot be proved. None of these records is R source,
+framework, family, provider, support, or readiness evidence.
 The Java/Spring v0.2 preview can persist Tree-sitter Java structural records for
 Java classes/interfaces/methods plus Spring MVC route methods, Spring
 components, Spring Boot applications, and Spring Data repositories when exact
@@ -75,6 +201,12 @@ records for modules, classes/structs, and functions plus GoogleTest test cases
 and fixtures, Catch2/doctest test cases, and Boost.Test cases and suites when
 include-evidence-gated registration-macro shapes are present, and `cpp-config`
 `PROJECT_CONFIG` records for `compile_commands.json`/`vcpkg.json`/`conanfile.txt`.
+The root vcpkg and Conan configuration units may also own bounded generic
+dependency records: vcpkg package names and bounded minimum-version constraints
+use ecosystem `vcpkg`, while exact Conan 2 `[requires]` `name/version`
+references use ecosystem `conan` and retain the version as a requirement. Both
+use unknown scope and prove no build,
+installed graph, external symbol, behavior contract, or family membership.
 The Rust v0.2 preview persists Tree-sitter Rust structural records
 for modules, structs, enums, traits, impl blocks, functions, methods, and tests,
 plus RepoGrammar self-dogfood roles and — in any repository — general framework
@@ -155,9 +287,10 @@ and typed `UNKNOWN` facts for unresolved imports, nonliteral route paths,
 controller/repository identity uncertainty, and runtime framework behavior.
 Only application-layer `repogrammar-java-derived` `DATAFLOW_DERIVED` facts with
 exact whitelisted targets and `derived_from=tree_sitter_java_structural_anchors`
-can support Java/Spring families. This does not prove Maven/Gradle, javac,
-annotation-processor, classpath, component-scan, dependency-injection, proxy, or
-repository-factory semantics.
+can support Java/Spring families. The separate static POM inventory does not
+change those family gates. Current Java output still does not prove a Maven/
+Gradle effective model, javac/JDT, annotation processor, classpath/JAR symbols,
+component scan, dependency injection, proxy, or repository-factory semantics.
 Current default C# indexing can likewise store syntax-origin `FRAMEWORK_ROLE`
 facts for ASP.NET Core controllers/actions, minimal-API routes, EF Core
 contexts/entity sets, and xUnit/NUnit/MSTest tests, `STRUCTURAL` exact-anchor
@@ -173,7 +306,9 @@ Current default C/C++ indexing can likewise store syntax-origin `FRAMEWORK_ROLE`
 facts for GoogleTest/Catch2/doctest/Boost.Test cases, fixtures, and suites,
 `STRUCTURAL` exact-anchor facts for include-evidence-gated registration macros,
 `PROJECT_CONFIG` facts for `compile_commands.json`/`vcpkg.json`/`conanfile.txt`
-inventory, and typed `UNKNOWN` facts for unresolved framework identity,
+inventory, bounded manifest-declared vcpkg/Conan dependency rows, and typed
+`UNKNOWN` facts for unresolved or partial dependency inventory, framework
+identity,
 Catch2-vs-doctest conflicts, build variants, macro boundaries, moc/generated
 code, and dispatch. Only application-layer `repogrammar-cpp-derived`
 `DATAFLOW_DERIVED` facts with exact whitelisted targets and

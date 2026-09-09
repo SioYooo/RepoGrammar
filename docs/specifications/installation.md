@@ -29,7 +29,9 @@ itself and does not make `repogrammar install` initialize or delete
 `setup --target auto` selects only detected targets with a live writer. If none
 are available, setup still initializes and indexes the repository and reports a
 single install-agent limitation. Before planning a machine write, setup performs
-a bounded, read-only native `mcp get` probe and correlates its parsed scope,
+a bounded, read-only ownership probe per selected live target — the native
+`mcp get` command for Codex and Claude Code, and a direct config-file read for
+the file-based opencode writer — and correlates its parsed scope,
 executable, and exact `serve` argument with the RepoGrammar-owned receipt and
 the current managed executable authority.
 
@@ -50,7 +52,9 @@ The resulting ownership states are intentionally distinct:
 An allowlisted native not-found response means absent. Codex requires its exact
 not-found sentence. Claude Code accepts the exact server-name sentence followed
 by either its legacy add-command guidance or its current configured-server
-inventory prefix; arbitrary suffixes remain rejected. A failed probe with
+inventory prefix; arbitrary suffixes remain rejected. For the file-based
+opencode writer, absence is the `mcp.repogrammar` key being absent in the
+global config file. A failed probe with
 unexpected output remains unknown and blocks setup because native state could
 not be inspected safely. Setup may continue repository-only for a successfully probed
 but unrecognized malformed configuration and recommends `repogrammar doctor`.
@@ -73,7 +77,10 @@ is needed only for TypeScript worker test development.
 Agent integration may require the selected native agent CLI:
 
 - `codex` for Codex integration;
-- `claude` for Claude Code integration.
+- `claude` for Claude Code integration;
+- `opencode` detection uses the `opencode` binary, but its live writer is
+  file-based: RepoGrammar reads and writes the opencode global config file
+  directly and never shells out to an opencode CLI for configuration.
 
 Missing agent CLIs must be non-fatal in interactive flows when other supported
 choices remain available.
@@ -157,8 +164,8 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-candidate and post-publication documentation should pin `v0.4.3` for
-reproducible acquisition. Public-install claims may identify `v0.4.3` as the
+candidate and post-publication documentation should pin `v0.5.0` for
+reproducible acquisition. Public-install claims may identify `v0.5.0` as the
 latest verified public stable only after its GitHub, npm, provenance, and
 finalizer evidence all pass. When a `latest` or explicit artifact lookup fails,
 installers must report
@@ -189,12 +196,13 @@ contributor source-build path. It must not duplicate native agent configuration
 or product-deletion ownership logic outside the Rust application, and it must
 not create or modify `.repogrammar/`.
 
-The current release-source manifests use stable identity `0.4.3`. A source
+The current release-source manifests use candidate stable identity `0.5.0`. A source
 build or source install must report that identity consistently across Cargo and
 npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
 to the independently verified public `0.4.3` GitHub Release and npm package;
-the source manifest by itself remains insufficient evidence.
+the source manifest by itself remains insufficient evidence. The `0.5.0`
+candidate is not a public release until its independent finalizer passes.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
@@ -310,7 +318,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.4.3.tgz` for the current
+  `npm install -g ./sioyooo-repogrammar-0.5.0.tgz` for the current
   source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 
@@ -385,10 +393,13 @@ and `--print-config` output:
 - `kiro`.
 
 It also accepts `auto`, `all`, `none`, and comma-separated concrete target
-lists such as `codex,claude-code`. In the current stable/preview product, live writes
-are implemented only for global Codex and global Claude Code. Other registry
-targets are configuration-preview/deferred targets until their idempotent
-writer, ownership receipt, uninstall inverse, and tests are implemented.
+lists such as `codex,claude-code`. In the current stable/preview product, live
+writes are implemented for global Codex, global Claude Code, and global
+opencode. The opencode writer is the first file-based live writer: it edits the
+opencode global config file directly instead of invoking a native agent CLI.
+Other registry targets are configuration-preview/deferred targets until their
+idempotent writer, ownership receipt, uninstall inverse, and tests are
+implemented.
 
 `repogrammar install` configures machine integration, `repogrammar disconnect`
 removes only receipt-owned coding-agent integration, and bare `repogrammar
@@ -450,6 +461,48 @@ The installer must:
 - never remove configuration that was not created by RepoGrammar;
 - treat instruction-file modification as optional and marker-fenced.
 
+## opencode global config writer
+
+The opencode target is live for global scope only and is configured through a
+file-based writer rather than a native agent CLI:
+
+- the config file is `$XDG_CONFIG_HOME/opencode/opencode.json`, defaulting to
+  `$HOME/.config/opencode/opencode.json` when `XDG_CONFIG_HOME` is unset or
+  empty; a relative `XDG_CONFIG_HOME` fails closed instead of resolving against
+  the current directory, and a missing `HOME` fails closed as well;
+- the managed entry is exactly the top-level `mcp` object's `repogrammar` key:
+  `{"type":"local","command":[<absolute managed executable>,"serve"],"enabled":true}`
+  written as plain JSON — RepoGrammar never writes JSONC;
+- absence detection is the `mcp.repogrammar` key being absent; an unparseable
+  file, a non-object root or `mcp` value, or an entry that is not a
+  recognizable local command server is `Malformed` and is preserved;
+- at the ownership boundary the entry's `command` array is normalized to
+  `(executable_path, args)` so the shared receipt/native matching rules
+  (including the exact `serve` argument) apply unchanged; a missing `enabled`
+  field is read with opencode's documented default of `true`;
+- the writer is idempotent: an existing byte-equivalent entry is reported
+  unchanged without writing;
+- all unknown fields are preserved through a `serde_json::Value` round-trip;
+  because the serializer orders object keys deterministically, key order may be
+  normalized while no field is lost;
+- a malformed file is refused by default and never auto-repaired;
+- before modifying a pre-existing file the exact previous bytes are written to
+  a sibling `opencode.json.repogrammar-bak` backup; the backup is removed only
+  after the post-write reparse verifies the exact managed entry, so a failed or
+  corrupted write leaves the pre-write bytes available for manual recovery;
+- writes are atomic through a same-directory temp file plus rename and are
+  followed by a reparse that verifies the managed entry;
+- the receipt records the file-based native action in the existing fields:
+  `native_program` is the absolute config file path and `native_args` is
+  `["mcp.repogrammar", "file-created" | "file-updated" | "unchanged"]`;
+- the uninstall inverse removes only the `mcp.repogrammar` key (dropping a
+  now-empty `mcp` object) and deletes the config file only when receipt
+  evidence (`file-created`) proves RepoGrammar created it in that install and
+  removal left it exactly `{}`; a file that pre-existed the install or gained
+  user content keeps its remaining content and is never deleted;
+- probing reads the file directly; `repogrammar install` never executes an
+  `opencode` process for configuration, probing, or removal.
+
 ## Global installation state
 
 Global user state may contain only installation and user-preference data:
@@ -483,7 +536,10 @@ required for precise uninstall; they must not contain paths discovered from an
 indexed repository, source evidence paths, prompts, or query targets. Each
 receipt records `target`, `scope`, `mcp_server`, `executable_path`,
 `native_program`, `native_args`, `instruction_file_path` (null when deferred),
-`instruction_action`, `telemetry_enabled`, and `created_unix_seconds` only.
+`instruction_action`, `telemetry_enabled`, and `created_unix_seconds` only. For
+the file-based opencode writer, `native_program` carries the absolute opencode
+config file path and `native_args` the managed-entry key plus write-outcome
+token described above; both are machine-level integration state.
 
 ## Product installation receipt
 
@@ -649,7 +705,7 @@ not supplied by RepoGrammar.
 Neither a successful live install nor instruction-file synchronization can hot
 swap an agent session that is already running. After a successful live
 `repogrammar install` or `repogrammar instructions sync`, the CLI recommends
-restarting the coding-agent session. Already-open Codex or Claude MCP child
+restarting the coding-agent session. Already-open coding-agent MCP child
 processes continue running the binary they started with, and an older session
 may retain the instruction snapshot it loaded at startup.
 
@@ -788,8 +844,10 @@ noninteractive live writes, and a dependency-light text wizard:
   `uninit --project ... --yes` command but preserves that repository state;
 - `repogrammar install` with no flags launches a TUI-style wizard when running
   in an interactive terminal;
-- the wizard presents Codex and Claude Code, supports multi-select in one run,
-  detects existing RepoGrammar-owned receipts, uses `a` as the default
+- the wizard is a data-driven menu over the live targets (currently
+  `1 = Codex`, `2 = Claude Code`, `3 = opencode`), supports multi-select in one
+  run through comma-separated numbers or agent names, detects existing
+  RepoGrammar-owned receipts, uses `a` as the default
   automatic selection, selects detected not-yet-managed agents through that
   default, reports a no-op when that set is empty, leaves undetected unmanaged
   agents unselected unless explicitly chosen, and skips already managed agents
@@ -803,7 +861,7 @@ noninteractive live writes, and a dependency-light text wizard:
   status, the no-write config preview, and the native MCP plus instruction-file
   plan lines (`describe_paths`). The current registry exposes deferred targets
   through dry-run and `--print-config` snippets only; live writes remain
-  implemented for global Codex and global Claude Code;
+  implemented for global Codex, global Claude Code, and global opencode;
 - re-running the wizard can add detected missing supported agents later or
   refresh the RepoGrammar-managed command path when every supported concrete
   agent is already managed. `OwnedCurrent` targets do not rerun native add;
@@ -818,6 +876,8 @@ noninteractive live writes, and a dependency-light text wizard:
   commands;
 - `--target claude-code --scope global` uses the native `claude mcp add/remove`
   commands with `user` scope;
+- `--target opencode --scope global` uses the file-based global config writer
+  described above and executes no opencode CLI;
 - live project-local writes remain deferred until ownership, receipt, and native
   config semantics are specified for each supported agent;
 - install places the `repogrammar` command in a user-writable command directory
@@ -924,13 +984,15 @@ noninteractive live writes, and a dependency-light text wizard:
   disabled telemetry, interactive install without telemetry flags prompts
   default-no, and environment/CI disablement overrides `--telemetry`.
 - dry-run output names the native MCP command shape for Codex and Claude Code
-  global installs and clearly marks deferred registry targets/scopes, while
+  global installs, the opencode global config-file write shape, and clearly
+  marks deferred registry targets/scopes, while
   project-local live writes remain deferred unless separately specified and
   tested.
-- default tests must not invoke real `codex` or `claude` binaries. Native agent
-  integration coverage uses dry-run output, command-vector construction, fake
-  configurators, and receipt behavior; any real native-CLI integration test must
-  be explicitly ignored or feature-gated outside default CI.
+- default tests must not invoke real `codex` or `claude` binaries or touch real
+  agent config paths. Native agent integration coverage uses dry-run output,
+  command-vector construction, fake configurators, file-based writer tests in
+  temporary directories, and receipt behavior; any real native-CLI integration
+  test must be explicitly ignored or feature-gated outside default CI.
 
 By default the installer does not edit instruction files: live instruction
 writing stays deferred unless an explicit `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>`

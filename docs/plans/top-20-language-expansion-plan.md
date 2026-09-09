@@ -1,7 +1,7 @@
 # Top-20 Language Expansion Plan
 
-- Status: Active implementation plan
-- Last updated: 2026-07-16
+- Status: Active implementation plan; 2026-08-01 audited checkpoint incomplete
+- Last updated: 2026-08-01
 - Scope: Execute ADR-0020 against the frozen TIOBE July 2026 Top-20 snapshot,
   with TypeScript tracked as an extra language.
 - Authority: `docs/decisions/ADR-0020-top-20-language-expansion-gate.md`
@@ -19,6 +19,85 @@
 
 If this plan conflicts with ADR-0020 or another accepted ADR, the ADR wins and
 this plan must be updated before implementation continues.
+
+## 2026-08-01 dependency/library semantics checkpoint
+
+ADR-0030 now supplies the shared third-party analysis model. Arbitrary packages
+may be inventoried through bounded manifest/lockfile evidence, but only isolated
+providers may establish package-qualified external symbols and only explicit,
+versioned, reviewed library contracts may establish library behavior. Package
+presence alone never supports a family. The current strict baseline remains
+`0/20`, with TypeScript extra also incomplete; see
+`docs/reports/language-support/top-20-third-party-baseline-2026-08-01.md`.
+
+The first provider consumer is Cargo metadata, which emits generic
+`manifest_declared` dependency records. The first static-manifest consumer is
+the bounded root npm `package.json` parser, which now emits direct declarations
+for production, development, optional, and peer dependency sections without
+executing Node, npm, package scripts, or dependency code. Peer dependencies use
+the shared `unknown` scope unless the model later gains a reviewed peer token.
+Schema v14 persists these consumers with same-generation source evidence and
+represents dependency directness as the closed `direct`/`transitive`/`unknown`
+set rather than collapsing unresolved lockfile graph position into a boolean.
+On an unrelated incremental source edit, Cargo output is recomputed while unchanged
+static npm declarations copy forward with their evidence unit, retaining one
+fresh record. The Python project-config frontend now emits PyPI
+`manifest_declared` records from PEP 621/build-system/dependency-group arrays
+when the running Python provides `tomllib`, from `setup.cfg` install/build/test/
+extra sections, and from literal `setup.py` dependency fields without executing
+the file. Distribution names use PEP 503 normalization; requirements use a
+bounded ASCII suffix, direct URL/path suffixes are not stored, and dynamic,
+non-authoritative, malformed, or over-budget dependency fields become
+`python_dependency_inventory` typed `UNKNOWN`. Static PyPI rows use the same
+evidence-bound incremental copy-forward as npm. These are project-model slices,
+not Python, Rust, JavaScript, or TypeScript language completion. Source-free
+public projection, generic provider ports, conflict reporting, lockfile
+resolution, Poetry/PDM/uv-specific metadata, wider C/C++ schemas, and other
+ecosystems remain open atomic modules. The bounded existing C/C++ project-model
+lane now also emits distinct, grammar-valid `vcpkg` package names/minimum
+requirements and exact Conan 2 `name/version` requirements without executing
+either package manager. Scope remains `unknown`; uninterpreted vcpkg fields,
+malformed Conan sections, Conan ranges/revisions/user-channel references,
+conflicts, and overflow abstain. This advances C0 project inventory but does not
+complete C or C++. Exact SwiftPM `Package.resolved` schema-2/3 files are the
+first lockfile consumer of unknown directness: a duplicate-key-rejecting,
+bounded static reader emits exact semantic-version pins while discarding
+locations and revisions. It does not evaluate `Package.swift`, invoke SwiftPM,
+select a toolchain, establish install/build/runtime state, or complete Swift.
+Exact Composer manifests and lockfiles now provide the corresponding PHP
+static-metadata slice. `composer.json` emits direct scoped requirements;
+`composer.lock` emits exact locked versions with runtime/development scope
+from its package section and directness unknown.
+The bounded unique-member reader discards source URLs, treats platform and
+virtual requirements as uncertainty rather than packages, and never runs PHP,
+Composer, plugins, scripts, autoloaders, or dependency code. Manifest/lock
+coherence and the selected PHP project profile remain unproved, so this does
+not advance PHP beyond `discovered_only`. Exact `Gemfile.lock` now supplies
+the RubyGems manifest slice: the unique `DEPENDENCIES` section yields strict
+direct declarations with unknown scope and no resolved version. Unsupported
+sources, malformed/conflicting input, and resource overflow remain
+`ruby_dependency_inventory` uncertainty; the reader does not join resolved
+specs or read/execute Ruby DSLs, Ruby, Bundler, RubyGems, project code, child
+processes, or network access. Ruby therefore also remains `discovered_only`.
+Exact root/nested `go.mod` files now supply the Go Modules manifest slice:
+bounded valid `require` declarations retain exact semantic versions and direct
+versus `// indirect` state under `manifest_declared` evidence. Scope and resolved
+version remain unknown; duplicates, malformed syntax, graph-changing directives,
+resource overflow, and unresolved module/workspace semantics become
+`go_dependency_inventory` typed `UNKNOWN`. Exact `go.work` files emit only a
+workspace-selection UNKNOWN. `.go` source remains source-store/parser free, and
+the adapter runs no Go command, module resolver, dependency code, child process,
+or network operation. Go therefore remains `discovered_only`.
+Exact root/nested Maven `pom.xml` now supplies the first Java dependency-
+inventory slice. A bounded static XML subset records only literal direct
+`groupId:artifactId` declarations with requirement, conservative scope, and
+optionality evidence; effective-model inheritance, dependency management/BOMs,
+profiles, properties, reactor modules, variants, exclusions, plugins, malformed
+XML, duplicate coordinates, and resource overflow stay
+`java_dependency_inventory` typed UNKNOWN. No Maven/Gradle/javac/provider,
+artifact, classpath, project code, or network path executes. This advances the
+Java C0 project-config obligation only; it does not provide javac/JDT semantics,
+external symbols, a completion review, or another passed ADR-0020 gate.
 
 ## Goal and non-goal
 
@@ -116,6 +195,14 @@ It does not provide javac/JDT semantics, classpath/build configuration,
 inheritance, annotation processing, runtime test discovery, or the ADR-0020
 completion review, so Java remains incomplete in C0.
 
+Java dependency checkpoint (2026-08-01): discovery now separates exact
+root/nested `pom.xml` as `java-config`, and the bounded file-local static reader
+persists only direct `maven` manifest declarations plus claim-scoped UNKNOWNs.
+Incremental tests cover copy-forward, replacement, and removal. This is not a
+Maven effective model, classpath/JAR symbol resolver, javac/JDT frontend,
+annotation-processor path, or language completion; Java therefore remains
+incomplete in C0.
+
 For C and C++, completion is reported separately even when discovery or provider
 infrastructure is shared. A shared implementation must prove language-specific
 tokens, units, fixtures, UNKNOWN policy, readiness, and completion reviews.
@@ -154,15 +241,20 @@ committing a complete slice.
 ADR-0021 accepts the Go architecture/security decision, and the bounded
 discovery/config module now advances Go to `discovered_only`; Go remains
 unsupported. Default indexing inventories `.go` as `go` and root/nested
-`go.mod`/`go.work` as `go-config` without parser-facing source-store reads, parsing, units, facts,
-IR, families, or readiness promotion. Its pure normalized-path classifier
+`go.mod`/`go.work` as `go-config`. `.go` bytes remain parser/source-store free.
+Exact Go config bytes enter a bounded, non-executing static parser: `go.mod`
+valid `require` declarations become evidence-bound `go_modules` dependency rows,
+while malformed/conflicting/graph-changing/resource-bounded inputs become
+claim-scoped typed UNKNOWN; `go.work` emits only a workspace-selection UNKNOWN.
+No Go source unit, Go source IR, family, readiness promotion, module-graph claim,
+or semantic support follows. The pure normalized-path classifier
 records Go-tool exclusions, `_test.go`, and a dated Go 1.26.5 GOOS/GOARCH
 suffix shape without selecting a configuration. Source marker scanning is
-explicitly deferred rather than guessed from text. While these tokens remain
-inventory-only and absent from `ParserProjectContext`, add/modify/delete deltas
-stay incremental, count zero Go parser attempts, retain warnings from the whole
-manifest, and purge claim-bearing records for Go paths. Frontend/IR must restore
-token-based project-context invalidation when it adds cross-file Go semantics.
+explicitly deferred rather than guessed from text. Add/modify/delete deltas
+stay incremental: `.go` paths count zero parser attempts and purge claim-bearing
+records, config paths reparse file-locally, and unchanged dependency evidence
+copies forward. Frontend/IR must restore token-based project-context
+invalidation when it adds cross-file Go semantics.
 
 The future semantic path must be opt-in and sandboxed, consume supplied
 source/config bytes where possible, and fail to a
@@ -201,15 +293,24 @@ classifier gives configuration precedence, applies PHP-only `.composer` and
 `.phpunit.cache` exclusions with `language_specific_exclusion`, and does not
 globally hide other languages; exact `vendor` remains globally excluded.
 
-Indexing persists only bounded repo-relative path, raw-byte SHA-256, size, and
-token before any source-store or parser dispatch. PHP-only generations are
-`file_manifest_only`; mixed generations remain syntax-only; warnings are
-path-free and emitted once per accepted token. PHP inventory deltas stay
-incremental, and copy-forward purges legacy PHP claim records while retaining
-metadata. No configuration is decoded or parsed, and no unit, IR, fact,
-`UNKNOWN`, family, project model, readiness, PHP/Composer/PHPUnit execution, or
-support behavior is added. Custom `vendor-dir` and PHPUnit cache-directory
-selection remain unresolved until the bounded project-model stage.
+Indexing persists bounded repo-relative path, raw-byte SHA-256, size, and token
+for every accepted PHP path. PHP source and PHPUnit XML stop there: they bypass
+the source store and parser and emit no unit, IR, fact, typed `UNKNOWN`,
+dependency, family, or project model. Exact `composer.json` and
+`composer.lock` are the sole static-metadata exception. Supplied UTF-8 bytes
+pass the shared bounded unique-member JSON gate before a non-executing parser
+emits only Composer dependency records and claim-scoped
+`php_dependency_inventory` uncertainty. Manifest declarations are direct and
+scoped; lock rows retain unknown directness and do not prove manifest coherence,
+installation, build, or runtime selection. Source URLs are discarded.
+PHP-only generations with only deferred source/PHPUnit inputs remain
+`file_manifest_only`; an admitted Composer document owns project-config units
+and makes the generation `syntax_only_code_units`. Mixed generations remain
+syntax-only; warnings are path-free and emitted once per inventory-only token.
+Dependency and file-metadata deltas stay incremental, and copy-forward purges
+legacy PHP semantic claims. No family, readiness, frontend, or support behavior
+is added. Custom `vendor-dir`, selected project profiles, Composer content-hash
+coherence, and PHPUnit cache-directory selection remain unresolved.
 
 `mago-syntax` 1.43.0 remains the production candidate only behind a separately
 reviewed OS-sandboxed worker and the full dependency, artifact, malformed-input,
@@ -219,11 +320,12 @@ Official PHP 8.5.8 `php -n -l` is the isolated syntax-validity oracle;
 separately qualification-gated fallback. Tree-sitter PHP 0.24.2 may generate
 syntax candidates only.
 
-The future exact first family is `php.phpunit.test_method`. Composer JSON/lock
-and PHPUnit XML remain bounded data inputs only; the safe path must not execute
-Composer, PHPUnit, autoloaders, plugins, scripts, repository PHP, or target
-dependencies. The normative obligation registry, resource/protocol contract,
-atomic module sequence, and all unchecked evidence live in ADR-0024 and
+The future exact first family is `php.phpunit.test_method`. Current Composer
+JSON/lock inventory and future PHPUnit XML/profile handling remain bounded data
+inputs only; the safe path must not execute Composer, PHPUnit, autoloaders,
+plugins, scripts, repository PHP, or target dependencies. The normative
+obligation registry, resource/protocol contract, atomic module sequence, and
+all unchecked evidence live in ADR-0024 and
 `docs/reports/language-support/php-completion-review.md`. No completion
 percentage or supported-language count may include PHP before its final audit.
 
@@ -240,14 +342,23 @@ Swift-only `.build`/`.swiftpm` exclusions without globally hiding other
 languages. Invalid version-manifest lookalikes with an exact `.swift` suffix
 remain ordinary Swift source inventory.
 
-Indexing persists only bounded repo-relative path, raw-byte SHA-256, size, and
-token before any source-store or parser dispatch. Swift-only generations are
-`file_manifest_only`; mixed generations retain their parser-capable mode;
-warnings are path-free and emitted once per accepted token. Swift inventory
-deltas stay incremental, and copy-forward purges legacy Swift claim records.
-No configuration is decoded or evaluated, and no dependency, toolchain,
-worker, project model, parser, unit, IR, fact, typed `UNKNOWN`, family, or
-readiness behavior is added.
+Indexing persists bounded repo-relative path, raw-byte SHA-256, size, and token
+before any source-store or parser dispatch. Swift-only generations without an
+admitted lockfile are `file_manifest_only`; an exact admitted
+`Package.resolved` owns a project-config unit, while mixed generations retain
+their parser-capable mode;
+warnings are path-free and emitted once per accepted inventory-only token.
+Swift inventory deltas stay incremental, and copy-forward purges legacy Swift
+claim records. Swift source, executable manifests, version manifests, and
+`.swift-version` remain inventory-only. Exact `Package.resolved` is the sole
+static-metadata exception: supplied schema-2/3 JSON receives bounded,
+duplicate-key-rejecting decoding and may emit SwiftPM lock rows with exact
+semantic versions, unknown scope/directness, and typed
+`swift_dependency_inventory` uncertainty. Package locations and revisions are
+discarded. No Swift, SwiftPM, Xcode, manifest, plugin, macro, toolchain, child
+process, or network operation executes, and no source parser, family, semantic
+support, readiness, installation, authenticity, buildability, or runtime claim
+is added.
 
 The production syntax candidate is exact SwiftSyntax 603.0.2 `SwiftParser`
 inside a separately reviewed OS-sandboxed worker, differentially qualified
@@ -286,13 +397,16 @@ module advances Ruby to `discovered_only`; Ruby remains unsupported. Stable
 `*.gemspec` paths. One pure normalized-path classifier gives configuration
 precedence, uses `language_specific_exclusion` for Ruby candidates below exact
 `.bundle`/`.ruby-lsp` components, and does not globally hide other languages.
-Indexing stores bounded path/hash/size/token metadata with no parser-facing
-source read, unit, IR, fact, `UNKNOWN`, family, or readiness promotion. Ruby-only
-generations are `file_manifest_only`; mixed generations remain syntax-only;
-inventory deltas stay incremental with one path-free warning per token and
-claim-record purge. Autosync preserves its generic Git-independent fingerprint
-behavior. This path does not evaluate project files or invoke Ruby, Bundler,
-RubyGems, Rake, Rails, tests, generators, child processes, or network access.
+Ruby source and every config except exact `Gemfile.lock` store bounded
+path/hash/size/token metadata with no parser-facing source read. A bounded pure
+Rust lock parser creates one project-config unit, source-free
+`ruby_dependency_inventory` `UNKNOWN`s, and strict direct `rubygems`
+manifest declarations from exact `Gemfile.lock` `DEPENDENCIES`. Executable
+Gemfile/gemspec DSLs and unqualified variants are never read or evaluated.
+Exact lock changes parse file-locally; unrelated source/config changes copy
+dependency rows forward. This slice adds no Ruby source IR,
+family, readiness promotion, or invocation of Ruby, Bundler, RubyGems, Rake,
+Rails, tests, generators, child processes, or network access.
 
 The current frontend candidate is `ruby-prism` 1.9.0 using the exact upstream
 commit linked by the release plus the separately checksummed package artifact,
@@ -327,7 +441,7 @@ substitutes an exact language-internal recurring-pattern family.
 
 | Language | Frontend/format decision to pin | Candidate first family | Scope/non-claim requirement |
 |---|---|---|---|
-| SQL | One initial SQL dialect and its authoritative/maintained dialect parser; migration/config discovery | DDL migration/table definitions or compatible query-shape families | One dialect never implies universal SQL; dynamic SQL and stored-language bodies remain typed |
+| SQL | Delivered as ADR-0040: a bounded in-process frontend over the PostgreSQL 16 / SQLite 3 dialect-invariance set instead of one selected dialect, so no external grammar is needed and no selection is claimed | `sql.schema.table_definition` from exact `CREATE TABLE` definition lists, minimum support three | The admitted subset never implies universal SQL; a dialect-divergent construct degrades its whole file; dynamic SQL, stored-language bodies, migration order, and catalog state remain typed |
 | R | R-native parser/frontend and package/project metadata | `testthat::test_that` tests or exact Shiny declarations | Non-standard evaluation, formula semantics, dynamic package loading and native extensions remain typed |
 | MATLAB | Version-profiled MATLAB parser/frontend and project/package metadata | `matlab.unittest` tests or function/class method families | Dynamic workspace/eval, path mutation, toolboxes, code generation and Simulink are separate claims |
 
@@ -429,3 +543,19 @@ At the end of each wave, publish a source-free summary of completed languages,
 provider availability, recoverable and irreducible `UNKNOWN` mechanisms,
 validation results, commit SHAs, and remaining risks. Keep the seven current
 Top-20 languages, TypeScript extra, and thirteen additions in separate totals.
+
+## 2026-08-01 audited program checkpoint
+
+The bounded five-round campaign is consolidated in
+`docs/reports/language-support/top-20-final-program-audit.md` and
+`docs/reports/language-support/top-20-program-summary.json`. It produced 20
+ranked completion reviews plus the TypeScript-extra review, bounded dependency
+inventory across 17 of 20 ecosystem tokens, schema-v14 persistence, and an
+exact-version reviewed-contract registry. The registry intentionally ships no
+production contract packs.
+
+The strict result is `0/20`, TypeScript extra is incomplete, and the
+third-party-library platform is incomplete. No lane may skip directly from
+this checkpoint to a support claim. Resume with the unfinished gate sequence
+in the corresponding completion review; the highest-EV shared path is one
+complete Python provider/external-symbol/reviewed-contract/family vertical.

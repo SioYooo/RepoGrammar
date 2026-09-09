@@ -3,13 +3,23 @@
 use crate::adapters::frameworks::rust_general::{
     rust_role_is_known, rust_support_family, rust_support_target_is_role_compatible,
 };
-use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
+use crate::adapters::frameworks::{
+    ada, cpp, csharp, delphi, fortran, go, java, matlab, php, r, ruby, sql, swift, tsjs,
+    visual_basic,
+};
+use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
 use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
+use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
+use crate::adapters::parsing::go::testing::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
 use crate::adapters::parsing::java::{JAVA_ANCHOR_ENGINE, JAVA_ANCHOR_METHOD};
+use crate::adapters::parsing::matlab::unittest::{MATLAB_ANCHOR_ENGINE, MATLAB_ANCHOR_METHOD};
 use crate::adapters::parsing::python::PYTHON_ANCHOR_ENGINE;
+use crate::adapters::parsing::r::testthat::{R_ANCHOR_ENGINE, R_ANCHOR_METHOD};
 use crate::adapters::parsing::rust::{RUST_ANCHOR_ENGINE, RUST_ANCHOR_METHOD};
+use crate::adapters::parsing::sql::{SQL_ANCHOR_ENGINE, SQL_ANCHOR_METHOD};
 use crate::adapters::parsing::tsjs::TSJS_ANCHOR_ENGINE;
+use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::proof_lattice::{
     add_variation_features_from_assumptions, derived_support_has_safe_origin,
 };
@@ -49,6 +59,28 @@ pub(crate) const CSHARP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_csha
 pub(crate) const CPP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-cpp-derived";
 pub(crate) const CPP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_c_cpp_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
+pub(crate) const VB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-vbnet-derived";
+pub(crate) const VB_DERIVED_SUPPORT_METHOD: &str = "bounded_vbnet_mstest_anchor_v1";
+pub(crate) const DELPHI_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-delphi-derived";
+pub(crate) const DELPHI_DERIVED_SUPPORT_METHOD: &str = "bounded_delphi_dunitx_anchor_v1";
+pub(crate) const ADA_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-ada-derived";
+pub(crate) const ADA_DERIVED_SUPPORT_METHOD: &str = "bounded_ada_aunit_anchor_v1";
+pub(crate) const MATLAB_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-matlab-derived";
+pub(crate) const MATLAB_DERIVED_SUPPORT_METHOD: &str = "bounded_matlab_unittest_anchor_v1";
+pub(crate) const PHP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-php-derived";
+pub(crate) const PHP_DERIVED_SUPPORT_METHOD: &str = "bounded_php_phpunit_v1";
+pub(crate) const SWIFT_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-swift-derived";
+pub(crate) const SWIFT_DERIVED_SUPPORT_METHOD: &str = "bounded_swift_xctest_declaration_v1";
+pub(crate) const RUBY_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-ruby-derived";
+pub(crate) const RUBY_DERIVED_SUPPORT_METHOD: &str = "bounded_ruby_minitest_v1";
+pub(crate) const GO_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-go-derived";
+pub(crate) const GO_DERIVED_SUPPORT_METHOD: &str = "bounded_go_test_declaration_v2";
+pub(crate) const FORTRAN_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-fortran-derived";
+pub(crate) const FORTRAN_DERIVED_SUPPORT_METHOD: &str = "bounded_fortran_testdrive_v1";
+pub(crate) const R_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-r-derived";
+pub(crate) const R_DERIVED_SUPPORT_METHOD: &str = "bounded_r_testthat_anchor_v1";
+pub(crate) const SQL_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-sql-derived";
+pub(crate) const SQL_DERIVED_SUPPORT_METHOD: &str = "bounded_sql_ddl_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_anchor_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -580,6 +612,11 @@ fn family_claim_from_supported_evidence(
         &supported_evidence,
         features_by_unit,
     ));
+    variation_slots.extend(rust_context_variation_slots(
+        key,
+        &supported_evidence,
+        features_by_unit,
+    ));
     variation_slots.extend(non_blocking_unknown_variation_slots(&claim_unknowns));
     let assessment = assess_family_prevalence(prevalence_inputs);
     let prevalence = FamilyPrevalence {
@@ -896,6 +933,9 @@ fn variation_feature_prefixes(
     }
     if is_c_cpp_language(language) {
         return cpp_variation_feature_prefixes(framework_role);
+    }
+    if language == "rust" {
+        return rust_variation_feature_prefixes(framework_role);
     }
     &[]
 }
@@ -1478,6 +1518,85 @@ fn cpp_variation_feature_prefixes(
         "framework:gtest.fixture" => &[("cpp_test_fixture_shape", &["fixture_shape:"])],
         "framework:boost_test.suite" => &[("cpp_test_suite_shape", &["suite_shape:"])],
         _ => &[],
+    }
+}
+
+fn rust_context_variation_slots(
+    key: &FamilyKey,
+    evidence: &[FamilyEvidence],
+    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<VariationSlot> {
+    if key.language != "rust" {
+        return Vec::new();
+    }
+    rust_variation_feature_prefixes(key.framework_role.as_str())
+        .iter()
+        .filter_map(|(slot_name, prefixes)| {
+            let profiles = evidence
+                .iter()
+                .map(|item| prefixed_feature_profile(item, features_by_unit, prefixes))
+                .collect::<BTreeSet<_>>();
+            let has_context = profiles.iter().any(|profile| !profile.is_empty());
+            (has_context && profiles.len() > 1).then(|| VariationSlot {
+                slot_id: format!("slot:{slot_name}"),
+                description: format!(
+                    "variation:{slot_name}:context metadata differs across supported members"
+                ),
+            })
+        })
+        .collect()
+}
+
+/// Rust variation dimensions per framework role, keyed by the raw (dotted)
+/// `framework_role` the way every sibling variation table is.
+///
+/// Each entry is disjoint from the same role's `rust_characteristic_prefixes`
+/// (keyed by the `stable_token` underscore form of the same role): characteristic
+/// prefixes are pinned equal across members by `rust_evidence_pair_is_compatible`,
+/// so they can never also be a legal variation. Only the prefixes
+/// `add_rust_family_features` can actually emit for the role appear here.
+///
+/// `import_context:` is deliberately absent. The only facts that produce it for
+/// Rust (`module:` targets and `rust_module_resolution=` assumptions) are bound to
+/// `RustUseItem`/`RustExternalModule` code units, which `rust_family_eligible_kind`
+/// excludes, so no Rust family member can carry that prefix.
+fn rust_variation_feature_prefixes(
+    framework_role: &str,
+) -> &'static [(&'static str, &'static [&'static str])] {
+    match framework_role {
+        // serde pins the support family and the derived trait anchor; the derive
+        // attribute shape (`none` / `rename_all` / ...) may still differ.
+        "framework:serde.model" => &[("rust_serde_attr_shape", &["serde_attr_shape:"])],
+        // thiserror pins only the support family, so the `#[error(...)]` message
+        // shape (literal vs formatted) is the remaining emitted dimension.
+        "framework:thiserror.error" => {
+            &[("rust_thiserror_message_shape", &["error_message_shape:"])]
+        }
+        // clap pins only the support family, which is the same
+        // `clap.derive_parser` family for `Parser`, `Subcommand`, and `Args`, so
+        // both the derived trait anchor and the attribute shape may differ.
+        "framework:clap.parser" => &[
+            ("rust_clap_derive_target", &["framework_api_anchor:"]),
+            ("rust_clap_attr_shape", &["clap_attr_shape:"]),
+        ],
+        // axum pins the support family, the HTTP method, and the route path shape;
+        // the only other feature its anchor emits is the role-constant
+        // `anchor_kind:axum_route`, so no dimension may legally differ. The arm is
+        // explicit so axum never falls through to the self-dogfood dimensions.
+        "framework:axum.route" => &[],
+        // The tokio and tracing anchors emit only the role-constant `anchor_kind:`
+        // beyond the pinned support family, so they likewise have no variation
+        // dimension. The arms are explicit so none of them falls through to the
+        // self-dogfood dimensions below, which describe a different thing.
+        "framework:tokio.entry" | "framework:tokio.test" | "framework:tracing.instrument" => &[],
+        // Self-dogfood roles pin their structural-shape profile, leaving the body
+        // call/control shape and the crate-layer path context (`rust_path_context`,
+        // e.g. `application` vs `adapters`) as the dimensions that may differ.
+        _ => &[
+            ("rust_self_dogfood_call_shape", &["call_shape:"]),
+            ("rust_self_dogfood_control_shape", &["control_shape:"]),
+            ("rust_self_dogfood_path_context", &["path_context:"]),
+        ],
     }
 }
 
@@ -2329,6 +2448,13 @@ enum FamilyUnknownDomain {
     CSharp,
     Cpp,
     Rust,
+    Sql,
+    Go,
+    R,
+    VisualBasic,
+    Delphi,
+    Ada,
+    Matlab,
 }
 
 impl FamilyUnknownDomain {
@@ -2359,6 +2485,36 @@ impl FamilyUnknownDomain {
         if language == "rust" {
             return (origin_engine == RUST_ANCHOR_ENGINE).then_some(Self::Rust);
         }
+        if language == "sql" {
+            return (origin_engine == SQL_ANCHOR_ENGINE && origin_method == SQL_ANCHOR_METHOD)
+                .then_some(Self::Sql);
+        }
+        if language == "go" {
+            return (origin_engine == GO_ANCHOR_ENGINE && origin_method == GO_ANCHOR_METHOD)
+                .then_some(Self::Go);
+        }
+        if language == "r" {
+            return (origin_engine == R_ANCHOR_ENGINE && origin_method == R_ANCHOR_METHOD)
+                .then_some(Self::R);
+        }
+        if language == "visual-basic" {
+            return (origin_engine == VB_ANCHOR_ENGINE && origin_method == VB_ANCHOR_METHOD)
+                .then_some(Self::VisualBasic);
+        }
+        if language == "object-pascal" {
+            return (origin_engine == DELPHI_ANCHOR_ENGINE
+                && origin_method == DELPHI_ANCHOR_METHOD)
+                .then_some(Self::Delphi);
+        }
+        if language == "ada" {
+            return (origin_engine == ADA_ANCHOR_ENGINE && origin_method == ADA_ANCHOR_METHOD)
+                .then_some(Self::Ada);
+        }
+        if language == "matlab" {
+            return (origin_engine == MATLAB_ANCHOR_ENGINE
+                && origin_method == MATLAB_ANCHOR_METHOD)
+                .then_some(Self::Matlab);
+        }
         None
     }
 
@@ -2370,6 +2526,13 @@ impl FamilyUnknownDomain {
             Self::CSharp => "csharp_family_membership",
             Self::Cpp => "cpp_family_membership",
             Self::Rust => "rust_family_membership",
+            Self::Sql => "sql_statement_boundary",
+            Self::Go => "go_test_declaration",
+            Self::R => "r_testthat_identity",
+            Self::VisualBasic => "vb_mstest_attribute_binding",
+            Self::Delphi => "delphi_dunitx_attribute_binding",
+            Self::Ada => "ada_aunit_registration_binding",
+            Self::Matlab => "matlab_unittest_class_binding",
         }
     }
 
@@ -2381,6 +2544,13 @@ impl FamilyUnknownDomain {
             Self::CSharp => "C#",
             Self::Cpp => "C/C++",
             Self::Rust => "Rust",
+            Self::Sql => "SQL",
+            Self::Go => "Go",
+            Self::R => "R",
+            Self::VisualBasic => "VB.NET",
+            Self::Delphi => "Delphi",
+            Self::Ada => "Ada",
+            Self::Matlab => "MATLAB",
         }
     }
 
@@ -2413,6 +2583,13 @@ impl FamilyUnknownDomain {
             Self::Rust => {
                 rust_unknown_reason_blocks_family_membership(reason, affected_claim, framework_role)
             }
+            Self::Sql => sql_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Go => go_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::R => r_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::VisualBasic => vb_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Delphi => delphi_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Ada => ada_unknown_reason_blocks_family_membership(reason, affected_claim),
+            Self::Matlab => matlab_unknown_reason_blocks_family_membership(reason, affected_claim),
         }
     }
 
@@ -2445,8 +2622,180 @@ impl FamilyUnknownDomain {
             Self::Rust => {
                 rust_unknown_is_non_blocking_family_subclaim(reason, affected_claim, framework_role)
             }
+            Self::Sql => sql_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
+            Self::Go => go_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
+            Self::R => r_unknown_is_non_blocking_family_subclaim(reason, affected_claim),
+            Self::VisualBasic => false,
+            Self::Delphi => false,
+            Self::Ada => false,
+            Self::Matlab => false,
         }
     }
+}
+
+/// Only an unproven statement boundary blocks a SQL family claim.
+///
+/// This is ADR-0040's argument as a rule. Once the token stream diverges, every
+/// later boundary in the file is unproven, so any claim resting on one is
+/// unproven with it. The unproven dialect is a different matter: the admitted
+/// parse is invariant across the declared set, so it cannot change the anchor
+/// and must not veto it. Widening the admitted subset to a construct the
+/// members lex differently would break that reasoning, which is why the ADR
+/// makes widening a decision rather than an implementation detail.
+fn sql_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::ConflictingFacts | UnknownReasonCode::StaleEvidence => {
+            affected_claim == "sql_statement_boundary" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// An MSTest attribute without an import or qualification blocks the binding.
+///
+/// The attribute name alone does not identify MSTest, so a file that uses it
+/// unresolved leaves the claim unproven rather than absent.
+fn vb_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "vb_mstest_attribute_binding" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// A `Test` methods block in a class that does not derive from
+/// `matlab.unittest.TestCase` blocks the anchor: the framework is unproven.
+///
+/// ADR-0046 D4b and D4c block it for a second reason. When a statement reads as
+/// either command syntax or an expression, or when the file mixes MATLAB with
+/// Octave-only lexemes, the two readings disagree about where a block closes.
+/// The frontend already withholds every anchor in such a file; recording the
+/// same conclusion here keeps one authoritative answer to "may this file support
+/// a family" rather than leaving it to the absence of a fact.
+fn matlab_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "matlab_unittest_class_binding"
+                || affected_claim.starts_with("family:")
+        }
+        UnknownReasonCode::ConflictingFacts => {
+            affected_claim == "matlab_block_structure"
+                || affected_claim == "matlab_dialect_invariance"
+                || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// A registration without an AUnit `with` clause blocks the anchor: the
+/// framework is unproven.
+fn ada_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "ada_aunit_registration_binding"
+                || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// An unbound DUnitX attribute blocks the anchor: without the import the
+/// framework, and with it the dialect, are unproven.
+fn delphi_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "delphi_dunitx_attribute_binding"
+                || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// An unproven testthat identity blocks every anchor in the file.
+///
+/// ADR-0042 makes the DESCRIPTION declaration a precondition, so without it the
+/// framework identity is unproven and nothing built on it may stand. A file
+/// that binds the name `test_that` itself unproves the same identity from the
+/// other side: the call still parses, but what it calls is no longer testthat's
+/// function.
+fn r_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::MissingDependency | UnknownReasonCode::MonkeyPatch => {
+            affected_claim == "r_testthat_identity" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+/// A call reached only under a runtime condition is recorded, never guessed at.
+///
+/// `if (interactive())` and `for (...)` decide at run time whether -- and how
+/// often -- a test is registered, and RepoGrammar evaluates neither. Not
+/// anchoring the call understates support; it does not unprove the
+/// unconditional calls beside it, so this rides along as a standing subclaim
+/// instead of blocking the shape anchor.
+fn r_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    reason == UnknownReasonCode::BuildVariantAmbiguity
+        && affected_claim == "r_conditional_test_registration"
+}
+
+/// An unresolvable testing import blocks the declaration claim it scopes.
+///
+/// A dot or blank import means no test signature in that file resolves, so
+/// anything built on one is unproven. A build constraint does not: the file's
+/// declarations are what they are whether or not the target platform compiles
+/// it, so that rides along as a subclaim instead.
+fn go_unknown_reason_blocks_family_membership(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport => {
+            affected_claim == "go_test_declaration" || affected_claim.starts_with("family:")
+        }
+        _ => false,
+    }
+}
+
+fn go_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    reason == UnknownReasonCode::BuildVariantAmbiguity && affected_claim == "go_build_constraint"
+}
+
+/// The unproven dialect is recorded, never silently dropped.
+///
+/// It bounds catalog state, execution semantics, migration order, and extension
+/// identity, none of which this frontend claims, so it rides along as a
+/// standing subclaim instead of blocking the shape anchor.
+fn sql_unknown_is_non_blocking_family_subclaim(
+    reason: UnknownReasonCode,
+    affected_claim: &str,
+) -> bool {
+    reason == UnknownReasonCode::MissingProjectConfig && affected_claim == "sql_dialect_profile"
 }
 
 fn classify_family_unknown_with_domain(
@@ -3035,7 +3384,7 @@ fn python_evidence_pair_is_compatible(
             non_builtin_pytest_fixture_context(left, features_by_unit)
                 == non_builtin_pytest_fixture_context(right, features_by_unit)
         }
-        "framework_pydantic_model" => {
+        "framework_pydantic_model" | "framework_marshmallow_schema" => {
             equal_feature_profiles(left, right, features_by_unit, &["class_base:"])
         }
         "framework_sqlalchemy_model" | "framework_sqlalchemy_repository_method" => {
@@ -3176,6 +3525,16 @@ fn java_evidence_pair_is_compatible(
                 &["support_family:", "jpa_namespace_root:"],
             )
         }
+        "framework_servlet_http_servlet" => {
+            // jakarta and javax servlets share the annotation's simple name but
+            // are different types, so they must never cluster together.
+            equal_feature_profiles(
+                left,
+                right,
+                features_by_unit,
+                &["support_family:", "servlet_namespace_root:"],
+            )
+        }
         "framework_jaxrs_resource" => equal_feature_profiles(
             left,
             right,
@@ -3237,7 +3596,9 @@ fn csharp_evidence_pair_is_compatible(
         "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
             equal_feature_profiles(left, right, features_by_unit, &["test_attribute:"])
         }
-        "framework_efcore_db_context" | "framework_efcore_entity_set" => {
+        "framework_efcore_db_context"
+        | "framework_efcore_entity_set"
+        | "framework_fluentvalidation_validator" => {
             equal_feature_profiles(left, right, features_by_unit, &["support_family:"])
         }
         _ => true,
@@ -3319,7 +3680,8 @@ fn rust_evidence_pair_is_compatible(
         "framework_thiserror_error"
         | "framework_clap_parser"
         | "framework_tokio_entry"
-        | "framework_tokio_test" => {
+        | "framework_tokio_test"
+        | "framework_tracing_instrument" => {
             equal_feature_profiles(left, right, features_by_unit, &["support_family:"])
         }
         // Self-dogfood roles keep their structural-shape profile equality.
@@ -3566,7 +3928,7 @@ fn characteristic_profile_prefixes(
 fn python_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
     match framework_role {
         "framework_fastapi_route" => &["decorator_shape:"],
-        "framework_pydantic_model" => &["class_base:"],
+        "framework_pydantic_model" | "framework_marshmallow_schema" => &["class_base:"],
         "framework_django_url_pattern" => &["route_path_shape:"],
         "framework_flask_route" => &["http_method:", "route_path_shape:"],
         // pytest is handled by `cluster_characteristic_profile` directly; the
@@ -3621,6 +3983,7 @@ fn java_characteristic_prefixes(framework_role: &str) -> &'static [&'static str]
         "framework_jpa_entity" | "framework_jpa_mapped_superclass" | "framework_jpa_embeddable" => {
             &["support_family:", "jpa_namespace_root:"]
         }
+        "framework_servlet_http_servlet" => &["support_family:", "servlet_namespace_root:"],
         "framework_jaxrs_resource" => &["support_family:", "class_route_path_shape:"],
         "framework_jaxrs_resource_method" => &["anchor_kind:", "http_method:", "route_path_shape:"],
         _ => &[],
@@ -3640,7 +4003,9 @@ fn csharp_characteristic_prefixes(framework_role: &str) -> &'static [&'static st
         "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
             &["test_attribute:"]
         }
-        "framework_efcore_db_context" | "framework_efcore_entity_set" => &["support_family:"],
+        "framework_efcore_db_context"
+        | "framework_efcore_entity_set"
+        | "framework_fluentvalidation_validator" => &["support_family:"],
         _ => &[],
     }
 }
@@ -3663,7 +4028,8 @@ fn rust_characteristic_prefixes(framework_role: &str) -> &'static [&'static str]
         "framework_thiserror_error"
         | "framework_clap_parser"
         | "framework_tokio_entry"
-        | "framework_tokio_test" => &["support_family:"],
+        | "framework_tokio_test"
+        | "framework_tracing_instrument" => &["support_family:"],
         // Self-dogfood roles keep their structural-shape profile equality.
         _ => &[
             "anchor_kind:",
@@ -3828,6 +4194,7 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
             _ => "pytest.test_anchor".to_string(),
         },
         "framework:pytest.fixture" => "pytest.fixture_decorator".to_string(),
+        "framework:marshmallow.schema" => "marshmallow.schema_base".to_string(),
         "framework:pydantic.model" => match target {
             "pydantic.BaseSettings" | "pydantic_settings.BaseSettings" => {
                 "pydantic.settings_base".to_string()
@@ -3863,6 +4230,39 @@ fn support_target_family(target: &str, framework_role: &str) -> String {
         }
         framework_role if rust_role_is_known(framework_role) => {
             rust_support_family(target, framework_role)
+        }
+        framework_role if sql::framework_role_is_known(framework_role) => {
+            sql::support_family(target, framework_role)
+        }
+        framework_role if r::framework_role_is_known(framework_role) => {
+            r::support_family(target, framework_role)
+        }
+        framework_role if visual_basic::framework_role_is_known(framework_role) => {
+            visual_basic::support_family(target, framework_role)
+        }
+        framework_role if delphi::framework_role_is_known(framework_role) => {
+            delphi::support_family(target, framework_role)
+        }
+        framework_role if ada::framework_role_is_known(framework_role) => {
+            ada::support_family(target, framework_role)
+        }
+        framework_role if matlab::framework_role_is_known(framework_role) => {
+            matlab::support_family(target, framework_role)
+        }
+        framework_role if php::framework_role_is_known(framework_role) => {
+            php::support_family(target, framework_role)
+        }
+        framework_role if swift::framework_role_is_known(framework_role) => {
+            swift::support_family(target, framework_role)
+        }
+        framework_role if ruby::framework_role_is_known(framework_role) => {
+            ruby::support_family(target, framework_role)
+        }
+        framework_role if go::framework_role_is_known(framework_role) => {
+            go::support_family(target, framework_role)
+        }
+        framework_role if fortran::framework_role_is_known(framework_role) => {
+            fortran::support_family(target, framework_role)
         }
         _ => framework_role.to_string(),
     }
@@ -4134,7 +4534,233 @@ fn support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) ->
     if rust_role_is_known(framework_role) {
         return rust_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
     }
+    if sql::framework_role_is_known(framework_role) {
+        return sql_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if r::framework_role_is_known(framework_role) {
+        return r_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if visual_basic::framework_role_is_known(framework_role) {
+        return vb_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if delphi::framework_role_is_known(framework_role) {
+        return delphi_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if ada::framework_role_is_known(framework_role) {
+        return ada_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if matlab::framework_role_is_known(framework_role) {
+        return matlab_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if php::framework_role_is_known(framework_role) {
+        return php_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if swift::framework_role_is_known(framework_role) {
+        return swift_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if ruby::framework_role_is_known(framework_role) {
+        return ruby_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    // ADR-0050 replaces ADR-0021's closed ladder: the bounded Go parser
+    // proves the test-function anchor by parsing, so its support facts may
+    // derive exactly like the other bounded frontends. The scanner of
+    // ADR-0041 stays auxiliary and derives nothing.
+    if go::framework_role_is_known(framework_role) {
+        return go_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
+    if fortran::framework_role_is_known(framework_role) {
+        return fortran_support_fact_is_role_compatible(fact, framework_role).unwrap_or(false);
+    }
     false
+}
+
+fn php_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = php::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && php_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn php_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        PHP_DERIVED_SUPPORT_ENGINE,
+        PHP_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_php_phpunit_anchors".to_string()],
+    )
+}
+
+fn swift_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = swift::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && swift_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn swift_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        SWIFT_DERIVED_SUPPORT_ENGINE,
+        SWIFT_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_swift_xctest_anchors".to_string()],
+    )
+}
+
+fn ruby_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = ruby::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && ruby_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn ruby_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        RUBY_DERIVED_SUPPORT_ENGINE,
+        RUBY_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_ruby_minitest_anchors".to_string()],
+    )
+}
+
+fn go_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = go::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && go_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn go_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        GO_DERIVED_SUPPORT_ENGINE,
+        GO_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_go_testing_anchors".to_string()],
+    )
+}
+
+fn fortran_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = fortran::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && fortran_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn fortran_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        FORTRAN_DERIVED_SUPPORT_ENGINE,
+        FORTRAN_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_fortran_testdrive_anchors".to_string()],
+    )
+}
+
+fn vb_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible =
+        visual_basic::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && vb_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn vb_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        VB_DERIVED_SUPPORT_ENGINE,
+        VB_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_vbnet_mstest_anchors".to_string()],
+    )
+}
+
+fn matlab_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = matlab::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && matlab_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn matlab_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        MATLAB_DERIVED_SUPPORT_ENGINE,
+        MATLAB_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_matlab_unittest_anchors".to_string()],
+    )
+}
+
+fn ada_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = ada::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && ada_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn ada_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        ADA_DERIVED_SUPPORT_ENGINE,
+        ADA_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_ada_aunit_anchors".to_string()],
+    )
+}
+
+fn delphi_support_fact_is_role_compatible(
+    fact: &SemanticFact,
+    framework_role: &str,
+) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = delphi::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && delphi_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn delphi_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        DELPHI_DERIVED_SUPPORT_ENGINE,
+        DELPHI_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_delphi_dunitx_anchors".to_string()],
+    )
+}
+
+fn r_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = r::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && r_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn r_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        R_DERIVED_SUPPORT_ENGINE,
+        R_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_r_testthat_anchors".to_string()],
+    )
+}
+
+fn sql_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
+    let target = fact.target.as_ref().map(|target| target.as_str())?;
+    let target_is_compatible = sql::support_target_is_role_compatible(target, framework_role)?;
+    Some(target_is_compatible && sql_support_fact_has_safe_origin(fact, framework_role))
+}
+
+fn sql_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
+    derived_support_has_safe_origin(
+        fact,
+        SQL_DERIVED_SUPPORT_ENGINE,
+        SQL_DERIVED_SUPPORT_METHOD,
+        framework_role,
+        &["derived_from=bounded_sql_ddl_anchors".to_string()],
+    )
 }
 
 fn rust_support_fact_is_role_compatible(fact: &SemanticFact, framework_role: &str) -> Option<bool> {
@@ -4316,6 +4942,82 @@ pub(crate) fn cpp_support_target_is_role_compatible(
     cpp::support_target_is_role_compatible(target, framework_role)
 }
 
+pub(crate) fn sql_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    sql::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn r_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    r::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn vb_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    visual_basic::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn matlab_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    matlab::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn ada_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    ada::support_target_is_role_compatible(target, framework_role)
+}
+pub(crate) fn php_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    php::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn swift_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    swift::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn ruby_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    ruby::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn go_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    go::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn fortran_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    fortran::support_target_is_role_compatible(target, framework_role)
+}
+
+pub(crate) fn delphi_support_target_is_role_compatible(
+    target: &str,
+    framework_role: &str,
+) -> Option<bool> {
+    delphi::support_target_is_role_compatible(target, framework_role)
+}
+
 pub(crate) fn cpp_framework_role_is_known(framework_role: &str) -> bool {
     cpp::framework_role_is_known(framework_role)
 }
@@ -4404,6 +5106,7 @@ pub(crate) fn python_support_target_is_role_compatible(
             Some(matches!(target, "pytest.test" | "pytest.mark.parametrize"))
         }
         "framework:pytest.fixture" => Some(matches!(target, "pytest.fixture")),
+        "framework:marshmallow.schema" => Some(target == "marshmallow.Schema"),
         "framework:pydantic.model" => Some(matches!(
             target,
             "pydantic.BaseModel" | "pydantic.BaseSettings" | "pydantic_settings.BaseSettings"
@@ -4461,6 +5164,7 @@ pub(crate) fn python_framework_role_is_known(framework_role: &str) -> bool {
         || framework_role.starts_with("framework:click")
         || framework_role.starts_with("framework:typer")
         || framework_role.starts_with("framework:celery")
+        || framework_role.starts_with("framework:marshmallow")
 }
 
 fn single_framework_role(roles: &BTreeSet<String>) -> Option<&str> {
@@ -4500,6 +5204,7 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "pytest_test"
             | "pytest_fixture"
             | "pydantic_model"
+            | "marshmallow_schema"
             | "sqlalchemy_model"
             | "sqlalchemy_repository_method"
             | "django_model"
@@ -4522,11 +5227,13 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "jpa_embeddable"
             | "jaxrs_resource_class"
             | "jaxrs_resource_method"
+            | "servlet_http_servlet"
             | "aspnet_controller"
             | "aspnet_controller_action"
             | "aspnet_minimal_api_route"
             | "efcore_db_context"
             | "efcore_entity_set"
+            | "fluentvalidation_validator"
             | "xunit_test_method"
             | "nunit_test_method"
             | "mstest_test_method"
@@ -4536,12 +5243,25 @@ pub(crate) fn family_eligible_kind(kind: &str) -> bool {
             | "doctest_test_case"
             | "boost_test_case"
             | "boost_test_suite"
+            | "cppunit_suite_registration"
             | "serde_model"
             | "thiserror_error_enum"
             | "tokio_entry"
             | "tokio_test"
             | "clap_parser"
             | "axum_route"
+            | "tracing_instrument"
+            | "sql_table_definition"
+            | "r_test_that_block"
+            | "vb_test_method"
+            | "delphi_test_procedure"
+            | "ada_test_registration"
+            | "matlab_test_method"
+            | "php_test_method"
+            | "swift_test_method"
+            | "ruby_minitest_test_method"
+            | "go_test_function"
+            | "fortran_test_drive_subroutine"
     ) || rust_family_eligible_kind(kind)
 }
 
@@ -4565,6 +5285,51 @@ pub(crate) fn min_family_support(language: &str) -> usize {
     } else if is_c_cpp_language(language) {
         CPP_MIN_FAMILY_SUPPORT
     } else if language == "rust" {
+        3
+    } else if language == "matlab" {
+        // The MATLAB completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "ada" {
+        // The Ada completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "object-pascal" {
+        // The Delphi completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "visual-basic" {
+        // The VB completion review requires support at least three, matching
+        // every other exact-anchor language rather than the shared default.
+        3
+    } else if language == "r" {
+        // The r completion review requires support at least three; the shared
+        // default of two would let a pair of test_that blocks form a family.
+        3
+    } else if language == "sql" {
+        // ADR-0020 requires SQL to reach support three; the shared default of
+        // two would let a pair of CREATE TABLE statements form a family.
+        3
+    } else if language == "go" {
+        // ADR-0050's completion review requires support at least three; the
+        // shared default of two would let a pair of TestXxx declarations form
+        // a family from the low-support fixture.
+        3
+    } else if language == "php" {
+        // ADR-0047's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "swift" {
+        // ADR-0048's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "ruby" {
+        // ADR-0049's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
+        3
+    } else if language == "fortran" {
+        // ADR-0051's completion review requires support at least three, the
+        // same bar every other exact-anchor language carries.
         3
     } else {
         DEFAULT_MIN_FAMILY_SUPPORT
@@ -4758,6 +5523,7 @@ mod tests {
             "pytest_test" => Some("framework:pytest.test"),
             "pytest_fixture" => Some("framework:pytest.fixture"),
             "pydantic_model" => Some("framework:pydantic.model"),
+            "marshmallow_schema" => Some("framework:marshmallow.schema"),
             "sqlalchemy_model" => Some("framework:sqlalchemy.model"),
             "sqlalchemy_repository_method" => Some("framework:sqlalchemy.repository_method"),
             _ => None,
@@ -4943,6 +5709,278 @@ mod tests {
             )
             .expect("valid evidence"),
             assumptions: vec![format!("affected_claim={affected_claim}")],
+        }
+    }
+
+    #[test]
+    fn sql_unproven_dialect_rides_along_while_a_diverged_boundary_blocks() {
+        let effect = |reason, claim| {
+            classify_unknown_family_effect(
+                "sql",
+                reason,
+                claim,
+                Some(crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION),
+                SQL_ANCHOR_ENGINE,
+                SQL_ANCHOR_METHOD,
+            )
+        };
+
+        // The whole ADR-0040 argument: the admitted parse is invariant across
+        // the declared dialects, so an unproven dialect cannot veto the anchor.
+        // It is still recorded, as a non-blocking subclaim.
+        let dialect = effect(
+            UnknownReasonCode::MissingProjectConfig,
+            "sql_dialect_profile",
+        )
+        .expect("the unproven dialect must still be reported");
+        assert_eq!(dialect.claim_impact(), Some(ClaimImpact::NonBlocking));
+
+        // A diverged token stream leaves later boundaries unproven, so anything
+        // resting on one is unproven with it.
+        let boundary = effect(
+            UnknownReasonCode::ConflictingFacts,
+            "sql_statement_boundary",
+        )
+        .expect("a diverged boundary must block");
+        assert_eq!(boundary.claim_impact(), Some(ClaimImpact::Blocking));
+
+        // An unadmitted statement is inventory, not a defect in the anchors
+        // around it.
+        assert!(effect(
+            UnknownReasonCode::InsufficientSupport,
+            "sql_statement_shape",
+        )
+        .is_none());
+
+        // Another language's engine cannot mint SQL family effects.
+        assert!(classify_unknown_family_effect(
+            "sql",
+            UnknownReasonCode::ConflictingFacts,
+            "sql_statement_boundary",
+            Some(crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION),
+            RUST_ANCHOR_ENGINE,
+            RUST_ANCHOR_METHOD,
+        )
+        .is_none());
+    }
+
+    /// ADR-0046 D4b and D4c. The MATLAB frontend already withholds every anchor
+    /// in a file whose block extents are unproven, but the classifier is the
+    /// authoritative answer to "may this file support a family", so it has to
+    /// reach the same conclusion from the fact alone.
+    #[test]
+    fn an_undecidable_matlab_block_extent_blocks_while_an_unadmitted_shape_does_not() {
+        let effect = |reason, claim| {
+            classify_unknown_family_effect(
+                "matlab",
+                reason,
+                claim,
+                Some(crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST),
+                MATLAB_ANCHOR_ENGINE,
+                MATLAB_ANCHOR_METHOD,
+            )
+        };
+
+        for claim in ["matlab_block_structure", "matlab_dialect_invariance"] {
+            let diverged = effect(UnknownReasonCode::ConflictingFacts, claim)
+                .unwrap_or_else(|| panic!("{claim} must be classified"));
+            assert_eq!(
+                diverged.claim_impact(),
+                Some(ClaimImpact::Blocking),
+                "{claim}"
+            );
+        }
+
+        // The framework binding keeps blocking for its own, separate reason.
+        let unbound = effect(
+            UnknownReasonCode::UnresolvedImport,
+            "matlab_unittest_class_binding",
+        )
+        .expect("an unbound Test block must block");
+        assert_eq!(unbound.claim_impact(), Some(ClaimImpact::Blocking));
+
+        // Leaving the declared subset understates what a file declares; it does
+        // not unprove the declarations that were parsed.
+        for claim in [
+            "matlab_classdef_body_shape",
+            "matlab_abstract_test_methods",
+            "matlab_test_attribute_value",
+        ] {
+            assert!(
+                effect(UnknownReasonCode::InsufficientSupport, claim)
+                    .is_none_or(|unknown| unknown.claim_impact() != Some(ClaimImpact::Blocking)),
+                "{claim}"
+            );
+        }
+
+        // Another language's engine cannot mint MATLAB family effects.
+        assert!(classify_unknown_family_effect(
+            "matlab",
+            UnknownReasonCode::ConflictingFacts,
+            "matlab_block_structure",
+            Some(crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST),
+            RUST_ANCHOR_ENGINE,
+            RUST_ANCHOR_METHOD,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn sql_support_requires_the_owned_derived_origin_and_the_exact_anchor_target() {
+        let role = crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION;
+        let unit = unit_with_language("db/schema.sql", "sql", "sql_table_definition", 0);
+        let safe = |target: &str, engine: &str, assumption: &str| {
+            let mut fact = semantic_support_fact_with_target(&unit, target);
+            fact.certainty = FactCertainty::DataflowDerived;
+            fact.origin.engine = engine.to_string();
+            fact.origin.method = SQL_DERIVED_SUPPORT_METHOD.to_string();
+            fact.assumptions = vec![
+                "provider_resolved=false".to_string(),
+                assumption.to_string(),
+                format!("framework_role={role}"),
+            ];
+            support_fact_is_role_compatible(&fact, role)
+        };
+
+        assert!(safe(
+            "sql.ddl.create_table",
+            SQL_DERIVED_SUPPORT_ENGINE,
+            "derived_from=bounded_sql_ddl_anchors"
+        ));
+        // A neighbouring DDL target is not this family's anchor.
+        assert!(!safe(
+            "sql.ddl.create_index",
+            SQL_DERIVED_SUPPORT_ENGINE,
+            "derived_from=bounded_sql_ddl_anchors"
+        ));
+        // Support must come from the owned derivation, not from any engine that
+        // happens to name the same target.
+        assert!(!safe(
+            "sql.ddl.create_table",
+            "some-other-engine",
+            "derived_from=bounded_sql_ddl_anchors"
+        ));
+        assert!(!safe(
+            "sql.ddl.create_table",
+            SQL_DERIVED_SUPPORT_ENGINE,
+            "derived_from=guesswork"
+        ));
+    }
+
+    #[test]
+    fn language_role_prefixes_do_not_claim_each_other() {
+        // The role-known chain is first-match-wins, so a role that falls under
+        // another language's prefix is answered by that language and silently
+        // never forms a family. The VB MSTest role hit exactly that against
+        // `framework:mstest.` before it was renamed.
+        let roles = [
+            crate::adapters::frameworks::visual_basic::ROLE_MSTEST_TEST,
+            crate::adapters::frameworks::delphi::ROLE_DUNITX_TEST,
+            crate::adapters::frameworks::ada::ROLE_AUNIT_TEST,
+            crate::adapters::frameworks::matlab::ROLE_UNITTEST_TEST,
+            crate::adapters::frameworks::r::ROLE_TESTTHAT_TEST,
+            crate::adapters::frameworks::sql::ROLE_SQL_TABLE_DEFINITION,
+            crate::adapters::frameworks::php::ROLE_PHPUNIT_TEST,
+            crate::adapters::frameworks::swift::ROLE_XCTEST_TEST,
+            crate::adapters::frameworks::ruby::ROLE_MINITEST_TEST,
+            crate::adapters::frameworks::go::ROLE_GO_TESTING_TEST,
+            crate::adapters::frameworks::fortran::ROLE_TESTDRIVE_TEST,
+        ];
+        for role in roles {
+            let claimants = [
+                ("python", python_framework_role_is_known(role)),
+                ("tsjs", tsjs_framework_role_is_known(role)),
+                ("java", java_framework_role_is_known(role)),
+                ("csharp", csharp_framework_role_is_known(role)),
+                ("cpp", cpp_framework_role_is_known(role)),
+                ("rust", rust_role_is_known(role)),
+                ("sql", sql::framework_role_is_known(role)),
+                ("r", r::framework_role_is_known(role)),
+                ("visual_basic", visual_basic::framework_role_is_known(role)),
+                ("delphi", delphi::framework_role_is_known(role)),
+                ("ada", ada::framework_role_is_known(role)),
+                ("matlab", matlab::framework_role_is_known(role)),
+                ("php", php::framework_role_is_known(role)),
+                ("swift", swift::framework_role_is_known(role)),
+                ("ruby", ruby::framework_role_is_known(role)),
+                ("go", go::framework_role_is_known(role)),
+                ("fortran", fortran::framework_role_is_known(role)),
+            ]
+            .into_iter()
+            .filter(|(_, claimed)| *claimed)
+            .map(|(language, _)| language)
+            .collect::<Vec<_>>();
+            assert_eq!(
+                claimants.len(),
+                1,
+                "role {role} is claimed by {claimants:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sql_requires_three_members_like_the_adr_gate_says() {
+        assert_eq!(min_family_support("sql"), 3);
+    }
+
+    #[test]
+    fn go_unknown_classification_uses_the_live_parser_engine_identity() {
+        // This module classified Go unknowns against the retired ADR-0041
+        // scanner's engine identity while every real fact carried the ADR-0050
+        // parser's, so the Go arm never matched and both Go claim-impact
+        // classifiers were dead against product data. Nothing failed: no test
+        // built a Go fact with the engine string the live parser emits.
+        assert_eq!(GO_ANCHOR_ENGINE, "repogrammar-go-testing-parser");
+        assert_eq!(GO_ANCHOR_METHOD, "bounded_go_test_declaration_v2");
+        assert_eq!(
+            FamilyUnknownDomain::from_language_and_origin("go", GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD),
+            Some(FamilyUnknownDomain::Go),
+            "a fact from the dispatched Go parser must classify as the Go domain"
+        );
+        assert_eq!(
+            FamilyUnknownDomain::from_language_and_origin(
+                "go",
+                "repogrammar-go-test-scanner",
+                "bounded_go_test_declaration_v1",
+            ),
+            None,
+            "the retired scanner's identity must not classify as the Go domain"
+        );
+    }
+
+    #[test]
+    fn every_exact_anchor_language_pins_the_three_member_bar() {
+        // Falling through to DEFAULT_MIN_FAMILY_SUPPORT is silent: the lane
+        // keeps compiling, every lane test keeps passing, and a pair of
+        // anchors quietly forms a family the completion review says must not
+        // form. A lane added without its explicit bar fails here instead.
+        for language in [
+            "python",
+            "typescript",
+            "javascript",
+            "java",
+            "csharp",
+            "cpp",
+            "c",
+            "rust",
+            "matlab",
+            "ada",
+            "object-pascal",
+            "visual-basic",
+            "r",
+            "sql",
+            "go",
+            "php",
+            "swift",
+            "ruby",
+            "fortran",
+        ] {
+            assert_eq!(
+                min_family_support(language),
+                3,
+                "{language} must pin the three-member bar its completion review states, \
+                 not inherit the shared default of {DEFAULT_MIN_FAMILY_SUPPORT}"
+            );
         }
     }
 
@@ -6080,6 +7118,184 @@ mod tests {
             claim.framework_role == "framework:repogrammar.rust_parser_adapter"
                 && claim.support == 3
         }));
+    }
+
+    /// Every framework role a Rust unit can carry: the six general-framework roles
+    /// from `adapters::frameworks::rust_general` and the nine self-dogfood roles
+    /// from `core::policy::rust_self_dogfood`.
+    const RUST_FRAMEWORK_ROLES: [&str; 15] = [
+        "framework:serde.model",
+        "framework:thiserror.error",
+        "framework:clap.parser",
+        "framework:axum.route",
+        "framework:tokio.entry",
+        "framework:tokio.test",
+        "framework:repogrammar.rust_cli_command",
+        "framework:repogrammar.rust_mcp_handler",
+        "framework:repogrammar.rust_indexing_phase",
+        "framework:repogrammar.rust_family_gate",
+        "framework:repogrammar.rust_parser_adapter",
+        "framework:repogrammar.rust_installer_action",
+        "framework:repogrammar.rust_storage_validation",
+        "framework:repogrammar.rust_source_span_renderer",
+        "framework:repogrammar.rust_product_test",
+    ];
+
+    #[test]
+    fn rust_variation_dimensions_are_disjoint_from_characteristic_prefixes() {
+        // The two tables key the same role differently: the variation table by the
+        // raw dotted role, the characteristic table by its `stable_token` form.
+        // A characteristic prefix is pinned equal across every member, so it can
+        // never also be a dimension along which members legally differ.
+        for role in RUST_FRAMEWORK_ROLES {
+            let characteristic = rust_characteristic_prefixes(&stable_token(role));
+            assert!(
+                !characteristic.is_empty(),
+                "rust role {role} must pin at least one characteristic prefix"
+            );
+            for (dimension, prefixes) in variation_feature_prefixes("rust", role) {
+                for prefix in *prefixes {
+                    assert!(
+                        !characteristic.contains(prefix),
+                        "rust dimension {dimension} reuses characteristic prefix {prefix} \
+                         for role {role}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rust_roles_declare_variation_dimensions_through_the_shared_dispatch() {
+        // Guards the defect this table fixes: `variation_feature_prefixes` used to
+        // fall through to the empty language default for rust, silently emitting no
+        // slots and no allowed-variation constraints. Only axum and the tokio
+        // entrypoints legitimately have none (their anchors emit nothing beyond the
+        // pinned support family and a role-constant `anchor_kind:`).
+        let intentionally_empty = [
+            "framework:axum.route",
+            "framework:tokio.entry",
+            "framework:tokio.test",
+        ];
+        for role in RUST_FRAMEWORK_ROLES {
+            let dimensions = variation_feature_prefixes("rust", role);
+            assert_eq!(
+                dimensions.is_empty(),
+                intentionally_empty.contains(&role),
+                "unexpected rust variation coverage for role {role}"
+            );
+        }
+        // The general-framework arms must be explicit, never the self-dogfood
+        // fallback that pins structural shapes the general anchors never emit.
+        let self_dogfood =
+            variation_feature_prefixes("rust", "framework:repogrammar.rust_family_gate");
+        for role in ["framework:serde.model", "framework:thiserror.error"] {
+            assert_ne!(
+                variation_feature_prefixes("rust", role),
+                self_dogfood,
+                "general rust role {role} must not fall through to the self-dogfood arm"
+            );
+        }
+    }
+
+    fn rust_self_dogfood_fact(
+        unit: &IndexedCodeUnitRecord,
+        role: &str,
+        target: &str,
+        call_shape: &str,
+        path_context: &str,
+    ) -> SemanticFact {
+        let mut fact = rust_derived_fact(unit, target, role);
+        fact.assumptions.extend([
+            "rust_anchor_kind=storage_validation".to_string(),
+            "rust_signature_shape=fn_result".to_string(),
+            "rust_visibility_shape=pub_crate".to_string(),
+            "rust_arity_shape=two".to_string(),
+            "rust_return_shape=result".to_string(),
+            "rust_attribute_shape=none".to_string(),
+            "rust_error_shape=typed".to_string(),
+            "rust_test_shape=none".to_string(),
+            "rust_control_shape=linear".to_string(),
+            format!("rust_call_shape={call_shape}"),
+            format!("rust_path_context={path_context}"),
+        ]);
+        fact
+    }
+
+    #[test]
+    fn rust_self_dogfood_family_emits_call_shape_and_path_context_variation() {
+        // Two members in the application layer with a direct call shape plus one in
+        // the adapter layer with a chained one: the members stay compatible (their
+        // characteristic structural shapes are equal) but now legally differ along
+        // the two dimensions the rust variation table declares. Control shape is
+        // identical everywhere, so it must produce neither slot nor constraint.
+        let role = "framework:repogrammar.rust_storage_validation";
+        let target = "repogrammar.rust.storage_validation";
+        let members = [
+            ("src/rust/application/storage.rs", "direct", "application"),
+            ("src/rust/application/session.rs", "direct", "application"),
+            (
+                "src/rust/adapters/persistence/sqlite.rs",
+                "chained",
+                "adapters",
+            ),
+        ];
+        let mut units = Vec::new();
+        let mut facts = Vec::new();
+        for (index, (path, call_shape, path_context)) in members.into_iter().enumerate() {
+            let unit = unit_with_language(path, "rust", "rust_function", index);
+            facts.push(role_fact(&unit, role));
+            facts.push(rust_self_dogfood_fact(
+                &unit,
+                role,
+                target,
+                call_shape,
+                path_context,
+            ));
+            units.push(unit);
+        }
+
+        let report = build_family_claims(&units, &facts);
+        assert_eq!(report.claims.len(), 1, "{report:?}");
+        let claim = &report.claims[0];
+        assert_eq!(claim.language, "rust");
+        assert_eq!(claim.support, 3);
+
+        let slot_ids = claim
+            .variation_slots
+            .iter()
+            .map(|slot| slot.slot_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(slot_ids.contains("slot:rust_self_dogfood_call_shape"));
+        assert!(slot_ids.contains("slot:rust_self_dogfood_path_context"));
+        assert!(!slot_ids.contains("slot:rust_self_dogfood_control_shape"));
+
+        let call_shape =
+            variation_constraint(&claim.constraint_profile, "rust_self_dogfood_call_shape")
+                .expect("call shape varies across the self-dogfood members");
+        assert!(!call_shape.includes_absent_profile);
+        assert_eq!(call_shape.observed_profiles.len(), 2);
+        let path_context =
+            variation_constraint(&claim.constraint_profile, "rust_self_dogfood_path_context")
+                .expect("path context varies across the self-dogfood members");
+        assert_eq!(path_context.observed_profiles.len(), 2);
+        assert!(
+            variation_constraint(&claim.constraint_profile, "rust_self_dogfood_control_shape")
+                .is_none()
+        );
+
+        // Same co-persistence agreement the Python and TS/JS families assert: for
+        // every dimension the rust table can emit, slot and constraint agree.
+        for entry in variation_feature_prefixes(&claim.language, claim.framework_role.as_str()) {
+            let dimension = entry.0;
+            let slot_present = slot_ids.contains(format!("slot:{dimension}").as_str());
+            let constraint_present =
+                variation_constraint(&claim.constraint_profile, dimension).is_some();
+            assert_eq!(
+                slot_present, constraint_present,
+                "variation slot and constraint disagree for dimension {dimension}"
+            );
+        }
     }
 
     #[test]
@@ -9427,6 +10643,50 @@ mod tests {
                 slot_present, constraint_present,
                 "variation slot and constraint disagree for dimension {dimension}"
             );
+        }
+    }
+
+    #[test]
+    fn python_registry_impacts_match_the_authoritative_claim_classifier() {
+        // `python_unknown_affected_claim_blocks_family` stays the
+        // authoritative claim-impact classifier; the registry in
+        // `adapters/parsing/python.rs` is the record that must agree with it.
+        // This is the lockstep check that keeps the two from drifting apart.
+        use crate::adapters::parsing::python::{PythonClaimImpact, PYTHON_OBLIGATION_REGISTRY};
+
+        for entry in PYTHON_OBLIGATION_REGISTRY {
+            let claim = entry.affected_claim;
+            match entry.impact {
+                PythonClaimImpact::Blocking => {
+                    for role in ["", "framework:pytest.test", "framework:fastapi.route"] {
+                        assert!(
+                            python_unknown_affected_claim_blocks_family(claim, role),
+                            "{claim} is recorded as blocking but does not block under role {role}"
+                        );
+                    }
+                }
+                PythonClaimImpact::NonBlocking => {
+                    for role in ["", "framework:pytest.test", "framework:fastapi.route"] {
+                        assert!(
+                            !python_unknown_affected_claim_blocks_family(claim, role),
+                            "{claim} is recorded as non-blocking but blocks under role {role}"
+                        );
+                    }
+                }
+                PythonClaimImpact::BlockingUnderPytestRole => {
+                    assert!(
+                        python_unknown_affected_claim_blocks_family(claim, "framework:pytest.test"),
+                        "{claim} must block under a pytest role"
+                    );
+                    assert!(
+                        !python_unknown_affected_claim_blocks_family(
+                            claim,
+                            "framework:fastapi.route"
+                        ),
+                        "{claim} must not block outside a pytest role"
+                    );
+                }
+            }
         }
     }
 }

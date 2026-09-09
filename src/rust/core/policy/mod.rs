@@ -3,5 +3,6 @@
 pub mod abstention;
 pub mod alignment;
 pub mod freshness;
+pub mod generation_mode;
 pub mod paths;
 pub mod rust_self_dogfood;

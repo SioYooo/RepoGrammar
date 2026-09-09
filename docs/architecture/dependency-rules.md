@@ -16,6 +16,10 @@
 - optional providers, including any future CodeGraph provider, belong behind
   ports and adapters. Their SDK, CLI, MCP, or file formats must not enter
   `core`, `ports`, or `application` as concrete third-party types.
+- reviewed library-contract registration belongs in `core` and may match only
+  exact resolved versions under the language-neutral contract. Ecosystem-native
+  range parsing or ordering belongs behind a separately qualified adapter; core
+  must not compare opaque version text or select an overlapping contract.
 
 ## Forbidden dependencies
 
@@ -69,15 +73,52 @@ compile, and Linux/macOS/Windows runtime gates pass.
 
 Go discovery/path-shape policy belongs in `adapters/languages/go.rs`; the file
 discovery adapter may use it for stable `go`/`go-config` classification, while
-application indexing may only route those tokens as inventory-only. Until the
-authorized frontend lands, neither the application nor generic parser may read
-Go source, inspect markers, select GOOS/GOARCH, or derive units/facts/families.
-The application may keep `go`/`go-config` metadata deltas incremental only
-while those tokens are absent from `ParserProjectContext`; it must filter all
-claim-bearing copy-forward records for their paths. The frontend module must
-add token-based project-context invalidation before introducing cross-file Go
-semantics. The dated suffix list is discovery metadata, not a core support
-authority.
+application indexing keeps `.go` inventory-only. Until the authorized source
+frontend lands, neither the application nor generic parser may read Go source,
+inspect markers, select GOOS/GOARCH, or derive Go-source units/facts/families.
+The bounded parser adapter may read only discovered `go.mod`/`go.work` bytes and
+return RepoGrammar-owned project-config units, scoped UNKNOWNs, and generic
+manifest-declared dependency records; it must not execute Go or resolve a
+module graph. `.go` metadata deltas remain incremental and filter all
+claim-bearing copy-forward records. Static file-local `go-config` outputs may
+also update/copy incrementally. A future source frontend must add its real
+cross-file inputs and token-based context invalidation before introducing Go
+source semantics. The dated suffix list is discovery metadata, not a core
+support authority.
+
+Java project-config classification belongs to the pure normalized-path policy
+in `adapters/languages/java.rs`. Exact root/nested `pom.xml` bytes may enter
+`adapters/parsing/java/maven.rs`, which owns a bounded static XML subset and
+returns only RepoGrammar-owned project-config units, evidence-bound direct
+Maven dependency declarations, and `java_dependency_inventory` typed UNKNOWNs.
+It must fail closed on malformed/duplicated markup, DTD/entity/CDATA input,
+element prefixes, ambiguous coordinates, effective-model obligations, and
+resource overflow. It must not resolve parents, profiles, properties,
+dependency management/BOMs, classpaths, artifacts, or repositories, and it
+must not invoke Maven, Gradle, javac/JDT, plugins, annotation processors,
+project/dependency code, child processes, caches, or network access. Because
+the accepted subset is file-local and absent from `ParserProjectContext`, its
+changed evidence may update incrementally and unchanged rows may copy only with
+their unchanged evidence unit.
+
+Ada and Fortran discovery policy belongs in `adapters/languages/ada.rs` and
+`adapters/languages/fortran.rs`. Their source and deferred configuration paths
+must be rejected before SourceStore dispatch. The bounded parser may read only
+supplied exact `alire.toml`/`alire.lock` and `fpm.toml` bytes and return owned
+project-config units, scoped UNKNOWNs, and generic manifest-declared dependency
+records. It must not evaluate GPR, interpret Alire's internal lock schema, run
+GNAT/gprbuild/alr/fpm/compiler/preprocessor commands, execute repository or
+dependency code, or resolve a graph. Libadalang and Flang remain qualification
+subjects, not accepted production dependencies.
+
+## Native filesystem notification boundary
+
+ADR-0053 accepts exact `notify` 8.2.0 with only `macos_fsevent` enabled.
+Concrete native watcher and event types stay in the filesystem adapter. The
+composition root receives only a coalesced boolean hint or a source-free typed
+failure, retains periodic fingerprint reconciliation, and visibly falls back to
+polling when native notification fails. A notification is never index freshness
+or filesystem-confinement evidence.
 
 ## Tree-sitter boundary
 
@@ -110,7 +151,10 @@ source-ordered issue vector consumed monotonically by `mod.rs`; it never
 resolves aliases or copies suite names into case facts. Bounded
 `compile_commands.json`, `vcpkg.json`, and
 `conanfile.txt` decoding stays in `cpp/project_config.rs`, which returns only
-RepoGrammar-owned project-config facts through the parser port.
+RepoGrammar-owned project-config facts and bounded vcpkg/Conan generic
+dependency records through the parser port. It never invokes either package
+manager or interprets unsupported conditional, feature, revision, range, or
+build semantics.
 
 C# Tree-sitter nodes stay in `src/rust/adapters/parsing/csharp.rs`; the pure
 `csharp/test_data.rs` helper owns xUnit `MemberData` argument classification and
@@ -165,49 +209,63 @@ key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is
 not an adapter and does not execute Pyrefly, Pyright, RightTyper, or repository
 code by itself.
 
-Go remains unimplemented. ADR-0021 permits a later version-pinned Tree-sitter
-Go dependency only as syntax fallback and defines an explicit, opt-in,
-sandboxed standard-library worker over supplied inputs as the authoritative
-path. The safe default must not invoke `go/packages`, `go list`, gopls, cgo, or
-repository build/test/generate commands. No Go dependency or runtime behavior
-is authorized by that preflight alone.
+Go source parsing and semantics remain unimplemented. The in-process static
+project-config reader is limited to bounded supplied `go.mod`/`go.work` text and
+language-neutral declaration inventory; it adds no production dependency and
+authorizes no Go runtime behavior. ADR-0021 permits a later version-pinned
+Tree-sitter Go dependency only as syntax fallback and defines an explicit,
+opt-in, sandboxed standard-library worker over supplied inputs as the
+authoritative source path. The safe default must not invoke `go/packages`, `go
+list`, gopls, cgo, or repository build/test/generate commands.
 The existing TypeScript process adapter is not a Go sandbox and must not be
 reused as one. Go claim impact must enter the existing authoritative cross-
 language family-`UNKNOWN` classifier; language callers may not infer blocking
 behavior from raw build/module/generated assumptions.
 
 PHP discovery/configuration classification and bounded inventory persistence
-are implemented without a parser or production dependency. This
-`discovered_only` state causes no parser-facing source-store read and creates no
-code unit, IR, semantic fact, typed `UNKNOWN`, family, project-model record, or
-support/readiness claim. Exact `.composer`/`.phpunit.cache` components are
-PHP-only exclusions; exact `vendor` retains the existing global policy. The
-future project-model boundary, not discovery or a caller, must own custom
-`vendor-dir`/cache selection before semantic admission.
+are implemented without a source frontend or production dependency. PHP source
+and PHPUnit XML cause no parser-facing source-store read and create no code
+unit, IR, fact, typed `UNKNOWN`, dependency, or family. Exact `composer.json`
+and `composer.lock` are the static-metadata exception: `php.rs` reads supplied
+UTF-8 JSON only after the shared bounded unique-member gate, then emits
+RepoGrammar-owned Composer rows and claim-scoped inventory uncertainty. Lock
+rows retain unknown directness and unverified manifest coherence; source URLs,
+installation, autoload, build, and runtime state are not inferred. Exact
+`.composer`/`.phpunit.cache` components are PHP-only exclusions; exact `vendor`
+retains the existing global policy. A future selected project-model boundary,
+not discovery or a caller, must own custom `vendor-dir`/cache selection before
+semantic admission.
 
 ADR-0024 names `mago-syntax` 1.43.0 only as the production frontend candidate
 in a separately reviewed OS-sandboxed worker and authorizes no dependency or
 runtime behavior. Official PHP 8.5.8 `php -n -l` may participate only as the
 isolated syntax-validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/
 location differential and separately qualification-gated fallback. Tree-sitter
-PHP 0.24.2 is a syntax-candidate fallback, never the semantic oracle. Composer
-JSON/lock and PHPUnit XML may enter only a separate future bounded non-executing
-project-model parser, which pins Composer 2.10.2 lock-content-hash semantics and
-emits an allowlisted normalized profile. A frontend worker receives only one PHP
-source plus that bounded profile, never raw configuration. No worker or project-
-model path may execute Composer, PHPUnit, autoloaders, plugins, scripts,
-repository PHP, or target dependencies. The exact artifact, transitive/
-advisory, sandbox, protocol, resource, five-target, and native-runtime gates
-must pass before any dependency or worker is added.
+PHP 0.24.2 is a syntax-candidate fallback, never the semantic oracle. The
+current Composer inventory does not implement a selected project profile or
+lock-content-hash coherence. A future bounded non-executing stage may add that
+profile and pin Composer 2.10.2 coherence semantics; PHPUnit XML remains future
+input. A frontend worker receives only one PHP source plus the future bounded
+profile, never raw configuration. No worker or project-model path may execute
+Composer, PHPUnit, autoloaders, plugins, scripts, repository PHP, or target
+dependencies. The exact artifact, transitive/advisory, sandbox, protocol,
+resource, five-target, and native-runtime gates must pass before any dependency
+or worker is added.
 
 Swift discovery/config classification and bounded inventory persistence are
-implemented without a parser, toolchain, or production dependency. This
-`discovered_only` state causes no parser-facing source-store read and creates no
-code unit, IR, semantic fact, typed `UNKNOWN`, family, project-model record, or
-support/readiness claim. Exact `.build`/`.swiftpm` components are Swift-only
-exclusions and do not globally prune other languages. The future project-model
-boundary must restore token-based context invalidation before cross-file Swift
-semantics are admitted.
+implemented without a source frontend, toolchain, or production dependency.
+Swift source, executable manifests, version-specific manifests, and
+`.swift-version` cause no parser-facing source-store read and create no code
+unit, IR, semantic fact, typed `UNKNOWN`, dependency, family, project model, or
+support/readiness claim. Exact `Package.resolved` is the sole static-metadata
+exception: `adapters/parsing/swift.rs` may decode supplied schema-2/3 JSON only
+after the shared `adapters/parsing/bounded_json.rs` gate proves bounded depth,
+object-member count, decoded-key size, and unique decoded member names. It may
+emit only RepoGrammar-owned SwiftPM lock rows and typed project-inventory
+uncertainty. Package locations and revisions are discarded. Exact
+`.build`/`.swiftpm` components are Swift-only exclusions and do not globally
+prune other languages. The future source/project-model boundary must restore
+token-based context invalidation before cross-file Swift semantics are admitted.
 
 ADR-0025 names SwiftSyntax 603.0.2 `SwiftParser`
 only as the syntax-frontend candidate in a separately reviewed OS-sandboxed
@@ -219,9 +277,10 @@ candidate. It must consume synthesized supplied inputs without opening the
 repository, evaluating `Package.swift`, building/indexing modules, resolving
 dependencies, loading macros/plugins, or using ambient SDK/toolchain state.
 
-The future project-model boundary may parse only a bounded static SwiftPM
-manifest subset and bounded lockfile data. It may never execute Swift, SwiftPM,
-Xcode, manifests, plugins, macros, generators, target code, tests, child
+The current lockfile boundary parses only the ADR-0025 bounded
+`Package.resolved` schema-2/3 subset; a future project-model boundary may add a
+separately reviewed bounded static SwiftPM manifest subset. Neither may execute
+Swift, SwiftPM, Xcode, manifests, plugins, macros, generators, target code, tests, child
 processes, or network requests. Exact archive/installer hashes and signatures,
 toolchain/source mapping, transitive packages, licenses, advisories, build
 scripts/C/C++ shims/generated code, SBOM/reproducibility, five-target compile
@@ -232,11 +291,15 @@ The paused baseline and exact next qualification goal are recorded in
 `docs/plans/swift-n1-qualification-handoff.md`; qualification evidence and
 production artifact/worker admission must remain separate atomic stages.
 
-Ruby discovery/config classification and bounded inventory persistence are
-implemented without a parser or production dependency. This `discovered_only`
-state causes no parser-facing source-store read and creates no code unit, IR,
-semantic fact, typed `UNKNOWN`, family, or support/readiness claim. ADR-0022
-names `ruby-prism` 1.9.0 only as a candidate and authorizes no dependency. The
+Ruby discovery/config classification and bounded dependency inventory are
+implemented without a production dependency. Ruby source and every config
+except exact `Gemfile.lock` remain source-free inventory. A pure Rust lock
+parser may read only bounded exact-lock bytes, create one project-config unit,
+emit source-free typed `ruby_dependency_inventory` `UNKNOWN`s, and parse
+direct `DEPENDENCIES` declarations. It must not read or evaluate executable
+DSLs or claim resolved versions. This `discovered_only` state creates no Ruby source IR,
+framework family, or support/readiness claim. ADR-0022 names `ruby-prism` 1.9.0
+only as a candidate and authorizes no dependency. The
 wrapper's native C99/FFI, vendored source, bindgen/libclang, compiler,
 static-link, checksum, license,
 platform, fuzz/corpus, range/diagnostic, benchmark, and supply-chain surface
@@ -246,6 +309,86 @@ No Ruby worker may evaluate Gemfiles/gemspecs or execute Ruby, Bundler,
 RubyGems, Rake, Rails, tests, generators, installed gems, repository tooling,
 or network access. Ruby claim impact must enter the authoritative
 cross-language family-`UNKNOWN` classifier.
+
+Visual Basic .NET discovery and bounded NuGet declaration inventory are
+implemented without a source frontend, MSBuild/NuGet execution, or production
+dependency. Exact lowercase `.vb` source remains unread `visual-basic`
+inventory. Exact lowercase `.vbproj` is the sole `visual-basic-config` input:
+`adapters/parsing/visual_basic.rs` reads supplied UTF-8 bytes only through the
+RepoGrammar-owned bounded XML reader, creates one project-config unit, and may
+emit literal direct `PackageReference` rows plus claim-scoped
+`visual_basic_dependency_inventory` uncertainty. It must not evaluate SDK
+imports, explicit imports, properties, conditions, item updates, version
+overrides, targets, restore, analyzers, generators, or project code. VB6
+`.vbp`/`.frm`/`.bas`/`.cls` inputs remain outside this lane. No dependency row
+is family evidence or a support claim.
+
+Object Pascal source discovery and Delphi project inventory are likewise
+source-free and dependency-free. Exact `.pas`/`.dpr`/`.dpk` paths use the
+generic `object-pascal` token because the suffix does not prove a compiler
+dialect. Only exact `.dproj` enters `adapters/parsing/delphi.rs` as
+`delphi-config`; the parser may emit bounded literal `DCC_UsePackage` rows with
+runtime scope and unknown directness. It must not evaluate Delphi MSBuild,
+properties, conditions, imports, targets, `.dpk` source, compiled packages, or
+any compiler/package manager. Free Pascal/Lazarus `.pp`/`.lpr`/`.lpi`/`.lpk`
+formats are not aliases for Delphi metadata and remain deferred. Dynamic,
+malformed, conflicting, or over-limit claims remain scoped
+`delphi_dependency_inventory` `UNKNOWN`s.
+SQL discovery is implemented by the pure normalized-path classifier in
+`adapters/languages/sql.rs`; the bounded DDL frontend belongs in
+`adapters/parsing/sql.rs` and its role registry in `adapters/frameworks/sql.rs`.
+Under ADR-0040 application indexing reads SQL source, but the frontend may scan
+only constructs PostgreSQL 16 and SQLite 3 lex identically, so it still selects
+no dialect and keeps dialect `UNKNOWN` for the reason ADR-0035 records. It must
+not invoke a parser generator, client, database, driver, or migration tool,
+retain statement literals or repository names in any output, or emit
+`sql_extension` rows. Admitting a construct the declared dialects lex
+differently, widening the invariance set, or adding an extension manifest each
+require a superseding ADR; an external grammar or database artifact additionally
+requires pinned, source-backed dependency and sandbox qualification.
+
+R discovery belongs in `adapters/languages/r.rs`; bounded metadata parsing
+belongs in `adapters/parsing/r.rs`. `.R` and `.r` source is inventory-only. The
+parser may
+read only exact supplied `DESCRIPTION`, `NAMESPACE`, and `renv.lock` bytes and
+must not run R, parse/eval/source R code, profiles, renv, packages, native code,
+children, or network operations. DESCRIPTION/NAMESPACE cannot default to CRAN.
+Only explicit bounded renv CRAN/Bioconductor records may cross the parser port
+as language-neutral dependencies; remote/custom/URL/local source values must be
+discarded, never sanitized into an output surrogate. This slice uses existing
+Rust/serde_json APIs and authorizes no production dependency.
+MATLAB discovery and bounded package inventory are implemented without a
+source frontend, licensed toolchain, or production dependency. Lowercase `.m`
+is inventory-only and never reaches the source store or parser. Only exact
+root/nested `resources/mpackage.json` bytes may enter the shared bounded,
+duplicate-key-rejecting JSON gate. The parser may emit one project-config unit,
+direct `matlab_add_on` declaration rows keyed by package name plus UUID, and
+typed `matlab_dependency_inventory` uncertainty. Provider/contact fields are
+discarded; compatibility strings are requirements, never installed or resolved
+versions. No path may invoke MATLAB, Octave, Simulink, project startup code,
+package installation, child processes, or network access, and no `.m` path may
+produce source IR, semantic facts, external symbols, families, or support.
+
+Assembly source admission is restricted to lowercase `.s`; uppercase `.S` is a
+language-specific exclusion because it conventionally requires preprocessing.
+The in-process parser is a byte/line/fact-bounded lexical scanner for one
+candidate profile: x86-64 ELF GNU as 2.46 AT&T syntax. It may emit a module,
+generic label units, containment IR, and selected source-visible directive,
+label, direct-call, and direct-jump facts. It must always emit an unproven-profile
+UNKNOWN, and macro/include/repetition, conditional, Intel-syntax, `.code16`,
+`.code32`, malformed, or over-budget evidence remains typed uncertainty. The
+scanner never assembles, preprocesses, links, executes, reads include targets,
+spawns a child, or accesses the network; lexical facts cannot support a family.
+
+Scratch remains outside product discovery and indexing. The disconnected
+`adapters/languages/scratch.rs` prerequisite accepts only caller-supplied classic
+single-disk, non-ZIP64 `.sb3` bytes, validates bounded central-directory/path/
+size/ratio/JSON structure, rejects encryption, links, traversal, duplicate
+paths, and unsupported compression, and parses only a stored root
+`project.json` without extraction. It is not a general ZIP reader and does not
+create a language token, source document, code unit, IR, fact, dependency, or
+family. A binary-document port and a maintained ZIP/deflate qualification are
+mandatory before `.sb3` discovery may be added.
 
 Provider SDK objects, LSP payloads, private Pyrefly data structures, Pyright
 internals, Python AST nodes, and runtime trace payloads must be translated into

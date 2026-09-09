@@ -2,6 +2,7 @@ use repogrammar::adapters::filesystem::change_fingerprint::{
     repository_change_fingerprint, repository_change_fingerprint_report,
     RepositoryChangeFingerprint,
 };
+use repogrammar::adapters::filesystem::change_watcher::RepositoryChangeWatcher;
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
@@ -27,11 +28,13 @@ use repogrammar::application::indexing::{
 };
 use repogrammar::application::install::{
     execute_disconnect, execute_install, execute_prepared_agent_disconnect,
-    inspect_agent_integration, prepare_product_agent_disconnect, rollback_agent_disconnect,
-    AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget, DisconnectExecutionOutcome,
-    InstallExecutionContext, InstallExecutionOutcome, InstallRequest, InstallScope,
-    McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator, NativeMcpServerConfig,
-    NativeMcpServerState, AGENT_PREFLIGHT_GATE, MCP_SERVER_NAME,
+    inspect_agent_integration, opencode_global_config_path, opencode_inspect_mcp_config,
+    opencode_native_add_action, opencode_native_remove_action, opencode_remove_mcp_config,
+    opencode_write_mcp_config, parse_opencode_mcp_entry, prepare_product_agent_disconnect,
+    rollback_agent_disconnect, AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget,
+    DisconnectExecutionOutcome, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
+    InstallScope, McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator,
+    NativeMcpServerConfig, NativeMcpServerState, AGENT_PREFLIGHT_GATE, MCP_SERVER_NAME,
 };
 use repogrammar::application::product_installation::{
     inspect_product_installation, ProductInstallationPlan, ProductInstallationRequest,
@@ -101,6 +104,73 @@ const AUTOSYNC_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const UNINSTALL_HELPER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const UNINSTALL_PARENT_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
 static AUTOSYNC_STARTUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const AUTOSYNC_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Events are wakeup hints; only a successful sync acknowledges a change.
+struct AutosyncSchedule {
+    pending: bool,
+    failures: u32,
+    next_scan: Instant,
+    retry_at: Instant,
+    idle_rounds: u32,
+}
+
+impl AutosyncSchedule {
+    fn new(now: Instant) -> Self {
+        Self {
+            pending: false,
+            failures: 0,
+            next_scan: now,
+            retry_at: now,
+            idle_rounds: 0,
+        }
+    }
+
+    fn due(&mut self, now: Instant, event: bool) -> bool {
+        self.pending |= event;
+        if event {
+            self.idle_rounds = 0;
+        }
+        now >= self.retry_at && (self.pending || now >= self.next_scan)
+    }
+
+    fn wait_interval(&self, native: bool, poll_ms: u64) -> Duration {
+        if native {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_millis(
+                poll_ms
+                    .saturating_mul(1u64 << self.idle_rounds.min(10))
+                    .min(poll_ms.max(30_000)),
+            )
+        }
+    }
+
+    fn scanned(&mut self, now: Instant, native: bool, poll_ms: u64) {
+        self.next_scan = now
+            + if native {
+                AUTOSYNC_RECONCILE_INTERVAL
+            } else {
+                Duration::from_millis(poll_ms)
+            };
+    }
+
+    fn failed(&mut self, now: Instant, poll_ms: u64) {
+        self.pending = true;
+        self.failures = self.failures.saturating_add(1);
+        let delay = poll_ms
+            .saturating_mul(1u64 << self.failures.min(10))
+            .min(60_000);
+        self.retry_at = now + Duration::from_millis(delay);
+    }
+
+    fn succeeded(&mut self) {
+        self.pending = false;
+        self.failures = 0;
+        self.idle_rounds = 0;
+    }
+}
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -361,6 +431,9 @@ struct ProductProgressSink<'a> {
     command: &'a str,
     interactive: bool,
     last_width: usize,
+    columns: usize,
+    unicode: bool,
+    color: bool,
 }
 
 impl<'a> ProductProgressSink<'a> {
@@ -369,13 +442,29 @@ impl<'a> ProductProgressSink<'a> {
             command,
             interactive,
             last_width: 0,
+            columns: std::env::var("COLUMNS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(80),
+            unicode: std::env::var("LC_ALL")
+                .or_else(|_| std::env::var("LC_CTYPE"))
+                .or_else(|_| std::env::var("LANG"))
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .contains("utf"),
+            color: std::env::var_os("NO_COLOR").is_none(),
         }
     }
 
     fn emit(&mut self, event: &ProgressEvent) {
         if self.interactive {
-            let (frame, width) =
-                render_interactive_index_progress_event(self.command, event, self.last_width);
+            let (frame, width) = render_interactive_index_progress_event(
+                self.command,
+                event,
+                self.columns,
+                self.unicode,
+                self.color,
+            );
             eprint!("{frame}");
             self.last_width = width;
         } else {
@@ -396,18 +485,15 @@ impl<'a> ProductProgressSink<'a> {
 fn render_interactive_index_progress_event(
     command: &str,
     event: &ProgressEvent,
-    previous_width: usize,
+    columns: usize,
+    unicode: bool,
+    color: bool,
 ) -> (String, usize) {
-    let line = render_index_progress_event(command, event)
-        .trim_end_matches('\n')
-        .to_string();
-    let width = line.chars().count();
-    let mut frame = format!("\r{line}");
-    let padding = previous_width.saturating_sub(width);
-    if padding > 0 {
-        frame.push_str(&" ".repeat(padding));
-    }
-    (frame, width)
+    let line = repogrammar::interfaces::cli::progress::render_terminal_index_progress_event(
+        command, event, columns, unicode, color,
+    );
+    let width = usize::from(!line.is_empty());
+    (format!("\r\x1b[2K{line}"), width)
 }
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
@@ -977,6 +1063,8 @@ impl ProductCliRuntime {
             }
         };
         let startup_nonce = startup_nonce_from_process();
+        // Subscribe before establishing the baseline so startup edits remain pending.
+        let mut watcher = RepositoryChangeWatcher::new(&root).ok();
         let env_lookup = |key: &str| std::env::var(key).ok();
         let initialized = initialize_autosync_service(
             || match self.autosync_terminal_repository_state(&request) {
@@ -1034,8 +1122,35 @@ impl ProductCliRuntime {
         }
         let mut failure_log = AutosyncFailureLogState::default();
         let mut fingerprint_observation: Option<String> = None;
+        append_autosync_daemon_log(
+            Some(&log_path),
+            if watcher.is_some() {
+                "autosync: native events enabled; periodic metadata reconciliation every 60s"
+            } else {
+                "autosync: native events unavailable; using metadata polling"
+            },
+        );
+        let mut schedule = AutosyncSchedule::new(Instant::now());
         loop {
-            std::thread::sleep(Duration::from_millis(settings.poll_ms));
+            let retry_wait = schedule.retry_at.saturating_duration_since(Instant::now());
+            let event = if !retry_wait.is_zero() {
+                // Leave the coalesced event queued; a noisy tree cannot bypass backoff.
+                std::thread::sleep(retry_wait.min(Duration::from_secs(10)));
+                false
+            } else if let Some(active) = &watcher {
+                match active.wait(schedule.wait_interval(true, settings.poll_ms)) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        append_autosync_daemon_log(Some(&log_path),
+                            "autosync: native event stream failed; reconciling and falling back to metadata polling");
+                        watcher = None;
+                        true
+                    }
+                }
+            } else {
+                std::thread::sleep(schedule.wait_interval(false, settings.poll_ms));
+                false
+            };
             // Best-effort cross-version step-down. If the run state shows a
             // strictly newer engine stamped it after this daemon reclaimed the
             // stamp at startup, step down early to avoid needless cross-version
@@ -1133,13 +1248,21 @@ impl ProductCliRuntime {
                     ));
                 }
             }
+            if !schedule.due(Instant::now(), event) {
+                continue;
+            }
+            if let Some(active) = &watcher {
+                active.refresh_ignore_filter();
+            }
             let fingerprint_started = Instant::now();
+            schedule.scanned(fingerprint_started, watcher.is_some(), settings.poll_ms);
             let next = match self.repository_fingerprint(&request) {
                 Ok(next) => {
                     record_autosync_runtime_recovery(&log_path, &mut failure_log, request.quiet);
                     next
                 }
                 Err(_) => {
+                    schedule.failed(Instant::now(), settings.poll_ms);
                     record_autosync_runtime_failure(
                         &autosync_request,
                         &log_path,
@@ -1151,7 +1274,8 @@ impl ProductCliRuntime {
                     continue;
                 }
             };
-            if next == current {
+            if next == current && !schedule.pending {
+                schedule.idle_rounds = schedule.idle_rounds.saturating_add(1);
                 continue;
             }
             std::thread::sleep(Duration::from_millis(settings.debounce_ms));
@@ -1159,6 +1283,7 @@ impl ProductCliRuntime {
             let stable = match self.repository_fingerprint_report(&request) {
                 Ok(stable) => stable,
                 Err(_) => {
+                    schedule.failed(Instant::now(), settings.poll_ms);
                     record_autosync_runtime_failure(
                         &autosync_request,
                         &log_path,
@@ -1170,10 +1295,9 @@ impl ProductCliRuntime {
                     continue;
                 }
             };
-            if stable.digest == current {
+            if stable.digest == current && !schedule.pending {
                 continue;
             }
-            current = stable.digest.clone();
             log_autosync_fingerprint_observation(
                 &log_path,
                 &mut fingerprint_observation,
@@ -1198,6 +1322,8 @@ impl ProductCliRuntime {
             let started = Instant::now();
             match self.index_repository("sync", sync_request) {
                 Ok(outcome) => {
+                    current = stable.digest;
+                    schedule.succeeded();
                     for line in failure_log.success_lines() {
                         append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
@@ -1217,6 +1343,7 @@ impl ProductCliRuntime {
                     );
                 }
                 Err(_error) => {
+                    schedule.failed(Instant::now(), settings.poll_ms);
                     let message = AutosyncRecordedFailure::SyncFailed.as_str();
                     let lines = failure_log.failure_lines(message, started.elapsed().as_millis());
                     for line in lines {
@@ -1820,7 +1947,10 @@ impl CliRuntime for ProductCliRuntime {
             request.quiet,
             request.stderr_is_terminal,
         );
-        let interactive_progress = emit_progress && request.stderr_is_terminal;
+        let interactive_progress = emit_progress
+            && request.stderr_is_terminal
+            && std::env::var_os("CI").is_none()
+            && std::env::var("TERM").as_deref() != Ok("dumb");
         let mut progress_sink = ProductProgressSink::new(command, interactive_progress);
         let result = {
             let mut progress = |event| {
@@ -2405,6 +2535,13 @@ fn run_serve_command(rest: &[String], runtime: &impl McpReadOnlyRuntime) -> i32 
 
 struct ProductNativeAgentConfigurator;
 
+impl ProductNativeAgentConfigurator {
+    fn opencode_config_path() -> Result<PathBuf, RepoGrammarError> {
+        let env_lookup = |key: &str| std::env::var(key).ok();
+        opencode_global_config_path(&env_lookup)
+    }
+}
+
 impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
     fn inspect_mcp_server(
         &self,
@@ -2412,6 +2549,10 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
         scope: InstallScope,
         current_dir: &str,
     ) -> Result<NativeMcpServerState, RepoGrammarError> {
+        if target == AgentTarget::Opencode {
+            let path = Self::opencode_config_path()?;
+            return opencode_inspect_mcp_config(&path, scope);
+        }
         let (program, args) = native_get_command(target, scope)?;
         run_native_agent_probe(target, scope, &program, &args, current_dir)
     }
@@ -2423,6 +2564,11 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
         executable_path: &str,
         current_dir: &str,
     ) -> Result<NativeAgentAction, RepoGrammarError> {
+        if target == AgentTarget::Opencode {
+            let path = Self::opencode_config_path()?;
+            let write = opencode_write_mcp_config(&path, scope, executable_path)?;
+            return Ok(opencode_native_add_action(&path, write));
+        }
         let (program, args) = native_add_command(target, scope, executable_path)?;
         run_native_agent_command(&program, &args, current_dir)?;
         Ok(NativeAgentAction {
@@ -2438,6 +2584,11 @@ impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
         scope: InstallScope,
         current_dir: &str,
     ) -> Result<NativeAgentAction, RepoGrammarError> {
+        if target == AgentTarget::Opencode {
+            let path = Self::opencode_config_path()?;
+            let removal = opencode_remove_mcp_config(&path, scope)?;
+            return Ok(opencode_native_remove_action(&path, removal));
+        }
         let (program, args) = native_remove_command(target, scope)?;
         run_native_agent_command(&program, &args, current_dir)?;
         Ok(NativeAgentAction {
@@ -2843,7 +2994,10 @@ fn classify_native_agent_probe(
 ) -> Result<NativeMcpServerState, RepoGrammarError> {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
-    if !matches!(target, AgentTarget::Codex | AgentTarget::ClaudeCode) {
+    if !matches!(
+        target,
+        AgentTarget::Codex | AgentTarget::ClaudeCode | AgentTarget::Opencode
+    ) {
         return Err(RepoGrammarError::InvalidInput(
             "native MCP probe requires a live agent target".to_string(),
         ));
@@ -2864,6 +3018,7 @@ fn classify_native_agent_probe(
     let config = match target {
         AgentTarget::Codex => parse_codex_mcp_probe(&stdout, scope),
         AgentTarget::ClaudeCode => parse_claude_mcp_probe(&stdout),
+        AgentTarget::Opencode => parse_opencode_mcp_probe(&stdout, scope),
         _ => unreachable!("live target checked above"),
     };
     Ok(config.map_or(
@@ -2947,14 +3102,69 @@ fn parse_claude_mcp_probe(output: &str) -> Option<NativeMcpServerConfig> {
     })
 }
 
+/// Classify the opencode config file contents handed to the probe classifier.
+/// The file-based configurator reads the file directly; this parser keeps
+/// `classify_native_agent_probe` accepting the opencode target through the same
+/// entry-normalization authority.
+fn parse_opencode_mcp_probe(output: &str, scope: InstallScope) -> Option<NativeMcpServerConfig> {
+    let value: serde_json::Value = serde_json::from_str(output).ok()?;
+    let entry = value.get("mcp")?.get(MCP_SERVER_NAME)?;
+    parse_opencode_mcp_entry(entry, scope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autosync_schedule_coalesces_events_and_retries_unacknowledged_changes() {
+        let now = Instant::now();
+        let mut schedule = AutosyncSchedule::new(now);
+        assert!(schedule.due(now, false));
+        schedule.scanned(now, true, 1000);
+        assert!(!schedule.due(now + Duration::from_secs(59), false));
+        assert!(schedule.due(now + Duration::from_secs(60), false));
+        assert!(schedule.due(now, true));
+        schedule.failed(now, 1000);
+        assert!(!schedule.due(now + Duration::from_secs(1), true));
+        assert!(schedule.due(now + Duration::from_secs(2), false));
+        assert!(
+            schedule.pending,
+            "failed sync must retry without a second edit"
+        );
+        for _ in 0..100 {
+            schedule.failed(now, 1000);
+        }
+        assert_eq!(schedule.retry_at - now, Duration::from_secs(60));
+        schedule.succeeded();
+        assert!(!schedule.pending);
+        assert_eq!(schedule.failures, 0);
+    }
+
+    #[test]
+    fn autosync_schedule_bounds_idle_polling_and_resets_on_events() {
+        let now = Instant::now();
+        let mut schedule = AutosyncSchedule::new(now);
+        assert_eq!(schedule.wait_interval(false, 1000), Duration::from_secs(1));
+        schedule.idle_rounds = 100;
+        assert_eq!(schedule.wait_interval(false, 1000), Duration::from_secs(30));
+        assert_eq!(
+            schedule.wait_interval(false, 600_000),
+            Duration::from_secs(600)
+        );
+        assert_eq!(schedule.wait_interval(true, 1000), Duration::from_secs(10));
+        schedule.due(now, true);
+        assert_eq!(schedule.wait_interval(false, 1000), Duration::from_secs(1));
+    }
+    use repogrammar::application::install::{
+        OpencodeConfigRemovalAction, OpencodeConfigWriteAction,
+    };
     use repogrammar::application::progress::{ProgressStage, WorkUnits};
     use repogrammar::application::query::{
         assess_semantic_fact_readiness, list_semantic_facts, IndexedSemanticFactsReport,
         SemanticFactReadinessRequest,
     };
+    use repogrammar::application::storage::list_active_dependencies;
     use repogrammar::core::model::UnknownReasonCode;
     #[cfg(unix)]
     use repogrammar::core::model::{CodeUnitKind, Language, RepositoryRevision};
@@ -3188,21 +3398,25 @@ mod tests {
             "stored file metadata",
             WorkUnits::known(12, 236).expect("valid work"),
         );
-        let (long_frame, long_width) = render_interactive_index_progress_event("sync", &long, 0);
+        let (long_frame, long_width) =
+            render_interactive_index_progress_event("sync", &long, 96, true, false);
 
         assert!(long_frame.starts_with('\r'));
         assert!(!long_frame.contains('\n'));
-        assert!(long_frame.contains("sync: [#-------------------] 5% 12/236 file_scanning"));
+        assert!(long_frame.contains("5% 12/236"));
+        assert!(long_frame.starts_with("\r\x1b[2Ksync / Scan"));
 
         let short = ProgressEvent::new(ProgressStage::ProjectDiscovery, "done", WorkUnits::Unknown);
         let (short_frame, short_width) =
-            render_interactive_index_progress_event("sync", &short, long_width);
+            render_interactive_index_progress_event("sync", &short, 96, true, false);
 
         assert!(short_frame.starts_with('\r'));
         assert!(!short_frame.contains('\n'));
-        assert!(short_frame.contains("sync: [working] project_discovery: done"));
+        assert!(short_frame.contains("sync / Discover"));
+        assert!(short_frame.contains("working"));
         assert!(!short_frame.contains('%'));
-        assert!(short_frame.ends_with(&" ".repeat(long_width - short_width)));
+        assert!(short_frame.starts_with("\r\x1b[2K"));
+        assert_eq!((long_width, short_width), (1, 1));
     }
 
     #[test]
@@ -4036,6 +4250,2033 @@ mod tests {
         copy_dir_contents(&release_fixture_v0_2_root().join(name), destination);
     }
 
+    fn visual_basic_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("visual_basic")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_visual_basic_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &visual_basic_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn visual_basic_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-vbnet-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn visual_basic_mstest_exact_attributes_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(
+            "mstest_exact_tests",
+            "vb-release-mstest-exact",
+        );
+
+        let derived = visual_basic_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "mstest.TestMethod")
+                .count(),
+            3,
+            "the helper Sub and the attributed Function are not tests: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:visual_basic:vb_test_method:framework_vb_mstest_test_method"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn visual_basic_unbound_attributes_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("mstest_unbound_attributes", "vb-release-mstest-unbound"),
+            ("mstest_low_support", "vb-release-mstest-low-support"),
+        ] {
+            let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("vb_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a VB MSTest family: {families_json}"
+            );
+            if fixture == "mstest_unbound_attributes" {
+                assert!(
+                    visual_basic_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "an unbound attribute name must derive no support"
+                );
+            }
+        }
+    }
+
+    /// ADR-0020 gate 6's build-variant and parse-degraded cases.
+    ///
+    /// Both fixtures carry enough attributed declarations to clear the support
+    /// threshold of three if they were read naively: four in opposite `#If`
+    /// branches, and three in a file whose parse fails. Neither may form a
+    /// family, and neither may derive support.
+    #[test]
+    fn visual_basic_build_variant_and_degraded_fixtures_form_no_family() {
+        for (fixture, prefix) in [
+            ("mstest_build_variant", "vb-release-mstest-build-variant"),
+            ("mstest_parse_degraded", "vb-release-mstest-degraded"),
+        ] {
+            let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(fixture, prefix);
+            assert!(
+                visual_basic_derived_support_targets(&runtime, &workspace).is_empty(),
+                "{fixture} must derive no support"
+            );
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("vb_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a VB MSTest family: {families_json}"
+            );
+        }
+    }
+
+    /// The property the VB scanner could not have. A file the parser cannot
+    /// admit now says so, instead of contributing fewer anchors in a way that
+    /// reads exactly like a file with fewer declarations.
+    #[test]
+    fn a_malformed_visual_basic_source_reports_a_degraded_parse_to_the_operator() {
+        let (workspace, runtime) = index_visual_basic_release_v0_2_fixture(
+            "mstest_parse_degraded",
+            "vb-release-degraded-warning",
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let warnings = index_json["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .map(|warning| warning.as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.starts_with("parse degraded for CatalogTests.vb")
+                    && warning
+                        .contains("missing code units are not evidence that a construct is absent")
+            }),
+            "{warnings:?}"
+        );
+    }
+
+    /// A scanner has no parse failure, so a malformed file used to yield fewer
+    /// anchors with no signal -- indistinguishable from a file that simply has
+    /// fewer declarations. Each scanner now checks its own well-formedness
+    /// invariant and reports a degraded parse when it is violated.
+    #[test]
+    fn a_malformed_scanned_source_reports_a_degraded_parse_to_the_operator() {
+        let (workspace, runtime) =
+            index_matlab_release_v0_2_fixture("unittest_degraded", "matlab-release-degraded");
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let warnings = index_json["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .map(|warning| warning.as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.starts_with("parse degraded for CatalogTest.m")
+                    && warning
+                        .contains("missing code units are not evidence that a construct is absent")
+            }),
+            "{warnings:?}"
+        );
+    }
+
+    /// `index` and every later query must answer "what does this generation
+    /// hold" identically. They used to decide it separately -- `index` from the
+    /// discovery report, queries from the recorded unit count -- so they
+    /// disagreed whenever an admitted file yielded nothing.
+    #[test]
+    fn the_indexing_mode_is_the_same_answer_from_index_and_from_a_later_query() {
+        // A decodable test class: the generation holds units.
+        let (workspace, runtime) =
+            index_matlab_release_v0_2_fixture("unittest_exact_tests", "mode-agreement-with-units");
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let files_json = parse_machine_output("files", &files, &workspace);
+        assert_eq!(index_json["indexing"], "syntax_only_code_units");
+        assert_eq!(files_json["indexing"], index_json["indexing"]);
+
+        // An admitted file that does not decode: the parser is never reached and
+        // the generation holds nothing, and both commands say so.
+        let workspace = TempWorkspace::new("mode-agreement-without-units");
+        std::fs::write(workspace.path().join("CatalogTest.m"), [0xff, 0xfe, 0xfd])
+            .expect("write undecodable MATLAB source");
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let index_json = parse_machine_output("index", &index, &workspace);
+        let files_json = parse_machine_output("files", &files, &workspace);
+        assert_eq!(index_json["indexed_units"], 0);
+        assert_eq!(index_json["indexing"], "file_manifest_only");
+        assert_eq!(files_json["indexing"], index_json["indexing"]);
+    }
+
+    #[test]
+    fn delphi_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_delphi_release_v0_2_fixture(
+            "dunitx_exact_tests",
+            "delphi-release-readiness-positive",
+        );
+        let unbound = index_delphi_release_v0_2_fixture(
+            "dunitx_unbound_attributes",
+            "delphi-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "object-pascal",
+            "Tests.Catalog.pas",
+            &[
+                "TCatalogTests",
+                "LoadsCatalog",
+                "DUnitX.TestFramework",
+                "Assert.AreEqual",
+            ],
+        );
+    }
+
+    #[test]
+    fn ada_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_ada_release_v0_2_fixture("aunit_exact_tests", "ada-release-readiness-positive");
+        let unbound = index_ada_release_v0_2_fixture(
+            "aunit_unbound_registrations",
+            "ada-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "ada",
+            "catalog_tests.adb",
+            &[
+                "Loads_Catalog",
+                "Filters_Catalog",
+                "AUnit.Assertions",
+                "loads the catalog",
+            ],
+        );
+    }
+
+    #[test]
+    fn matlab_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_matlab_release_v0_2_fixture(
+            "unittest_exact_tests",
+            "matlab-release-readiness-positive",
+        );
+        let unbound = index_matlab_release_v0_2_fixture(
+            "unittest_unbound_block",
+            "matlab-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "matlab",
+            "CatalogTest.m",
+            &[
+                "loadsCatalog",
+                "filtersCatalog",
+                "verifyTrue",
+                "matlab.unittest.TestCase",
+            ],
+        );
+    }
+
+    #[test]
+    fn visual_basic_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_visual_basic_release_v0_2_fixture(
+            "mstest_exact_tests",
+            "vb-release-readiness-positive",
+        );
+        let unbound = index_visual_basic_release_v0_2_fixture(
+            "mstest_unbound_attributes",
+            "vb-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "visual-basic",
+            "CatalogTests.vb",
+            &[
+                "LoadsCatalog",
+                "FiltersCatalog",
+                "Assert.IsNotNull",
+                "Microsoft.VisualStudio.TestTools.UnitTesting",
+            ],
+        );
+    }
+
+    #[test]
+    fn r_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_r_release_v0_2_fixture("testthat_exact_tests", "r-release-readiness-positive");
+        let undeclared =
+            index_r_release_v0_2_fixture("testthat_undeclared", "r-release-readiness-undeclared");
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&undeclared.0, &undeclared.1),
+            "r",
+            "tests/testthat/test-catalog.R",
+            &[
+                "loads the catalog",
+                "filters the catalog",
+                "expect_true",
+                "closing_brace",
+            ],
+        );
+    }
+
+    #[test]
+    fn php_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_php_release_v0_2_fixture("phpunit_exact_tests", "php-release-readiness-positive");
+        let lookalikes = index_php_release_v0_2_fixture(
+            "phpunit_lookalikes",
+            "php-release-readiness-lookalikes",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&lookalikes.0, &lookalikes.1),
+            "php",
+            "tests/CatalogTest.php",
+            &[
+                "testLoadsTheCatalog",
+                "testFiltersByCategory",
+                "assertSame",
+                "extends TestCase",
+            ],
+        );
+    }
+
+    #[test]
+    fn swift_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_swift_release_v0_2_fixture(
+            "xctest_exact_tests",
+            "swift-release-readiness-positive",
+        );
+        let unbound = index_swift_release_v0_2_fixture(
+            "xctest_unbound_import",
+            "swift-release-readiness-unbound",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&unbound.0, &unbound.1),
+            "swift",
+            "CatalogTests.swift",
+            &[
+                "testLoadsCatalog",
+                "testFiltersCatalog",
+                "testSortsCatalog",
+                "XCTAssertEqual",
+            ],
+        );
+    }
+
+    #[test]
+    fn ruby_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_ruby_release_v0_2_fixture(
+            "minitest_exact_tests",
+            "ruby-release-readiness-positive",
+        );
+        let lookalikes = index_ruby_release_v0_2_fixture(
+            "minitest_lookalikes",
+            "ruby-release-readiness-lookalikes",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&lookalikes.0, &lookalikes.1),
+            "ruby",
+            "test/test_catalog.rb",
+            &[
+                "CatalogTest",
+                "test_loads_catalog",
+                "test_filters_catalog",
+                "Minitest::Test",
+            ],
+        );
+    }
+
+    #[test]
+    fn go_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive =
+            index_go_release_v0_2_fixture("testing_exact_tests", "go-release-readiness-positive");
+        // `testing_lookalikes` persists no Go unknown at all, so only the
+        // degraded corpus can prove the lane reaches the unknowns surface.
+        let degraded = index_go_release_v0_2_fixture(
+            "testing_parse_degraded",
+            "go-release-readiness-degraded",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&degraded.0, &degraded.1),
+            "go",
+            "catalog_test.go",
+            &[
+                // Go unit ids now carry the declaration's ordinal rather than
+                // its name, so the admitted test names must not reach any
+                // surface either, exactly as in every sibling lane.
+                "TestLoadsCatalog",
+                "TestFiltersCatalog",
+                "t.Log",
+                "*testing.T",
+                "func TestMain",
+                "TestRaw",
+            ],
+        );
+    }
+
+    #[test]
+    fn fortran_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let positive = index_fortran_release_v0_2_fixture(
+            "testdrive_exact_tests",
+            "fortran-release-readiness-positive",
+        );
+        let missing_use = index_fortran_release_v0_2_fixture(
+            "testdrive_missing_use",
+            "fortran-release-readiness-missing-use",
+        );
+        assert_scanner_lane_readiness_is_source_free(
+            (&positive.0, &positive.1),
+            (&missing_use.0, &missing_use.1),
+            "fortran",
+            "test_drive_suite.f90",
+            &[
+                "test_plain",
+                "test_multi",
+                "test_alloc_order",
+                "new_unittest",
+            ],
+        );
+    }
+
+    /// ADR-0020 gate 7 for a scanner lane: every required public surface must
+    /// expose bounded tokens, states, counts, provenance, and recovery only.
+    ///
+    /// The assertions are non-vacuous by construction. Each command must exit
+    /// zero and parse, the positive workspace must really report the lane's
+    /// family, and the unbound workspace must really report the lane's typed
+    /// `UNKNOWN` -- otherwise the leakage checks would run over nothing.
+    fn assert_scanner_lane_readiness_is_source_free(
+        positive: (&TempWorkspace, &ProductCliRuntime),
+        unbound: (&TempWorkspace, &ProductCliRuntime),
+        language_token: &str,
+        analogue_target: &str,
+        markers: &[&str],
+    ) {
+        for (workspace, runtime) in [positive, unbound] {
+            for command in ["status", "doctor", "stats", "unknowns", "families", "files"] {
+                let output =
+                    run_with_runtime(cli_args(command, workspace.path(), &["--json"]), runtime);
+                assert_eq!(output.status, 0, "{command} stderr: {}", output.stderr);
+                let value = parse_machine_output(command, &output, workspace);
+                assert_eq!(value["command"], command);
+                assert_no_output_leakage(command, &output.stdout, workspace);
+                for marker in markers {
+                    assert!(
+                        !output.stdout.contains(marker),
+                        "{command} leaked {language_token} source text or identifier {marker}"
+                    );
+                }
+            }
+
+            for arguments in [
+                serde_json::json!({"operation": "inspect_readiness"}),
+                serde_json::json!({
+                    "operation": "find_analogues",
+                    "target": analogue_target,
+                    "mode": "compact",
+                }),
+            ] {
+                let payload = mcp_context_payload(runtime, workspace, arguments);
+                let rendered = payload.to_string();
+                for marker in markers {
+                    assert!(
+                        !rendered.contains(marker),
+                        "MCP leaked {language_token} source text or identifier {marker}: {rendered}"
+                    );
+                }
+            }
+        }
+
+        let (positive_workspace, positive_runtime) = positive;
+        let status = run_with_runtime(
+            cli_args("status", positive_workspace.path(), &["--json"]),
+            positive_runtime,
+        );
+        let status_json = parse_machine_output("status", &status, positive_workspace);
+        assert_eq!(
+            status_json["product_readiness"]["family_prevalence"]["total_count"], 1,
+            "the {language_token} family must reach the readiness surface: {status_json}"
+        );
+
+        let (unbound_workspace, unbound_runtime) = unbound;
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", unbound_workspace.path(), &["--json"]),
+            unbound_runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, unbound_workspace);
+        assert!(
+            unknowns_json["unknown_inventory"]["by_language"]
+                .as_array()
+                .expect("by_language")
+                .iter()
+                .any(|row| row["language"] == language_token
+                    && row["count"].as_u64().unwrap_or_default() >= 1),
+            "the {language_token} lane should reach the unknowns surface: {unknowns_json}"
+        );
+    }
+
+    fn matlab_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("matlab")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_matlab_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &matlab_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn matlab_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-matlab-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn matlab_unittest_exact_classes_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) = index_matlab_release_v0_2_fixture(
+            "unittest_exact_tests",
+            "matlab-release-unittest-exact",
+        );
+
+        let derived = matlab_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "matlab_unittest.TestMethod")
+                .count(),
+            3,
+            "the private method and the file-local function are not tests: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:matlab:matlab_test_method:framework_matlab_unittest_test_method"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn matlab_unbound_test_blocks_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("unittest_unbound_block", "matlab-release-unittest-unbound"),
+            (
+                "unittest_low_support",
+                "matlab-release-unittest-low-support",
+            ),
+        ] {
+            let (workspace, runtime) = index_matlab_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("matlab_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a MATLAB unittest family: {families_json}"
+            );
+            if fixture == "unittest_unbound_block" {
+                assert!(
+                    matlab_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "a Test block outside a TestCase class must derive no support"
+                );
+            }
+        }
+    }
+
+    /// ADR-0046 D4b at the product surface. The fixture is the exact-tests class
+    /// with one extra statement: `format end` reads as the command `format('end')`
+    /// or as an expression closing the enclosing block, and nothing in the file
+    /// decides which. The family that would otherwise form at support three must
+    /// not form, and the abstention must be visible as a typed `UNKNOWN` rather
+    /// than as silence.
+    #[test]
+    fn an_undecidable_matlab_block_extent_withholds_the_family_it_would_otherwise_form() {
+        let (workspace, runtime) = index_matlab_release_v0_2_fixture(
+            "unittest_command_ambiguity",
+            "matlab-release-command-ambiguity",
+        );
+
+        assert!(
+            matlab_derived_support_targets(&runtime, &workspace).is_empty(),
+            "an undecidable block extent must derive no support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("matlab_test_method"))))
+                .unwrap_or(false),
+            "{families_json}"
+        );
+
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, &workspace);
+        assert!(
+            unknowns_json["unknown_inventory"]["by_language"]
+                .as_array()
+                .expect("by_language")
+                .iter()
+                .any(|row| row["language"] == "matlab"
+                    && row["count"].as_u64().unwrap_or_default() >= 1),
+            "the abstention must reach the unknowns surface: {unknowns_json}"
+        );
+        // The divergent statement is named by class, never quoted.
+        assert!(!unknowns.stdout.contains("format"), "{}", unknowns.stdout);
+    }
+
+    fn ada_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("ada")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_ada_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &ada_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn ada_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-ada-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ada_aunit_exact_registrations_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) =
+            index_ada_release_v0_2_fixture("aunit_exact_tests", "ada-release-aunit-exact");
+
+        let derived = ada_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "aunit.Register_Routine")
+                .count(),
+            3,
+            "the commented call, the string, and the variable argument are not \
+             registrations: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:ada:ada_test_registration:framework_aunit_test_registration"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn ada_unbound_registrations_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("aunit_unbound_registrations", "ada-release-aunit-unbound"),
+            ("aunit_low_support", "ada-release-aunit-low-support"),
+        ] {
+            let (workspace, runtime) = index_ada_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("ada_test_registration"))))
+                    .unwrap_or(false),
+                "{fixture} must not form an Ada AUnit family: {families_json}"
+            );
+            if fixture == "aunit_unbound_registrations" {
+                assert!(
+                    ada_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "a registration without an AUnit with clause must derive no support"
+                );
+            }
+        }
+    }
+
+    fn delphi_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("delphi")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_delphi_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &delphi_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        (workspace, runtime)
+    }
+
+    fn delphi_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-delphi-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn delphi_dunitx_exact_attributes_form_a_family_without_a_toolchain() {
+        let (workspace, runtime) =
+            index_delphi_release_v0_2_fixture("dunitx_exact_tests", "delphi-release-dunitx-exact");
+
+        let derived = delphi_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "dunitx.Test")
+                .count(),
+            3,
+            "the helper procedure, the attributed function, and the plain class's \
+             attributed procedure are not tests: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1, "{families_json}");
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:object_pascal:delphi_test_procedure:framework_dunitx_test_procedure"
+            ));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn delphi_unbound_attributes_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("dunitx_unbound_attributes", "delphi-release-dunitx-unbound"),
+            ("dunitx_low_support", "delphi-release-dunitx-low-support"),
+        ] {
+            let (workspace, runtime) = index_delphi_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("delphi_test_procedure"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Delphi DUnitX family: {families_json}"
+            );
+            if fixture == "dunitx_unbound_attributes" {
+                assert!(
+                    delphi_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "an unbound attribute name must derive no support"
+                );
+            }
+        }
+    }
+
+    fn r_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("r")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_r_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &r_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert!(index_json["indexed_units"].as_u64().unwrap_or_default() > 0);
+        (workspace, runtime)
+    }
+
+    fn r_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-r-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn r_testthat_exact_blocks_form_a_family_without_r() {
+        let (workspace, runtime) =
+            index_r_release_v0_2_fixture("testthat_exact_tests", "r-release-testthat-exact");
+
+        let derived = r_derived_support_targets(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|target| *target == "testthat.test_that")
+                .count(),
+            3,
+            "nested, namespaced, commented, and quoted calls must not derive support: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with("family:r:r_test_that_block:framework_testthat_test"));
+        assert_eq!(family_array[0]["support"], 3);
+    }
+
+    #[test]
+    fn r_testthat_without_a_declared_dependency_or_enough_support_forms_no_family() {
+        for (fixture, prefix) in [
+            ("testthat_undeclared", "r-release-testthat-undeclared"),
+            ("testthat_low_support", "r-release-testthat-low-support"),
+        ] {
+            let (workspace, runtime) = index_r_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("testthat"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a testthat family: {families_json}"
+            );
+            if fixture == "testthat_undeclared" {
+                // The path and the call shape are both exactly right; only the
+                // DESCRIPTION declaration is missing, and that alone must stop it.
+                assert!(
+                    r_derived_support_targets(&runtime, &workspace).is_empty(),
+                    "an undeclared dependency must derive no support"
+                );
+            }
+        }
+    }
+
+    fn go_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("go")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_go_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &go_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert!(index_json["indexed_units"].as_u64().unwrap_or_default() > 0);
+        (workspace, runtime)
+    }
+
+    fn go_derived_support_targets(
+        runtime: &ProductCliRuntime,
+        workspace: &TempWorkspace,
+    ) -> Vec<String> {
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open store");
+        list_semantic_facts(&store)
+            .expect("list semantic facts")
+            .facts
+            .iter()
+            .filter(|fact| fact.origin_engine == "repogrammar-go-derived")
+            .map(|fact| {
+                assert_eq!(fact.certainty, "DATAFLOW_DERIVED");
+                fact.target.clone().unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn go_testing_declarations_parse_into_derived_support_and_form_a_family() {
+        // ADR-0050 replaces ADR-0021's closed ladder: the bounded parser
+        // proves the test-function anchor, so the exact-test corpus derives
+        // support facts like every other bounded frontend and the
+        // go.testing family forms from parser evidence.
+        let (workspace, runtime) =
+            index_go_release_v0_2_fixture("testing_exact_tests", "go-release-testing-exact");
+
+        let store_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&store_request)
+            .expect("open store");
+        let units = list_code_units(&store).expect("read units").units;
+        assert_eq!(
+            units
+                .iter()
+                .filter(|unit| unit.kind == "go_test_function")
+                .count(),
+            3,
+            "TestMain, the helper, and the benchmark are not test declarations"
+        );
+        assert!(
+            !go_derived_support_targets(&runtime, &workspace).is_empty(),
+            "the parser-proven anchors derive support facts"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("go_test_function"))))
+                .unwrap_or(false),
+            "the exact-anchor corpus must form the go.testing family: {families_json}"
+        );
+    }
+
+    #[test]
+    fn go_testing_lookalikes_and_low_support_form_no_family() {
+        for (fixture, prefix) in [
+            ("testing_lookalikes", "go-release-testing-lookalikes"),
+            ("testing_low_support", "go-release-testing-low-support"),
+        ] {
+            let (workspace, runtime) = index_go_release_v0_2_fixture(fixture, prefix);
+            let derived = go_derived_support_targets(&runtime, &workspace);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("go_test_function"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Go family: {families_json}"
+            );
+            if fixture == "testing_lookalikes" {
+                assert!(
+                    derived.is_empty(),
+                    "prose and an unimported T must derive nothing: {derived:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn go_testing_benchmarks_fuzz_and_table_driven_anchor_every_declaration() {
+        // ADR-0050 admits `TestXxx`, `BenchmarkXxx` and `FuzzXxx` as one
+        // `go.testing.test_function` family, and the bounded parser skips
+        // declaration bodies. The benchmark/fuzz corpus therefore anchors two
+        // benchmarks, one fuzz target and the bare `Test`; the table-driven
+        // corpus anchors its three declarations and nothing from the `t.Run`
+        // subtests, commented-out code or string literals inside their bodies.
+        for (fixture, prefix, support) in [
+            (
+                "testing_benchmarks_fuzz",
+                "go-release-testing-benchmarks-fuzz",
+                4,
+            ),
+            ("testing_table_driven", "go-release-testing-table-driven", 3),
+        ] {
+            let (workspace, runtime) = index_go_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            let family = families_json["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .find(|family| {
+                    family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("go_test_function"))
+                })
+                .unwrap_or_else(|| {
+                    panic!("{fixture} must form the go.testing family: {families_json}")
+                });
+            assert_eq!(
+                family["support"], support,
+                "every admitted Go anchor must count in {fixture}: {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn go_testing_parse_degraded_indexes_without_forming_a_family() {
+        // Every file in this corpus leaves the declared subset -- a cgo
+        // import, a generic type-parameter list, unbalanced braces and an
+        // unterminated string -- so each abstains whole-file. The repository
+        // still indexes to completion, and no unproven declaration reaches
+        // family formation.
+        let (workspace, runtime) =
+            index_go_release_v0_2_fixture("testing_parse_degraded", "go-release-testing-degraded");
+        assert!(
+            go_derived_support_targets(&runtime, &workspace).is_empty(),
+            "an abstaining file must derive no support"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("go_test_function"))))
+                .unwrap_or(false),
+            "a whole-file abstention must not form a Go family: {families_json}"
+        );
+    }
+    #[test]
+    fn go_source_outside_test_filenames_is_never_read() {
+        let workspace = TempWorkspace::new("go-release-non-test-source");
+        fs::write(
+            workspace.path().join("go.mod"),
+            "module example.test/x\n\ngo 1.22\n",
+        )
+        .expect("write go.mod");
+        fs::write(
+            workspace.path().join("catalog.go"),
+            "package catalog\n\nimport \"testing\"\n\nfunc TestLoads(t *testing.T) {}\n",
+        )
+        .expect("write ordinary Go source");
+        let runtime = ProductCliRuntime;
+        run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        // The signature is exact, but `go test` would not compile this file as a
+        // test, so the frontend must never see it.
+        assert!(go_derived_support_targets(&runtime, &workspace).is_empty());
+    }
+
+    fn php_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("php")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_php_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &php_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // A lookalike or degraded corpus must still index cleanly; only the
+        // family may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn php_phpunit_exact_tests_form_a_family_through_the_product_cli() {
+        // ADR-0047: the bounded PHPUnit frontend proves the test-method
+        // anchor, so the exact-test corpus must survive the product's
+        // storage-validation path and form the phpunit family.
+        let (workspace, runtime) =
+            index_php_release_v0_2_fixture("phpunit_exact_tests", "php-release-phpunit-exact");
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family = families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("php_test_method"))
+            })
+            .unwrap_or_else(|| {
+                panic!("the exact-anchor corpus must form the phpunit family: {families_json}")
+            });
+        assert_eq!(
+            family["support"], 6,
+            "every admitted PHPUnit anchor must count: {family}"
+        );
+    }
+
+    #[test]
+    fn php_phpunit_lookalikes_low_support_and_degraded_form_no_family() {
+        for (fixture, prefix) in [
+            ("phpunit_lookalikes", "php-release-phpunit-lookalikes"),
+            ("phpunit_low_support", "php-release-phpunit-low-support"),
+            ("phpunit_degraded", "php-release-phpunit-degraded"),
+        ] {
+            let (workspace, runtime) = index_php_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("php_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a PHP family: {families_json}"
+            );
+        }
+    }
+
+    fn swift_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("swift")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_swift_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &swift_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // Conditional, degraded, and unbound-import corpora must still index
+        // cleanly; only the family may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn swift_xctest_exact_and_throwing_tests_form_a_family_through_the_product_cli() {
+        // ADR-0048: `throws` on an XCTest method changes nothing about the
+        // anchor, so both corpora must reach the same support through the
+        // product's family-formation path.
+        for (fixture, prefix) in [
+            ("xctest_exact_tests", "swift-release-xctest-exact"),
+            ("xctest_throwing_tests", "swift-release-xctest-throwing"),
+        ] {
+            let (workspace, runtime) = index_swift_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            let family = families_json["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .find(|family| {
+                    family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("swift_test_method"))
+                })
+                .unwrap_or_else(|| {
+                    panic!("{fixture} must form the xctest family: {families_json}")
+                });
+            assert_eq!(
+                family["support"], 3,
+                "every admitted XCTest anchor must count in {fixture}: {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn swift_xctest_lookalikes_low_support_and_unbound_corpora_form_no_family() {
+        for (fixture, prefix) in [
+            ("xctest_lookalikes", "swift-release-xctest-lookalikes"),
+            ("xctest_low_support", "swift-release-xctest-low-support"),
+            ("xctest_degraded", "swift-release-xctest-degraded"),
+            ("xctest_conditional", "swift-release-xctest-conditional"),
+            ("xctest_setup_override", "swift-release-xctest-setup"),
+            ("xctest_unbound_import", "swift-release-xctest-unbound"),
+        ] {
+            let (workspace, runtime) = index_swift_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("swift_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Swift family: {families_json}"
+            );
+        }
+    }
+
+    fn ruby_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("ruby")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_ruby_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &ruby_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // A parse-degraded corpus must still index cleanly; only the family
+        // may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn ruby_minitest_exact_tests_form_a_family_through_the_product_cli() {
+        // ADR-0049: the bounded Minitest frontend proves the `def test_*`
+        // anchor under a Minitest::Test subclass, so the exact-test corpus
+        // must form the minitest family through the product path.
+        let (workspace, runtime) =
+            index_ruby_release_v0_2_fixture("minitest_exact_tests", "ruby-release-minitest-exact");
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family = families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("ruby_minitest_test_method"))
+            })
+            .unwrap_or_else(|| {
+                panic!("the exact-anchor corpus must form the minitest family: {families_json}")
+            });
+        assert_eq!(
+            family["support"], 8,
+            "every admitted Minitest anchor must count: {family}"
+        );
+    }
+
+    #[test]
+    fn ruby_minitest_lookalikes_low_support_and_degraded_form_no_family() {
+        for (fixture, prefix) in [
+            ("minitest_lookalikes", "ruby-release-minitest-lookalikes"),
+            ("minitest_low_support", "ruby-release-minitest-low-support"),
+            ("minitest_parse_degraded", "ruby-release-minitest-degraded"),
+        ] {
+            let (workspace, runtime) = index_ruby_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("ruby_minitest_test_method"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Ruby family: {families_json}"
+            );
+        }
+    }
+
+    fn fortran_release_fixture_v0_2_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("fortran")
+            .join("release")
+            .join("v0_2")
+    }
+
+    fn index_fortran_release_v0_2_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_dir_contents(
+            &fortran_release_fixture_v0_2_root().join(fixture),
+            workspace.path(),
+        );
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        // A degraded or use-less corpus must still index cleanly; only the
+        // family may fail to form.
+        assert_eq!(
+            index_json["status"], "complete",
+            "{fixture} must index: {index_json}"
+        );
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "{fixture} should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    #[test]
+    fn fortran_test_drive_exact_tests_form_a_family_through_the_product_cli() {
+        // ADR-0051: the bounded test-drive frontend proves the module-scope
+        // subroutine whose first dummy is an `error_type`, so the exact-test
+        // corpus must clear storage validation and form the test-drive family.
+        let (workspace, runtime) = index_fortran_release_v0_2_fixture(
+            "testdrive_exact_tests",
+            "fortran-release-testdrive-exact",
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family = families_json["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("fortran_test_drive_subroutine"))
+            })
+            .unwrap_or_else(|| {
+                panic!("the exact-anchor corpus must form the test-drive family: {families_json}")
+            });
+        assert_eq!(
+            family["support"], 6,
+            "every admitted test-drive anchor must count: {family}"
+        );
+    }
+
+    #[test]
+    fn fortran_test_drive_lookalikes_low_support_and_missing_use_form_no_family() {
+        for (fixture, prefix) in [
+            (
+                "testdrive_lookalikes",
+                "fortran-release-testdrive-lookalikes",
+            ),
+            (
+                "testdrive_low_support",
+                "fortran-release-testdrive-low-support",
+            ),
+            (
+                "testdrive_parse_degraded",
+                "fortran-release-testdrive-degraded",
+            ),
+            (
+                "testdrive_missing_use",
+                "fortran-release-testdrive-missing-use",
+            ),
+        ] {
+            let (workspace, runtime) = index_fortran_release_v0_2_fixture(fixture, prefix);
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            assert!(
+                !families_json["families"]
+                    .as_array()
+                    .map(|families| families.iter().any(|family| family["family_id"]
+                        .as_str()
+                        .is_some_and(|id| id.contains("fortran_test_drive_subroutine"))))
+                    .unwrap_or(false),
+                "{fixture} must not form a Fortran family: {families_json}"
+            );
+        }
+    }
+
+    fn sql_release_fixture_v0_1_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("fixtures")
+            .join("sql")
+            .join("release")
+            .join("v0_1")
+    }
+
+    fn copy_sql_release_v0_1_fixture(name: &str, destination: &Path) {
+        copy_dir_contents(&sql_release_fixture_v0_1_root().join(name), destination);
+    }
+
+    fn index_sql_release_v0_1_fixture(
+        fixture: &str,
+        prefix: &str,
+    ) -> (TempWorkspace, ProductCliRuntime) {
+        let workspace = TempWorkspace::new(prefix);
+        copy_sql_release_v0_1_fixture(fixture, workspace.path());
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only", "--json"]),
+            &runtime,
+        );
+        assert_eq!(
+            parse_machine_output("init", &init, &workspace)["status"],
+            "initialized"
+        );
+        let index = run_with_runtime(
+            cli_args(
+                "index",
+                workspace.path(),
+                &["--json", "--progress", "never"],
+            ),
+            &runtime,
+        );
+        let index_json = parse_machine_output("index", &index, &workspace);
+        assert_eq!(index_json["status"], "complete");
+        assert!(
+            index_json["indexed_units"].as_u64().unwrap_or_default() > 0,
+            "SQL fixture should index units: {index_json}"
+        );
+        (workspace, runtime)
+    }
+
+    fn sql_family_status(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> String {
+        let families =
+            run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+        parse_machine_output("families", &families, workspace)["status"]
+            .as_str()
+            .expect("families status")
+            .to_string()
+    }
+
+    fn sql_family_support(runtime: &ProductCliRuntime, workspace: &TempWorkspace) -> Option<u64> {
+        let families =
+            run_with_runtime(cli_args("families", workspace.path(), &["--json"]), runtime);
+        let value = parse_machine_output("families", &families, workspace);
+        value["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .find(|family| {
+                // Match the SQL role token, not the substring "sql", which any
+                // SQLAlchemy family id would also satisfy.
+                family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("sql_table_definition"))
+            })
+            .and_then(|family| family["support"].as_u64())
+    }
+
+    fn assert_no_sql_fixture_marker_leaks(runtime: &ProductCliRuntime, workspace: &TempWorkspace) {
+        for command in ["families", "unknowns", "files"] {
+            let output =
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), runtime);
+            for marker in ["fixture_", "FixtureItems", "fixture-default-label"] {
+                assert!(
+                    !output.stdout.contains(marker),
+                    "{command} leaked SQL fixture marker {marker}"
+                );
+            }
+        }
+    }
+
+    /// Every identifier and literal in the SQL fixture corpus, so one assertion
+    /// covers "no repository name or source text reached this surface".
+    const SQL_FIXTURE_MARKERS: &[&str] = &[
+        "fixture_accounts",
+        "fixture_orders",
+        "FixtureItems",
+        "fixture-default-label",
+        "fixture_solo_a",
+        "fixture_solo_b",
+        "fixture_ghost",
+        "fixture_log",
+        "fixture_diverged",
+        "CREATE TABLE",
+        "PRIMARY KEY",
+        "INTEGER",
+    ];
+
+    #[test]
+    fn sql_readiness_surfaces_stay_source_free_and_low_cardinality() {
+        let (workspace, runtime) =
+            index_sql_release_v0_1_fixture("exact_table_definitions", "sql-release-readiness");
+
+        // ADR-0020 gate 7 names these surfaces. Each must expose bounded tokens,
+        // states, counts, provenance, and recovery only.
+        for command in ["status", "doctor", "stats", "unknowns", "families", "files"] {
+            let output =
+                run_with_runtime(cli_args(command, workspace.path(), &["--json"]), &runtime);
+            // Non-vacuity: a surface that errored out would trivially satisfy
+            // every leakage assertion below.
+            assert_eq!(output.status, 0, "{command} stderr: {}", output.stderr);
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_eq!(value["command"], command);
+            assert_no_output_leakage(command, &output.stdout, &workspace);
+            for marker in SQL_FIXTURE_MARKERS {
+                assert!(
+                    !output.stdout.contains(marker),
+                    "{command} leaked SQL source text or identifier {marker}"
+                );
+            }
+        }
+
+        // Non-vacuity for the claim-bearing surface: the SQL lane really does
+        // report typed UNKNOWNs here, so the leakage assertions above ran over
+        // content that had something to leak.
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let unknowns_json = parse_machine_output("unknowns", &unknowns, &workspace);
+        // The surface reports the SQL lane by bounded token and count only: the
+        // language name and reason code appear, the claim string and the
+        // repository's own identifiers do not.
+        assert!(
+            unknowns_json["unknown_inventory"]["by_language"]
+                .as_array()
+                .expect("by_language")
+                .iter()
+                .any(|row| row["language"] == "sql"
+                    && row["count"].as_u64().unwrap_or_default() >= 1),
+            "the SQL lane should reach the unknowns surface: {unknowns_json}"
+        );
+
+        // The dialect UNKNOWN must not advertise a mechanism this product does
+        // not have. No repository-local evidence selects a SQL dialect, so there
+        // is no config to add and no provider to enable.
+        assert!(
+            unknowns_json["unknown_inventory"]["by_required_mechanism"]
+                .as_array()
+                .expect("by_required_mechanism")
+                .iter()
+                .any(|row| row["required_mechanism"] == "manual_dialect_declaration"),
+            "SQL dialect recovery must be manual: {unknowns_json}"
+        );
+        assert!(
+            !unknowns_json.to_string().contains("add_project_config"),
+            "adding a project config cannot select a SQL dialect: {unknowns_json}"
+        );
+
+        // And the readiness surface really is describing the SQL family rather
+        // than an empty repository.
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        let status_json = parse_machine_output("status", &status, &workspace);
+        assert_eq!(
+            status_json["product_readiness"]["family_prevalence"]["total_count"],
+            1
+        );
+
+        // The MCP surface routes through the same evidence, and its own helper
+        // already rejects absolute paths.
+        for arguments in [
+            serde_json::json!({"operation": "inspect_readiness"}),
+            serde_json::json!({
+                "operation": "find_analogues",
+                "target": "db/schema.sql",
+                "mode": "compact",
+            }),
+        ] {
+            let payload = mcp_context_payload(&runtime, &workspace, arguments);
+            let rendered = payload.to_string();
+            for marker in SQL_FIXTURE_MARKERS {
+                assert!(
+                    !rendered.contains(marker),
+                    "MCP leaked SQL source text or identifier {marker}: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sql_release_fixture_exact_table_definitions_form_one_family() {
+        let (workspace, runtime) =
+            index_sql_release_v0_1_fixture("exact_table_definitions", "sql-release-exact");
+
+        assert_eq!(sql_family_status(&runtime, &workspace), "ok");
+        assert_eq!(
+            sql_family_support(&runtime, &workspace),
+            Some(3),
+            "three admitted CREATE TABLE definitions must reach the SQL support threshold"
+        );
+        assert_no_sql_fixture_marker_leaks(&runtime, &workspace);
+    }
+
+    #[test]
+    fn sql_release_fixture_low_support_and_lookalikes_form_no_family() {
+        for (fixture, prefix) in [
+            ("low_support_tables", "sql-release-low-support"),
+            ("statement_lookalikes", "sql-release-lookalikes"),
+            ("dialect_divergence", "sql-release-divergence"),
+        ] {
+            let (workspace, runtime) = index_sql_release_v0_1_fixture(fixture, prefix);
+
+            // Abstention, not an empty success: a repository whose SQL forms no
+            // family reports UNKNOWN rather than "no families here".
+            assert_eq!(
+                sql_family_status(&runtime, &workspace),
+                "UNKNOWN",
+                "{fixture} must abstain rather than report a clean empty result"
+            );
+            assert_eq!(
+                sql_family_support(&runtime, &workspace),
+                None,
+                "{fixture} must not form a SQL family"
+            );
+            assert_no_sql_fixture_marker_leaks(&runtime, &workspace);
+        }
+    }
+
     fn copy_rust_release_v0_2_fixture(name: &str, destination: &Path) {
         copy_dir_contents(&rust_release_fixture_v0_2_root().join(name), destination);
     }
@@ -4304,6 +6545,10 @@ mod tests {
         assert!(
             !output.contains(rust_release_fixture_v0_2_root().to_string_lossy().as_ref()),
             "{command} leaked absolute Rust v0.2 fixture path: {output}"
+        );
+        assert!(
+            !output.contains(sql_release_fixture_v0_1_root().to_string_lossy().as_ref()),
+            "{command} leaked absolute SQL v0.1 fixture path: {output}"
         );
         assert!(
             !output.contains(unknown_reduction_fixture_root().to_string_lossy().as_ref()),
@@ -5059,6 +7304,10 @@ mod tests {
             DiscoveredLanguage::PythonConfig => Language::PythonConfig,
             DiscoveredLanguage::TsJsConfig => Language::TsJsConfig,
             DiscoveredLanguage::Java => Language::Java,
+            DiscoveredLanguage::JavaConfig => Language::JavaConfig,
+            DiscoveredLanguage::Matlab => Language::Matlab,
+            DiscoveredLanguage::MatlabConfig => Language::MatlabConfig,
+            DiscoveredLanguage::Assembly => Language::Assembly,
             DiscoveredLanguage::CSharp => Language::CSharp,
             DiscoveredLanguage::C => Language::C,
             DiscoveredLanguage::Cpp => Language::Cpp,
@@ -5071,6 +7320,20 @@ mod tests {
             DiscoveredLanguage::RubyConfig => Language::RubyConfig,
             DiscoveredLanguage::Swift => Language::Swift,
             DiscoveredLanguage::SwiftConfig => Language::SwiftConfig,
+            DiscoveredLanguage::VisualBasic => Language::VisualBasic,
+            DiscoveredLanguage::VisualBasicConfig => Language::VisualBasicConfig,
+            DiscoveredLanguage::ObjectPascal => Language::ObjectPascal,
+            DiscoveredLanguage::DelphiConfig => Language::DelphiConfig,
+            DiscoveredLanguage::Ada => Language::Ada,
+            DiscoveredLanguage::AdaConfig => Language::AdaConfig,
+            DiscoveredLanguage::Fortran => Language::Fortran,
+            DiscoveredLanguage::FortranConfig => Language::FortranConfig,
+            DiscoveredLanguage::Sql
+            | DiscoveredLanguage::SqlMigration
+            | DiscoveredLanguage::SqlSchema
+            | DiscoveredLanguage::SqlCatalog => Language::Sql,
+            DiscoveredLanguage::R => Language::R,
+            DiscoveredLanguage::RConfig => Language::RConfig,
             DiscoveredLanguage::Rust => Language::Rust,
             DiscoveredLanguage::RustConfig => Language::RustConfig,
         }
@@ -6157,6 +8420,13 @@ mod tests {
             member_role: "framework:unittest.test",
         },
         PythonExactAnchorSmokeCase {
+            fixture: "marshmallow_exact_schemas",
+            family_id: "family:python:marshmallow_schema:framework_marshmallow_schema",
+            support_target: "marshmallow.Schema",
+            evidence_path: "schemas.py",
+            member_role: "framework:marshmallow.schema",
+        },
+        PythonExactAnchorSmokeCase {
             fixture: "django_urls_exact",
             family_id: "family:python:django_url_pattern:framework_django_url_pattern",
             support_target: "django.urls.path",
@@ -6258,7 +8528,11 @@ mod tests {
 
     #[test]
     fn python_v0_2_preview_lookalikes_and_low_support_form_no_family() {
-        for fixture in ["framework_lookalikes", "low_support"] {
+        for fixture in [
+            "framework_lookalikes",
+            "low_support",
+            "marshmallow_lookalikes",
+        ] {
             let workspace = TempWorkspace::new(&format!("python-v0-2-negative-{fixture}"));
             copy_python_release_v0_2_fixture(fixture, workspace.path());
             let runtime = ProductCliRuntime;
@@ -7182,6 +9456,64 @@ mod tests {
     }
 
     #[test]
+    fn java_servlet_web_servlets_form_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_java_release_v0_2_fixture(
+            "servlet_exact_web_servlets",
+            "java-release-servlet-exact",
+        );
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "servlet.annotation.WebServlet")
+                .count(),
+            3,
+            "three exact @WebServlet classes should derive three support facts: {derived:?}"
+        );
+        assert_single_java_family(
+            &runtime,
+            &workspace,
+            "family:java:servlet_http_servlet:framework_servlet_http_servlet",
+        );
+
+        // A locally declared @WebServlet annotation is not the Jakarta one.
+        let (workspace, runtime) = index_java_release_v0_2_fixture(
+            "servlet_lookalikes",
+            "java-release-servlet-lookalikes",
+        );
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target == "servlet.annotation.WebServlet"),
+            "an unimported @WebServlet must not derive support: {derived:?}"
+        );
+    }
+
+    #[test]
+    fn java_servlet_detector_leaves_the_shipped_families_intact() {
+        // Two framework roles on one unit deletes a family silently, so the
+        // pre-existing Java families are re-asserted after adding the servlet
+        // detector.
+        for (fixture, family_prefix) in [
+            (
+                "jpa_exact_entities",
+                "family:java:jpa_entity:framework_jpa_entity",
+            ),
+            (
+                "jaxrs_exact_resources",
+                "family:java:jaxrs_resource_method:framework_jaxrs_resource_method",
+            ),
+        ] {
+            let (workspace, runtime) = index_java_release_v0_2_fixture(
+                fixture,
+                &format!("java-release-servlet-regression-{fixture}"),
+            );
+            assert_single_java_family(&runtime, &workspace, family_prefix);
+        }
+    }
+
+    #[test]
     fn java_jaxrs_exact_resources_form_family_without_worker() {
         let (workspace, runtime) = index_java_release_v0_2_fixture(
             "jaxrs_exact_resources",
@@ -7246,6 +9578,67 @@ mod tests {
                     && claim == "java_jpa_entity_identity"),
             "missing (UnresolvedImport, java_jpa_entity_identity): {unknowns:?}"
         );
+    }
+
+    /// A single exact Spring MVC route is a resolvable-but-lonely member: the
+    /// unit is indexed and its framework anchor is derived, yet support stays
+    /// below the min-support-3 family threshold, so no family row and no claim
+    /// payload may reach the product surface.
+    #[test]
+    fn java_low_support_stays_unknown_without_family_rows() {
+        const LOW_SUPPORT_PATH: &str =
+            "src/main/java/com/example/lowsupport/SingleRouteController.java";
+        let (workspace, runtime) =
+            index_java_release_v0_2_fixture("low_support", "java-release-low-support");
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let units_json = parse_machine_output("units", &units, &workspace);
+        let java_unit_kinds = units_json["units"]
+            .as_array()
+            .expect("units array")
+            .iter()
+            .filter(|unit| unit["language"] == "java")
+            .filter_map(|unit| unit["kind"].as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            java_unit_kinds.contains(&"spring_mvc_route"),
+            "low-support fixture must still index its Java route unit; got {java_unit_kinds:?}"
+        );
+
+        let derived = java_derived_support_facts(&runtime, &workspace);
+        let route_derived = derived
+            .iter()
+            .filter(|(path, target, _)| {
+                path == LOW_SUPPORT_PATH && target == "spring.web.bind.annotation.GetMapping"
+            })
+            .count();
+        assert_eq!(
+            route_derived, 1,
+            "low-support fixture must derive exactly one route anchor: {derived:?}"
+        );
+
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_eq!(families_json["status"], "UNKNOWN");
+        assert!(families_json["families"]
+            .as_array()
+            .expect("families")
+            .is_empty());
+        assert_no_claim_payload("families", &families_json);
+        assert_no_output_leakage("families", &families.stdout, &workspace);
+
+        for command in ["family", "member", "find", "explain", "check"] {
+            let output = run_with_runtime(
+                cli_args(command, workspace.path(), &[LOW_SUPPORT_PATH, "--json"]),
+                &runtime,
+            );
+            let value = parse_machine_output(command, &output, &workspace);
+            assert_unknown_query_json(command, &value);
+            assert_no_claim_payload(command, &value);
+        }
     }
 
     fn index_csharp_release_v0_2_fixture(
@@ -7359,6 +9752,90 @@ mod tests {
         let detail_json = parse_machine_output("family", &detail, &workspace);
         assert_eq!(detail_json["status"], "ok");
         assert_eq!(detail_json["output"]["source_snippets_included"], false);
+    }
+
+    #[test]
+    fn csharp_fluentvalidation_validators_form_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_csharp_release_v0_2_fixture(
+            "fluentvalidation_exact_validators",
+            "csharp-release-fluentvalidation-exact",
+        );
+
+        let derived = csharp_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "fluentvalidation.AbstractValidator")
+                .count(),
+            3,
+            "three exact validators should derive three support facts: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:csharp:fluentvalidation_validator:framework_fluentvalidation_validator"
+            ));
+        assert_eq!(family_array[0]["support"], 3);
+
+        // A locally declared AbstractValidator<T> with no using and no fully
+        // qualified path is some other type entirely.
+        let (workspace, runtime) = index_csharp_release_v0_2_fixture(
+            "fluentvalidation_lookalikes",
+            "csharp-release-fluentvalidation-lookalikes",
+        );
+        let derived = csharp_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target == "fluentvalidation.AbstractValidator"),
+            "lookalike bases must not derive support: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .map(|families| families.iter().any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("fluentvalidation"))))
+                .unwrap_or(false),
+            "lookalikes must not form a FluentValidation family: {families_json}"
+        );
+    }
+
+    #[test]
+    fn csharp_fluentvalidation_detector_leaves_the_shipped_families_intact() {
+        // A second detector on an already-claimed unit deletes a family
+        // silently, so the pre-existing C# families are re-asserted here.
+        let (workspace, runtime) = index_csharp_release_v0_2_fixture(
+            "aspnet_exact_controllers",
+            "csharp-release-fluentvalidation-regression",
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert_eq!(family_array[0]["support"], 3);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:csharp:aspnet_controller_action:framework_aspnetcore_controller_action"
+            ));
     }
 
     #[test]
@@ -7716,6 +10193,80 @@ mod tests {
     }
 
     #[test]
+    fn cpp_cppunit_registrations_form_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_cpp_release_v0_2_fixture(
+            "cppunit_exact_registrations",
+            "cpp-release-cppunit-exact",
+        );
+
+        let derived = cpp_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "cppunit.CPPUNIT_TEST_SUITE_REGISTRATION")
+                .count(),
+            3,
+            "derived CppUnit support facts: {derived:?}"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        let family_array = families_json["families"].as_array().expect("families");
+        assert_eq!(family_array.len(), 1);
+        assert!(family_array[0]["family_id"]
+            .as_str()
+            .expect("family id")
+            .starts_with(
+                "family:cpp:cppunit_suite_registration:framework_cppunit_suite_registration"
+            ));
+        assert_eq!(family_array[0]["support"], 3);
+
+        // Without the cppunit include the macro spelling proves nothing.
+        let (workspace, runtime) =
+            index_cpp_release_v0_2_fixture("cppunit_lookalikes", "cpp-release-cppunit-lookalikes");
+        let derived = cpp_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target.starts_with("cppunit.")),
+            "an uncorroborated CppUnit macro must not derive support: {derived:?}"
+        );
+    }
+
+    #[test]
+    fn cpp_cppunit_detector_leaves_the_shipped_test_families_intact() {
+        for (fixture, family_prefix) in [
+            (
+                "gtest_exact_tests",
+                "family:cpp:gtest_test_case:framework_gtest_test",
+            ),
+            (
+                "catch2_exact_tests",
+                "family:cpp:catch2_test_case:framework_catch2_test",
+            ),
+        ] {
+            let (workspace, runtime) = index_cpp_release_v0_2_fixture(
+                fixture,
+                &format!("cpp-release-cppunit-regression-{fixture}"),
+            );
+            let families = run_with_runtime(
+                cli_args("families", workspace.path(), &["--json"]),
+                &runtime,
+            );
+            let families_json = parse_machine_output("families", &families, &workspace);
+            let family_array = families_json["families"].as_array().expect("families");
+            assert_eq!(family_array.len(), 1, "{fixture}");
+            assert!(family_array[0]["family_id"]
+                .as_str()
+                .expect("family id")
+                .starts_with(family_prefix));
+            assert_eq!(family_array[0]["support"], 3, "{fixture}");
+        }
+    }
+
+    #[test]
     fn cpp_test_macro_lookalikes_stay_unknown_without_family() {
         let (workspace, runtime) =
             index_cpp_release_v0_2_fixture("test_macro_lookalikes", "cpp-release-lookalikes");
@@ -8065,6 +10616,69 @@ mod tests {
     }
 
     #[test]
+    fn rust_tracing_instrument_fixture_forms_a_family_and_lookalikes_do_not() {
+        let (workspace, runtime) = index_rust_release_v0_2_fixture(
+            "tracing_instrumented",
+            "rust-release-tracing-instrumented",
+        );
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "tracing.instrument")
+                .count(),
+            3,
+            "three instrument anchors should derive three support facts: {derived:?}"
+        );
+        let families_json = rust_family_json(&runtime, &workspace);
+        assert_eq!(families_json["status"], "ok");
+        assert_rust_family_role(&families_json, "framework_tracing_instrument", 3);
+
+        let (workspace, runtime) = index_rust_release_v0_2_fixture(
+            "tracing_lookalikes",
+            "rust-release-tracing-lookalikes",
+        );
+        let derived = rust_derived_support_facts(&runtime, &workspace);
+        assert!(
+            !derived
+                .iter()
+                .any(|(_, target, _)| target == "tracing.instrument"),
+            "no lookalike may derive tracing support: {derived:?}"
+        );
+        let families_json = rust_family_json(&runtime, &workspace);
+        assert!(
+            !families_json["families"]
+                .as_array()
+                .expect("families")
+                .iter()
+                .any(|family| family["family_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains("framework_tracing_instrument"))),
+            "lookalikes must not form a tracing family: {families_json}"
+        );
+    }
+
+    #[test]
+    fn rust_tracing_detector_does_not_disturb_the_shipped_framework_families() {
+        // A second detector firing on an already-claimed unit does not error --
+        // it silently drops that unit from family support. These are the
+        // families that existed before tracing was added, asserted unchanged.
+        for (fixture, role_token, support) in [
+            ("serde_exact_models", "framework_serde_model", 3),
+            ("thiserror_exact_errors", "framework_thiserror_error", 3),
+            ("axum_exact_routes", "framework_axum_route", 3),
+        ] {
+            let (workspace, runtime) = index_rust_release_v0_2_fixture(
+                fixture,
+                &format!("rust-release-tracing-regression-{fixture}"),
+            );
+            let families_json = rust_family_json(&runtime, &workspace);
+            assert_eq!(families_json["status"], "ok", "{fixture}");
+            assert_rust_family_role(&families_json, role_token, support);
+        }
+    }
+
+    #[test]
     fn rust_low_support_stays_unknown_without_family_rows() {
         let (workspace, runtime) =
             index_rust_release_v0_2_fixture("low_support_family", "rust-release-low-support");
@@ -8091,7 +10705,7 @@ mod tests {
         fs::create_dir_all(workspace.path().join("src")).expect("create src");
         fs::write(
             workspace.path().join("Cargo.toml"),
-            "[package]\nname = \"demo-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+            "[package]\nname = \"demo-crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n\n[dependencies]\nserde = \"1\"\n",
         )
         .expect("write manifest");
         fs::write(
@@ -8158,6 +10772,53 @@ mod tests {
                     .iter()
                     .any(|assumption| assumption == "proc_macros_executed=false")
         }));
+        let dependencies = list_active_dependencies(&store).expect("list package dependencies");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        let dependency = &dependencies.dependencies[0];
+        assert_eq!(dependency.ecosystem, "cargo");
+        assert_eq!(dependency.package_name, "serde");
+        assert_eq!(dependency.requirement.as_deref(), Some("^1"));
+        assert_eq!(dependency.evidence_level, "manifest_declared");
+        assert_eq!(dependency.path, "Cargo.toml");
+
+        fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub fn demo() -> usize { 2 }\n",
+        )
+        .expect("modify unrelated Rust source");
+        let sync = run_with_runtime(
+            cli_args("sync", workspace.path(), &["--json", "--progress", "never"]),
+            &runtime,
+        );
+        assert_eq!(sync.status, 0);
+        assert!(
+            !workspace.path().join("build-script-ran.txt").exists(),
+            "incremental sync must not execute Cargo build scripts"
+        );
+        let sync_value = parse_machine_output("sync", &sync, &workspace);
+        assert_eq!(sync_value["sync_mode"], "incremental");
+        let refreshed_store = runtime
+            .store_for_status_request(&status_request)
+            .expect("reopen store after sync");
+        let refreshed_dependencies =
+            list_active_dependencies(&refreshed_store).expect("list refreshed dependencies");
+        assert_eq!(refreshed_dependencies.dependencies.len(), 1);
+        assert_eq!(refreshed_dependencies.dependencies[0].package_name, "serde");
+        let refreshed_facts =
+            list_semantic_facts(&refreshed_store).expect("list refreshed semantic facts");
+        assert_eq!(
+            refreshed_facts
+                .facts
+                .iter()
+                .filter(|fact| {
+                    fact.origin_engine == "cargo_metadata"
+                        && fact.origin_method == "cargo_metadata_no_deps_v1"
+                        && fact.target.as_deref() == Some("cargo.package.demo_crate")
+                })
+                .count(),
+            1,
+            "incremental sync must recompute rather than duplicate Cargo provider facts"
+        );
     }
 
     #[test]
@@ -9228,6 +11889,82 @@ mod tests {
         );
         let families_json = parse_machine_output("families", &families, &workspace);
         assert_family_role(&families_json, "framework:jest_vitest.test");
+    }
+
+    #[test]
+    fn tsjs_playwright_exact_tests_form_their_own_runner_family() {
+        let (workspace, runtime) = index_release_v0_2_fixture(
+            "playwright_exact_tests",
+            "tsjs-release-playwright-exact-tests",
+        );
+
+        let derived = tsjs_derived_support_facts(&runtime, &workspace);
+        assert_eq!(
+            derived
+                .iter()
+                .filter(|(_, target, _)| target == "playwright.test")
+                .count(),
+            3,
+            "Playwright fixture should derive three exact test cases: {derived:?}"
+        );
+        // Playwright never adopts a jest/vitest target, which is what keeps it
+        // in its own family rather than clustering with unit tests. The fixture
+        // uses a real `test.describe(...)` suite, so this also pins that a
+        // member call is not read as a bare ambient `describe`.
+        assert!(!derived
+            .iter()
+            .any(|(_, target, _)| target.starts_with("jest_vitest.")));
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open indexed store");
+        let facts = list_semantic_facts(&store).expect("list semantic facts");
+        assert!(
+            facts.facts.iter().any(|fact| {
+                fact.origin_engine == "repogrammar-tsjs-derived"
+                    && fact.target.as_deref() == Some("playwright.test")
+                    && fact
+                        .assumptions
+                        .iter()
+                        .any(|assumption| assumption == "runner_kind=playwright")
+            }),
+            "Playwright support facts must carry runner_kind=playwright"
+        );
+        let families = run_with_runtime(
+            cli_args("families", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        let families_json = parse_machine_output("families", &families, &workspace);
+        assert_family_role(&families_json, "framework:jest_vitest.test");
+    }
+
+    #[test]
+    fn tsjs_playwright_detector_leaves_the_shipped_runner_families_intact() {
+        // runner_kind is a required-equal family feature, so adding a runner
+        // must not merge or displace the existing ones.
+        for (fixture, target) in [
+            ("jest_vitest_exact_tests", "jest_vitest.it"),
+            ("mocha_exact_tests", "mocha.it"),
+        ] {
+            let (workspace, runtime) = index_release_v0_2_fixture(
+                fixture,
+                &format!("tsjs-release-playwright-regression-{fixture}"),
+            );
+            let derived = tsjs_derived_support_facts(&runtime, &workspace);
+            assert!(
+                derived.iter().any(|(_, found, _)| found == target),
+                "{fixture} must still derive {target}: {derived:?}"
+            );
+            assert!(
+                !derived
+                    .iter()
+                    .any(|(_, found, _)| found.starts_with("playwright.")),
+                "{fixture} must not acquire a Playwright target: {derived:?}"
+            );
+        }
     }
 
     #[test]
@@ -11575,7 +14312,524 @@ class User(Base):
     }
 
     #[test]
-    fn product_runtime_inventory_reads_file_manifest_only_generation() {
+    fn product_runtime_undecodable_ada_fortran_sources_and_gpr_yield_no_units() {
+        let workspace = TempWorkspace::new("product-runtime-ada-fortran-inventory");
+        let mut ada_source = vec![0xff, 0xfe, 0xfd];
+        ada_source.extend_from_slice(b"ADA_SOURCE_MUST_NOT_BE_READ");
+        fs::write(workspace.path().join("main.adb"), ada_source).expect("write Ada source");
+        let mut fortran_source = vec![0xff, 0xfe, 0xfd];
+        fortran_source.extend_from_slice(b"FORTRAN_SOURCE_MUST_NOT_BE_READ");
+        fs::write(workspace.path().join("main.f90"), fortran_source).expect("write Fortran source");
+        let mut gpr = vec![0xff, 0xfe, 0xfd];
+        gpr.extend_from_slice(b"GPR_SOURCE_MUST_NOT_BE_READ");
+        fs::write(workspace.path().join("demo.gpr"), gpr).expect("write GPR inventory");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 3);
+        // ADR-0045 admits `.adb` and ADR-0051 admits `.f90`, but these bytes are
+        // not UTF-8, so each body is read and then skipped: the parser is never
+        // reached and the generation holds nothing. `.gpr` stays deferred.
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
+        assert_eq!(value["parser_attempted_files"], 0);
+        assert_eq!(value["indexed_units"], 0);
+        assert_eq!(value["semantic_facts"], 0);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!([
+                "parser skipped unsupported language token: ada-config",
+                "parser skipped non-UTF-8 source: main.adb",
+                "parser skipped non-UTF-8 source: main.f90"
+            ])
+        );
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        // Same answer as `index` above: one classifier decides this from the
+        // recorded unit count, so the two commands cannot disagree.
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| {
+                    (
+                        file["path"].as_str().expect("path"),
+                        file["language"].as_str().expect("language"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("demo.gpr", "ada-config"),
+                ("main.adb", "ada"),
+                ("main.f90", "fortran"),
+            ]
+        );
+        for secret in [
+            "ADA_SOURCE_MUST_NOT_BE_READ",
+            "FORTRAN_SOURCE_MUST_NOT_BE_READ",
+            "GPR_SOURCE_MUST_NOT_BE_READ",
+        ] {
+            assert!(!index.stdout.contains(secret));
+            assert!(!files.stdout.contains(secret));
+        }
+    }
+
+    #[test]
+    fn product_runtime_alire_and_fpm_manifests_report_bounded_syntax_inventory() {
+        let workspace = TempWorkspace::new("product-runtime-alire-fpm-index");
+        fs::write(
+            workspace.path().join("alire.toml"),
+            "[[depends-on]]\nsecret_ada_crate = \"^1\"\n",
+        )
+        .expect("write Alire manifest");
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            "[dependencies]\nsecret-fortran-package = \"*\"\n",
+        )
+        .expect("write fpm manifest");
+        let runtime = ProductCliRuntime;
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 2);
+        assert_eq!(value["indexed_units"], 2);
+        assert_eq!(value["semantic_facts"], 2);
+        assert_eq!(value["warnings"], serde_json::json!([]));
+        assert!(!index.stdout.contains("secret_ada_crate"));
+        assert!(!index.stdout.contains("secret-fortran-package"));
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("units", &units, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["units"].as_array().expect("units array").len(), 2);
+        assert!(!units.stdout.contains("secret_ada_crate"));
+        assert!(!units.stdout.contains("secret-fortran-package"));
+    }
+
+    #[test]
+    fn product_runtime_exact_gemfile_lock_reports_bounded_syntax_inventory() {
+        let workspace = TempWorkspace::new("product-runtime-ruby-lock-index");
+        fs::write(
+            workspace.path().join("Gemfile.lock"),
+            "DEPENDENCIES\n  rack (~> 3.1)\n",
+        )
+        .expect("write exact Gemfile.lock");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 1);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(value["semantic_facts"], 0);
+        assert_eq!(value["warnings"], serde_json::json!([]));
+        assert!(!index.stdout.contains("rack"));
+
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("units", &units, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["units"].as_array().expect("units array").len(), 1);
+    }
+
+    #[test]
+    fn product_runtime_exact_maven_pom_is_source_free_static_inventory() {
+        let workspace = TempWorkspace::new("product-runtime-maven-pom-index");
+        fs::write(
+            workspace.path().join("pom.xml"),
+            "<project><dependencies><dependency><groupId>private.example</groupId><artifactId>secret-library</artifactId><version>9.8.7</version></dependency></dependencies></project>",
+        )
+        .expect("write exact Maven POM");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 1);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(value["semantic_facts"], 0);
+        assert_eq!(value["warnings"], serde_json::json!([]));
+        for secret in ["private.example", "secret-library", "9.8.7", "<dependency>"] {
+            assert!(!index.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        let status_value = parse_machine_output("status", &status, &workspace);
+        assert_eq!(status_value["derived_record_dependencies"], 1);
+        for secret in ["private.example", "secret-library", "9.8.7", "<dependency>"] {
+            assert!(!status.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open Maven inventory store");
+        let dependencies = list_active_dependencies(&store).expect("read internal Maven inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].ecosystem, "maven");
+        assert_eq!(
+            dependencies.dependencies[0].package_name,
+            "private.example:secret-library"
+        );
+    }
+
+    #[test]
+    fn product_runtime_vbproj_reports_syntax_inventory_and_skips_undecodable_vb_source() {
+        let workspace = TempWorkspace::new("product-runtime-vbnet-inventory-index");
+        let mut source = vec![0xff, 0xfe, 0xfd];
+        source.extend_from_slice(b"vb-source-must-not-be-read");
+        fs::write(workspace.path().join("Program.vb"), source).expect("write binary VB source");
+        fs::write(
+            workspace.path().join("App.vbproj"),
+            r#"<Project><ItemGroup><PackageReference Include="Private.Package" Version="1.0"/></ItemGroup></Project>"#,
+        )
+        .expect("write vbproj");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        // ADR-0043 admits `.vb` to the bounded MSTest scanner, so the file is
+        // read rather than deferred. These bytes are not UTF-8, so it is
+        // skipped with a warning and its content still never reaches output.
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!(["parser skipped non-UTF-8 source: Program.vb"])
+        );
+        assert!(!index.stdout.contains("vb-source-must-not-be-read"));
+        assert!(!index.stdout.contains("Private.Package"));
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("file path"),
+                    file["language"].as_str().expect("file language")
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.vbproj", "visual-basic-config"),
+                ("Program.vb", "visual-basic")
+            ]
+        );
+    }
+
+    #[test]
+    fn product_runtime_dproj_reports_syntax_inventory_beside_an_undecodable_pascal_unit() {
+        let workspace = TempWorkspace::new("product-runtime-delphi-inventory-index");
+        let mut source = vec![0xff, 0xfe, 0xfd];
+        source.extend_from_slice(b"pascal-source-must-not-be-read");
+        fs::write(workspace.path().join("Unit1.pas"), source)
+            .expect("write binary Object Pascal source");
+        fs::write(
+            workspace.path().join("App.dproj"),
+            r#"<Project><PropertyGroup><DCC_UsePackage>rtl;PrivateRuntime</DCC_UsePackage></PropertyGroup></Project>"#,
+        )
+        .expect("write dproj");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!(["parser skipped non-UTF-8 source: Unit1.pas"])
+        );
+        assert!(!index.stdout.contains("pascal-source-must-not-be-read"));
+        assert!(!index.stdout.contains("PrivateRuntime"));
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("file path"),
+                    file["language"].as_str().expect("file language")
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.dproj", "delphi-config"),
+                ("Unit1.pas", "object-pascal")
+            ]
+        );
+    }
+
+    #[test]
+    fn product_runtime_sql_ddl_is_bounded_and_source_free() {
+        let workspace = TempWorkspace::new("product-runtime-sql-ddl-index");
+        fs::create_dir_all(workspace.path().join("db/migrations"))
+            .expect("create SQL migration dir");
+        // Every identifier and literal here is a marker: ADR-0040 forbids any of
+        // them from reaching a code unit id, fact, or public surface, because a
+        // name's identity is exactly the dialect-dependent fact this frontend
+        // cannot assert.
+        for (path, body) in [
+            (
+                "query.sql",
+                "SELECT secret_column FROM hidden_table WHERE token = 'sql-literal-marker';\n",
+            ),
+            (
+                "schema.sql",
+                "CREATE TABLE marker_accounts (id INTEGER PRIMARY KEY, email TEXT);\n",
+            ),
+            (
+                "db/migrations/001.sql",
+                "CREATE TABLE marker_orders (id INTEGER);\nCREATE TABLE marker_items (id INTEGER);\n",
+            ),
+        ] {
+            fs::write(workspace.path().join(path), body).expect("write SQL source");
+        }
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime,
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 3);
+        assert_eq!(value["parser_attempted_files"], 3);
+        // Three module units plus the four top-level statements.
+        assert_eq!(value["indexed_units"], 7);
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("path"),
+                    file["language"].as_str().expect("language"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("db/migrations/001.sql", "sql-migration"),
+                ("query.sql", "sql"),
+                ("schema.sql", "sql-schema"),
+            ]
+        );
+        let unknowns = run_with_runtime(
+            cli_args("unknowns", workspace.path(), &["--json"]),
+            &runtime,
+        );
+        for marker in [
+            "marker_accounts",
+            "marker_orders",
+            "marker_items",
+            "secret_column",
+            "hidden_table",
+            "sql-literal-marker",
+        ] {
+            for output in [&index, &files, &unknowns] {
+                assert!(
+                    !output.stdout.contains(marker),
+                    "{marker} leaked into a public surface"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn product_runtime_r_reads_only_bounded_metadata_and_sanitizes_remote_sources() {
+        let workspace = TempWorkspace::new("product-runtime-r-inventory-index");
+        let mut r_source = vec![0xff, 0xfe, 0xfd];
+        r_source.extend_from_slice(b"r-source-must-not-be-read");
+        fs::write(workspace.path().join("main.R"), r_source).expect("write binary R source");
+        fs::write(
+            workspace.path().join("renv.lock"),
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"},"private":{"Package":"private","Version":"1.0","Source":"GitHub","RemoteUrl":"https://user:CLI_SECRET@example.invalid/repo"}}}"#,
+        )
+        .expect("write renv lock");
+        let runtime = ProductCliRuntime;
+        assert_eq!(
+            run_with_runtime(
+                cli_args("init", workspace.path(), &["--state-only"]),
+                &runtime,
+            )
+            .status,
+            0
+        );
+
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 1);
+        assert_eq!(value["indexed_units"], 1);
+        assert_eq!(
+            value["warnings"],
+            serde_json::json!(["parser skipped unsupported language token: r"])
+        );
+
+        let files = run_with_runtime(cli_args("files", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("files", &files, &workspace);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(
+            value["files"]
+                .as_array()
+                .expect("files array")
+                .iter()
+                .map(|file| (
+                    file["path"].as_str().expect("path"),
+                    file["language"].as_str().expect("language"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![("main.R", "r"), ("renv.lock", "r-config")]
+        );
+        let units = run_with_runtime(cli_args("units", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("units", &units, &workspace);
+        assert_eq!(value["units"].as_array().expect("units array").len(), 1);
+        for output in [&index.stdout, &files.stdout, &units.stdout] {
+            for marker in ["r-source-must-not-be-read", "CLI_SECRET", "example.invalid"] {
+                assert!(!output.contains(marker), "leaked {marker}");
+            }
+        }
+    }
+
+    #[test]
+    fn product_runtime_matlab_and_assembly_inventory_is_source_free() {
+        let workspace = TempWorkspace::new("product-runtime-matlab-assembly-index");
+        fs::create_dir_all(workspace.path().join("resources")).expect("create MATLAB resources");
+        fs::write(
+            workspace.path().join("resources/mpackage.json"),
+            r#"{"name":"PrivateDemo","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0","dependencies":[{"name":"SecretDependency","compatibleVersions":">1.0.0","id":"e6c4123e-0068-42be-aef2-00d49d1509f5"}]}"#,
+        )
+        .expect("write MATLAB package definition");
+        fs::write(
+            workspace.path().join("private.s"),
+            ".text\nsecret_entry:\n call private_target\n.include \"secret.inc\"\n",
+        )
+        .expect("write assembly source");
+        let runtime = ProductCliRuntime;
+
+        let init = run_with_runtime(
+            cli_args("init", workspace.path(), &["--state-only"]),
+            &runtime,
+        );
+        assert_eq!(init.status, 0);
+        let index = run_with_runtime(cli_args("index", workspace.path(), &["--json"]), &runtime);
+        let value = parse_machine_output("index", &index, &workspace);
+        assert_eq!(value["generation_id"], "gen-000001");
+        assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "syntax_only_code_units");
+        assert_eq!(value["parser"], "syntax_only");
+        assert_eq!(value["parser_attempted_files"], 2);
+        for secret in [
+            "PrivateDemo",
+            "SecretDependency",
+            "e6c4123e",
+            "secret_entry",
+            "private_target",
+            "secret.inc",
+        ] {
+            assert!(!index.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status = run_with_runtime(cli_args("status", workspace.path(), &["--json"]), &runtime);
+        let status_value = parse_machine_output("status", &status, &workspace);
+        assert!(status_value["derived_record_dependencies"].is_number());
+        for secret in [
+            "SecretDependency",
+            "secret_entry",
+            "private_target",
+            "secret.inc",
+        ] {
+            assert!(!status.stdout.contains(secret), "leaked {secret}");
+        }
+
+        let status_request = RepositoryStatusRequest {
+            path: workspace.path().display().to_string(),
+            state_dir_override: None,
+        };
+        let store = runtime
+            .store_for_status_request(&status_request)
+            .expect("open MATLAB inventory store");
+        let dependencies = list_active_dependencies(&store).expect("read MATLAB inventory");
+        assert_eq!(dependencies.dependencies.len(), 1);
+        assert_eq!(dependencies.dependencies[0].ecosystem, "matlab_add_on");
+        assert!(dependencies.dependencies[0]
+            .package_name
+            .starts_with("SecretDependency@"));
+    }
+
+    #[test]
+    fn product_runtime_defers_executable_ruby_config_without_reading_source() {
         let workspace = TempWorkspace::new("product-runtime-ruby-inventory-index");
         fs::write(workspace.path().join("README.txt"), "not a TS/JS source\n")
             .expect("write ignored source");
@@ -11600,7 +14854,11 @@ class User(Base):
         let value: Value = serde_json::from_str(index.stdout.trim()).expect("index JSON");
         assert_eq!(value["generation_id"], "gen-000001");
         assert_eq!(value["discovered_files"], 2);
+        assert_eq!(value["indexing"], "file_manifest_only");
+        assert_eq!(value["parser"], "deferred");
+        assert_eq!(value["parser_attempted_files"], 0);
         assert_eq!(value["indexed_units"], 0);
+        assert_eq!(value["semantic_facts"], 0);
         assert_eq!(
             value["warnings"],
             serde_json::json!([
@@ -11657,10 +14915,10 @@ class User(Base):
         let mut php_source = vec![0xff, 0xfe, 0xfd];
         php_source.extend_from_slice(b"php-source-must-not-be-read");
         fs::write(workspace.path().join("main.php"), php_source).expect("write binary PHP source");
-        let mut composer_config = vec![0xff, 0xfe, 0xfd];
-        composer_config.extend_from_slice(b"php-config-must-not-be-read");
-        fs::write(workspace.path().join("composer.json"), composer_config)
-            .expect("write binary Composer config");
+        let mut phpunit_config = vec![0xff, 0xfe, 0xfd];
+        phpunit_config.extend_from_slice(b"php-config-must-not-be-read");
+        fs::write(workspace.path().join("phpunit.xml"), phpunit_config)
+            .expect("write binary deferred PHPUnit config");
         let runtime = ProductCliRuntime;
 
         let init = run_with_runtime(
@@ -11681,8 +14939,8 @@ class User(Base):
         assert_eq!(
             value["warnings"],
             serde_json::json!([
-                "parser skipped unsupported language token: php",
-                "parser skipped unsupported language token: php-config"
+                "parser skipped unsupported language token: php-config",
+                "parser skipped non-UTF-8 source: main.php"
             ])
         );
         assert!(!index.stdout.contains("php-source-must-not-be-read"));
@@ -11712,7 +14970,7 @@ class User(Base):
                     )
                 })
                 .collect::<Vec<_>>(),
-            vec![("composer.json", "php-config"), ("main.php", "php")]
+            vec![("main.php", "php"), ("phpunit.xml", "php-config")]
         );
         assert!(!files.stdout.contains("php-source-must-not-be-read"));
         assert!(!files.stdout.contains("php-config-must-not-be-read"));
@@ -11736,7 +14994,7 @@ class User(Base):
         assert!(human.stdout.contains("parser_attempted_files: 0"));
         assert!(human
             .stdout
-            .contains("warning: parser skipped unsupported language token: php\n"));
+            .contains("warning: parser skipped non-UTF-8 source: main.php\n"));
         assert!(human
             .stdout
             .contains("warning: parser skipped unsupported language token: php-config\n"));
@@ -11781,8 +15039,8 @@ class User(Base):
         assert_eq!(
             value["warnings"],
             serde_json::json!([
-                "parser skipped unsupported language token: swift",
-                "parser skipped unsupported language token: swift-config"
+                "parser skipped unsupported language token: swift-config",
+                "parser skipped non-UTF-8 source: main.swift"
             ])
         );
         assert!(!index.stdout.contains("swift-source-must-not-be-read"));
@@ -11839,7 +15097,7 @@ class User(Base):
         assert!(human.stdout.contains("parser_attempted_files: 0"));
         assert!(human
             .stdout
-            .contains("warning: parser skipped unsupported language token: swift\n"));
+            .contains("warning: parser skipped non-UTF-8 source: main.swift\n"));
         assert!(human
             .stdout
             .contains("warning: parser skipped unsupported language token: swift-config\n"));
@@ -13329,6 +16587,86 @@ pythonpath = ["src"]
         let rendered = format!("{malformed:?}");
         assert!(!rendered.contains("/Users/alice"));
         assert!(!rendered.contains("SECRET_TOKEN"));
+    }
+
+    #[test]
+    fn native_probe_classifier_accepts_opencode_config_contents() {
+        let present = classify_native_agent_probe(
+            AgentTarget::Opencode,
+            InstallScope::Global,
+            true,
+            br#"{"mcp":{"repogrammar":{"type":"local","command":["/opt/repogrammar","serve"],"enabled":true}}}"#,
+            b"",
+        )
+        .expect("valid opencode config contents");
+        assert_eq!(
+            present,
+            NativeMcpServerState::Present(NativeMcpServerConfig {
+                executable_path: "/opt/repogrammar".to_string(),
+                args: vec!["serve".to_string()],
+                scope: InstallScope::Global,
+                enabled: true,
+            })
+        );
+
+        let malformed = classify_native_agent_probe(
+            AgentTarget::Opencode,
+            InstallScope::Global,
+            true,
+            br#"{"mcp":{"repogrammar":{"type":"remote","url":"https://example.invalid"}}}"#,
+            b"",
+        )
+        .expect("unrecognized opencode entry is a preserved malformed state");
+        assert_eq!(malformed, NativeMcpServerState::Malformed);
+
+        let error = classify_native_agent_probe(
+            AgentTarget::Gemini,
+            InstallScope::Global,
+            true,
+            b"{}",
+            b"",
+        )
+        .expect_err("non-live targets still fail closed");
+        assert_eq!(
+            error.to_string(),
+            "native MCP probe requires a live agent target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn product_configurator_routes_opencode_through_the_file_writer() {
+        let workspace = TempWorkspace::new("product-configurator-opencode");
+        let xdg_config = workspace.path().join("xdg-config");
+        fs::create_dir_all(&xdg_config).expect("xdg config dir");
+        let config_path = xdg_config.join("opencode").join("opencode.json");
+        let executable = workspace.path().join("repogrammar");
+        fs::write(&executable, "stub\n").expect("stub executable");
+
+        // The env-based path resolution honors XDG_CONFIG_HOME without
+        // hardcoding ~/.config; this test avoids mutating process env vars by
+        // exercising the same resolution through the install-service helper.
+        let resolved = {
+            let env_lookup = |key: &str| match key {
+                "XDG_CONFIG_HOME" => Some(xdg_config.display().to_string()),
+                _ => None,
+            };
+            opencode_global_config_path(&env_lookup).expect("resolve opencode config path")
+        };
+        assert_eq!(resolved, config_path);
+        let action = opencode_write_mcp_config(
+            &resolved,
+            InstallScope::Global,
+            &executable.display().to_string(),
+        )
+        .expect("write opencode config");
+        assert_eq!(action, OpencodeConfigWriteAction::CreatedFile);
+        let inspected = opencode_inspect_mcp_config(&resolved, InstallScope::Global)
+            .expect("inspect opencode config");
+        assert!(matches!(inspected, NativeMcpServerState::Present(_)));
+        let removal = opencode_remove_mcp_config(&resolved, InstallScope::Global)
+            .expect("remove opencode entry");
+        assert_eq!(removal, OpencodeConfigRemovalAction::RemovedEntry);
     }
 
     #[cfg(unix)]

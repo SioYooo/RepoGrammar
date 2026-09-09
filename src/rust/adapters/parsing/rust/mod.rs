@@ -262,10 +262,27 @@ impl<'a> RustTreeScanner<'a> {
     }
 
     /// Slice covering a node's leading attributes plus its body, used for
-    /// bounded framework-attribute detection.
+    /// bounded shape derivation.
     fn unit_slice_with_attributes<'b>(&'b self, node: Node<'_>) -> &'b str {
         let start = leading_attribute_start_byte(node).unwrap_or_else(|| node.start_byte());
         self.document.text.get(start..node.end_byte()).unwrap_or("")
+    }
+
+    /// Slice covering only a node's leading attributes.
+    ///
+    /// Attribute detection must never see the body. A body may legitimately
+    /// contain an attribute's own spelling -- inside a string, a comment, or a
+    /// macro template -- and matching there would both invent a framework role
+    /// and steal the unit from the role it actually had, which is silent
+    /// because a unit is only ever assigned one kind.
+    fn attribute_prefix_slice<'b>(&'b self, node: Node<'_>) -> &'b str {
+        let Some(start) = leading_attribute_start_byte(node) else {
+            return "";
+        };
+        self.document
+            .text
+            .get(start..node.start_byte())
+            .unwrap_or("")
     }
 
     /// Decide a struct/enum kind, promoting to a general framework kind when the
@@ -279,11 +296,17 @@ impl<'a> RustTreeScanner<'a> {
     /// exact `#[tokio::main]`/`#[tokio::test]` attribute (or a bare `#[main]`
     /// with `use tokio::main`) is present.
     fn function_item_kind(&self, node: Node<'_>, context: VisitContext) -> CodeUnitKind {
-        let slice = self.unit_slice_with_attributes(node);
-        if let Some(kind) = framework_anchors::tokio_function_kind(slice) {
+        let attributes = self.attribute_prefix_slice(node);
+        if let Some(kind) = framework_anchors::tokio_function_kind(attributes) {
             return kind;
         }
-        if let Some(kind) = framework_anchors::tokio_bare_main_kind(slice, &self.use_ctx) {
+        if let Some(kind) = framework_anchors::tokio_bare_main_kind(attributes, &self.use_ctx) {
+            return kind;
+        }
+        // Ordered after tokio on purpose: a function may carry both attributes,
+        // and a unit with two framework roles is dropped from family support
+        // without a diagnostic rather than reported as a conflict.
+        if let Some(kind) = framework_anchors::tracing_instrument_kind(attributes, &self.use_ctx) {
             return kind;
         }
         self.function_kind(node, context)
@@ -1251,13 +1274,15 @@ parse_macro!(ParserState);
                     .is_some_and(|target| target.as_str() == "repogrammar.rust.parser_adapter")
             })
             .collect::<Vec<_>>();
-        assert!(parser_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "rust_attribute_shape=derive")));
+        assert!(parser_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "rust_attribute_shape=derive")
+        }));
         assert!(parser_facts.iter().any(|fact| {
             fact.assumptions.iter().any(|assumption| {
-                assumption == "rust_signature_shape=async_unsafe_generic_receiver_mut_ref_returns_value"
+                assumption
+                    == "rust_signature_shape=async_unsafe_generic_receiver_mut_ref_returns_value"
             }) && fact
                 .assumptions
                 .iter()
@@ -1335,14 +1360,13 @@ path = "src/rust/benches/unknowns.rs"
                 "missing Cargo project config target {target}"
             );
         }
-        assert!(report
-            .semantic_facts
-            .iter()
-            .any(|fact| fact.kind == SemanticFactKind::Unknown
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
                 && fact
                     .target
                     .as_ref()
-                    .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")));
+                    .is_some_and(|target| target.as_str() == "BuildVariantAmbiguity")
+        }));
     }
 
     #[test]
@@ -1502,10 +1526,11 @@ pub struct Item {
             SemanticFactKind::Symbol,
             "serde.Deserialize"
         ));
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "serde_attr_shape=rename_all")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "serde_attr_shape=rename_all")
+        }));
         // Derive-macro expansion stays a non-blocking honesty subclaim.
         assert!(has_unknown_claim(
             &report,
@@ -1591,6 +1616,126 @@ pub enum CatalogError {
             SemanticFactKind::Symbol,
             "thiserror.Error"
         ));
+    }
+
+    #[test]
+    fn attribute_text_inside_a_function_body_is_not_an_attribute() {
+        // The needle must be matched against the attribute region only. A body
+        // may legitimately contain the attribute's own spelling -- in a string,
+        // a comment, or a macro template -- and claiming the enclosing function
+        // would both invent a role and steal the unit from the role it had.
+        let text = "\nuse tracing::instrument;\n\nfn renders_docs() -> &'static str {\n    // #[instrument] appears here only as prose\n    \"#[tracing::instrument(level = \\\"debug\\\")]\"\n}\n\nfn tokio_prose() -> &'static str {\n    \"#[tokio::main]\"\n}\n";
+        let report = RustSyntaxParser
+            .parse(document("src/lib.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TracingInstrument),
+            "body text must not anchor tracing: {:?}",
+            report
+                .units
+                .iter()
+                .map(|unit| unit.kind.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TokioEntry),
+            "body text must not anchor tokio either: {:?}",
+            report
+                .units
+                .iter()
+                .map(|unit| unit.kind.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn tracing_instrument_attribute_anchors_only_with_use_or_qualified_path() {
+        let text = r#"
+use tracing::instrument;
+
+#[instrument]
+fn bare(id: u64) -> u64 { id }
+
+#[instrument(skip(secret))]
+fn with_arguments(id: u64, secret: &str) -> u64 { let _ = secret; id }
+
+#[tracing::instrument(level = "debug")]
+fn qualified(id: u64) -> u64 { id }
+"#;
+        let report = RustSyntaxParser
+            .parse(document("src/lib.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert_eq!(
+            report
+                .units
+                .iter()
+                .filter(|unit| unit.kind == CodeUnitKind::TracingInstrument)
+                .count(),
+            3,
+            "bare, argument-carrying, and qualified spellings all anchor"
+        );
+        assert!(has_fact_target(
+            &report,
+            SemanticFactKind::Symbol,
+            "tracing.instrument"
+        ));
+    }
+
+    #[test]
+    fn bare_instrument_without_use_evidence_does_not_anchor() {
+        let text = r#"
+#[instrument]
+fn borrowed_from_another_crate(id: u64) -> u64 { id }
+"#;
+        let report = RustSyntaxParser
+            .parse(document("src/lib.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TracingInstrument),
+            "a bare attribute with no same-file use evidence is some other crate's"
+        );
+        assert!(!has_fact_target(
+            &report,
+            SemanticFactKind::Symbol,
+            "tracing.instrument"
+        ));
+    }
+
+    #[test]
+    fn tokio_keeps_precedence_when_a_function_carries_both_attributes() {
+        // A unit with two framework roles is dropped from family support
+        // without any diagnostic, so the ordered chain must yield exactly one
+        // kind here. Tokio is first and stays first.
+        let text = r#"
+use tracing::instrument;
+
+#[tokio::main]
+#[instrument]
+async fn main() {}
+"#;
+        let report = RustSyntaxParser
+            .parse(document("src/main.rs", text, Language::Rust))
+            .expect("parse Rust");
+        assert!(report
+            .units
+            .iter()
+            .any(|unit| unit.kind == CodeUnitKind::TokioEntry));
+        assert!(
+            !report
+                .units
+                .iter()
+                .any(|unit| unit.kind == CodeUnitKind::TracingInstrument),
+            "tracing must not also claim a unit tokio already claims"
+        );
     }
 
     #[test]
@@ -1682,10 +1827,11 @@ pub fn router() -> Router {
             })
             .count();
         assert_eq!(route_anchors, 3);
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "http_method=GET")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "http_method=GET")
+        }));
     }
 
     #[test]

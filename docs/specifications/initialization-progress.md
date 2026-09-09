@@ -18,7 +18,7 @@ progress events.
 
 Progress must:
 
-- show an indeterminate spinner until the workload denominator is known;
+- show an indeterminate indicator until the workload denominator is known;
 - show exact completed and total work units plus an exact integer percentage
   when known;
 - never display fabricated percentages for unknown work or unstable ETAs;
@@ -40,16 +40,22 @@ state directory described in `docs/specifications/storage.md`.
 ## Current implementation status
 
 The bootstrap defines typed progress stages, known and unknown work units,
-plain rendering, and internal NDJSON serialization. `init` emits repository-state
-initialization progress. `index`, `sync`, and `resync` emit typed per-stage
+plain rendering, and internal NDJSON serialization. `init` uses live indexing
+progress and a concise result; interactive bootstrap does not append a delayed
+synthetic state-initialization event after that result. State-only and explicit
+noninteractive progress retain the initialization event. `index`, `sync`, and `resync` emit typed per-stage
 progress events while they run discovery, file metadata storage, syntax
 parsing, code-unit normalization, local support-fact recording, semantic-worker
 deferred/running status, candidate/family construction, and persistence
-validation. Human progress is rendered to stderr with an ASCII bar, integer
-percentage, and exact counts when exact work counts are known, and `[working]`
-without a percentage when a denominator is not known. Interactive TTY progress
-uses carriage-return single-line updates and emits one final newline; plain-log
-progress remains one line per event. `--json --progress always` keeps the final
+validation. Human progress is rendered to stderr. Interactive terminals show a cyan,
+width-bounded bar, a short phase name, and exact completed/total work with that
+phase's integer percentage. Unknown work remains indeterminate without a
+percentage or ETA. `NO_COLOR` disables color while retaining the bar. UTF
+locales use Unicode bars; other locales use ASCII. `COLUMNS` controls width
+(default 80); narrow frames omit detail before exact counts and never invent
+truncated numeric values. Carriage-return plus line erasure updates one line,
+followed by a final newline. Non-TTY, `CI`, and `TERM=dumb` use append-only
+plain ASCII logs. No animation thread or estimated overall progress is added. `--json --progress always` keeps the final
 JSON result on stdout while rendering the same human progress-bar output on
 stderr.
 

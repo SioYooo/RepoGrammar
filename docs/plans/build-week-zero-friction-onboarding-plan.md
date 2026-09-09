@@ -353,7 +353,7 @@ Required committed artifacts are:
 - this plan;
 - `../reports/build-week-usability-baseline.md` and `.summary.json`;
 - `../reports/build-week-usability-completion.md` and `.summary.json`;
-- `../demo/build-week-demo.md`;
+- `../demo/demo-runbook.md`;
 - synchronized specifications, architecture, README, quickstarts, CHANGELOG,
   release documents, and `.agents/memories/project-state.md`;
 - automated tests in documented `src/` paths.

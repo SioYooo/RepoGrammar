@@ -1,10 +1,11 @@
 //! Contract types for future Python semantic providers such as Pyrefly and Pyright.
 
 use crate::core::model::{
-    CodeUnitId, ContentHash, SemanticFact, SourceRange, TypedUnknown, UnknownClass,
+    CodeUnitId, ContentHash, FactCertainty, SemanticFact, SourceRange, TypedUnknown, UnknownClass,
     UnknownReasonCode,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
+use std::collections::BTreeMap;
 
 const MAX_PROVIDER_METADATA_CHARS: usize = 128;
 
@@ -42,6 +43,157 @@ impl PythonProviderOperation {
             Self::ObserveRuntimeTypes => "observe_runtime_types",
         }
     }
+
+    /// True when the operation may assign at most one target to a subject.
+    ///
+    /// Two distinct targets for one subject then contradict each other and the
+    /// answer must abstain. Call hierarchy and runtime-type observation are
+    /// additive by construction, so many targets per subject are ordinary output
+    /// there and must never be read as a conflict.
+    pub fn is_single_valued(self) -> bool {
+        matches!(self, Self::ResolveFrameworkIdentity | Self::CrossCheckClaim)
+    }
+}
+
+/// Why an answered provider request yields no usable facts.
+///
+/// This is the port's whole abstention vocabulary: a caller that cannot map its
+/// situation onto one of these states has no authority to mint facts from
+/// provider output. Every state carries zero facts and no provenance, so no
+/// provider failure can degrade into a confident structural claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PythonProviderState {
+    /// No provider answered: it is absent, unconfigured, or failed to run.
+    Absent,
+    /// A provider answered, but about source that has since changed or vanished.
+    Stale,
+    /// A provider answered about current source and contradicted itself.
+    Conflicting,
+}
+
+impl PythonProviderState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Stale => "stale",
+            Self::Conflicting => "conflicting",
+        }
+    }
+
+    fn reason(self) -> UnknownReasonCode {
+        match self {
+            Self::Absent => UnknownReasonCode::MissingDependency,
+            Self::Stale => UnknownReasonCode::StaleEvidence,
+            Self::Conflicting => UnknownReasonCode::ConflictingFacts,
+        }
+    }
+
+    /// The legacy class this state projects to.
+    ///
+    /// Absent and stale name a mechanism that discharges them — install the
+    /// provider, re-run it against the current revision — so both are
+    /// recoverable. A contradiction inside one answer has no such mechanism:
+    /// re-running the same provider over the same source reproduces it, and
+    /// nothing else is registered to adjudicate it. Per the UNKNOWN policy an
+    /// unregistered mechanism defaults to irreducible rather than to an invented
+    /// provider capability.
+    fn class(self) -> UnknownClass {
+        match self {
+            Self::Absent | Self::Stale => UnknownClass::Recoverable,
+            Self::Conflicting => UnknownClass::Irreducible,
+        }
+    }
+
+    fn recovery(self, provider: PythonProviderKind) -> Option<String> {
+        match self {
+            Self::Absent => Some(format!(
+                "install or configure {} provider",
+                provider.as_str()
+            )),
+            Self::Stale => Some(format!(
+                "re-run {} provider against the current repository revision",
+                provider.as_str()
+            )),
+            Self::Conflicting => None,
+        }
+    }
+}
+
+/// One provider answer as recorded by a caller, before it becomes facts.
+///
+/// The request carries the content hash each candidate had when the provider
+/// saw it, so freshness is decided against recorded evidence rather than against
+/// a caller's belief about it.
+#[derive(Debug, Clone, Copy)]
+pub struct PythonProviderAnswer<'a> {
+    /// The request the provider answered, or would have answered.
+    pub request: &'a PythonProviderRequest,
+    /// Provider provenance. `None` when no provider answered at all.
+    pub provenance: Option<&'a PythonProviderProvenance>,
+    /// Facts the provider returned.
+    pub facts: &'a [SemanticFact],
+    /// The content hash each candidate has at the current revision. A candidate
+    /// absent from this map no longer exists.
+    pub current_hashes: &'a BTreeMap<CodeUnitId, ContentHash>,
+}
+
+/// Decide whether an answered provider request may become facts, and if not, why.
+///
+/// This is the single entrypoint for that decision. Callers may route, format,
+/// persist, or test its result, but must not rederive provider abstention from
+/// raw provenance, hash, or fact fields.
+///
+/// Precedence is absent, then stale, then conflicting, and that order is load-
+/// bearing: a contradiction inside an answer about source that has already
+/// changed says nothing about the current revision, so reporting it as a
+/// conflict would attribute a disagreement to code that may no longer contain
+/// one. `None` means the answer is usable; it is not a claim that the facts are
+/// correct, only that this port has no reason to abstain.
+pub fn classify_python_provider_answer(
+    answer: &PythonProviderAnswer<'_>,
+) -> Option<PythonProviderState> {
+    if answer.provenance.is_none() {
+        return Some(PythonProviderState::Absent);
+    }
+    if answer.request.candidates.iter().any(|candidate| {
+        answer
+            .current_hashes
+            .get(&candidate.code_unit_id)
+            .is_none_or(|current| *current != candidate.content_hash)
+    }) {
+        return Some(PythonProviderState::Stale);
+    }
+    if answer_contradicts_itself(answer.request.operation, answer.facts) {
+        return Some(PythonProviderState::Conflicting);
+    }
+    None
+}
+
+fn answer_contradicts_itself(operation: PythonProviderOperation, facts: &[SemanticFact]) -> bool {
+    if facts
+        .iter()
+        .any(|fact| fact.certainty == FactCertainty::Conflicting)
+    {
+        return true;
+    }
+    if !operation.is_single_valued() {
+        return false;
+    }
+    let mut targets: BTreeMap<(&str, &str), &str> = BTreeMap::new();
+    for fact in facts {
+        let Some(target) = fact.target.as_ref() else {
+            continue;
+        };
+        let claim = (fact.subject.as_str(), fact.kind.as_protocol_str());
+        match targets.get(&claim) {
+            Some(seen) if *seen != target.as_str() => return true,
+            Some(_) => {}
+            None => {
+                targets.insert(claim, target.as_str());
+            }
+        }
+    }
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,25 +379,37 @@ impl PythonProviderOutput {
         }
     }
 
-    pub fn unavailable(provider: PythonProviderKind, operation: PythonProviderOperation) -> Self {
+    /// Abstain from one provider operation with the typed UNKNOWN its state
+    /// requires, carrying no facts and no provenance.
+    ///
+    /// Every state blocks the same claim, because what is unavailable is the
+    /// same conclusion in all three cases; only the reason code, class, and
+    /// recovery differ. That keeps a stale or contradicted answer from being
+    /// counted as a different obligation than a missing provider.
+    pub fn abstained(
+        state: PythonProviderState,
+        provider: PythonProviderKind,
+        operation: PythonProviderOperation,
+    ) -> Self {
         Self {
             facts: Vec::new(),
             unknowns: vec![TypedUnknown::new(
-                UnknownClass::Recoverable,
-                UnknownReasonCode::MissingDependency,
+                state.class(),
+                state.reason(),
                 format!(
                     "python_provider:{}:{}",
                     provider.as_str(),
                     operation.as_str()
                 ),
-                Some(format!(
-                    "install or configure {} provider",
-                    provider.as_str()
-                )),
+                state.recovery(provider),
             )
-            .expect("provider unavailable UNKNOWN uses non-empty fields")],
+            .expect("provider abstention UNKNOWN uses non-empty fields")],
             provenance: None,
         }
+    }
+
+    pub fn unavailable(provider: PythonProviderKind, operation: PythonProviderOperation) -> Self {
+        Self::abstained(PythonProviderState::Absent, provider, operation)
     }
 }
 
@@ -269,6 +433,9 @@ fn validate_provider_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::model::{
+        Evidence, FactOrigin, Provenance, RepositoryRevision, SemanticFactKind, SymbolId,
+    };
 
     fn hash(character: char) -> ContentHash {
         ContentHash::new(format!("sha256:{}", character.to_string().repeat(64)))
@@ -283,6 +450,321 @@ mod tests {
             SourceRange::new(start, start + 10).expect("valid range"),
         )
         .expect("valid provider candidate")
+    }
+
+    fn request(operation: PythonProviderOperation) -> PythonProviderRequest {
+        PythonProviderRequest::new(
+            PythonProviderKind::Pyrefly,
+            operation,
+            [candidate("src/a.py", 0)],
+            "3.12.6",
+            hash('b'),
+            "env-sha256-abc",
+        )
+        .expect("valid provider request")
+    }
+
+    fn provenance(operation: PythonProviderOperation) -> PythonProviderProvenance {
+        PythonProviderProvenance::new(
+            PythonProviderKind::Pyrefly,
+            "0.1.0",
+            "3.12.6",
+            hash('b'),
+            "env-sha256-abc",
+            operation,
+        )
+        .expect("valid provenance")
+    }
+
+    /// The hashes the request's candidates still carry at the current revision.
+    fn unchanged_hashes(request: &PythonProviderRequest) -> BTreeMap<CodeUnitId, ContentHash> {
+        request
+            .candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.code_unit_id.clone(),
+                    candidate.content_hash.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn fact(subject: &str, target: &str, certainty: FactCertainty) -> SemanticFact {
+        SemanticFact {
+            kind: SemanticFactKind::FrameworkRole,
+            subject: subject.to_string(),
+            target: Some(SymbolId::new(target).expect("valid symbol id")),
+            origin: FactOrigin {
+                engine: "test-provider".to_string(),
+                engine_version: "0.1.0".to_string(),
+                method: "fixture".to_string(),
+            },
+            certainty,
+            evidence: Evidence::new(
+                CodeUnitId::new("unit:src/a.py:0").expect("valid code unit id"),
+                SourceRange::new(0, 10).expect("valid range"),
+                Provenance::new(
+                    "src/a.py",
+                    hash('a'),
+                    RepositoryRevision::new("0".repeat(40)).expect("valid revision"),
+                )
+                .expect("valid provenance"),
+                "provider fixture fact",
+            )
+            .expect("valid evidence"),
+            assumptions: Vec::new(),
+        }
+    }
+
+    fn classify(
+        request: &PythonProviderRequest,
+        provenance: Option<&PythonProviderProvenance>,
+        facts: &[SemanticFact],
+        current_hashes: &BTreeMap<CodeUnitId, ContentHash>,
+    ) -> Option<PythonProviderState> {
+        classify_python_provider_answer(&PythonProviderAnswer {
+            request,
+            provenance,
+            facts,
+            current_hashes,
+        })
+    }
+
+    #[test]
+    fn fresh_consistent_answer_gives_the_port_no_reason_to_abstain() {
+        let request = request(PythonProviderOperation::ResolveFrameworkIdentity);
+        let provenance = provenance(PythonProviderOperation::ResolveFrameworkIdentity);
+        let facts = [fact(
+            "app.get_user",
+            "framework:fastapi.route",
+            FactCertainty::Semantic,
+        )];
+
+        assert_eq!(
+            classify(
+                &request,
+                Some(&provenance),
+                &facts,
+                &unchanged_hashes(&request)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unanswered_request_is_absent_even_when_every_candidate_is_current() {
+        let request = request(PythonProviderOperation::ResolveFrameworkIdentity);
+
+        assert_eq!(
+            classify(&request, None, &[], &unchanged_hashes(&request)),
+            Some(PythonProviderState::Absent)
+        );
+    }
+
+    #[test]
+    fn changed_or_deleted_candidate_source_makes_an_answer_stale() {
+        let request = request(PythonProviderOperation::ResolveFrameworkIdentity);
+        let provenance = provenance(PythonProviderOperation::ResolveFrameworkIdentity);
+        let facts = [fact(
+            "app.get_user",
+            "framework:fastapi.route",
+            FactCertainty::Semantic,
+        )];
+
+        let mut rewritten = unchanged_hashes(&request);
+        for value in rewritten.values_mut() {
+            *value = hash('f');
+        }
+        assert_eq!(
+            classify(&request, Some(&provenance), &facts, &rewritten),
+            Some(PythonProviderState::Stale),
+            "a candidate whose content hash moved was answered about different source"
+        );
+
+        assert_eq!(
+            classify(&request, Some(&provenance), &facts, &BTreeMap::new()),
+            Some(PythonProviderState::Stale),
+            "a candidate that no longer exists cannot be current"
+        );
+    }
+
+    #[test]
+    fn a_self_contradicting_answer_about_current_source_is_conflicting() {
+        let request = request(PythonProviderOperation::ResolveFrameworkIdentity);
+        let provenance = provenance(PythonProviderOperation::ResolveFrameworkIdentity);
+        let current = unchanged_hashes(&request);
+
+        let two_targets = [
+            fact(
+                "app.get_user",
+                "framework:fastapi.route",
+                FactCertainty::Semantic,
+            ),
+            fact(
+                "app.get_user",
+                "framework:flask.route",
+                FactCertainty::Semantic,
+            ),
+        ];
+        assert_eq!(
+            classify(&request, Some(&provenance), &two_targets, &current),
+            Some(PythonProviderState::Conflicting),
+            "one single-valued subject cannot hold two different targets"
+        );
+
+        let self_declared = [fact(
+            "app.get_user",
+            "framework:fastapi.route",
+            FactCertainty::Conflicting,
+        )];
+        assert_eq!(
+            classify(&request, Some(&provenance), &self_declared, &current),
+            Some(PythonProviderState::Conflicting),
+            "a provider that reports its own fact as conflicting is believed"
+        );
+    }
+
+    #[test]
+    fn repeating_one_target_for_a_subject_is_not_a_contradiction() {
+        let request = request(PythonProviderOperation::CrossCheckClaim);
+        let provenance = provenance(PythonProviderOperation::CrossCheckClaim);
+        let facts = [
+            fact(
+                "app.get_user",
+                "framework:fastapi.route",
+                FactCertainty::Semantic,
+            ),
+            fact(
+                "app.get_user",
+                "framework:fastapi.route",
+                FactCertainty::Semantic,
+            ),
+        ];
+
+        assert_eq!(
+            classify(
+                &request,
+                Some(&provenance),
+                &facts,
+                &unchanged_hashes(&request)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn additive_operations_admit_many_targets_for_one_subject() {
+        for operation in [
+            PythonProviderOperation::CallHierarchy,
+            PythonProviderOperation::ObserveRuntimeTypes,
+        ] {
+            assert!(!operation.is_single_valued(), "{operation:?}");
+            let request = request(operation);
+            let provenance = provenance(operation);
+            let facts = [
+                fact("app.get_user", "app.load_user", FactCertainty::Semantic),
+                fact("app.get_user", "app.audit_access", FactCertainty::Semantic),
+            ];
+
+            assert_eq!(
+                classify(
+                    &request,
+                    Some(&provenance),
+                    &facts,
+                    &unchanged_hashes(&request)
+                ),
+                None,
+                "{operation:?} produces many targets per subject by construction"
+            );
+        }
+    }
+
+    #[test]
+    fn staleness_outranks_a_contradiction_it_cannot_localize() {
+        let request = request(PythonProviderOperation::ResolveFrameworkIdentity);
+        let provenance = provenance(PythonProviderOperation::ResolveFrameworkIdentity);
+        let facts = [
+            fact(
+                "app.get_user",
+                "framework:fastapi.route",
+                FactCertainty::Semantic,
+            ),
+            fact(
+                "app.get_user",
+                "framework:flask.route",
+                FactCertainty::Semantic,
+            ),
+        ];
+
+        assert_eq!(
+            classify(&request, Some(&provenance), &facts, &BTreeMap::new()),
+            Some(PythonProviderState::Stale),
+            "a disagreement about vanished source is not a claim about the current revision"
+        );
+        assert_eq!(
+            classify(&request, None, &facts, &BTreeMap::new()),
+            Some(PythonProviderState::Absent),
+            "with no provider answer there is nothing to call stale or conflicting"
+        );
+    }
+
+    #[test]
+    fn every_abstention_blocks_the_same_claim_with_its_own_reason_and_recovery() {
+        let expected = [
+            (
+                PythonProviderState::Absent,
+                UnknownClass::Recoverable,
+                UnknownReasonCode::MissingDependency,
+                Some("install or configure pyrefly provider"),
+            ),
+            (
+                PythonProviderState::Stale,
+                UnknownClass::Recoverable,
+                UnknownReasonCode::StaleEvidence,
+                Some("re-run pyrefly provider against the current repository revision"),
+            ),
+            (
+                PythonProviderState::Conflicting,
+                UnknownClass::Irreducible,
+                UnknownReasonCode::ConflictingFacts,
+                None,
+            ),
+        ];
+
+        for (state, class, reason, recovery) in expected {
+            let output = PythonProviderOutput::abstained(
+                state,
+                PythonProviderKind::Pyrefly,
+                PythonProviderOperation::ResolveFrameworkIdentity,
+            );
+
+            assert!(output.facts.is_empty(), "{state:?} must carry no facts");
+            assert!(
+                output.provenance.is_none(),
+                "{state:?} must carry no provenance"
+            );
+            assert_eq!(output.unknowns.len(), 1, "{state:?}");
+            assert_eq!(output.unknowns[0].class, class, "{state:?}");
+            assert_eq!(output.unknowns[0].reason, reason, "{state:?}");
+            assert_eq!(
+                output.unknowns[0].affected_claim,
+                "python_provider:pyrefly:resolve_framework_identity",
+                "every state blocks the same claim"
+            );
+            assert_eq!(
+                output.unknowns[0].recovery.as_deref(),
+                recovery,
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_states_use_stable_tokens() {
+        assert_eq!(PythonProviderState::Absent.as_str(), "absent");
+        assert_eq!(PythonProviderState::Stale.as_str(), "stale");
+        assert_eq!(PythonProviderState::Conflicting.as_str(), "conflicting");
     }
 
     #[test]
@@ -393,6 +875,15 @@ mod tests {
         assert_eq!(
             output.unknowns[0].affected_claim,
             "python_provider:pyrefly:resolve_framework_identity"
+        );
+        assert_eq!(
+            output,
+            PythonProviderOutput::abstained(
+                PythonProviderState::Absent,
+                PythonProviderKind::Pyrefly,
+                PythonProviderOperation::ResolveFrameworkIdentity,
+            ),
+            "the legacy constructor must stay one spelling of the absent state"
         );
     }
 }

@@ -12,6 +12,7 @@ pub(crate) const ROLE_ASPNET_CONTROLLER_ACTION: &str = "framework:aspnetcore.con
 pub(crate) const ROLE_ASPNET_MINIMAL_ROUTE: &str = "framework:aspnetcore.minimal_route";
 pub(crate) const ROLE_EFCORE_DB_CONTEXT: &str = "framework:efcore.db_context";
 pub(crate) const ROLE_EFCORE_ENTITY_SET: &str = "framework:efcore.entity_set";
+pub(crate) const ROLE_FLUENTVALIDATION_VALIDATOR: &str = "framework:fluentvalidation.validator";
 pub(crate) const ROLE_XUNIT_TEST: &str = "framework:xunit.test";
 pub(crate) const ROLE_NUNIT_TEST: &str = "framework:nunit.test";
 pub(crate) const ROLE_MSTEST_TEST: &str = "framework:mstest.test";
@@ -79,6 +80,11 @@ pub(crate) fn role_for_code_unit_kind(kind: &CodeUnitKind) -> Option<CSharpFrame
             note: "Tree-sitter C# code unit indicates exact EF Core DbContext role",
             assumption: "EF Core runtime model building unresolved",
         }),
+        CodeUnitKind::FluentValidationValidator => Some(CSharpFrameworkRole {
+            target: ROLE_FLUENTVALIDATION_VALIDATOR,
+            note: "Tree-sitter C# code unit indicates exact FluentValidation validator role",
+            assumption: "FluentValidation rule chains and validator resolution unresolved",
+        }),
         CodeUnitKind::EfCoreEntitySet => Some(CSharpFrameworkRole {
             target: ROLE_EFCORE_ENTITY_SET,
             note: "Tree-sitter C# code unit indicates exact EF Core entity set role",
@@ -109,6 +115,7 @@ pub(crate) fn framework_role_is_known(framework_role: &str) -> bool {
         || framework_role.starts_with("framework:xunit.")
         || framework_role.starts_with("framework:nunit.")
         || framework_role.starts_with("framework:mstest.")
+        || framework_role.starts_with("framework:fluentvalidation.")
 }
 
 pub(crate) fn support_target_is_role_compatible(
@@ -120,6 +127,7 @@ pub(crate) fn support_target_is_role_compatible(
         ROLE_ASPNET_CONTROLLER_ACTION => Some(ASPNET_CONTROLLER_ACTION_TARGETS.contains(&target)),
         ROLE_ASPNET_MINIMAL_ROUTE => Some(ASPNET_MINIMAL_ROUTE_TARGETS.contains(&target)),
         ROLE_EFCORE_DB_CONTEXT => Some(target == "efcore.DbContext"),
+        ROLE_FLUENTVALIDATION_VALIDATOR => Some(target == "fluentvalidation.AbstractValidator"),
         ROLE_EFCORE_ENTITY_SET => Some(target == "efcore.DbSet"),
         ROLE_XUNIT_TEST => Some(XUNIT_TEST_TARGETS.contains(&target)),
         ROLE_NUNIT_TEST => Some(NUNIT_TEST_TARGETS.contains(&target)),
@@ -135,6 +143,7 @@ pub(crate) fn support_family(target: &str, framework_role: &str) -> String {
         ROLE_ASPNET_CONTROLLER_ACTION => "aspnetcore.mvc.http_attribute_route".to_string(),
         ROLE_ASPNET_MINIMAL_ROUTE => "aspnetcore.minimal.map_route".to_string(),
         ROLE_EFCORE_DB_CONTEXT => "efcore.db_context".to_string(),
+        ROLE_FLUENTVALIDATION_VALIDATOR => "fluentvalidation.validator".to_string(),
         ROLE_EFCORE_ENTITY_SET => "efcore.entity_set".to_string(),
         ROLE_XUNIT_TEST => "xunit.test_attribute".to_string(),
         ROLE_NUNIT_TEST => "nunit.test_attribute".to_string(),

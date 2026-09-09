@@ -145,8 +145,10 @@ The current implementation covers a bounded static CPython `ast` slice only:
 - a private project-config parser mode for safe root `pyproject.toml` via
   `tomllib`, `setup.cfg` via `configparser`, and `setup.py` via CPython `ast`,
   including sanitized project name, safe source roots, recognized tool sections
-  where applicable, and typed config `UNKNOWN` for malformed/incomplete
-  recognized setup config or unavailable TOML support;
+  where applicable, bounded PyPI manifest declarations, and typed config or
+  dependency-inventory `UNKNOWN` for malformed/incomplete recognized setup
+  config, dynamic dependency fields, resource limits, or unavailable TOML
+  support;
 - semantic-worker-compatible project-mode module graph construction that uses
   safe `.py` paths plus sanitized `pyproject.toml` source roots when `tomllib`
   is available, emits graph-derived `RESOLVED_IMPORT` facts only for unique
@@ -176,8 +178,10 @@ The current implementation covers a bounded static CPython `ast` slice only:
   source-store path/hash/size boundary, calls the private
   `parse_project_config` worker mode, and persists `project_config` code units
   plus `PROJECT_CONFIG`/`STRUCTURAL` facts for sanitized project names, safe
-  source roots, and recognized tool sections where applicable. Malformed config
-  and incomplete recognized setup fields become typed `UNKNOWN`;
+  source roots, and recognized tool sections where applicable, plus ADR-0030
+  PyPI `manifest_declared` dependency rows. Malformed config, incomplete
+  recognized setup fields, and dynamic dependency expressions become typed
+  claim-specific `UNKNOWN`;
 - file-local simple alias propagation for FastAPI router/app objects, such as
   `router = APIRouter(); api = router`, with same-name top-level reassignment
   removing that name's role so stale aliases do not produce exact canonical
@@ -372,9 +376,25 @@ The current implementation covers a bounded static CPython `ast` slice only:
   only, while dynamic or nonlocal targets preserve `UNKNOWN`.
 - a Rust `ports::python_provider` boundary for future candidate-scoped
   Pyrefly/Pyright/RightTyper requests, provider provenance assumptions,
-  provider cache-key dimensions, and recoverable provider-unavailable
-  `UNKNOWN`s. This boundary is not a provider adapter, does not execute external
-  tools, and does not add production Pyrefly/Pyright/RightTyper support. Future
+  provider cache-key dimensions, and typed provider-abstention `UNKNOWN`s.
+  Abstention has exactly three states — `absent` when no provider answered,
+  `stale` when the answer describes source whose content hash has since moved or
+  whose code unit is gone, and `conflicting` when an answer about current source
+  contradicts itself. `classify_python_provider_answer` is the one entrypoint
+  that decides which applies; callers route, format, persist, and test its
+  result but must not rederive it from raw provenance, hash, or fact fields. The
+  precedence is absent, then stale, then conflicting, because a disagreement
+  inside an answer about already-changed source says nothing about the current
+  revision. Absent and stale are recoverable and name their mechanism; a
+  provider contradicting itself is irreducible, since re-running the same
+  provider over the same source reproduces it and no registered mechanism
+  adjudicates it. A subject may hold many targets without contradiction under
+  `CallHierarchy` and `ObserveRuntimeTypes`, which are additive by construction;
+  only single-valued operations treat two targets for one subject as a conflict.
+  Every state yields zero facts and no provenance, so no provider failure can
+  degrade into a confident structural claim. This boundary is not a provider
+  adapter, does not execute external tools, and does not add production
+  Pyrefly/Pyright/RightTyper support. Future
   provider adapters must translate accepted provider spans into existing
   same-code-unit path/hash/range support evidence before EC-MVFI-lite can use
   them; provider origin alone cannot bypass canonical target compatibility.
@@ -528,6 +548,33 @@ parse also produces `MissingProjectConfig`. Project mode also applies sanitized
 Neither path resolves imported symbols, re-exports, namespace packages, or
 site-packages. The `setup.py` scan is lexical and does not model arbitrary
 runtime side effects hidden inside unrelated helper calls.
+
+The same bounded project-config pass inventories standard Python packaging
+declarations without treating them as installed or resolved dependencies.
+When `tomllib` exists, root `pyproject.toml` contributes string entries from
+PEP 621 `project.dependencies` and `project.optional-dependencies`,
+`build-system.requires`, and string-only `dependency-groups`; a runtime without
+`tomllib` keeps the existing `MissingDependency` boundary. `setup.cfg`
+contributes literal `install_requires`, `setup_requires`, `tests_require`, and
+`options.extras_require` lines. A lexically authoritative static `setup.py`
+contributes literal list/tuple/set values from `install_requires`,
+`setup_requires`, and `tests_require`, plus complete literal
+`extras_require` dictionaries. A trusted dependency-bearing `setup()` outside
+the direct unconditional authority shape, including a conditional call, and
+dynamic or partial dependency expressions emit
+`python_dependency_inventory` `UNKNOWN` without discarding independently safe
+project/source-root facts. Distribution identity is normalized under PEP 503;
+the stored requirement is only a bounded ASCII non-URL/path suffix after the
+name, so credentials and local paths do not enter dependency records. Every row remains
+`manifest_declared`, direct, source-evidence-bound context. It does not prove an
+installed distribution, transitive graph, selected extra/environment marker,
+external symbol, behavior contract, or family membership.
+The private project-config protocol is revisioned independently at
+`protocol_version=1`, `contract_revision=1`. Its complete response is capped at
+2 MiB; a projection that would exceed the cap drops dependency rows and emits
+`ResourceLimit` UNKNOWN. Invalid types for relevant TOML tables or
+`project.dynamic` likewise abstain instead of becoming a complete empty
+inventory.
 
 When more than one of `pyproject.toml`, `setup.cfg`, and `setup.py` exists,
 default indexing deduplicates the safe roots from every successfully parsed file

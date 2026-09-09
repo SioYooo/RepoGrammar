@@ -2,10 +2,34 @@
 //!
 //! This adapter uses the repository's Python worker process so Rust does not
 //! hand-roll Python parsing rules. The worker returns owned metadata only.
+//!
+//! Every claim-scoped typed `UNKNOWN` this lane can emit is declared exactly
+//! once in [`PYTHON_OBLIGATION_REGISTRY`], the lane's ADR-0020 gate 4
+//! source-semantic obligation registry: the claim each unknown scopes, whether
+//! an unmet obligation blocks the family claim, the provider mechanism that
+//! could recover it, and the provider-fallback policy that says what could
+//! discharge it. Reason codes stay a separate axis in
+//! [`python_unknown_reason_is_supported`], because one reason serves many
+//! claims.
+//!
+//! Fallback tokens, and the policy each one stands for:
+//!
+//! - `python_type_provider_not_integrated` means
+//!   `SemanticProviderSlot::PythonTypeProvider` exists and claims this
+//!   mechanism (see `resolves_mechanisms` in `src/rust/core/model/provider.rs`),
+//!   but the slot is not integrated, so nothing answers the obligation today.
+//! - `no_registered_provider_resolves_this_mechanism` means no provider slot
+//!   claims the mechanism at all; discharging it needs a framework-specific
+//!   analyzer this product does not have.
+//! - `repository_configuration_declaration` means the obligation is
+//!   recoverable from the repository's own configuration, with no provider
+//!   involved.
 
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
+    CodeUnit, CodeUnitId, CodeUnitKind, DependencyDirectness, DependencyEcosystem,
+    DependencyEvidenceLevel, DependencyRecord, DependencyScope, DependencySnapshot,
+    DependencyVersion, Evidence, FactCertainty, FactOrigin, Language, PackageIdentity, Provenance,
     RepositoryRevision, SemanticFact, SemanticFactKind, SourceRange, SymbolId,
 };
 use crate::ports::parser::{
@@ -27,11 +51,15 @@ use std::time::{Duration, Instant};
 pub(crate) const PYTHON_ANCHOR_ENGINE: &str = "python";
 const PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION: u64 = 1;
 const PYTHON_PARSE_DOCUMENT_CONTRACT_REVISION: u64 = 2;
+const PYTHON_PROJECT_CONFIG_CONTRACT_REVISION: u64 = 1;
 
 // A source file can legitimately produce substantially more metadata than its
 // input bytes while remaining below the worker's 2,000-fact bound. Keep stdout
 // bounded, but leave enough room for the bundled worker to analyze itself.
 const MAX_PYTHON_FRONTEND_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+/// A version triple needs a handful of bytes; anything longer is not a version
+/// and the probe must not read an unbounded amount from a host-supplied program.
+const MAX_PYTHON_VERSION_PROBE_BYTES: u64 = 64;
 /// Per-request byte cap for a `parse_document` payload. When the whole-project
 /// context (every `.py` text) pushes the serialized request past this cap,
 /// `serialize_parse_request` silently drops the context and the worker parses the
@@ -98,8 +126,7 @@ impl PythonAstParser {
                 return Err(ParseError::UnsupportedLanguage);
             }
             let response = self.parse_project_config(&document)?;
-            return parse_project_config_response(&document, &response)
-                .map(SourceParseOutput::from_report);
+            return parse_project_config_response(&document, &response);
         }
         if document.language != Language::Python {
             return Err(ParseError::UnsupportedLanguage);
@@ -121,6 +148,7 @@ impl PythonAstParser {
         Ok(SourceParseOutput {
             report,
             python_interface_hash: Some(interface_hash),
+            dependencies: Vec::new(),
         })
     }
 }
@@ -151,6 +179,10 @@ impl SourceParser for PythonAstParser {
     fn extract_python_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
         self.extract_interface(path, text)
     }
+
+    fn python_frontend_version(&self) -> Option<String> {
+        self.probe_interpreter_version()
+    }
 }
 
 fn default_python_executable<F>(env_lookup: F) -> String
@@ -179,6 +211,15 @@ fn default_python_worker_script() -> PathBuf {
         }
     }
     let source_worker = source_checkout_python_worker_script();
+    // Cargo unit-test binaries link the library without `cfg(test)`, but debug
+    // assertions remain enabled. Prefer the checkout worker for every local
+    // debug/test build so an old packaging-smoke asset under `target/` cannot
+    // silently drift from the Rust-side response contract. Release binaries
+    // continue to resolve their installed bundled worker first.
+    #[cfg(debug_assertions)]
+    if source_worker.is_file() {
+        return source_worker;
+    }
     if let Ok(executable) = std::env::current_exe() {
         for candidate in python_worker_script_candidates(&executable) {
             if candidate.is_file() {
@@ -232,6 +273,7 @@ impl PythonAstParser {
     fn parse_project_config(&self, document: &SourceDocument<'_>) -> Result<String, ParseError> {
         let payload = json!({
             "protocol_version": 1,
+            "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
             "mode": "parse_project_config",
             "path": document.path,
             "content_hash": document.content_hash.as_str(),
@@ -244,7 +286,7 @@ impl PythonAstParser {
                 "python ast frontend request exceeded size limit".to_string(),
             ));
         }
-        self.run_worker_request(&payload, false)
+        self.run_worker_request(&payload, true)
     }
 
     fn parse_document(
@@ -284,10 +326,74 @@ impl PythonAstParser {
         }
     }
 
+    /// Ask the same interpreter that runs the worker which version it is.
+    ///
+    /// This deliberately re-uses `self.executable` rather than looking up
+    /// `python3` again: `REPOGRAMMAR_PYTHON_EXECUTABLE` can redirect the frontend,
+    /// and a version read from a different interpreter than the one doing the
+    /// parsing would be worse than no version at all.
+    ///
+    /// The interpreter is host-supplied and that variable can point at any
+    /// program, so its output is untrusted: the read is bounded, the wait is
+    /// bounded, a non-zero exit is discarded, and only an exact numeric
+    /// `major.minor.patch` triple is accepted. Every failure yields `None`, which
+    /// callers must report as an unknown boundary rather than a guessed version.
+    fn probe_interpreter_version(&self) -> Option<String> {
+        let deadline = Instant::now() + self.timeout;
+        let mut child = Command::new(&self.executable)
+            .arg("-c")
+            .arg("import sys;print('%d.%d.%d' % sys.version_info[:3])")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let Some(stdout) = child.stdout.take() else {
+            terminate_python_frontend(&mut child);
+            return None;
+        };
+        let (sender, receiver) = mpsc::channel();
+        if thread::Builder::new()
+            .name("repogrammar-python-version".to_string())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let _ = stdout
+                    .take(MAX_PYTHON_VERSION_PROBE_BYTES)
+                    .read_to_end(&mut output);
+                let _ = sender.send(output);
+            })
+            .is_err()
+        {
+            terminate_python_frontend(&mut child);
+            return None;
+        }
+        let status = wait_for_python_frontend(&mut child, deadline).ok()?;
+        if !status.success() {
+            return None;
+        }
+        let output = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()?;
+        let text = String::from_utf8(output).ok()?;
+        let version = text.trim();
+        let mut parts = version.split('.');
+        let (Some(major), Some(minor), Some(patch), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return None;
+        };
+        if ![major, minor, patch].iter().all(|part| {
+            !part.is_empty() && part.len() <= 4 && part.bytes().all(|byte| byte.is_ascii_digit())
+        }) {
+            return None;
+        }
+        Some(version.to_string())
+    }
+
     fn run_worker_request(
         &self,
         serialized: &str,
-        parse_document_contract: bool,
+        revisioned_contract: bool,
     ) -> Result<String, ParseError> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
@@ -359,7 +465,7 @@ impl PythonAstParser {
             .map_err(|_| ParseError::Timeout)?
             .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
         if !status.success() {
-            if parse_document_contract
+            if revisioned_contract
                 && status.code() == Some(2)
                 && output.is_empty()
                 && self.worker_script.is_file()
@@ -577,7 +683,7 @@ fn parse_worker_response(
 fn parse_project_config_response(
     document: &SourceDocument<'_>,
     response: &str,
-) -> Result<ParseReport, ParseError> {
+) -> Result<SourceParseOutput, ParseError> {
     if response.len() > MAX_PYTHON_FRONTEND_OUTPUT_BYTES {
         return Err(ParseError::Internal(
             "python ast frontend output exceeded size limit".to_string(),
@@ -597,12 +703,45 @@ fn parse_project_config_response(
     let object = value.as_object().ok_or_else(|| {
         ParseError::Internal("python ast frontend response was not an object".into())
     })?;
+    if object.get("error_code").and_then(Value::as_str) == Some("PYTHON_FRONTEND_CONTRACT_MISMATCH")
+    {
+        validate_allowed_keys(
+            object,
+            &[
+                "protocol_version",
+                "contract_revision",
+                "mode",
+                "error_code",
+            ],
+            "python project config contract mismatch response",
+        )?;
+        if object.get("protocol_version").and_then(Value::as_u64)
+            == Some(PYTHON_PARSE_DOCUMENT_PROTOCOL_VERSION)
+            && object.get("contract_revision").and_then(Value::as_u64)
+                == Some(PYTHON_PROJECT_CONFIG_CONTRACT_REVISION)
+            && object.get("mode").and_then(Value::as_str) == Some("parse_project_config")
+        {
+            return Err(ParseError::PythonFrontendContractMismatch);
+        }
+        return Err(ParseError::Internal(
+            "python project config mismatch envelope was invalid".to_string(),
+        ));
+    }
     validate_allowed_keys(
         object,
-        &["protocol_version", "mode", "path", "config", "unknowns"],
+        &[
+            "protocol_version",
+            "contract_revision",
+            "mode",
+            "path",
+            "config",
+            "unknowns",
+        ],
         "python ast frontend response",
     )?;
     if object.get("protocol_version").and_then(Value::as_u64) != Some(1)
+        || object.get("contract_revision").and_then(Value::as_u64)
+            != Some(PYTHON_PROJECT_CONFIG_CONTRACT_REVISION)
         || object.get("mode").and_then(Value::as_str) != Some("parse_project_config")
         || object.get("path").and_then(Value::as_str) != Some(document.path)
     {
@@ -614,14 +753,19 @@ fn parse_project_config_response(
     let unit = project_config_unit(document)?;
     let mut semantic_facts = project_config_facts(document, &unit, object)?;
     sort_semantic_facts(&mut semantic_facts);
+    let dependencies = project_config_dependencies(document, &unit, object)?;
     let units = vec![unit];
     let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
-    Ok(ParseReport {
-        units,
-        ir_nodes,
-        ir_edges: Vec::new(),
-        semantic_facts,
-        diagnostics: Vec::new(),
+    Ok(SourceParseOutput {
+        report: ParseReport {
+            units,
+            ir_nodes,
+            ir_edges: Vec::new(),
+            semantic_facts,
+            diagnostics: Vec::new(),
+        },
+        python_interface_hash: None,
+        dependencies,
     })
 }
 
@@ -794,7 +938,12 @@ fn project_config_facts(
         .ok_or_else(|| ParseError::Internal("python project config summary was invalid".into()))?;
     validate_allowed_keys(
         config,
-        &["project_name", "source_roots", "tool_sections"],
+        &[
+            "project_name",
+            "source_roots",
+            "tool_sections",
+            "dependencies",
+        ],
         "python project config summary",
     )?;
     let mut facts = Vec::new();
@@ -843,6 +992,120 @@ fn project_config_facts(
         facts.push(project_config_unknown_fact(document, unit, unknown)?);
     }
     Ok(facts)
+}
+
+fn project_config_dependencies(
+    document: &SourceDocument<'_>,
+    unit: &CodeUnit,
+    object: &Map<String, Value>,
+) -> Result<Vec<DependencyRecord>, ParseError> {
+    let config = object
+        .get("config")
+        .and_then(Value::as_object)
+        .ok_or_else(|| ParseError::Internal("python project config summary was invalid".into()))?;
+    let values = config
+        .get("dependencies")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ParseError::Internal("python project config dependencies were invalid".into())
+        })?;
+    if values.len() > 2_000 {
+        return Err(ParseError::Internal(
+            "python project config returned too many dependencies".to_string(),
+        ));
+    }
+    let mut dependencies = Vec::with_capacity(values.len());
+    for value in values {
+        let entry = value.as_object().ok_or_else(|| {
+            ParseError::Internal("python project config dependency was invalid".into())
+        })?;
+        validate_allowed_keys(
+            entry,
+            &["name", "requirement", "scope", "optional"],
+            "python project config dependency",
+        )?;
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| is_normalized_python_distribution_name(name))
+            .ok_or_else(|| {
+                ParseError::Internal("python project config dependency name was invalid".into())
+            })?;
+        let requirement = match entry.get("requirement") {
+            Some(Value::Null) | None => None,
+            Some(Value::String(requirement)) if is_safe_python_requirement_suffix(requirement) => {
+                Some(DependencyVersion::new(requirement).map_err(ParseError::Internal)?)
+            }
+            _ => {
+                return Err(ParseError::Internal(
+                    "python project config dependency requirement was invalid".to_string(),
+                ));
+            }
+        };
+        let scope = entry
+            .get("scope")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ParseError::Internal("python project config dependency scope was invalid".into())
+            })
+            .and_then(|scope| DependencyScope::parse_str(scope).map_err(ParseError::Internal))?;
+        let optional = entry
+            .get("optional")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                ParseError::Internal(
+                    "python project config dependency optional flag was invalid".into(),
+                )
+            })?;
+        dependencies.push(
+            DependencyRecord::new(
+                PackageIdentity::new(DependencyEcosystem::Pypi, name)
+                    .map_err(ParseError::Internal)?,
+                requirement,
+                None,
+                scope,
+                optional,
+                DependencyDirectness::Direct,
+                DependencyEvidenceLevel::ManifestDeclared,
+                project_config_evidence(document, unit, "bounded Python dependency declaration")?,
+            )
+            .map_err(ParseError::Internal)?,
+        );
+    }
+    DependencySnapshot::new(dependencies, Vec::new())
+        .map(|snapshot| snapshot.dependencies)
+        .map_err(ParseError::Internal)
+}
+
+fn is_normalized_python_distribution_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && !value.contains("--")
+}
+
+fn is_safe_python_requirement_suffix(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && matches!(
+            value.as_bytes().first(),
+            Some(b'[' | b'~' | b'<' | b'>' | b'=' | b'!' | b';' | b'(')
+        )
+        && !value.contains('@')
+        && !value.contains('/')
+        && !value.contains('\\')
+        && !value.contains(':')
+        && !value.chars().any(char::is_control)
 }
 
 fn optional_project_config_name(value: Option<&Value>) -> Result<Option<&str>, ParseError> {
@@ -938,7 +1201,7 @@ fn project_config_unknown_fact(
         })?;
     if !matches!(
         reason,
-        "MissingProjectConfig" | "MissingDependency" | "ConflictingFacts"
+        "MissingProjectConfig" | "MissingDependency" | "ConflictingFacts" | "ResourceLimit"
     ) {
         return Err(ParseError::Internal(
             "python project config UNKNOWN reason was unsupported".to_string(),
@@ -952,7 +1215,7 @@ fn project_config_unknown_fact(
                 "python project config UNKNOWN affected claim was invalid".to_string(),
             )
         })?;
-    if affected_claim != "python_project_config" {
+    if !python_project_config_claim_is_supported(affected_claim) {
         return Err(ParseError::Internal(
             "python project config UNKNOWN affected claim was unsupported".to_string(),
         ));
@@ -974,7 +1237,7 @@ fn project_config_unknown_fact(
         )?,
         assumptions: vec![
             format!("reason_code={reason}"),
-            "affected_claim=python_project_config".to_string(),
+            format!("affected_claim={affected_claim}"),
             format!("parsed_with={parser_method}"),
         ],
     })
@@ -1677,6 +1940,233 @@ fn python_structural_target_is_supported(value: &str) -> bool {
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-'))
 }
 
+/// Recorded claim impact of an unmet Python obligation.
+///
+/// `application/family.rs` stays the authoritative claim-impact classifier;
+/// this is the record that must agree with it, and the lockstep test in that
+/// module pins the two together so they cannot drift silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PythonClaimImpact {
+    /// Blocks the family claim wherever it appears.
+    Blocking,
+    /// Recorded residual; never blocks.
+    NonBlocking,
+    /// Blocks only under a `framework:pytest` role, which is the existing
+    /// behaviour of `python_unknown_affected_claim_blocks_family`.
+    BlockingUnderPytestRole,
+}
+
+/// One source-semantic obligation an admitted Python family claim rests on.
+///
+/// This is the lane's ADR-0020 gate 4 registry, mirroring
+/// `R_OBLIGATION_REGISTRY`. Every claim-scoped typed `UNKNOWN` the Python lane
+/// emits is declared here exactly once, with what it scopes, whether an unmet
+/// obligation blocks the family claim, the provider mechanism that could
+/// recover it, and the provider-fallback policy that names what could
+/// discharge it.
+pub(crate) struct PythonObligation {
+    /// Stable affected-claim token (`affected_claim=` assumption).
+    pub(crate) affected_claim: &'static str,
+    /// Recorded claim impact of an unmet obligation. Must agree with
+    /// `python_unknown_affected_claim_blocks_family` in
+    /// `src/rust/application/family.rs`.
+    // Read by the family.rs lockstep test only: routing the classifier through
+    // this field would make that test tautological.
+    #[allow(dead_code)]
+    pub(crate) impact: PythonClaimImpact,
+    /// The mechanism `claim_specific_required_unknown_mechanism` reports for
+    /// this claim, or None where that function falls through to the
+    /// reason-based default.
+    // Read by the query.rs lockstep test only, for the same reason.
+    #[allow(dead_code)]
+    pub(crate) required_mechanism: Option<&'static str>,
+    /// Source-free, fixed human-facing note saying what the unknown scopes.
+    #[allow(dead_code)]
+    pub(crate) note: &'static str,
+    /// Provider-fallback policy as a stable low-cardinality token. The prose
+    /// policy each token stands for is in this module's doc comment.
+    pub(crate) fallback: &'static str,
+}
+
+/// The complete ADR-0020 gate 4 source-semantic obligation registry for the
+/// Python lane's claim-scoped unknowns.
+///
+/// Obligations split three ways. The identity and binding obligations block
+/// the family claim when unmet: without a proven import, call target, or
+/// framework receiver the membership claim itself is unproven. The fixture
+/// obligation blocks only under a pytest role, because only there does the
+/// injected binding carry the claim. The remaining obligations are residuals
+/// the bounded frontend can never discharge -- request-time injection, runtime
+/// dispatch, ORM registries, and configuration state -- so they ride along as
+/// non-blocking unknowns rather than being guessed away.
+///
+/// The fallback token vocabulary is documented once in this module's doc
+/// comment.
+pub(crate) const PYTHON_OBLIGATION_REGISTRY: &[PythonObligation] = &[
+    PythonObligation {
+        affected_claim: "python_import_resolution",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "an import binding is not resolved to a repository-local module or an installed distribution, so the imported symbol's origin is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_call_target",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: None,
+        note: "a call's receiver is not bound to a definition, so the called implementation is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_framework_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: None,
+        note: "a unit's framework role rests on a binding this frontend cannot prove, so the framework identity is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_django_model_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("django_project_model"),
+        note: "a Django model or manager identity depends on app-registry and settings state this frontend does not read",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_django_url_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("django_project_model"),
+        note: "a Django URL entry names its view through include or a dotted path the URL configuration resolves at import time",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_flask_route_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("flask_app_model"),
+        note: "a Flask route's application or blueprint receiver is not bound, so the route's owning app is unproven",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_cli_command_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a CLI command's group or callback receiver is imported from another module, so the command's owning group is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_celery_task_identity",
+        impact: PythonClaimImpact::Blocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a Celery task decorator's app receiver is imported from another module, so the task's owning app is unproven",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "pytest_fixture_binding",
+        impact: PythonClaimImpact::BlockingUnderPytestRole,
+        required_mechanism: Some("pytest_fixture_graph"),
+        note: "a test parameter is supplied by pytest's fixture lookup across conftest scopes, so the fixture that binds it is unproven",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "fastapi_dependency_target",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("fastapi_dependency_graph"),
+        note: "a FastAPI Depends callable is injected per request, so the implementation that answers the dependency stays a residual",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "fastapi_router_binding",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("fastapi_dependency_graph"),
+        note: "an include_router call names a router defined elsewhere, so the routes it contributes are not enumerated",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "fastapi_router_prefix",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("fastapi_dependency_graph"),
+        note: "a router prefix is composed at include time rather than written as a literal, so the mounted path is not computed",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "pydantic_validator_side_effects",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("pydantic_validator_model"),
+        note: "a Pydantic validator coerces or rejects values when the model runs, so a field's effective shape beyond its declaration is not modeled",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "sqlalchemy_query_shape",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("sqlalchemy_session_model"),
+        note: "a query is assembled through session and chained builder calls, so the statement's final shape is not reconstructed",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "sqlalchemy_relationship_target",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("sqlalchemy_model_graph"),
+        note: "a relationship names its target model as a string the declarative registry resolves, so the related model is not bound",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_django_string_dispatch",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("django_project_model"),
+        note: "a Django call names its target as a dotted string resolved at runtime, so the dispatch target is not bound",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_django_settings_behavior",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("django_settings_model"),
+        note: "behavior depends on settings values assembled from environment and settings modules this frontend does not evaluate",
+        fallback: "no_registered_provider_resolves_this_mechanism",
+    },
+    PythonObligation {
+        affected_claim: "python_unittest_patch_target",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a unittest.mock patch names its target as a string resolved when the patch runs, so the patched attribute is not bound",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_celery_runtime_routing",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: Some("python_import_graph"),
+        note: "a Celery task is dispatched by name through broker routing, so the worker-side task that receives it is not bound",
+        fallback: "python_type_provider_not_integrated",
+    },
+    PythonObligation {
+        affected_claim: "python_project_config",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: None,
+        note: "the repository's Python project configuration is absent, unreadable, or contradictory, so the declared project metadata is unproven",
+        fallback: "repository_configuration_declaration",
+    },
+    PythonObligation {
+        affected_claim: "python_dependency_inventory",
+        impact: PythonClaimImpact::NonBlocking,
+        required_mechanism: None,
+        note: "a declared dependency's identity or version is not stated in the repository's own configuration, so the inventory entry is incomplete",
+        fallback: "repository_configuration_declaration",
+    },
+];
+
+/// Registry lookup by affected claim. Claims outside the registry are not part
+/// of the lane's declared unknown vocabulary.
+pub(crate) fn python_obligation(affected_claim: &str) -> Option<&'static PythonObligation> {
+    PYTHON_OBLIGATION_REGISTRY
+        .iter()
+        .find(|entry| entry.affected_claim == affected_claim)
+}
+
+/// True for the claims the project-config path may scope an UNKNOWN to: the
+/// registry entries the repository's own configuration could discharge.
+fn python_project_config_claim_is_supported(affected_claim: &str) -> bool {
+    python_obligation(affected_claim)
+        .is_some_and(|entry| entry.fallback == "repository_configuration_declaration")
+}
+
 fn python_unknown_reason_is_supported(value: &str) -> bool {
     matches!(
         value,
@@ -1695,29 +2185,7 @@ fn python_unknown_reason_is_supported(value: &str) -> bool {
 }
 
 fn python_affected_claim_is_supported(value: &str) -> bool {
-    matches!(
-        value,
-        "python_import_resolution"
-            | "python_call_target"
-            | "python_framework_identity"
-            | "fastapi_dependency_target"
-            | "fastapi_router_binding"
-            | "fastapi_router_prefix"
-            | "pydantic_validator_side_effects"
-            | "sqlalchemy_query_shape"
-            | "sqlalchemy_relationship_target"
-            | "pytest_fixture_binding"
-            | "python_project_config"
-            | "python_django_model_identity"
-            | "python_django_url_identity"
-            | "python_flask_route_identity"
-            | "python_cli_command_identity"
-            | "python_celery_task_identity"
-            | "python_django_string_dispatch"
-            | "python_unittest_patch_target"
-            | "python_celery_runtime_routing"
-            | "python_django_settings_behavior"
-    )
+    python_obligation(value).is_some()
 }
 
 fn python_anchor_kind_is_supported(value: &str) -> bool {
@@ -1864,6 +2332,7 @@ fn code_unit_kind(value: &str) -> Option<CodeUnitKind> {
         "django_model" => Some(CodeUnitKind::DjangoModel),
         "django_url_pattern" => Some(CodeUnitKind::DjangoUrlPattern),
         "django_test" => Some(CodeUnitKind::DjangoTest),
+        "marshmallow_schema" => Some(CodeUnitKind::MarshmallowSchema),
         "flask_route" => Some(CodeUnitKind::FlaskRoute),
         "unittest_test_method" => Some(CodeUnitKind::UnittestTestMethod),
         "click_command" => Some(CodeUnitKind::ClickCommand),
@@ -1965,6 +2434,41 @@ mod tests {
     }
 
     #[test]
+    fn interpreter_version_probe_reports_a_triple_and_refuses_anything_else() {
+        let version = PythonAstParser::default()
+            .python_frontend_version()
+            .expect("the interpreter that runs the worker reports its version");
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(parts.len(), 3, "version={version}");
+        assert!(
+            parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+            "version={version}"
+        );
+
+        // A missing program cannot produce a guessed version.
+        assert_eq!(
+            PythonAstParser::with_worker(
+                "repogrammar-nonexistent-python-interpreter",
+                PathBuf::from("missing-worker.py"),
+            )
+            .python_frontend_version(),
+            None
+        );
+
+        // `REPOGRAMMAR_PYTHON_EXECUTABLE` can point at any program, so a
+        // zero-exit program that prints something other than a version triple
+        // must be refused rather than reported as the syntax boundary.
+        #[cfg(unix)]
+        assert_eq!(
+            PythonAstParser::with_worker("/bin/echo", PathBuf::from("missing-worker.py"))
+                .python_frontend_version(),
+            None
+        );
+    }
+
+    #[test]
     fn extract_python_interface_is_unverified_when_worker_is_unavailable() {
         // A missing interpreter must degrade to `Unverified` (the sync preflight
         // then falls back to a full rebuild) rather than panicking or guessing.
@@ -2052,8 +2556,12 @@ mod tests {
     }
 
     fn project_config_document(text: &str) -> SourceDocument<'_> {
+        project_config_document_at("pyproject.toml", text)
+    }
+
+    fn project_config_document_at<'a>(path: &'a str, text: &'a str) -> SourceDocument<'a> {
         SourceDocument {
-            path: "pyproject.toml",
+            path,
             language: Language::PythonConfig,
             content_hash: ContentHash::new(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -2274,15 +2782,13 @@ def test_users(client, status, missing_fixture):
             .as_ref()
             .map(SymbolId::as_str)
             == Some("app.services.UserService.list_orders")));
-        assert!(!report.semantic_facts.iter().any(|fact| fact
-            .target
-            .as_ref()
-            .map(SymbolId::as_str)
-            == Some("service.list_orders")
-            && fact
-                .assumptions
-                .iter()
-                .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")));
+        assert!(!report.semantic_facts.iter().any(|fact| {
+            fact.target.as_ref().map(SymbolId::as_str) == Some("service.list_orders")
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "python_anchor_kind=fastapi_service_call")
+        }));
         assert!(report.semantic_facts.iter().any(|fact| {
             fact.kind == SemanticFactKind::Unknown
                 && fact.target.as_ref().map(SymbolId::as_str) == Some("FrameworkMagic")
@@ -4116,6 +4622,7 @@ class User:
         let source = r#"
 [project]
 name = "demo-api"
+dependencies = ["FastAPI>=0.116", "uvicorn[standard]~=0.35"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "../secret"]
@@ -4132,18 +4639,34 @@ project_includes = ["src"]
         let document = project_config_document(source);
         let response = json!({
             "protocol_version": 1,
+            "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
             "mode": "parse_project_config",
             "path": "pyproject.toml",
             "config": {
                 "project_name": "demo-api",
                 "source_roots": ["src", "src/lib", "tests"],
-                "tool_sections": ["pyrefly", "pyright", "pytest"]
+                "tool_sections": ["pyrefly", "pyright", "pytest"],
+                "dependencies": [
+                    {
+                        "name": "fastapi",
+                        "requirement": ">=0.116",
+                        "scope": "runtime",
+                        "optional": false
+                    },
+                    {
+                        "name": "uvicorn",
+                        "requirement": "[standard]~=0.35",
+                        "scope": "runtime",
+                        "optional": false
+                    }
+                ]
             },
             "unknowns": []
         })
         .to_string();
-        let report =
+        let output =
             parse_project_config_response(&document, &response).expect("parse project config");
+        let report = output.report;
 
         assert_eq!(report.units.len(), 1);
         let unit = &report.units[0];
@@ -4164,10 +4687,11 @@ project_includes = ["src"]
         assert!(targets.contains(&Some("python.project_config.project_name.demo-api")));
         assert!(targets.contains(&Some("python.project_config.source_root.src.lib")));
         assert!(targets.contains(&Some("python.project_config.tool_section.pyright")));
-        assert!(report.semantic_facts.iter().any(|fact| fact
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "python_config_source_root=src/lib")));
+        assert!(report.semantic_facts.iter().any(|fact| {
+            fact.assumptions
+                .iter()
+                .any(|assumption| assumption == "python_config_source_root=src/lib")
+        }));
         assert!(report.semantic_facts.iter().all(|fact| {
             fact.kind == SemanticFactKind::ProjectConfig
                 && fact.certainty == FactCertainty::Structural
@@ -4184,6 +4708,30 @@ project_includes = ["src"]
                     .iter()
                     .any(|assumption| assumption == "not_family_claim_input")
         }));
+        assert_eq!(
+            output
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    (
+                        dependency.package.name.as_str(),
+                        dependency
+                            .requirement
+                            .as_ref()
+                            .map(DependencyVersion::as_str),
+                        dependency.scope,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("fastapi", Some(">=0.116"), DependencyScope::Runtime),
+                (
+                    "uvicorn",
+                    Some("[standard]~=0.35"),
+                    DependencyScope::Runtime
+                ),
+            ]
+        );
 
         let debug = format!("{:?}", report);
         for forbidden in ["../secret", "/tmp/secret", "C:/secret", "project_includes"] {
@@ -4192,6 +4740,221 @@ project_includes = ["src"]
                 "project config leaked forbidden text {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn bundled_python_project_config_frontend_inventories_static_dependencies() {
+        let parser = PythonAstParser::default();
+        let context = ParserProjectContext::default();
+        let cases = [
+            (
+                "setup.cfg",
+                r#"
+[metadata]
+name = demo
+[options]
+install_requires =
+    Requests>=2
+    private-lib @ https://user:secret@example.invalid/pkg.whl
+    path-marker; os_name == '/private/marker-secret'
+setup_requires =
+    setuptools>=68
+tests_require =
+    pytest>=8
+[options.extras_require]
+postgres =
+    psycopg[binary]>=3
+"#,
+                vec![
+                    ("path-marker", None, DependencyScope::Runtime, false),
+                    ("private-lib", None, DependencyScope::Runtime, false),
+                    (
+                        "psycopg",
+                        Some("[binary]>=3"),
+                        DependencyScope::Unknown,
+                        true,
+                    ),
+                    ("pytest", Some(">=8"), DependencyScope::Test, false),
+                    ("requests", Some(">=2"), DependencyScope::Runtime, false),
+                    ("setuptools", Some(">=68"), DependencyScope::Build, false),
+                ],
+            ),
+            (
+                "setup.py",
+                r#"
+from setuptools import setup
+
+setup(
+    name="demo",
+    install_requires=["requests>=2"],
+    setup_requires=["setuptools>=68"],
+    tests_require=["pytest>=8"],
+    extras_require={"postgres": ["psycopg[binary]>=3"]},
+)
+raise RuntimeError("must never execute setup.py")
+"#,
+                vec![
+                    (
+                        "psycopg",
+                        Some("[binary]>=3"),
+                        DependencyScope::Unknown,
+                        true,
+                    ),
+                    ("pytest", Some(">=8"), DependencyScope::Test, false),
+                    ("requests", Some(">=2"), DependencyScope::Runtime, false),
+                    ("setuptools", Some(">=68"), DependencyScope::Build, false),
+                ],
+            ),
+        ];
+
+        for (path, source, expected) in cases {
+            let output = parser
+                .parse_with_context_output(project_config_document_at(path, source), &context)
+                .unwrap_or_else(|error| panic!("parse {path}: {error:?}"));
+            assert_eq!(
+                output
+                    .dependencies
+                    .iter()
+                    .map(|dependency| {
+                        (
+                            dependency.package.name.as_str(),
+                            dependency
+                                .requirement
+                                .as_ref()
+                                .map(DependencyVersion::as_str),
+                            dependency.scope,
+                            dependency.optional,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                expected,
+                "{path}"
+            );
+            assert!(output.dependencies.iter().all(|dependency| {
+                dependency.package.ecosystem == DependencyEcosystem::Pypi
+                    && dependency.directness == DependencyDirectness::Direct
+                    && dependency.evidence_level == DependencyEvidenceLevel::ManifestDeclared
+                    && dependency.evidence.provenance.path == path
+            }));
+            let debug = format!("{output:?}");
+            assert!(!debug.contains("user:secret"));
+            assert!(!debug.contains("marker-secret"));
+            assert!(!debug.contains("must never execute"));
+        }
+    }
+
+    #[test]
+    fn project_config_dependency_response_fails_closed_on_contract_drift_and_invalid_records() {
+        let document = project_config_document("[project]\nname = 'demo'\n");
+        let response_for = |dependencies: Value| {
+            json!({
+                "protocol_version": 1,
+                "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
+                "mode": "parse_project_config",
+                "path": "pyproject.toml",
+                "config": {
+                    "project_name": "demo",
+                    "source_roots": [],
+                    "tool_sections": [],
+                    "dependencies": dependencies
+                },
+                "unknowns": []
+            })
+            .to_string()
+        };
+        let valid = json!({
+            "name": "requests",
+            "requirement": ">=2",
+            "scope": "runtime",
+            "optional": false
+        });
+        for invalid in [
+            json!({"name": "requests", "requirement": ">=2", "scope": "runtime"}),
+            json!({
+                "name": "requests",
+                "requirement": ">=2",
+                "scope": "runtime",
+                "optional": false,
+                "extra": true
+            }),
+            json!({
+                "name": "requests",
+                "requirement": "@/private/secret",
+                "scope": "runtime",
+                "optional": false
+            }),
+            json!({
+                "name": "requests",
+                "requirement": ">=2",
+                "scope": "ambient",
+                "optional": false
+            }),
+            json!({
+                "name": "requests",
+                "requirement": ">=2",
+                "scope": "runtime",
+                "optional": "false"
+            }),
+        ] {
+            assert!(matches!(
+                parse_project_config_response(&document, &response_for(json!([invalid]))),
+                Err(ParseError::Internal(_))
+            ));
+        }
+        assert!(matches!(
+            parse_project_config_response(
+                &document,
+                &response_for(json!([valid.clone(), valid.clone()]))
+            ),
+            Err(ParseError::Internal(_))
+        ));
+        assert!(matches!(
+            parse_project_config_response(
+                &document,
+                &response_for(Value::Array(vec![valid; 2_001]))
+            ),
+            Err(ParseError::Internal(_))
+        ));
+
+        let mismatch = json!({
+            "protocol_version": 1,
+            "contract_revision": PYTHON_PROJECT_CONFIG_CONTRACT_REVISION,
+            "mode": "parse_project_config",
+            "error_code": "PYTHON_FRONTEND_CONTRACT_MISMATCH"
+        })
+        .to_string();
+        assert_eq!(
+            parse_project_config_response(&document, &mismatch),
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
+    }
+
+    #[test]
+    fn dynamic_setup_py_dependencies_stay_typed_unknown_without_execution() {
+        let source = r#"
+from setuptools import setup
+
+DEPS = ["requests>=2"]
+setup(name="demo", install_requires=DEPS)
+raise RuntimeError("must never execute setup.py")
+"#;
+        let output = PythonAstParser::default()
+            .parse_with_context_output(
+                project_config_document_at("setup.py", source),
+                &ParserProjectContext::default(),
+            )
+            .expect("dynamic setup.py dependency is represented as UNKNOWN");
+
+        assert!(output.dependencies.is_empty());
+        assert!(output.report.semantic_facts.iter().any(|fact| {
+            fact.kind == SemanticFactKind::Unknown
+                && fact.certainty == FactCertainty::Unknown
+                && fact
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == "affected_claim=python_dependency_inventory")
+        }));
+        assert!(!format!("{output:?}").contains("must never execute"));
     }
 
     #[test]
@@ -4971,6 +5734,14 @@ def _api_client():
         let debug = format!("{result:?}");
         assert!(!debug.contains(root.to_string_lossy().as_ref()));
         assert!(!debug.contains("contract_revision"));
+        let project_config_result = parser.parse(project_config_document_at(
+            "setup.cfg",
+            "[metadata]\nname = demo\n",
+        ));
+        assert_eq!(
+            project_config_result,
+            Err(ParseError::PythonFrontendContractMismatch)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -5143,5 +5914,143 @@ def _api_client():
                 "affected_claim=python_import_resolution"
             ]
         })
+    }
+
+    /// The exact claim vocabulary the two allowlists admitted before the
+    /// registry consolidated them: the twenty the CPython-ast path accepted,
+    /// plus `python_dependency_inventory` from the project-config path.
+    const DECLARED_PYTHON_CLAIMS: &[&str] = &[
+        "python_import_resolution",
+        "python_call_target",
+        "python_framework_identity",
+        "python_django_model_identity",
+        "python_django_url_identity",
+        "python_flask_route_identity",
+        "python_cli_command_identity",
+        "python_celery_task_identity",
+        "pytest_fixture_binding",
+        "fastapi_dependency_target",
+        "fastapi_router_binding",
+        "fastapi_router_prefix",
+        "pydantic_validator_side_effects",
+        "sqlalchemy_query_shape",
+        "sqlalchemy_relationship_target",
+        "python_django_string_dispatch",
+        "python_django_settings_behavior",
+        "python_unittest_patch_target",
+        "python_celery_runtime_routing",
+        "python_project_config",
+        "python_dependency_inventory",
+    ];
+
+    #[test]
+    fn python_obligation_registry_admits_exactly_the_declared_claim_vocabulary() {
+        assert_eq!(DECLARED_PYTHON_CLAIMS.len(), 21);
+        let registered = PYTHON_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| entry.affected_claim)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            registered,
+            DECLARED_PYTHON_CLAIMS
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+        for claim in DECLARED_PYTHON_CLAIMS {
+            assert!(
+                python_affected_claim_is_supported(claim),
+                "{claim} must stay accepted"
+            );
+        }
+        // Nothing outside the registry is accepted. `python_family_membership`
+        // and `family:` claims appear in the family classifier but are not part
+        // of the emitted vocabulary, so they must stay rejected here.
+        for claim in [
+            "",
+            "python_family_membership",
+            "family:python.fastapi.route",
+            "python_import_resolution ",
+            "r_testthat_identity",
+        ] {
+            assert!(
+                !python_affected_claim_is_supported(claim),
+                "{claim} must not be accepted"
+            );
+        }
+        // The project-config path stays narrower than the full registry: only
+        // the claims the repository's own configuration could discharge.
+        let config_claims = DECLARED_PYTHON_CLAIMS
+            .iter()
+            .copied()
+            .filter(|claim| python_project_config_claim_is_supported(claim))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            config_claims,
+            vec!["python_project_config", "python_dependency_inventory"]
+        );
+    }
+
+    #[test]
+    fn python_obligation_registry_declares_each_claim_once() {
+        let mut claims = PYTHON_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| entry.affected_claim)
+            .collect::<Vec<_>>();
+        let count = claims.len();
+        claims.sort_unstable();
+        claims.dedup();
+        assert_eq!(claims.len(), count, "registry claims must be unique");
+    }
+
+    #[test]
+    fn python_obligation_registry_records_well_formed_mechanisms_and_fallbacks() {
+        for entry in PYTHON_OBLIGATION_REGISTRY {
+            if let Some(mechanism) = entry.required_mechanism {
+                assert!(
+                    !mechanism.is_empty(),
+                    "{} records an empty mechanism",
+                    entry.affected_claim
+                );
+            }
+            assert!(
+                matches!(
+                    entry.fallback,
+                    "python_type_provider_not_integrated"
+                        | "no_registered_provider_resolves_this_mechanism"
+                        | "repository_configuration_declaration"
+                ),
+                "{} records an undocumented fallback token {}",
+                entry.affected_claim,
+                entry.fallback
+            );
+            assert!(
+                !entry.note.is_empty(),
+                "{} records an empty note",
+                entry.affected_claim
+            );
+        }
+    }
+
+    #[test]
+    fn python_obligation_lookups_are_total_and_order_is_stable() {
+        for claim in DECLARED_PYTHON_CLAIMS {
+            let entry = python_obligation(claim).expect("registry lookup must be total");
+            assert_eq!(entry.affected_claim, *claim);
+        }
+        assert!(python_obligation("python_family_membership").is_none());
+        let order = PYTHON_OBLIGATION_REGISTRY
+            .iter()
+            .map(|entry| entry.affected_claim)
+            .collect::<Vec<_>>();
+        assert_eq!(order, DECLARED_PYTHON_CLAIMS.to_vec());
+        assert_eq!(
+            order,
+            PYTHON_OBLIGATION_REGISTRY
+                .iter()
+                .map(|entry| entry.affected_claim)
+                .collect::<Vec<_>>(),
+            "registry order must be stable across reads"
+        );
     }
 }

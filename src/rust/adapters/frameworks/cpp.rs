@@ -14,6 +14,7 @@ pub(crate) const ROLE_CATCH2_TEST: &str = "framework:catch2.test";
 pub(crate) const ROLE_DOCTEST_TEST: &str = "framework:doctest.test";
 pub(crate) const ROLE_BOOST_TEST: &str = "framework:boost_test.test";
 pub(crate) const ROLE_BOOST_SUITE: &str = "framework:boost_test.suite";
+pub(crate) const ROLE_CPPUNIT_SUITE_REGISTRATION: &str = "framework:cppunit.suite_registration";
 
 pub(crate) const GTEST_TEST_TARGETS: &[&str] = &[
     "gtest.TEST",
@@ -68,6 +69,11 @@ pub(crate) fn role_for_code_unit_kind(kind: &CodeUnitKind) -> Option<CppFramewor
             note: "Tree-sitter C/C++ code unit indicates exact Boost.Test suite macro role",
             assumption: "Boost.Test suite registration is not evaluated",
         }),
+        CodeUnitKind::CppUnitSuiteRegistration => Some(CppFrameworkRole {
+            target: ROLE_CPPUNIT_SUITE_REGISTRATION,
+            note: "Tree-sitter C/C++ code unit indicates exact CppUnit suite registration role",
+            assumption: "CppUnit registry construction and test enumeration are not evaluated",
+        }),
         _ => None,
     }
 }
@@ -77,6 +83,7 @@ pub(crate) fn framework_role_is_known(framework_role: &str) -> bool {
         || framework_role.starts_with("framework:catch2.")
         || framework_role.starts_with("framework:doctest.")
         || framework_role.starts_with("framework:boost_test.")
+        || framework_role.starts_with("framework:cppunit.")
 }
 
 pub(crate) fn support_target_is_role_compatible(
@@ -90,6 +97,9 @@ pub(crate) fn support_target_is_role_compatible(
         ROLE_DOCTEST_TEST => Some(target == "doctest.TEST_CASE"),
         ROLE_BOOST_TEST => Some(BOOST_TEST_TARGETS.contains(&target)),
         ROLE_BOOST_SUITE => Some(target == "boost_test.BOOST_AUTO_TEST_SUITE"),
+        ROLE_CPPUNIT_SUITE_REGISTRATION => {
+            Some(target == "cppunit.CPPUNIT_TEST_SUITE_REGISTRATION")
+        }
         _ if framework_role_is_known(framework_role) => Some(false),
         _ => None,
     }
@@ -103,6 +113,7 @@ pub(crate) fn support_family(target: &str, framework_role: &str) -> String {
         ROLE_DOCTEST_TEST => "doctest.test_case".to_string(),
         ROLE_BOOST_TEST => "boost_test.test_case".to_string(),
         ROLE_BOOST_SUITE => "boost_test.test_suite".to_string(),
+        ROLE_CPPUNIT_SUITE_REGISTRATION => "cppunit.suite_registration".to_string(),
         _ => target.to_string(),
     }
 }

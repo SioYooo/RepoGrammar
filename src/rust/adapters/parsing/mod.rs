@@ -1,29 +1,90 @@
 //! Parsing adapters. Tree-sitter types must not cross this module boundary.
 
-use crate::core::model::{CodeUnit, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId};
+use crate::core::model::{
+    CodeUnit, CodeUnitId, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId,
+};
 use crate::ports::parser::{
     ParseError, ParseReport, ParserProjectContext, PythonInterfaceProbe, SourceDocument,
     SourceParseOutput, SourceParser,
 };
 use std::collections::BTreeSet;
 
+pub mod ada;
+pub mod assembly;
+pub(crate) mod bounded_json;
+pub(crate) mod bounded_xml;
 pub mod cpp;
 pub mod csharp;
+pub mod delphi;
+pub mod fortran;
+pub mod go;
 pub mod java;
+pub mod matlab;
+pub mod php;
 pub mod python;
+pub mod r;
+pub mod ruby;
 pub mod rust;
+pub mod sql;
+pub mod swift;
 pub mod syntax;
 pub mod tree_sitter;
 pub mod tsjs;
+pub mod visual_basic;
 
 #[derive(Debug, Default)]
 pub struct RepoGrammarSourceParser {
     syntax: syntax::SyntaxCodeUnitParser,
     python: python::PythonAstParser,
     java: java::JavaSyntaxParser,
+    java_config: java::maven::JavaMavenConfigParser,
+    matlab_config: matlab::MatlabPackageConfigParser,
+    assembly: assembly::AssemblySyntaxParser,
     csharp: csharp::CSharpSyntaxParser,
+    delphi: delphi::DelphiProjectConfigParser,
     cpp: cpp::CppSyntaxParser,
+    go: go::GoProjectConfigParser,
+    php: php::PhpConfigParser,
+    ruby: RubyConfigParser,
+    r: r::RProjectConfigParser,
+    go_testing: go::testing::GoTestingParser,
+    r_testthat: r::testthat::RTestThatParser,
+    visual_basic_mstest: visual_basic::mstest::VisualBasicMsTestParser,
+    delphi_dunitx: delphi::dunitx::DelphiDUnitXParser,
+    ada_aunit: ada::aunit::AdaAUnitParser,
+    matlab_unittest: matlab::unittest::MatlabUnitTestParser,
     rust: rust::RustSyntaxParser,
+    sql: sql::SqlDdlParser,
+    swift: swift::SwiftProjectConfigParser,
+    visual_basic: visual_basic::VisualBasicProjectConfigParser,
+    ada: ada::AdaProjectConfigParser,
+    fortran: fortran::FortranProjectConfigParser,
+    fortran_testdrive: fortran::testdrive::FortranTestDriveParser,
+}
+
+#[derive(Debug, Default)]
+struct RubyConfigParser;
+
+impl SourceParser for RubyConfigParser {
+    fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+        ruby::parse(document)
+    }
+
+    fn parse_with_context(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<ParseReport, ParseError> {
+        ruby::parse(document)
+    }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        _context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        ruby::parse_output(document)
+    }
 }
 
 impl SourceParser for RepoGrammarSourceParser {
@@ -36,18 +97,35 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.python.parse(document)
             }
             crate::core::model::Language::Java => self.java.parse(document),
+            crate::core::model::Language::JavaConfig => self.java_config.parse(document),
+            crate::core::model::Language::Matlab => self.matlab_unittest.parse(document),
+            crate::core::model::Language::MatlabConfig => self.matlab_config.parse(document),
+            crate::core::model::Language::Assembly => self.assembly.parse(document),
             crate::core::model::Language::CSharp => self.csharp.parse(document),
             crate::core::model::Language::C
             | crate::core::model::Language::Cpp
             | crate::core::model::Language::CppConfig => self.cpp.parse(document),
-            crate::core::model::Language::Go
-            | crate::core::model::Language::GoConfig
-            | crate::core::model::Language::Php
-            | crate::core::model::Language::PhpConfig
-            | crate::core::model::Language::Ruby
-            | crate::core::model::Language::RubyConfig
-            | crate::core::model::Language::Swift
-            | crate::core::model::Language::SwiftConfig => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Go => self.go_testing.parse(document),
+            crate::core::model::Language::GoConfig => self.go.parse(document),
+            crate::core::model::Language::PhpConfig => self.php.parse(document),
+            crate::core::model::Language::Php => php::phpunit::PhpPHPUnitParser.parse(document),
+            crate::core::model::Language::Ruby => {
+                ruby::minitest::RubyMinitestParser.parse(document)
+            }
+            crate::core::model::Language::Swift => swift::xctest::parse_report(document),
+            crate::core::model::Language::SwiftConfig => self.swift.parse(document),
+            crate::core::model::Language::VisualBasicConfig => self.visual_basic.parse(document),
+            crate::core::model::Language::VisualBasic => self.visual_basic_mstest.parse(document),
+            crate::core::model::Language::ObjectPascal => self.delphi_dunitx.parse(document),
+            crate::core::model::Language::DelphiConfig => self.delphi.parse(document),
+            crate::core::model::Language::Ada => self.ada_aunit.parse(document),
+            crate::core::model::Language::AdaConfig => self.ada.parse(document),
+            crate::core::model::Language::Fortran => self.fortran_testdrive.parse(document),
+            crate::core::model::Language::FortranConfig => self.fortran.parse(document),
+            crate::core::model::Language::RubyConfig => self.ruby.parse(document),
+            crate::core::model::Language::RConfig => self.r.parse(document),
+            crate::core::model::Language::Sql => self.sql.parse(document),
+            crate::core::model::Language::R => self.r_testthat.parse(document),
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse(document)
             }
@@ -70,6 +148,18 @@ impl SourceParser for RepoGrammarSourceParser {
                 self.python.parse_with_context(document, context)
             }
             crate::core::model::Language::Java => self.java.parse_with_context(document, context),
+            crate::core::model::Language::JavaConfig => {
+                self.java_config.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Matlab => {
+                self.matlab_unittest.parse_with_context(document, context)
+            }
+            crate::core::model::Language::MatlabConfig => {
+                self.matlab_config.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Assembly => {
+                self.assembly.parse_with_context(document, context)
+            }
             crate::core::model::Language::CSharp => {
                 self.csharp.parse_with_context(document, context)
             }
@@ -78,14 +168,55 @@ impl SourceParser for RepoGrammarSourceParser {
             | crate::core::model::Language::CppConfig => {
                 self.cpp.parse_with_context(document, context)
             }
-            crate::core::model::Language::Go
-            | crate::core::model::Language::GoConfig
-            | crate::core::model::Language::Php
-            | crate::core::model::Language::PhpConfig
-            | crate::core::model::Language::Ruby
-            | crate::core::model::Language::RubyConfig
-            | crate::core::model::Language::Swift
-            | crate::core::model::Language::SwiftConfig => Err(ParseError::UnsupportedLanguage),
+            crate::core::model::Language::Go => {
+                self.go_testing.parse_with_context(document, context)
+            }
+            crate::core::model::Language::GoConfig => self.go.parse_with_context(document, context),
+            crate::core::model::Language::PhpConfig => {
+                self.php.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Php => {
+                php::phpunit::PhpPHPUnitParser.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Ruby => {
+                ruby::minitest::RubyMinitestParser.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Swift => swift::xctest::parse_report(document),
+            crate::core::model::Language::SwiftConfig => {
+                self.swift.parse_with_context(document, context)
+            }
+            crate::core::model::Language::VisualBasicConfig => {
+                self.visual_basic.parse_with_context(document, context)
+            }
+            crate::core::model::Language::VisualBasic => self
+                .visual_basic_mstest
+                .parse_with_context(document, context),
+            crate::core::model::Language::ObjectPascal => {
+                self.delphi_dunitx.parse_with_context(document, context)
+            }
+            crate::core::model::Language::DelphiConfig => {
+                self.delphi.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Ada => {
+                self.ada_aunit.parse_with_context(document, context)
+            }
+            crate::core::model::Language::AdaConfig => {
+                self.ada.parse_with_context(document, context)
+            }
+            crate::core::model::Language::Fortran => {
+                self.fortran_testdrive.parse_with_context(document, context)
+            }
+            crate::core::model::Language::FortranConfig => {
+                self.fortran.parse_with_context(document, context)
+            }
+            crate::core::model::Language::RubyConfig => {
+                self.ruby.parse_with_context(document, context)
+            }
+            crate::core::model::Language::RConfig => self.r.parse_with_context(document, context),
+            crate::core::model::Language::Sql => self.sql.parse_with_context(document, context),
+            crate::core::model::Language::R => {
+                self.r_testthat.parse_with_context(document, context)
+            }
             crate::core::model::Language::Rust | crate::core::model::Language::RustConfig => {
                 self.rust.parse_with_context(document, context)
             }
@@ -99,9 +230,83 @@ impl SourceParser for RepoGrammarSourceParser {
         context: &ParserProjectContext,
     ) -> Result<SourceParseOutput, ParseError> {
         match document.language {
+            crate::core::model::Language::TypeScript
+            | crate::core::model::Language::JavaScript
+            | crate::core::model::Language::TsJsConfig => {
+                self.syntax.parse_with_context_output(document, context)
+            }
             crate::core::model::Language::Python | crate::core::model::Language::PythonConfig => {
                 self.python.parse_with_context_output(document, context)
             }
+            crate::core::model::Language::JavaConfig => self
+                .java_config
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::MatlabConfig => self
+                .matlab_config
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::Assembly => {
+                self.assembly.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::C
+            | crate::core::model::Language::Cpp
+            | crate::core::model::Language::CppConfig => {
+                self.cpp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Go => {
+                self.go_testing.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::GoConfig => {
+                self.go.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::PhpConfig => {
+                self.php.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Swift => swift::xctest::parse_output(document),
+            crate::core::model::Language::SwiftConfig => {
+                self.swift.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::VisualBasicConfig => self
+                .visual_basic
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::ObjectPascal => self
+                .delphi_dunitx
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::Ada => {
+                self.ada_aunit.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Matlab => self
+                .matlab_unittest
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::DelphiConfig => {
+                self.delphi.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::AdaConfig => {
+                self.ada.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Fortran => self
+                .fortran_testdrive
+                .parse_with_context_output(document, context),
+            crate::core::model::Language::FortranConfig => {
+                self.fortran.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::RubyConfig => {
+                self.ruby.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::RConfig => {
+                self.r.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::CSharp => {
+                self.csharp.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::Sql => {
+                self.sql.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::R => {
+                self.r_testthat.parse_with_context_output(document, context)
+            }
+            crate::core::model::Language::VisualBasic => self
+                .visual_basic_mstest
+                .parse_with_context_output(document, context),
             _ => self
                 .parse_with_context(document, context)
                 .map(SourceParseOutput::from_report),
@@ -176,6 +381,105 @@ pub(crate) fn ir_edges_for_units(units: &[CodeUnit]) -> Result<Vec<IrEdge>, Stri
         .collect()
 }
 
+/// Deterministic identity order for config-inventory facts:
+/// (target, assumptions, evidence note). One fact per dependency claim, so
+/// claim identity — not source position — is the canonical order.
+pub(crate) fn sort_inventory_facts(facts: &mut [crate::core::model::SemanticFact]) {
+    facts.sort_by(|left, right| {
+        (
+            left.target
+                .as_ref()
+                .map(crate::core::model::SymbolId::as_str),
+            left.assumptions.as_slice(),
+            left.evidence.note.as_str(),
+        )
+            .cmp(&(
+                right
+                    .target
+                    .as_ref()
+                    .map(crate::core::model::SymbolId::as_str),
+                right.assumptions.as_slice(),
+                right.evidence.note.as_str(),
+            ))
+    });
+}
+
+/// Deterministic positional order for source-anchor facts:
+/// (range start, range end, kind, target). Anchor facts repeat within one
+/// file, so source position is the primary key and claim identity breaks
+/// ties.
+pub(crate) fn sort_anchor_facts(facts: &mut [crate::core::model::SemanticFact]) {
+    facts.sort_by(|left, right| {
+        (
+            left.evidence.range.start_byte,
+            left.evidence.range.end_byte,
+            left.kind.as_protocol_str(),
+            left.target
+                .as_ref()
+                .map(crate::core::model::SymbolId::as_str),
+        )
+            .cmp(&(
+                right.evidence.range.start_byte,
+                right.evidence.range.end_byte,
+                right.kind.as_protocol_str(),
+                right
+                    .target
+                    .as_ref()
+                    .map(crate::core::model::SymbolId::as_str),
+            ))
+    });
+}
+
+/// The single whole-file `project_config` unit every config-inventory lane
+/// emits: stable id, full-range `SourceRange`, and document provenance.
+pub(crate) fn project_config_unit(
+    document: &SourceDocument<'_>,
+    language: crate::core::model::Language,
+) -> Result<CodeUnit, ParseError> {
+    let end_byte = document.text.len();
+    Ok(CodeUnit {
+        id: CodeUnitId::new(format!(
+            "unit:{}#project_config:0-{}:0",
+            document.path, end_byte
+        ))
+        .map_err(ParseError::Internal)?,
+        language,
+        kind: CodeUnitKind::ProjectConfig,
+        range: crate::core::model::SourceRange::new(0, end_byte).map_err(ParseError::Internal)?,
+        provenance: crate::core::model::Provenance::new(
+            document.path,
+            document.content_hash.clone(),
+            document.repository_revision.clone(),
+        )
+        .map_err(ParseError::Internal)?,
+    })
+}
+
+/// The shared `SourceParseOutput` epilogue for config-inventory lanes: sorted
+/// facts, unit IR, and the validated dependency snapshot.
+pub(crate) fn config_source_parse_output(
+    units: Vec<CodeUnit>,
+    semantic_facts: Vec<crate::core::model::SemanticFact>,
+    dependencies: Vec<crate::core::model::DependencyRecord>,
+) -> Result<SourceParseOutput, ParseError> {
+    let ir_nodes = ir_nodes_for_units(&units).map_err(ParseError::Internal)?;
+    let ir_edges = ir_edges_for_units(&units).map_err(ParseError::Internal)?;
+    let dependencies = crate::core::model::DependencySnapshot::new(dependencies, Vec::new())
+        .map_err(ParseError::Internal)?
+        .dependencies;
+    Ok(SourceParseOutput {
+        report: ParseReport {
+            units,
+            ir_nodes,
+            ir_edges,
+            semantic_facts,
+            diagnostics: Vec::new(),
+        },
+        python_interface_hash: None,
+        dependencies,
+    })
+}
+
 fn same_file(left: &CodeUnit, right: &CodeUnit) -> bool {
     left.provenance.path == right.provenance.path
 }
@@ -205,8 +509,17 @@ fn is_class_like(kind: &str) -> bool {
             | "jpa_mapped_superclass"
             | "jpa_embeddable"
             | "jaxrs_resource_class"
+            | "servlet_http_servlet"
+            | "vb_test_class"
+            | "delphi_test_fixture"
+            | "matlab_test_class"
+            | "swift_test_class"
+            | "php_test_class"
+            | "ruby_minitest_test_class"
+            | "marshmallow_schema"
             | "aspnet_controller"
             | "efcore_db_context"
+            | "fluentvalidation_validator"
             | "gtest_test_fixture"
             | "qt_object_class"
             | "rust_impl_block"
@@ -231,6 +544,13 @@ fn is_method_like(kind: &str) -> bool {
             | "doctest_test_case"
             | "boost_test_case"
             | "boost_test_suite"
+            | "cppunit_suite_registration"
+            | "vb_test_method"
+            | "delphi_test_procedure"
+            | "matlab_test_method"
+            | "swift_test_method"
+            | "php_test_method"
+            | "ruby_minitest_test_method"
             | "junit5_test_method"
             | "junit4_test_method"
             | "testng_test_method"
@@ -279,10 +599,15 @@ mod tests {
     }
 
     fn ruby_inventory_document(language: Language) -> SourceDocument<'static> {
+        let text = if language == Language::RubyConfig {
+            "DEPENDENCIES\n  rack\n"
+        } else {
+            "inventory only"
+        };
         SourceDocument {
             path: match language {
                 Language::Ruby => "main.rb",
-                Language::RubyConfig => "Gemfile",
+                Language::RubyConfig => "Gemfile.lock",
                 _ => unreachable!("Ruby inventory helper accepts only Ruby tokens"),
             },
             language,
@@ -291,7 +616,7 @@ mod tests {
             )
             .expect("valid hash"),
             repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
-            text: "inventory only",
+            text,
         }
     }
 
@@ -329,74 +654,203 @@ mod tests {
         }
     }
 
+    fn sql_r_inventory_document(language: Language) -> SourceDocument<'static> {
+        let path = match &language {
+            Language::Sql => "schema.sql",
+            Language::R => "main.R",
+            Language::RConfig => "renv.lock",
+            _ => unreachable!("SQL/R inventory helper accepts only SQL/R tokens"),
+        };
+        let text = if language == Language::RConfig {
+            r#"{"Packages":{"jsonlite":{"Package":"jsonlite","Version":"1.8.8","Source":"Repository","Repository":"CRAN"}}}"#
+        } else {
+            "inventory only"
+        };
+        SourceDocument {
+            path,
+            language,
+            content_hash: ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            text,
+        }
+    }
+
+    fn matlab_inventory_document(language: Language) -> SourceDocument<'static> {
+        SourceDocument {
+            path: match language {
+                Language::Matlab => "main.m",
+                Language::MatlabConfig => "resources/mpackage.json",
+                _ => unreachable!("MATLAB inventory helper accepts only MATLAB tokens"),
+            },
+            language,
+            content_hash: ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            text: r#"{"name":"Demo","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0","dependencies":[]}"#,
+        }
+    }
+
     #[test]
-    fn product_parser_explicitly_rejects_go_inventory_tokens() {
+    fn product_parser_rejects_go_source_but_statically_parses_go_mod() {
         let parser = RepoGrammarSourceParser::default();
         assert_eq!(
             parser.parse(go_inventory_document(Language::Go)),
             Err(ParseError::UnsupportedLanguage)
         );
-        assert_eq!(
-            parser.parse_with_context(
-                go_inventory_document(Language::GoConfig),
+        let report = parser
+            .parse_with_context(
+                SourceDocument {
+                    text: "module example.test/app\nrequire example.test/lib v1.0.0\n",
+                    ..go_inventory_document(Language::GoConfig)
+                },
                 &ParserProjectContext::default(),
-            ),
+            )
+            .expect("statically parse go.mod project config");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+    }
+
+    #[test]
+    fn product_parser_routes_sql_to_its_frontend_rejects_r_source_and_parses_exact_r_metadata() {
+        let parser = RepoGrammarSourceParser::default();
+        assert_eq!(
+            parser.parse(sql_r_inventory_document(Language::R)),
             Err(ParseError::UnsupportedLanguage)
+        );
+        // ADR-0040 routes SQL to the bounded DDL frontend. "inventory only" is
+        // not an admitted statement shape, so the file yields its module unit
+        // and one statement unit and no anchor.
+        let sql = parser
+            .parse(sql_r_inventory_document(Language::Sql))
+            .expect("SQL must reach the bounded DDL frontend");
+        assert_eq!(sql.units.len(), 2);
+        assert!(sql
+            .semantic_facts
+            .iter()
+            .all(|fact| !fact.certainty.supports_family_membership()));
+        let output = parser
+            .parse_with_context_output(
+                sql_r_inventory_document(Language::RConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("exact renv.lock must return bounded dependency evidence");
+        assert_eq!(output.report.units.len(), 1);
+        assert_eq!(output.report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert_eq!(output.dependencies.len(), 1);
+        assert_eq!(
+            output.dependencies[0].package.ecosystem,
+            crate::core::model::DependencyEcosystem::Cran
         );
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_ruby_inventory_tokens() {
+    fn product_parser_rejects_ruby_source_but_qualifies_exact_bundler_lock() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Ruby, Language::RubyConfig] {
-            assert_eq!(
-                parser.parse(ruby_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    ruby_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(ruby_inventory_document(Language::Ruby)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+
+        let output = parser
+            .parse_with_context_output(
+                ruby_inventory_document(Language::RubyConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("exact Gemfile.lock must return bounded dependency evidence");
+        assert_eq!(output.report.units.len(), 1);
+        assert!(output.report.semantic_facts.is_empty());
+        assert_eq!(output.dependencies.len(), 1);
+        assert_eq!(output.dependencies[0].package.name.as_str(), "rack");
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_php_inventory_tokens() {
+    fn product_parser_rejects_php_source_but_accepts_composer_config() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Php, Language::PhpConfig] {
-            assert_eq!(
-                parser.parse(php_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    php_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        assert_eq!(
+            parser.parse(php_inventory_document(Language::Php)),
+            Err(ParseError::UnsupportedLanguage)
+        );
+        let report = parser
+            .parse_with_context(
+                php_inventory_document(Language::PhpConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("Composer config has a bounded static parser");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert!(report
+            .semantic_facts
+            .iter()
+            .all(|fact| fact.kind == SemanticFactKind::Unknown));
     }
 
     #[test]
-    fn product_parser_explicitly_rejects_swift_inventory_tokens() {
+    fn product_parser_routes_swift_source_and_accepts_bounded_config() {
         let parser = RepoGrammarSourceParser::default();
-        for language in [Language::Swift, Language::SwiftConfig] {
-            assert_eq!(
-                parser.parse(swift_inventory_document(language.clone())),
-                Err(ParseError::UnsupportedLanguage)
-            );
-            assert_eq!(
-                parser.parse_with_context(
-                    swift_inventory_document(language),
-                    &ParserProjectContext::default(),
-                ),
-                Err(ParseError::UnsupportedLanguage)
-            );
-        }
+        // ADR-0048 routes `.swift` to the bounded xctest frontend. This
+        // inventory text is outside the declared subset, so it yields the
+        // file's module unit plus one typed refusal and no anchor.
+        let swift_source = parser
+            .parse(swift_inventory_document(Language::Swift))
+            .expect("route bounded Swift source");
+        assert_eq!(swift_source.units.len(), 1);
+        assert_eq!(swift_source.units[0].kind, CodeUnitKind::Module);
+        assert!(swift_source
+            .semantic_facts
+            .iter()
+            .all(|fact| fact.kind == SemanticFactKind::Unknown));
+        let report = parser
+            .parse_with_context(
+                swift_inventory_document(Language::SwiftConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("parse bounded Swift project config");
+        assert_eq!(report.units.len(), 1);
+        assert_eq!(report.units[0].kind, CodeUnitKind::ProjectConfig);
+    }
+
+    #[test]
+    fn product_parser_routes_matlab_config_and_assembly_without_source_execution() {
+        let parser = RepoGrammarSourceParser::default();
+        // ADR-0046 routes `.m` to the bounded unittest scanner. This fixture
+        // declares no test class, so it yields the file's module unit alone --
+        // no anchor, no fact, and still no MATLAB or Octave execution.
+        let matlab_source = parser
+            .parse(matlab_inventory_document(Language::Matlab))
+            .expect("route bounded MATLAB source");
+        assert_eq!(matlab_source.units.len(), 1);
+        assert_eq!(matlab_source.units[0].kind, CodeUnitKind::Module);
+        assert!(matlab_source.semantic_facts.is_empty());
+        let matlab = parser
+            .parse_with_context_output(
+                matlab_inventory_document(Language::MatlabConfig),
+                &ParserProjectContext::default(),
+            )
+            .expect("route bounded MATLAB package config");
+        assert_eq!(matlab.report.units[0].kind, CodeUnitKind::ProjectConfig);
+        assert!(matlab.dependencies.is_empty());
+
+        let assembly = parser
+            .parse(SourceDocument {
+                path: "start.s",
+                language: Language::Assembly,
+                content_hash: ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("valid hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+                text: ".text\nentry:\n call helper\n",
+            })
+            .expect("route bounded assembly scanner");
+        assert!(assembly
+            .semantic_facts
+            .iter()
+            .all(|fact| !fact.certainty.supports_family_membership()));
     }
 
     #[test]
@@ -774,18 +1228,20 @@ setup(name="second-project", package_dir={"": "second-src"})
             .expect("multiple setup calls become a typed config conflict");
 
         assert_eq!(report.units.len(), 1);
-        assert_eq!(report.semantic_facts.len(), 1);
-        let conflict = &report.semantic_facts[0];
-        assert_eq!(conflict.kind, SemanticFactKind::Unknown);
-        assert_eq!(conflict.certainty, FactCertainty::Unknown);
-        assert_eq!(
-            conflict.target.as_ref().map(SymbolId::as_str),
-            Some("ConflictingFacts")
-        );
-        assert!(conflict
-            .assumptions
-            .iter()
-            .any(|assumption| assumption == "affected_claim=python_project_config"));
+        assert_eq!(report.semantic_facts.len(), 2);
+        assert!(report.semantic_facts.iter().all(|conflict| {
+            conflict.kind == SemanticFactKind::Unknown
+                && conflict.certainty == FactCertainty::Unknown
+                && conflict.target.as_ref().map(SymbolId::as_str) == Some("ConflictingFacts")
+        }));
+        for affected_claim in ["python_dependency_inventory", "python_project_config"] {
+            assert!(report.semantic_facts.iter().any(|conflict| {
+                conflict
+                    .assumptions
+                    .iter()
+                    .any(|assumption| assumption == &format!("affected_claim={affected_claim}"))
+            }));
+        }
     }
 
     #[test]
@@ -820,6 +1276,34 @@ setup(name="second-project", package_dir={"": "second-src"})
                     .parse(python_config_document(path, "setup(name='not-config')\n")),
                 Err(ParseError::UnsupportedLanguage)
             ));
+        }
+    }
+
+    #[test]
+    fn class_bearing_lanes_classify_both_halves_of_their_containment_pair() {
+        // `ir_edges_for_units` emits a Contains edge only when the container is
+        // class-like and the member is method-like. A lane that adds a test
+        // class and a test method without listing both here still compiles,
+        // still parses, and still forms its family — it silently loses every
+        // containment edge instead, with no failing test to say so. Each
+        // class-bearing lane pins both halves of its pair.
+        for (class_kind, method_kind) in [
+            ("class", "method"),
+            ("vb_test_class", "vb_test_method"),
+            ("delphi_test_fixture", "delphi_test_procedure"),
+            ("matlab_test_class", "matlab_test_method"),
+            ("swift_test_class", "swift_test_method"),
+            ("php_test_class", "php_test_method"),
+            ("ruby_minitest_test_class", "ruby_minitest_test_method"),
+        ] {
+            assert!(
+                is_class_like(class_kind),
+                "{class_kind} must be class-like or its members lose containment"
+            );
+            assert!(
+                is_method_like(method_kind),
+                "{method_kind} must be method-like or it loses containment"
+            );
         }
     }
 }

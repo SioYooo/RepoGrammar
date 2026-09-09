@@ -6,8 +6,8 @@
 //! `UNKNOWN` values before crossing this port.
 
 use crate::core::model::{
-    CodeUnitId, ContentHash, SemanticFact, SourceRange, TypedUnknown, UnknownClass,
-    UnknownReasonCode,
+    CodeUnitId, ContentHash, DependencyRecord, SemanticFact, SourceRange, TypedUnknown,
+    UnknownClass, UnknownReasonCode,
 };
 use crate::core::policy::paths::validate_repo_relative_path;
 use std::path::Path;
@@ -260,6 +260,7 @@ impl RustProviderCacheKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RustProviderOutput {
     pub facts: Vec<SemanticFact>,
+    pub dependencies: Vec<DependencyRecord>,
     pub unknowns: Vec<TypedUnknown>,
     pub provenance: Option<RustProviderProvenance>,
 }
@@ -272,6 +273,21 @@ impl RustProviderOutput {
     ) -> Self {
         Self {
             facts,
+            dependencies: Vec::new(),
+            unknowns,
+            provenance: Some(provenance),
+        }
+    }
+
+    pub fn with_dependencies(
+        provenance: RustProviderProvenance,
+        facts: Vec<SemanticFact>,
+        dependencies: Vec<DependencyRecord>,
+        unknowns: Vec<TypedUnknown>,
+    ) -> Self {
+        Self {
+            facts,
+            dependencies,
             unknowns,
             provenance: Some(provenance),
         }
@@ -280,6 +296,7 @@ impl RustProviderOutput {
     pub fn unavailable(provider: RustProviderKind, operation: RustProviderOperation) -> Self {
         Self {
             facts: Vec::new(),
+            dependencies: Vec::new(),
             unknowns: vec![TypedUnknown::new(
                 UnknownClass::Recoverable,
                 UnknownReasonCode::MissingDependency,
@@ -486,6 +503,7 @@ mod tests {
         );
 
         assert!(output.facts.is_empty());
+        assert!(output.dependencies.is_empty());
         assert!(output.provenance.is_none());
         assert_eq!(output.unknowns.len(), 1);
         assert_eq!(output.unknowns[0].class, UnknownClass::Recoverable);

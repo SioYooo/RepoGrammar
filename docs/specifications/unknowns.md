@@ -220,6 +220,25 @@ Some unknowns block only specific claims:
   a relevant field is dynamic, partial, duplicate, unpacked, overridable, or
   unreachable after a definite top-level `raise`. No roots are emitted from the
   incomplete field. A complete empty `setup()` call is not an `UNKNOWN`.
+- SwiftPM lock inventory uses the stable affected-claim token
+  `swift_dependency_inventory`. Malformed, duplicate-key, over-budget, or
+  unsupported-schema `Package.resolved` input maps to `MissingProjectConfig`;
+  branch, revision-only, and non-semantic-version pins map to
+  `InsufficientSupport`; conflicting exact versions map to `ConflictingFacts`;
+  and dependency overflow uses the existing internal `ResourceLimit` target.
+  Accepted schema-2/3 pins still carry claim-scoped directness uncertainty: a
+  lockfile pin does not prove whether the root manifest declared it directly.
+- Composer inventory uses the stable affected-claim token
+  `php_dependency_inventory`. Malformed, duplicate-key, unsupported-schema,
+  invalid-name/requirement/version, or partial object/array shapes map to
+  `MissingProjectConfig`; platform packages, virtual relations, unverified
+  manifest/lock coherence, and lockfile root directness map to
+  `InsufficientSupport`; conflicting duplicate package declarations map to
+  `ConflictingFacts`; and dependency-record overflow uses the existing
+  internal `ResourceLimit` target. Valid bounded rows remain inventoried when
+  only a separate subclaim is unresolved. The parser retains neither source
+  URLs nor installation/runtime claims and never executes PHP, Composer,
+  plugins, scripts, autoloaders, repository code, or dependency code.
 - Rust self-dogfood maps unresolved external modules and complex repo-local
   `use crate::...` / `use super::...` / `use self::...` paths to
   `UnresolvedImport`, `#[cfg]` / `#[cfg_attr]`, target-specific Cargo sections,
@@ -377,7 +396,10 @@ Some unknowns block only specific claims:
   (`cpp_indirect_dispatch`), and absent or unreadable
   `compile_commands.json`/`vcpkg.json`/`conanfile.txt` project configuration
   (`cpp_project_config`) remain explicit non-blocking `UNKNOWN` subclaims or
-  non-supporting context. RepoGrammar never runs a build, compiler, preprocessor,
+  non-supporting context. Partial, conflicting, unsupported, malformed-section,
+  or resource-limited vcpkg/Conan declaration parsing additionally affects only
+  `cpp_dependency_inventory`; it does not erase valid bounded records or become
+  family evidence. RepoGrammar never runs a build, compiler, preprocessor,
   or moc/protoc, and never expands macros; generated and build-variant facts
   remain unsupported context. The accepted contract snapshot is intentionally
   narrower than all framework versions: underscore-bearing `TEST`/`TEST_F`/
@@ -387,10 +409,17 @@ Some unknowns block only specific claims:
   escaped/raw/prefixed Catch2 tag strings remain `UNKNOWN`. C/C++ support must
   not be guessed from macro names, base-type names, directory names, or fact
   text substrings.
-- Go is `discovered_only` and remains unsupported after ADR-0021 plus the
-  source-free discovery/config module. Inventory emits no Go semantic facts or
-  `UNKNOWN` reason codes; the unsupported-parser notice is a bounded path-free
-  warning per language token, not a claim fact. A future
+- Go is `discovered_only` and remains unsupported after ADR-0021. `.go` source
+  inventory emits no Go semantic facts or `UNKNOWN` reason codes; its
+  unsupported-parser notice is a bounded path-free warning, not a claim fact.
+  The bounded static `go-config` lane may emit existing reason codes
+  (`MissingProjectConfig`, `ConflictingFacts`, `InsufficientSupport`, or
+  `BuildVariantAmbiguity`) only with
+  `affected_claim=go_dependency_inventory` for malformed, conflicting,
+  resource-bounded, workspace, replace/exclude/retract/toolchain/tool, or other
+  unsupported manifest semantics. Those UNKNOWNs govern completeness of the
+  language-neutral declaration inventory and cannot support or block a Go
+  source family. A future
   Go test-function slice must route `go_file_selection`,
   `go_test_declaration_identity`, and `go_generated_origin` through the same
   authoritative family-`UNKNOWN` classifier used by other languages; those
@@ -426,9 +455,13 @@ Some unknowns block only specific claims:
   compiler, or SourceKit result may silently discharge those obligations or
   form a Swift family before the authoritative claim-impact registry lands.
 - Ruby is `discovered_only` and remains unsupported after ADR-0022. Discovery
-  persists only bounded file metadata for `ruby` and `ruby-config` tokens; it
-  emits no Ruby facts, typed `UNKNOWN`s, code units, IR, or families, and its
-  inventory-only warning is not semantic evidence. The future exact Minitest
+  persists bounded file metadata for `ruby` and `ruby-config` tokens. Ruby
+  source and every config except exact `Gemfile.lock` remain inventory-only.
+  Lock parsing may emit only source-free `ruby_dependency_inventory` UNKNOWNs
+  for malformed/conflicting entries, unsupported lock sources, and resource
+  limits; those UNKNOWNs govern dependency inventory only and are not Ruby
+  semantic or family evidence. Executable DSL and unqualified config paths are
+  not parser inputs and produce no fact. The future exact Minitest
   slice must route `ruby_parse_degraded`, `ruby_syntax_version`,
   `ruby_minitest_require_identity`, `ruby_constant_identity`,
   `ruby_minitest_test_definition`, `ruby_runtime_mutation`, and
@@ -443,6 +476,22 @@ Some unknowns block only specific claims:
   never block Ruby support. These mechanisms must become typed `UNKNOWN` after
   the registry lands; until then they are unavailable and no Ruby semantic
   capability, reason codes, facts, families, or public support exists.
+- Visual Basic is `discovered_only` and remains unsupported after ADR-0031.
+  Only VB.NET `.vb`/`.vbproj` inventory is admitted; VB6 formats are excluded.
+  The bounded `.vbproj` reader may emit source-free UNKNOWN with
+  `affected_claim=visual_basic_dependency_inventory` for malformed or
+  unsupported package entries, conflicting case-insensitive identities,
+  MSBuild SDK/import/property/condition/update/override behavior that was not
+  evaluated, and XML/dependency resource limits. Independently safe literal
+  `PackageReference` rows may remain; UNKNOWN never becomes family evidence.
+- The Delphi/Object Pascal lane is `discovered_only` and unsupported after
+  ADR-0032. Generic `object-pascal` source does not select Delphi versus Free
+  Pascal, and only exact `.dproj` is `delphi-config`. Static parsing may emit
+  source-free UNKNOWN with `affected_claim=delphi_dependency_inventory` for
+  malformed XML, imports/properties/conditions, invalid package entries,
+  resource limits, and unresolved authored-direct versus automatically added
+  package relationships. `.lpi`/`.lpk` and `.dpk` requirements are not silently
+  used as equivalent package evidence.
 - Python bounded preview analysis (Django, Flask, stdlib unittest, click/typer,
   Celery; ADR-0019 wave E1) reuses the FastAPI/SQLAlchemy exact-import gate. A
   base or decorator receiver that matches a known framework simple name but does

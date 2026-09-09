@@ -1,0 +1,6 @@
+Package: lowsupport
+Version: 0.1.0
+Title: Low support fixture
+Description: Two admitted blocks only.
+Suggests:
+    testthat

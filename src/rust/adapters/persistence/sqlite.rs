@@ -4,10 +4,11 @@
 //! adapter. Application code talks to it through storage ports.
 
 use crate::core::model::{
-    ContentHash, FactCertainty, FamilyConstraintProfile, FamilyPrevalence, FamilyPrevalenceClass,
-    FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics, IrEdgeLabel,
-    IrNodeKind, SemanticFactKind, TypedUnknown, UnknownClass, UnknownObligation, UnknownReasonCode,
-    VariationConstraint,
+    ContentHash, DependencyDirectness, DependencyEcosystem, DependencyEvidenceLevel,
+    DependencyScope, FactCertainty, FamilyConstraintProfile, FamilyPrevalence,
+    FamilyPrevalenceClass, FeatureConstraint, FeatureConstraintOrigin, FeatureConstraintSemantics,
+    IrEdgeLabel, IrNodeKind, SemanticFactKind, TypedUnknown, UnknownClass, UnknownObligation,
+    UnknownReasonCode, VariationConstraint,
 };
 use crate::core::policy::paths::{looks_like_windows_absolute_path, RepoRelativePathError};
 use crate::ports::family_store::{
@@ -20,11 +21,12 @@ use crate::ports::family_store::{
     IndexedVariationSlotRecord, StoreError, WriteSessionStats, FAMILY_SEARCH_PATH_COMPONENT_CAP,
 };
 use crate::ports::index_store::{
-    ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveIndexedFiles, ActiveIrGraph,
-    ActiveRepoShapeStats, ActiveSemanticFacts, GenerationEngineStampStore, GenerationHandle,
-    GenerationPruneReport, GenerationPruneRequest, GenerationRetentionStore, IndexCompactReport,
-    IndexCompactRequest, IndexMaintenanceStore, IndexStorageCleanStore, IndexStorageLayout,
-    IndexStorageSizeReport, IndexStore, IndexStoreError, IndexedCodeUnitRecord, IndexedFileRecord,
+    ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveDependencyRecords, ActiveIndexedFiles,
+    ActiveIrGraph, ActiveRepoShapeStats, ActiveSemanticFacts, DependencyStore,
+    GenerationEngineStampStore, GenerationHandle, GenerationPruneReport, GenerationPruneRequest,
+    GenerationRetentionStore, IndexCompactReport, IndexCompactRequest, IndexMaintenanceStore,
+    IndexStorageCleanStore, IndexStorageLayout, IndexStorageSizeReport, IndexStore,
+    IndexStoreError, IndexedCodeUnitRecord, IndexedDependencyRecord, IndexedFileRecord,
     IndexedIrEdgeRecord, IndexedIrNodeRecord, IndexedSemanticFactRecord, LegacyLayoutCleanupReport,
     PythonModuleInterfaceRecord, PythonModuleInterfaceStore, RepoShapeLanguageStats,
     ScopedIndexedFiles, StorageCleanReport, StorageCleanRequest, StorageInspection,
@@ -836,6 +838,7 @@ impl IndexStore for SqliteIndexStore {
         let units = query_code_units(&connection, &generation_id)?;
         let (ir_nodes, ir_edges) = query_ir_graph(&connection, &generation_id)?;
         let semantic_facts = query_semantic_facts(&connection, &generation_id)?;
+        let dependencies = query_dependencies(&connection, &generation_id)?;
 
         Ok(ActiveClaimInputSnapshot {
             generation_id,
@@ -844,6 +847,7 @@ impl IndexStore for SqliteIndexStore {
             ir_nodes,
             ir_edges,
             semantic_facts,
+            dependencies,
         })
     }
 
@@ -880,6 +884,7 @@ impl IndexStore for SqliteIndexStore {
                 "semantic fact evidence is inconsistent with indexed code units".to_string(),
             ));
         }
+        query_dependencies(&connection, &generation.generation_id)?;
         if derived_dependency_violation_count(&connection, &generation.generation_id)? != 0 {
             return Err(IndexStoreError::InvalidState(
                 "derived record dependencies are inconsistent with indexed files".to_string(),
@@ -1056,7 +1061,7 @@ impl IndexStore for SqliteIndexStore {
                     active_generation: None,
                     schema_version: None,
                     code_unit_count: None,
-                    dependency_record_count: None,
+                    derived_record_dependency_count: None,
                     dirty_record_count: None,
                     journal_mode: None,
                     foreign_keys_enabled: None,
@@ -1090,6 +1095,27 @@ impl IndexStore for SqliteIndexStore {
         inspection.wal_bytes = None;
         inspection.shm_bytes = None;
         Ok(inspection)
+    }
+}
+
+impl DependencyStore for SqliteIndexStore {
+    fn record_dependency(
+        &self,
+        generation: &GenerationHandle,
+        dependency: &IndexedDependencyRecord,
+    ) -> Result<(), IndexStoreError> {
+        let mut session = SqliteGenerationWriteSession::open(self, generation)?;
+        session.record_dependency(dependency)?;
+        session.seal(false)
+    }
+
+    fn list_active_dependencies(&self) -> Result<ActiveDependencyRecords, IndexStoreError> {
+        let (generation_id, connection) = self.open_active_generation_read_model()?;
+        let dependencies = query_dependencies(&connection, &generation_id)?;
+        Ok(ActiveDependencyRecords {
+            generation_id,
+            dependencies,
+        })
     }
 }
 
@@ -2083,6 +2109,104 @@ impl SqliteGenerationWriteSession {
         self.note_rows(4)
     }
 
+    fn write_dependency(
+        &mut self,
+        dependency: &IndexedDependencyRecord,
+    ) -> Result<(), IndexStoreError> {
+        validate_dependency_record(dependency)?;
+        let start_byte = i64::try_from(dependency.start_byte)
+            .map_err(|_| invalid_record("dependency range exceeds SQLite integer range"))?;
+        let end_byte = i64::try_from(dependency.end_byte)
+            .map_err(|_| invalid_record("dependency range exceeds SQLite integer range"))?;
+        let Some((unit_path, unit_hash, unit_start_byte, unit_end_byte, file_hash)) = self
+            .connection
+            .query_row(
+                "SELECT code_units.path, code_units.content_hash, code_units.start_byte, \
+                        code_units.end_byte, indexed_files.content_hash \
+                 FROM code_units \
+                 JOIN indexed_files \
+                   ON indexed_files.generation_id = code_units.generation_id \
+                  AND indexed_files.path = code_units.path \
+                 WHERE code_units.generation_id = ?1 \
+                   AND code_units.code_unit_id = ?2",
+                params![self.generation.generation_id, dependency.code_unit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_unavailable)?
+        else {
+            return Err(invalid_record(
+                "dependency must reference an indexed code unit in the same generation",
+            ));
+        };
+        if unit_path != dependency.path {
+            return Err(invalid_record(
+                "dependency evidence path must match code unit path",
+            ));
+        }
+        if unit_hash != dependency.content_hash.as_str()
+            || file_hash != dependency.content_hash.as_str()
+        {
+            return Err(invalid_record(
+                "dependency content hash must match indexed file and code unit",
+            ));
+        }
+        if start_byte < unit_start_byte || end_byte > unit_end_byte {
+            return Err(invalid_record(
+                "dependency range must stay within code unit range",
+            ));
+        }
+        self.ensure_batch()?;
+        self.connection
+            .execute(
+                "INSERT INTO dependency_records \
+                 (generation_id, dependency_id, ecosystem, package_name, requirement, \
+                  resolved_version, scope, optional, directness, evidence_level, \
+                  platform_target, alias, code_unit_id, \
+                  path, content_hash, start_byte, end_byte, note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+                  ?17, ?18)",
+                params![
+                    self.generation.generation_id,
+                    dependency.dependency_id,
+                    dependency.ecosystem,
+                    dependency.package_name,
+                    dependency.requirement.as_deref(),
+                    dependency.resolved_version.as_deref(),
+                    dependency.scope,
+                    dependency.optional,
+                    dependency.directness,
+                    dependency.evidence_level,
+                    dependency.platform_target.as_deref(),
+                    dependency.alias.as_deref(),
+                    dependency.code_unit_id,
+                    dependency.path,
+                    dependency.content_hash.as_str(),
+                    start_byte,
+                    end_byte,
+                    dependency.note,
+                ],
+            )
+            .map_err(sql_unavailable)?;
+        record_derived_dependency(
+            &self.connection,
+            self.generation_id(),
+            "external_dependency",
+            &dependency.dependency_id,
+            &dependency.path,
+            dependency.content_hash.as_str(),
+        )?;
+        self.note_rows(2)
+    }
+
     fn write_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), IndexStoreError> {
         validate_index_text_field(&family.family_id, "family id")?;
         validate_family_classification(&family.classification)?;
@@ -2416,6 +2540,14 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
     ) -> Result<(), IndexStoreError> {
         self.ensure_not_sealed()?;
         self.write_semantic_fact(fact)
+    }
+
+    fn record_dependency(
+        &mut self,
+        dependency: &IndexedDependencyRecord,
+    ) -> Result<(), IndexStoreError> {
+        self.ensure_not_sealed()?;
+        self.write_dependency(dependency)
     }
 
     fn record_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), StoreError> {
@@ -3128,6 +3260,17 @@ const REPO_SHAPE_LANGUAGE_SCOPES: &[&str] = &[
     "java",
     "csharp",
     "c/cpp",
+    "sql",
+    "r",
+    "visual-basic",
+    "object-pascal",
+    "ada",
+    "matlab",
+    "php",
+    "swift",
+    "ruby",
+    "go",
+    "fortran",
 ];
 
 fn query_repo_shape_language_stats(
@@ -3209,6 +3352,7 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
         "python" => {
             "code_units.language = 'python' AND code_units.kind IN (\
              'fastapi_route', 'pytest_test', 'pytest_fixture', 'pydantic_model', \
+             'marshmallow_schema', \
              'pydantic_settings', 'sqlalchemy_model', 'sqlalchemy_repository_method', \
              'django_model', 'django_url_pattern', 'django_test', 'flask_route', \
              'unittest_test_method', 'click_command', 'typer_command', 'celery_task')"
@@ -3229,25 +3373,44 @@ fn repo_shape_unit_where(language: &str) -> &'static str {
              'rust_enum', 'rust_trait', 'rust_impl_block', 'rust_function', 'rust_method', \
              'rust_trait_method', 'rust_associated_function', 'rust_test_function', \
              'serde_model', 'thiserror_error_enum', 'tokio_entry', 'tokio_test', \
-             'clap_parser', 'axum_route')"
+             'clap_parser', 'axum_route', 'tracing_instrument')"
         }
         "java" => {
             "code_units.language = 'java' AND code_units.kind IN (\
              'spring_mvc_route', 'spring_component', 'spring_boot_application', \
              'spring_data_repository', 'junit5_test_method', 'junit4_test_method', \
              'testng_test_method', 'jpa_entity', 'jpa_mapped_superclass', 'jpa_embeddable', \
-             'jaxrs_resource_class', 'jaxrs_resource_method')"
+             'jaxrs_resource_class', 'jaxrs_resource_method', 'servlet_http_servlet')"
         }
         "csharp" => {
             "code_units.language = 'csharp' AND code_units.kind IN (\
              'aspnet_controller', 'aspnet_controller_action', 'aspnet_minimal_api_route', \
-             'efcore_db_context', 'efcore_entity_set', 'xunit_test_method', \
+             'efcore_db_context', 'efcore_entity_set', 'fluentvalidation_validator', 'xunit_test_method', \
              'nunit_test_method', 'mstest_test_method')"
         }
         "c/cpp" => {
             "code_units.language IN ('c', 'cpp') AND code_units.kind IN (\
              'gtest_test_case', 'gtest_test_fixture', 'catch2_test_case', \
-             'doctest_test_case', 'boost_test_case', 'boost_test_suite')"
+             'doctest_test_case', 'boost_test_case', 'boost_test_suite', 'cppunit_suite_registration')"
+        }
+        "sql" => "code_units.language = 'sql' AND code_units.kind = 'sql_table_definition'",
+        "r" => "code_units.language = 'r' AND code_units.kind = 'r_test_that_block'",
+        "visual-basic" => {
+            "code_units.language = 'visual-basic' AND code_units.kind = 'vb_test_method'"
+        }
+        "object-pascal" => {
+            "code_units.language = 'object-pascal' AND code_units.kind = 'delphi_test_procedure'"
+        }
+        "ada" => "code_units.language = 'ada' AND code_units.kind = 'ada_test_registration'",
+        "matlab" => "code_units.language = 'matlab' AND code_units.kind = 'matlab_test_method'",
+        "php" => "code_units.language = 'php' AND code_units.kind = 'php_test_method'",
+        "swift" => "code_units.language = 'swift' AND code_units.kind = 'swift_test_method'",
+        "ruby" => {
+            "code_units.language = 'ruby' AND code_units.kind = 'ruby_minitest_test_method'"
+        }
+        "go" => "code_units.language = 'go' AND code_units.kind = 'go_test_function'",
+        "fortran" => {
+            "code_units.language = 'fortran' AND code_units.kind = 'fortran_test_drive_subroutine'"
         }
         _ => "0",
     }
@@ -3264,6 +3427,17 @@ fn repo_shape_indexed_file_where(language: &str) -> &'static str {
         "java" => "indexed_files.language = 'java'",
         "csharp" => "indexed_files.language = 'csharp'",
         "c/cpp" => "indexed_files.language IN ('c', 'cpp', 'cpp-config')",
+        "sql" => "indexed_files.language IN ('sql', 'sql-migration', 'sql-schema', 'sql-catalog')",
+        "r" => "indexed_files.language IN ('r', 'r-config')",
+        "visual-basic" => "indexed_files.language IN ('visual-basic', 'visual-basic-config')",
+        "object-pascal" => "indexed_files.language IN ('object-pascal', 'delphi-config')",
+        "ada" => "indexed_files.language IN ('ada', 'ada-config')",
+        "matlab" => "indexed_files.language IN ('matlab', 'matlab-config')",
+        "php" => "indexed_files.language IN ('php', 'php-config')",
+        "swift" => "indexed_files.language IN ('swift', 'swift-config')",
+        "ruby" => "indexed_files.language IN ('ruby', 'ruby-config')",
+        "go" => "indexed_files.language IN ('go', 'go-config')",
+        "fortran" => "indexed_files.language IN ('fortran', 'fortran-config')",
         _ => "0",
     }
 }
@@ -3279,6 +3453,17 @@ fn repo_shape_indexed_code_unit_where(language: &str) -> &'static str {
         "java" => "code_units.language = 'java'",
         "csharp" => "code_units.language = 'csharp'",
         "c/cpp" => "code_units.language IN ('c', 'cpp')",
+        "sql" => "code_units.language = 'sql'",
+        "r" => "code_units.language = 'r'",
+        "visual-basic" => "code_units.language = 'visual-basic'",
+        "object-pascal" => "code_units.language = 'object-pascal'",
+        "ada" => "code_units.language = 'ada'",
+        "matlab" => "code_units.language = 'matlab'",
+        "php" => "code_units.language = 'php'",
+        "swift" => "code_units.language = 'swift'",
+        "ruby" => "code_units.language = 'ruby'",
+        "go" => "code_units.language = 'go'",
+        "fortran" => "code_units.language = 'fortran'",
         _ => "0",
     }
 }
@@ -3300,6 +3485,17 @@ fn repo_shape_family_where(language: &str) -> &'static str {
         "c/cpp" => {
             "(families.family_id GLOB 'family:c:*' OR families.family_id GLOB 'family:cpp:*')"
         }
+        "sql" => "families.family_id GLOB 'family:sql:*'",
+        "r" => "families.family_id GLOB 'family:r:*'",
+        "visual-basic" => "families.family_id GLOB 'family:visual_basic:*'",
+        "object-pascal" => "families.family_id GLOB 'family:object_pascal:*'",
+        "ada" => "families.family_id GLOB 'family:ada:*'",
+        "matlab" => "families.family_id GLOB 'family:matlab:*'",
+        "php" => "families.family_id GLOB 'family:php:*'",
+        "swift" => "families.family_id GLOB 'family:swift:*'",
+        "ruby" => "families.family_id GLOB 'family:ruby:*'",
+        "go" => "families.family_id GLOB 'family:go:*'",
+        "fortran" => "families.family_id GLOB 'family:fortran:*'",
         _ => "0",
     }
 }
@@ -4438,6 +4634,150 @@ fn query_semantic_facts(
     Ok(facts)
 }
 
+fn query_dependencies(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Vec<IndexedDependencyRecord>, IndexStoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT dependency_records.dependency_id, dependency_records.ecosystem, \
+                    dependency_records.package_name, dependency_records.requirement, \
+                    dependency_records.resolved_version, dependency_records.scope, \
+                    dependency_records.optional, dependency_records.directness, \
+                    dependency_records.evidence_level, dependency_records.code_unit_id, \
+                    dependency_records.path, dependency_records.content_hash, \
+                    dependency_records.start_byte, dependency_records.end_byte, \
+                    dependency_records.note, code_units.path, code_units.content_hash, \
+                    code_units.start_byte, code_units.end_byte, indexed_files.content_hash, \
+                    indexed_files.size_bytes, dependency_records.platform_target, \
+                    dependency_records.alias \
+             FROM dependency_records \
+             JOIN code_units \
+               ON code_units.generation_id = dependency_records.generation_id \
+              AND code_units.code_unit_id = dependency_records.code_unit_id \
+             JOIN indexed_files \
+               ON indexed_files.generation_id = dependency_records.generation_id \
+              AND indexed_files.path = dependency_records.path \
+             WHERE dependency_records.generation_id = ?1 \
+             ORDER BY dependency_records.ecosystem COLLATE BINARY, \
+                      dependency_records.package_name COLLATE BINARY, \
+                      dependency_records.scope COLLATE BINARY, \
+                      dependency_records.path COLLATE BINARY, \
+                      dependency_records.start_byte, dependency_records.dependency_id COLLATE BINARY",
+        )
+        .map_err(sql_unavailable)?;
+    let rows = statement
+        .query_map(params![generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, bool>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, i64>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, String>(14)?,
+                row.get::<_, String>(15)?,
+                row.get::<_, String>(16)?,
+                row.get::<_, i64>(17)?,
+                row.get::<_, i64>(18)?,
+                row.get::<_, String>(19)?,
+                row.get::<_, i64>(20)?,
+                row.get::<_, Option<String>>(21)?,
+                row.get::<_, Option<String>>(22)?,
+            ))
+        })
+        .map_err(sql_unavailable)?;
+    let mut dependencies = Vec::new();
+    for row in rows {
+        let (
+            dependency_id,
+            ecosystem,
+            package_name,
+            requirement,
+            resolved_version,
+            scope,
+            optional,
+            directness,
+            evidence_level,
+            code_unit_id,
+            path,
+            content_hash,
+            start_byte,
+            end_byte,
+            note,
+            unit_path,
+            unit_hash,
+            unit_start_byte,
+            unit_end_byte,
+            file_hash,
+            file_size,
+            platform_target,
+            alias,
+        ) = row.map_err(sql_unavailable)?;
+        let start_byte = usize::try_from(start_byte)
+            .map_err(|_| invalid_state("stored dependency start byte is invalid"))?;
+        let end_byte = usize::try_from(end_byte)
+            .map_err(|_| invalid_state("stored dependency end byte is invalid"))?;
+        let unit_start_byte = usize::try_from(unit_start_byte)
+            .map_err(|_| invalid_state("stored code unit start byte is invalid"))?;
+        let unit_end_byte = usize::try_from(unit_end_byte)
+            .map_err(|_| invalid_state("stored code unit end byte is invalid"))?;
+        let file_size = usize::try_from(file_size)
+            .map_err(|_| invalid_state("stored indexed file size is invalid"))?;
+        if path != unit_path {
+            return Err(invalid_state(
+                "stored dependency evidence path does not match code unit",
+            ));
+        }
+        validate_stored_repo_relative_path(&path, "stored dependency path")?;
+        validate_stored_code_unit_id(&code_unit_id, &path)?;
+        if content_hash != unit_hash || content_hash != file_hash {
+            return Err(invalid_state(
+                "stored dependency content hash does not match indexed evidence",
+            ));
+        }
+        if start_byte > end_byte
+            || start_byte < unit_start_byte
+            || end_byte > unit_end_byte
+            || end_byte > file_size
+        {
+            return Err(invalid_state("stored dependency range is invalid"));
+        }
+        let dependency = IndexedDependencyRecord {
+            dependency_id,
+            ecosystem,
+            package_name,
+            requirement,
+            resolved_version,
+            scope,
+            optional,
+            directness,
+            evidence_level,
+            platform_target,
+            alias,
+            code_unit_id,
+            path,
+            content_hash: ContentHash::new(content_hash)
+                .map_err(|_| invalid_state("stored dependency content hash is invalid"))?,
+            start_byte,
+            end_byte,
+            note,
+        };
+        validate_dependency_record(&dependency)
+            .map_err(|_| invalid_state("stored dependency record is invalid"))?;
+        dependencies.push(dependency);
+    }
+    Ok(dependencies)
+}
+
 fn query_ir_graph(
     connection: &Connection,
     generation_id: &str,
@@ -4640,7 +4980,7 @@ fn apply_migrations(connection: &Connection) -> Result<(), IndexStoreError> {
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) \
-             VALUES (?1, 'python_module_interfaces_v10', datetime('now'))",
+             VALUES (?1, 'dependency_declaration_selectors_v14', datetime('now'))",
             params![STORAGE_SCHEMA_VERSION],
         )
         .map_err(sql_unavailable)?;
@@ -4810,7 +5150,7 @@ fn inspect_connection(
     let integrity_check = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(sql_unavailable)?;
-    let (code_unit_count, dependency_record_count, dirty_record_count) =
+    let (code_unit_count, derived_record_dependency_count, dirty_record_count) =
         if let Some(active_generation) = active_generation {
             (
                 Some(active_generation_table_count(
@@ -4823,7 +5163,7 @@ fn inspect_connection(
                     connection,
                     "derived_record_dependencies",
                     active_generation,
-                    "dependency record",
+                    "derived record dependency",
                 )?),
                 Some(active_generation_table_count(
                     connection,
@@ -4845,7 +5185,7 @@ fn inspect_connection(
         active_generation: active_generation.map(str::to_string),
         schema_version,
         code_unit_count,
-        dependency_record_count,
+        derived_record_dependency_count,
         dirty_record_count,
         journal_mode: Some(journal_mode),
         foreign_keys_enabled: Some(foreign_keys == 1),
@@ -5603,6 +5943,55 @@ fn validate_index_text_field(value: &str, label: &'static str) -> Result<(), Ind
     }
 }
 
+fn validate_dependency_record(dependency: &IndexedDependencyRecord) -> Result<(), IndexStoreError> {
+    for (value, label) in [
+        (&dependency.dependency_id, "dependency id"),
+        (&dependency.package_name, "dependency package name"),
+        (&dependency.code_unit_id, "dependency code unit id"),
+        (&dependency.note, "dependency note"),
+    ] {
+        validate_index_text_field(value, label)?;
+    }
+    DependencyEcosystem::parse_str(&dependency.ecosystem)
+        .map_err(|_| invalid_record("dependency ecosystem is invalid"))?;
+    DependencyScope::parse_str(&dependency.scope)
+        .map_err(|_| invalid_record("dependency scope is invalid"))?;
+    DependencyDirectness::parse_str(&dependency.directness)
+        .map_err(|_| invalid_record("dependency directness is invalid"))?;
+    let evidence_level = DependencyEvidenceLevel::parse_str(&dependency.evidence_level)
+        .map_err(|_| invalid_record("dependency evidence level is invalid"))?;
+    for (value, label) in [
+        (dependency.requirement.as_deref(), "dependency requirement"),
+        (
+            dependency.resolved_version.as_deref(),
+            "dependency resolved version",
+        ),
+        (
+            dependency.platform_target.as_deref(),
+            "dependency platform target",
+        ),
+        (dependency.alias.as_deref(), "dependency alias"),
+    ] {
+        if let Some(value) = value {
+            validate_index_text_field(value, label)?;
+        }
+    }
+    if evidence_level == DependencyEvidenceLevel::LockfileResolved
+        && dependency.resolved_version.is_none()
+    {
+        return Err(invalid_record(
+            "lockfile-resolved dependency must include a resolved version",
+        ));
+    }
+    validate_repo_relative_path(&dependency.path)?;
+    if dependency.start_byte > dependency.end_byte {
+        return Err(invalid_record(
+            "dependency source range start must not exceed end",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_stored_ir_node_id(id: &str, code_unit_id: &str) -> Result<(), IndexStoreError> {
     validate_stored_non_empty_text(id, "stored IR node id")?;
     if id.contains('\\') || id.contains("://") || looks_like_windows_absolute_path(id) {
@@ -5775,6 +6164,10 @@ fn unavailable(message: &'static str) -> IndexStoreError {
     IndexStoreError::Unavailable(message.to_string())
 }
 
+fn invalid_state(message: &'static str) -> IndexStoreError {
+    IndexStoreError::InvalidState(message.to_string())
+}
+
 fn invalid_record(message: &'static str) -> IndexStoreError {
     IndexStoreError::InvalidRecord(message.to_string())
 }
@@ -5892,6 +6285,30 @@ const REQUIRED_SCHEMA: &[RequiredTableSchema] = &[
         ],
         primary_key_columns: &["generation_id", "fact_id"],
         minimum_foreign_key_rows: 2,
+        required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
+    },
+    RequiredTableSchema {
+        name: "dependency_records",
+        columns: &[
+            "generation_id",
+            "dependency_id",
+            "ecosystem",
+            "package_name",
+            "requirement",
+            "resolved_version",
+            "scope",
+            "optional",
+            "directness",
+            "evidence_level",
+            "code_unit_id",
+            "path",
+            "content_hash",
+            "start_byte",
+            "end_byte",
+            "note",
+        ],
+        primary_key_columns: &["generation_id", "dependency_id"],
+        minimum_foreign_key_rows: 5,
         required_sql_fragments: &["PRIMARY KEY", "FOREIGN KEY", "CHECK"],
     },
     RequiredTableSchema {
@@ -6068,6 +6485,35 @@ CREATE TABLE IF NOT EXISTS semantic_facts (
     FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
     FOREIGN KEY (generation_id, evidence_id) REFERENCES evidence(generation_id, evidence_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS dependency_records (
+    generation_id TEXT NOT NULL,
+    dependency_id TEXT NOT NULL CHECK (dependency_id <> ''),
+    ecosystem TEXT NOT NULL CHECK (ecosystem IN ('pypi', 'npm', 'maven', 'nuget', 'cargo', 'go_modules', 'composer', 'rubygems', 'swift_package_manager', 'cran', 'bioconductor', 'delphi_package', 'alire', 'fpm', 'matlab_add_on', 'sql_extension', 'scratch_extension', 'vcpkg', 'conan', 'native_system')),
+    package_name TEXT NOT NULL CHECK (package_name <> ''),
+    requirement TEXT,
+    resolved_version TEXT,
+    scope TEXT NOT NULL CHECK (scope IN ('runtime', 'development', 'test', 'build', 'unknown')),
+    optional INTEGER NOT NULL CHECK (optional IN (0, 1)),
+    directness TEXT NOT NULL CHECK (directness IN ('direct', 'transitive', 'unknown')),
+    evidence_level TEXT NOT NULL CHECK (evidence_level IN ('manifest_declared', 'lockfile_resolved', 'provider_resolved')),
+    platform_target TEXT CHECK (platform_target IS NULL OR platform_target <> ''),
+    alias TEXT CHECK (alias IS NULL OR alias <> ''),
+    code_unit_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    start_byte INTEGER NOT NULL CHECK (start_byte >= 0),
+    end_byte INTEGER NOT NULL CHECK (end_byte >= start_byte),
+    note TEXT NOT NULL CHECK (note <> ''),
+    CHECK (evidence_level <> 'lockfile_resolved' OR resolved_version IS NOT NULL),
+    PRIMARY KEY (generation_id, dependency_id),
+    FOREIGN KEY (generation_id) REFERENCES index_generations(generation_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, code_unit_id) REFERENCES code_units(generation_id, code_unit_id) ON DELETE CASCADE,
+    FOREIGN KEY (generation_id, path) REFERENCES indexed_files(generation_id, path) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_dependency_records_generation_package
+ON dependency_records(generation_id, ecosystem, package_name, scope, path, start_byte, dependency_id);
 
 CREATE TABLE IF NOT EXISTS families (
     generation_id TEXT NOT NULL,
@@ -6249,6 +6695,28 @@ mod tests {
             start_byte: 0,
             end_byte: 10,
             note: "compiler resolved import target".to_string(),
+        }
+    }
+
+    fn dependency(path: &str) -> IndexedDependencyRecord {
+        IndexedDependencyRecord {
+            dependency_id: format!("dependency:{path}:serde"),
+            ecosystem: "cargo".to_string(),
+            package_name: "serde".to_string(),
+            requirement: Some("^1".to_string()),
+            resolved_version: None,
+            scope: "runtime".to_string(),
+            optional: false,
+            directness: "direct".to_string(),
+            evidence_level: "manifest_declared".to_string(),
+            platform_target: None,
+            alias: None,
+            code_unit_id: code_unit(path).id,
+            path: path.to_string(),
+            content_hash: file(path).content_hash,
+            start_byte: 0,
+            end_byte: 10,
+            note: "bounded Cargo dependency declaration".to_string(),
         }
     }
 
@@ -6530,6 +6998,32 @@ mod tests {
         assert_eq!(tsjs.indexed_code_unit_count, 1);
         assert_eq!(tsjs.eligible_code_units, 0);
         assert_eq!(tsjs.family_count, 0);
+    }
+
+    #[test]
+    fn every_repo_shape_scope_has_all_four_predicates() {
+        // Each `_ => "0"` arm is a valid SQL predicate that matches nothing, so
+        // a language listed in the scopes but missing from a `where` function
+        // reports zero instead of failing. That is how SQL's units and families
+        // were excluded from repo-shape stats for a whole session after its
+        // family landed: the family commit never touched this file, and nothing
+        // failed. This invariant is cheaper than remembering.
+        for scope in REPO_SHAPE_LANGUAGE_SCOPES {
+            for (name, predicate) in [
+                ("unit", repo_shape_unit_where(scope)),
+                ("indexed_file", repo_shape_indexed_file_where(scope)),
+                (
+                    "indexed_code_unit",
+                    repo_shape_indexed_code_unit_where(scope),
+                ),
+                ("family", repo_shape_family_where(scope)),
+            ] {
+                assert_ne!(
+                    predicate, "0",
+                    "repo-shape scope {scope} has no {name} predicate, so it silently counts zero"
+                );
+            }
+        }
     }
 
     #[test]
@@ -7291,8 +7785,20 @@ mod tests {
             ]
         );
         let inspection = store.inspect().expect("inspect storage");
-        assert_eq!(inspection.dependency_record_count, Some(6));
+        assert_eq!(inspection.derived_record_dependency_count, Some(6));
         assert_eq!(inspection.dirty_record_count, Some(0));
+
+        // The reported count is the incremental-invalidation graph, not the
+        // ADR-0030 third-party inventory. This generation has six of the former
+        // and zero of the latter, so a surface that published this number as
+        // `dependency_records` would be reporting a different subsystem.
+        let third_party_dependency_rows: i64 = Connection::open(store.mutable_database_path())
+            .expect("open mutable database")
+            .query_row("SELECT count(*) FROM dependency_records", [], |row| {
+                row.get(0)
+            })
+            .expect("count third-party dependency rows");
+        assert_eq!(third_party_dependency_rows, 0);
     }
 
     #[test]
@@ -8114,7 +8620,7 @@ mod tests {
 
         assert_eq!(inspection.active_generation, Some("gen-000001".to_string()));
         assert_eq!(inspection.schema_version, Some(STORAGE_SCHEMA_VERSION));
-        assert_eq!(inspection.dependency_record_count, Some(0));
+        assert_eq!(inspection.derived_record_dependency_count, Some(0));
         assert_eq!(inspection.dirty_record_count, Some(0));
         assert_eq!(inspection.journal_mode.as_deref(), Some("wal"));
         assert_eq!(inspection.foreign_keys_enabled, Some(true));
@@ -8494,6 +9000,260 @@ mod tests {
     }
 
     #[test]
+    fn dependency_records_round_trip_from_active_generation_without_leaks() {
+        let workspace = TempWorkspace::new("sqlite-list-dependencies");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+        let direct = dependency("Cargo.toml");
+        let mut transitive = direct.clone();
+        transitive.dependency_id = "dependency:Cargo.toml:tracing".to_string();
+        transitive.package_name = "tracing".to_string();
+        transitive.requirement = None;
+        transitive.resolved_version = Some("0.1.41".to_string());
+        transitive.directness = "transitive".to_string();
+        transitive.evidence_level = "lockfile_resolved".to_string();
+        transitive.note = "bounded lockfile transitive dependency".to_string();
+        DependencyStore::record_dependency(&store, &generation, &direct)
+            .expect("record dependency");
+        DependencyStore::record_dependency(&store, &generation, &transitive)
+            .expect("record transitive dependency");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store
+            .list_active_dependencies()
+            .expect("list active dependencies");
+
+        assert_eq!(report.generation_id, "gen-000001");
+        assert_eq!(report.dependencies, vec![direct, transitive]);
+        assert_eq!(
+            report
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.directness.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct", "transitive"]
+        );
+        let dependency = &report.dependencies[0];
+        let workspace_path = workspace.path().to_string_lossy();
+        for value in [
+            &dependency.dependency_id,
+            &dependency.ecosystem,
+            &dependency.package_name,
+            &dependency.scope,
+            &dependency.directness,
+            &dependency.evidence_level,
+            &dependency.code_unit_id,
+            &dependency.path,
+            &dependency.note,
+        ] {
+            assert!(!value.contains(workspace_path.as_ref()));
+            assert!(!value.contains("UNIQUE_SOURCE_SENTINEL"));
+        }
+    }
+
+    #[test]
+    fn platform_scoped_declarations_of_one_package_persist_side_by_side() {
+        // Cargo emits one entry per declaration, so a crate declared under two
+        // `cfg(...)` tables reaches storage as two rows that share every other
+        // field and one manifest evidence range. Both must persist and read back
+        // with their predicate intact.
+        let workspace = TempWorkspace::new("sqlite-platform-scoped-dependencies");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+
+        let mut unix = dependency("Cargo.toml");
+        unix.dependency_id = "dependency:Cargo.toml:libc:unix".to_string();
+        unix.package_name = "libc".to_string();
+        unix.platform_target = Some("cfg(unix)".to_string());
+        let mut windows = unix.clone();
+        windows.dependency_id = "dependency:Cargo.toml:libc:windows".to_string();
+        windows.platform_target = Some("cfg(windows)".to_string());
+        let mut aliased = dependency("Cargo.toml");
+        aliased.dependency_id = "dependency:Cargo.toml:serde:codec".to_string();
+        aliased.alias = Some("codec".to_string());
+
+        DependencyStore::record_dependency(&store, &generation, &unix)
+            .expect("record cfg(unix) declaration");
+        DependencyStore::record_dependency(&store, &generation, &windows)
+            .expect("record cfg(windows) declaration");
+        DependencyStore::record_dependency(&store, &generation, &aliased)
+            .expect("record aliased declaration");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        let report = store
+            .list_active_dependencies()
+            .expect("list active dependencies");
+        let mut predicates = report
+            .dependencies
+            .iter()
+            .filter(|record| record.package_name == "libc")
+            .map(|record| record.platform_target.clone())
+            .collect::<Vec<_>>();
+        predicates.sort();
+        assert_eq!(
+            predicates,
+            vec![
+                Some("cfg(unix)".to_string()),
+                Some("cfg(windows)".to_string())
+            ]
+        );
+        assert_eq!(
+            report
+                .dependencies
+                .iter()
+                .find(|record| record.package_name == "serde")
+                .and_then(|record| record.alias.clone()),
+            Some("codec".to_string())
+        );
+    }
+
+    #[test]
+    fn composer_lock_dependency_round_trips_with_static_evidence_level() {
+        let workspace = TempWorkspace::new("sqlite-composer-dependency");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("composer.lock"))
+            .expect("record Composer lock");
+        store
+            .record_code_unit(&generation, &code_unit("composer.lock"))
+            .expect("record Composer project-config unit");
+        let mut composer = dependency("composer.lock");
+        composer.dependency_id = "dependency:composer.lock:symfony-console".to_string();
+        composer.ecosystem = "composer".to_string();
+        composer.package_name = "symfony/console".to_string();
+        composer.requirement = None;
+        composer.resolved_version = Some("v7.2.1".to_string());
+        composer.directness = "unknown".to_string();
+        composer.evidence_level = "lockfile_resolved".to_string();
+        composer.note =
+            "bounded static Composer lock entry; directness and runtime selection remain unknown"
+                .to_string();
+        DependencyStore::record_dependency(&store, &generation, &composer)
+            .expect("record Composer dependency");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+
+        assert_eq!(
+            store
+                .list_active_dependencies()
+                .expect("list Composer dependency")
+                .dependencies,
+            vec![composer]
+        );
+    }
+
+    #[test]
+    fn active_dependency_reads_reject_tampered_evidence_levels() {
+        let workspace = TempWorkspace::new("sqlite-invalid-dependency-read");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+        DependencyStore::record_dependency(&store, &generation, &dependency("Cargo.toml"))
+            .expect("record dependency");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON; \
+                 UPDATE dependency_records SET evidence_level = 'guessed';",
+            )
+            .expect("tamper dependency");
+
+        assert!(matches!(
+            store.list_active_dependencies(),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn active_dependency_reads_reject_tampered_directness() {
+        let workspace = TempWorkspace::new("sqlite-invalid-dependency-directness");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+        DependencyStore::record_dependency(&store, &generation, &dependency("Cargo.toml"))
+            .expect("record dependency");
+        store
+            .activate_generation(&generation)
+            .expect("activate generation");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON; \
+                 UPDATE dependency_records SET directness = 'guessed';",
+            )
+            .expect("tamper dependency directness");
+
+        assert!(matches!(
+            store.list_active_dependencies(),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn generation_activation_rejects_tampered_dependency_evidence() {
+        let workspace = TempWorkspace::new("sqlite-invalid-dependency-activation");
+        let store = store(&workspace);
+        let generation = store.prepare_next_generation().expect("prepare generation");
+        store
+            .record_indexed_file(&generation, &file("Cargo.toml"))
+            .expect("record file");
+        store
+            .record_code_unit(&generation, &code_unit("Cargo.toml"))
+            .expect("record code unit");
+        DependencyStore::record_dependency(&store, &generation, &dependency("Cargo.toml"))
+            .expect("record dependency");
+        let connection = store
+            .open_existing_generation(&generation.generation_id)
+            .expect("open generation");
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON; \
+                 UPDATE dependency_records SET scope = 'guessed';",
+            )
+            .expect("tamper dependency");
+
+        assert!(matches!(
+            store.activate_generation(&generation),
+            Err(IndexStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
     fn load_active_claim_input_snapshot_returns_same_generation_records_without_leaks() {
         let workspace = TempWorkspace::new("sqlite-active-claim-input-snapshot");
         let store = store(&workspace);
@@ -8541,6 +9301,10 @@ mod tests {
         store
             .record_semantic_fact(&generation, &fact)
             .expect("record semantic fact");
+        let mut dependency = dependency("src/a.ts");
+        dependency.code_unit_id = module.id.clone();
+        DependencyStore::record_dependency(&store, &generation, &dependency)
+            .expect("record dependency");
         store
             .activate_generation(&generation)
             .expect("activate generation");
@@ -8582,6 +9346,7 @@ mod tests {
             vec![ir_edge(&module_node, &function_node)]
         );
         assert_eq!(snapshot.semantic_facts, vec![fact]);
+        assert_eq!(snapshot.dependencies, vec![dependency]);
 
         let debug = format!("{snapshot:?}");
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
@@ -8619,6 +9384,7 @@ mod tests {
         assert!(snapshot.ir_nodes.is_empty());
         assert!(snapshot.ir_edges.is_empty());
         assert!(snapshot.semantic_facts.is_empty());
+        assert!(snapshot.dependencies.is_empty());
     }
 
     #[test]
@@ -9709,7 +10475,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_creates_python_module_interfaces_table_at_current_version() {
+    fn schema_creates_current_additive_semantic_tables() {
         let workspace = TempWorkspace::new("sqlite-python-interface-schema");
         let store = store(&workspace);
         store
@@ -9731,6 +10497,15 @@ mod tests {
             )
             .expect("query sqlite_master");
         assert_eq!(table_present, 1);
+        let dependency_table_present: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'dependency_records'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query dependency table");
+        assert_eq!(dependency_table_present, 1);
     }
 
     #[test]

@@ -1,33 +1,13 @@
 use super::unknown::RustUnknownSpec;
 use super::{anchors, lines_with_offsets, toml_key_value, toml_string, unknown};
 use crate::adapters::parsing::{ir_edges_for_units, ir_nodes_for_units};
-use crate::core::model::{
-    CodeUnit, CodeUnitId, CodeUnitKind, Language, Provenance, SemanticFact, SourceRange, SymbolId,
-};
+use crate::core::model::{CodeUnit, Language, SemanticFact, SymbolId};
 use crate::ports::parser::{ParseError, ParseReport, SourceDocument};
 
 pub(super) fn project_config_report(
     document: SourceDocument<'_>,
 ) -> Result<ParseReport, ParseError> {
-    let range = SourceRange::new(0, document.text.len()).map_err(ParseError::Internal)?;
-    let provenance = Provenance::new(
-        document.path,
-        document.content_hash.clone(),
-        document.repository_revision.clone(),
-    )
-    .map_err(ParseError::Internal)?;
-    let unit = CodeUnit {
-        id: CodeUnitId::new(format!(
-            "unit:{}#project_config:0-{}:0",
-            document.path,
-            document.text.len()
-        ))
-        .map_err(ParseError::Internal)?,
-        language: Language::RustConfig,
-        kind: CodeUnitKind::ProjectConfig,
-        range,
-        provenance,
-    };
+    let unit = crate::adapters::parsing::project_config_unit(&document, Language::RustConfig)?;
     let mut facts = cargo_toml_facts(&document, &unit)?;
     facts.sort_by(|left, right| {
         (

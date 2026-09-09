@@ -1,142 +1,106 @@
 # Quickstart
 
-This guide keeps source, candidate, and public release state separate. A source
-manifest or Git tag does not prove that either public registry is ready.
+Install the CLI once, then run `repogrammar init` inside each repository.
+Python 3.10+, Bash, curl, tar, and gzip are required; Rust and Node.js are not.
 
-## 1. Verify exact stable availability
+## Install
 
-```bash
-npm view @sioyooo/repogrammar@0.4.3 version
-npm view @sioyooo/repogrammar dist-tags --json
-curl -fsSI https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh.sha256
-npx --yes --package @sioyooo/repogrammar@0.4.3 repogrammar version
-```
+The commands below target the `0.5.0` release candidate. Until its publication
+and public verification finish, `0.4.3` remains the verified public release;
+use the [source installation](#source-installation) for candidate testing.
 
-Use the no-build path only when the exact package and GitHub asset exist and
-the dist-tags are `latest=0.4.3` and `preview=0.2.0-preview.0`. The preview tag
-must continue to resolve the immutable historical preview.
-
-Python 3.10 or newer is required for the bundled bounded Python analyzer. The
-release path does not require Rust/Cargo, Docker, an LLM, embeddings, a vector
-database, or an API key.
-
-## 2. Download and install the binary
-
-Download the exact release installer, verify the installer asset itself, then
-let it download and checksum-verify the matching native binary and worker:
+Copy this block on macOS or glibc-based Linux. It verifies the installer before
+execution, then the installer verifies the matching native archive:
 
 ```bash
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh.sha256
-shasum -a 256 -c install.sh.sha256
-bash install.sh --version v0.4.3 --install-cli-only --yes
+(
+set -eu
+install_tmp="$(mktemp -d)"
+trap 'rm -rf "$install_tmp"' EXIT
+cd "$install_tmp"
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh.sha256
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c install.sh.sha256
+else
+  shasum -a 256 -c install.sh.sha256
+fi
+bash install.sh --version v0.5.0 --install-cli-only --yes
+) &&
 export PATH="$HOME/.local/bin:$PATH"
-repogrammar version
 ```
 
-On Linux, use `sha256sum -c install.sh.sha256` for the checksum step.
-`--install-cli-only` installs the managed binary, bundled Python worker, and
-product receipt. It does not configure coding agents and does not create
-repository `.repogrammar/` state.
+Run `repogrammar version` to check the installation. Add the `export PATH` line
+once to your shell configuration if `$HOME/.local/bin` is not already on PATH.
+Installation does not connect an agent or create a repository index.
 
-## 3. Optionally connect a coding agent
+Supported archives cover macOS arm64/x86_64, Linux x86_64 with glibc 2.35+, and
+Linux arm64 with glibc 2.39+. Windows and musl Linux are not supported.
 
-Skip this step for CLI-only use. To configure detected supported coding agents
-for the read-only MCP server:
+## Initialize a repository
+
+```bash
+cd /path/to/repository
+repogrammar init
+repogrammar status
+```
+
+Commands use the current directory by default. `init` creates `.repogrammar/`,
+builds the first index, and starts that repository's autosync daemon. You do not
+need a separate `index` command. There is no global repository scanner.
+
+For scripts or CI, use `repogrammar init --yes --no-autosync --progress never`.
+Use `--project /path/to/repository` when operating from another directory.
+
+| Command | When to use it |
+|---|---|
+| `repogrammar init` | First use in a repository; creates state and builds the index. |
+| `repogrammar sync` | Refresh ordinary edits immediately instead of waiting for autosync. |
+| `repogrammar resync` | Rebuild analysis when recovery guidance requests it or after analysis changes. |
+
+Autosync is best-effort. Follow `repogrammar status` or `repogrammar doctor`
+recovery guidance if the index is unavailable or stale.
+
+## Connect a coding agent (optional)
 
 ```bash
 repogrammar install --target auto --scope global --yes --no-telemetry
 ```
 
-This machine-level command does not initialize or index a repository. The
-combined `repogrammar setup` journey remains available, but it is not required
-by this explicit installation flow.
+This configures detected supported agents; it does not initialize repositories.
+Restart the agent session afterward. For a specific client, follow the
+[Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or
+[opencode](quickstart-opencode.md) guide. Global instruction-file synchronization
+is a separate explicit action described in those guides.
 
-## 4. Initialize each repository
-
-```bash
-cd /path/to/repo
-repogrammar init --project "$PWD" --yes
-repogrammar status --project "$PWD"
-```
-
-`init` creates repository-local state, builds the active index, and starts
-repo-local autosync by default. For CI or a deterministic one-shot index:
+## Find repository conventions
 
 ```bash
-repogrammar init --project "$PWD" --yes --no-autosync --progress never
+repogrammar find "FastAPI route" --mode compact --verbosity minimal
+repogrammar check "path/to/file.py:LINE" --mode compact --verbosity minimal
 ```
 
-RepoGrammar does not run a global repository scanner. Run `init` once for every
-repository you want indexed.
+Read the returned `read_plan`. `UNKNOWN` and `PARTIAL_CONTEXT` identify evidence
+limits or recovery steps; static alignment does not prove runtime equivalence.
 
-## 5. Ask for bounded context
+## Remove an installation or index
 
-```bash
-repogrammar find "FastAPI route" \
-  --project "$PWD" --mode compact --verbosity minimal
+| Command | Effect |
+|---|---|
+| `repogrammar uninstall --dry-run` | Preview removal of the managed machine installation. |
+| `repogrammar uninstall --yes` | Remove that installation and its owned agent integrations; preserve repository indexes. |
+| `repogrammar disconnect --target all --yes` | Remove agent integrations while keeping the CLI. |
+| `repogrammar uninit --yes` | Remove the current repository's local RepoGrammar state. |
 
-repogrammar check "path/to/file.py:LINE" \
-  --project "$PWD" --mode compact --verbosity minimal
-```
+## Source installation
 
-Consume the returned `read_plan` before broad source reads. A successful
-`check` is a static-alignment certificate; it always keeps
-`runtime_equivalence: UNKNOWN`. `UNKNOWN` and `PARTIAL_CONTEXT` are normal
-typed results with source fallback or sync recovery, not silent failures.
-
-If query-time hashes reject stale evidence, refresh explicitly:
-
-```bash
-repogrammar sync --project "$PWD"
-```
-
-Autosync is a best-effort convenience. Explicit sync is the authoritative
-refresh path.
-
-## 6. Contributor-only source install
+From a RepoGrammar source checkout:
 
 ```bash
 cargo build --release
-bash src/install/repogrammar-install.sh \
-  --install-cli-only --from-source --yes
+bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-## 7. Cleanup
-
-```bash
-repogrammar uninstall --dry-run
-repogrammar uninstall --yes
-```
-
-Bare `uninstall` removes only the first-party managed machine installation and
-its receipt-owned agent integrations. It preserves every repository's
-`.repogrammar/`, telemetry and research data, unknown global files, and
-npm/Cargo or unmanaged PATH copies. Remove one repository index separately:
-
-```bash
-repogrammar uninit --project /path/to/repo --yes
-```
-
-To disconnect coding agents while keeping the installed product:
-
-```bash
-repogrammar disconnect --target all --scope global --dry-run
-repogrammar disconnect --target all --scope global --yes
-```
-
-The `disconnect` rename and full self-uninstall contract first shipped in
-`0.4.1`; use the installed binary's help for its exact lifecycle contract.
-
-## Platform and scope boundary
-
-Stable release archives cover:
-
-- macOS arm64 and x86_64;
-- glibc Linux x86_64 with glibc 2.35 or newer; and
-- glibc Linux arm64 with glibc 2.39 or newer.
-
-Windows, musl Linux, older/unknown libc, and unsupported architectures fail
-closed before download. See [limitations](limitations.md),
-[installation specification](specifications/installation.md), and the
-[Codex quickstart](quickstart-codex.md) for exact boundaries.
+See [CLI reference](specifications/cli.md), [installation details](specifications/installation.md),
+and [limitations](limitations.md) for the full contracts.

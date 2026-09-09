@@ -121,6 +121,7 @@ const FAMILY_QUERY_REQUIRED_MECHANISM_KEYS: &[&str] = &[
     "cpp_macro_boundary",
     "cpp_test_framework_model",
     "cpp_compile_commands_model",
+    "manual_dialect_declaration",
     "sqlalchemy_session_model",
     "sqlalchemy_model_graph",
     "pydantic_validator_model",

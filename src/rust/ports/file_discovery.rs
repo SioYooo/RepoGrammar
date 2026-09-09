@@ -24,6 +24,10 @@ pub enum DiscoveredLanguage {
     PythonConfig,
     TsJsConfig,
     Java,
+    JavaConfig,
+    Matlab,
+    MatlabConfig,
+    Assembly,
     CSharp,
     C,
     Cpp,
@@ -36,6 +40,20 @@ pub enum DiscoveredLanguage {
     RubyConfig,
     Swift,
     SwiftConfig,
+    VisualBasic,
+    VisualBasicConfig,
+    ObjectPascal,
+    DelphiConfig,
+    Ada,
+    AdaConfig,
+    Fortran,
+    FortranConfig,
+    Sql,
+    SqlMigration,
+    SqlSchema,
+    SqlCatalog,
+    R,
+    RConfig,
     Rust,
     RustConfig,
 }
@@ -51,6 +69,10 @@ impl DiscoveredLanguage {
             Self::PythonConfig => "python-config",
             Self::TsJsConfig => "tsjs-config",
             Self::Java => "java",
+            Self::JavaConfig => "java-config",
+            Self::Matlab => "matlab",
+            Self::MatlabConfig => "matlab-config",
+            Self::Assembly => "assembly",
             Self::CSharp => "csharp",
             Self::C => "c",
             Self::Cpp => "cpp",
@@ -63,6 +85,20 @@ impl DiscoveredLanguage {
             Self::RubyConfig => "ruby-config",
             Self::Swift => "swift",
             Self::SwiftConfig => "swift-config",
+            Self::VisualBasic => "visual-basic",
+            Self::VisualBasicConfig => "visual-basic-config",
+            Self::ObjectPascal => "object-pascal",
+            Self::DelphiConfig => "delphi-config",
+            Self::Ada => "ada",
+            Self::AdaConfig => "ada-config",
+            Self::Fortran => "fortran",
+            Self::FortranConfig => "fortran-config",
+            Self::Sql => "sql",
+            Self::SqlMigration => "sql-migration",
+            Self::SqlSchema => "sql-schema",
+            Self::SqlCatalog => "sql-catalog",
+            Self::R => "r",
+            Self::RConfig => "r-config",
             Self::Rust => "rust",
             Self::RustConfig => "rust-config",
         }
@@ -240,10 +276,31 @@ mod tests {
     }
 
     #[test]
+    fn java_discovery_tokens_are_stable_and_distinct() {
+        assert_eq!(DiscoveredLanguage::Java.as_str(), "java");
+        assert_eq!(DiscoveredLanguage::JavaConfig.as_str(), "java-config");
+        assert_ne!(DiscoveredLanguage::Java, DiscoveredLanguage::JavaConfig);
+    }
+
+    #[test]
+    fn matlab_and_assembly_discovery_tokens_are_stable() {
+        assert_eq!(DiscoveredLanguage::Matlab.as_str(), "matlab");
+        assert_eq!(DiscoveredLanguage::MatlabConfig.as_str(), "matlab-config");
+        assert_ne!(DiscoveredLanguage::Matlab, DiscoveredLanguage::MatlabConfig);
+        assert_eq!(DiscoveredLanguage::Assembly.as_str(), "assembly");
+    }
+
+    #[test]
     fn ruby_discovery_and_exclusion_tokens_are_stable() {
         assert_eq!(DiscoveredLanguage::Ruby.as_str(), "ruby");
         assert_eq!(DiscoveredLanguage::RubyConfig.as_str(), "ruby-config");
         assert_ne!(DiscoveredLanguage::Ruby, DiscoveredLanguage::RubyConfig);
+        assert_eq!(DiscoveredLanguage::Sql.as_str(), "sql");
+        assert_eq!(DiscoveredLanguage::SqlMigration.as_str(), "sql-migration");
+        assert_eq!(DiscoveredLanguage::SqlSchema.as_str(), "sql-schema");
+        assert_eq!(DiscoveredLanguage::SqlCatalog.as_str(), "sql-catalog");
+        assert_eq!(DiscoveredLanguage::R.as_str(), "r");
+        assert_eq!(DiscoveredLanguage::RConfig.as_str(), "r-config");
         assert_eq!(
             SkippedReason::LanguageSpecificExclusion.as_str(),
             "language_specific_exclusion"
@@ -262,6 +319,19 @@ mod tests {
     }
 
     #[test]
+    fn ada_and_fortran_discovery_tokens_are_stable_and_distinct() {
+        assert_eq!(DiscoveredLanguage::Ada.as_str(), "ada");
+        assert_eq!(DiscoveredLanguage::AdaConfig.as_str(), "ada-config");
+        assert_ne!(DiscoveredLanguage::Ada, DiscoveredLanguage::AdaConfig);
+        assert_eq!(DiscoveredLanguage::Fortran.as_str(), "fortran");
+        assert_eq!(DiscoveredLanguage::FortranConfig.as_str(), "fortran-config");
+        assert_ne!(
+            DiscoveredLanguage::Fortran,
+            DiscoveredLanguage::FortranConfig
+        );
+    }
+
+    #[test]
     fn swift_discovery_and_exclusion_tokens_are_stable() {
         assert_eq!(DiscoveredLanguage::Swift.as_str(), "swift");
         assert_eq!(DiscoveredLanguage::SwiftConfig.as_str(), "swift-config");
@@ -269,6 +339,29 @@ mod tests {
         assert_eq!(
             SkippedReason::LanguageSpecificExclusion.as_str(),
             "language_specific_exclusion"
+        );
+    }
+
+    #[test]
+    fn visual_basic_discovery_and_exclusion_tokens_are_stable() {
+        assert_eq!(DiscoveredLanguage::VisualBasic.as_str(), "visual-basic");
+        assert_eq!(
+            DiscoveredLanguage::VisualBasicConfig.as_str(),
+            "visual-basic-config"
+        );
+        assert_ne!(
+            DiscoveredLanguage::VisualBasic,
+            DiscoveredLanguage::VisualBasicConfig
+        );
+    }
+
+    #[test]
+    fn object_pascal_and_delphi_config_tokens_are_stable_and_distinct() {
+        assert_eq!(DiscoveredLanguage::ObjectPascal.as_str(), "object-pascal");
+        assert_eq!(DiscoveredLanguage::DelphiConfig.as_str(), "delphi-config");
+        assert_ne!(
+            DiscoveredLanguage::ObjectPascal,
+            DiscoveredLanguage::DelphiConfig
         );
     }
 

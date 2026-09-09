@@ -2,6 +2,7 @@
 
 mod bounded_read;
 pub mod change_fingerprint;
+pub mod change_watcher;
 pub mod discovery;
 pub(crate) mod git;
 mod resource_limits;

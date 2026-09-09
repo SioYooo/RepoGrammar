@@ -1,7 +1,7 @@
 # Python v0.1 Implementation Plan
 
 - Status: Active planning artifact
-- Last updated: 2026-06-25
+- Last updated: 2026-08-01
 - Scope: Python-first v0.1 implementation coordination
 - Canonical algorithm spec: `docs/specifications/python-analysis.md`
 - Provider cascade decision: `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`
@@ -15,6 +15,15 @@ evidence, source-backed claims, and typed `UNKNOWN` for unsupported facts.
 
 The first Python slice targets FastAPI, pytest, SQLAlchemy, and Pydantic. It
 does not attempt full Python semantic analysis.
+
+The 2026-08-01 Top-20 campaign added bounded PyPI manifest inventory and the
+shared dependency/contract-registry substrate, but Python still passes only
+4/9 of the strict language-completion gates. No production reviewed contract
+pack or authoritative Python type/provider integration exists. The next
+highest-EV Python milestone is one isolated provider-backed, package-qualified,
+exact-version reviewed-contract family vertical with source-free output and
+blocking `UNKNOWN` preservation; see
+`docs/reports/language-support/python-completion-review.md`.
 
 ## Current Reality
 

@@ -1,0 +1,12 @@
+{
+  "schema": "autosync-live-proof.v1",
+  "native_events": true,
+  "ignored_writes": 100,
+  "ignored_noise_triggered_sync": false,
+  "same_size_same_mtime_update_synced": true,
+  "log": "autosync: native events enabled; periodic metadata reconciliation every 60s\nautosync: fingerprint git-ignore=applied ignored-skipped=0\nautosync: incremental sync +0 ~1 -0 unchanged 0 copied 0 reparsed 1 file(s), 2 unit(s) in 1355ms (generation gen-000002)\n",
+  "platform": "macOS arm64",
+  "battery_life_measured": false,
+  "ignored_write_observation_seconds": 3,
+  "same_metadata_deadline_seconds": 15
+}

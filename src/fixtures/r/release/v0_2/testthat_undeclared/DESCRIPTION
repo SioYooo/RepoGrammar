@@ -1,0 +1,6 @@
+Package: undeclared
+Version: 0.1.0
+Title: Undeclared fixture
+Description: A package that does not depend on testthat.
+Imports:
+    jsonlite

@@ -2,7 +2,7 @@
 
 - Evidence date: 2026-07-16
 - Candidate version: `0.2.0-preview.0`
-- Product posture: long-lived developer tool; Build Week is a launch milestone
+- Product posture: long-lived developer tool
 - Install proof: `public-preview-install-proof-matrix.md`
 - Real-repository evidence: `../case-studies/public-preview-dogfood.md`
 
@@ -11,11 +11,11 @@
 `PRODUCT_STORY_READY; PUBLICATION_AND_MEASUREMENT_PENDING`
 
 The repository now presents RepoGrammar as a continuing local-first developer
-tool, with Build Week material derived from the product story rather than
-driving it. Release automation and one native packaged candidate are locally
+tool, with launch material derived from the product story rather than driving
+it. Release automation and one native packaged candidate are locally
 verified. Public no-build installation, four-platform candidate evidence,
-measured token reduction, a recorded video, and Devpost submission are not yet
-complete and must not be described as complete.
+measured token reduction, and a recorded video are not yet complete and must
+not be described as complete.
 
 ## Readiness by priority
 
@@ -31,10 +31,9 @@ complete and must not be described as complete.
 | P1 | reusable video plan | script complete | 96-second narrated shot list and evidence checklist exist |
 | P1 | animated GIF and public video | not produced | requires real screen recording, audio, editing, and public upload |
 | P1 | packaged candidate dogfood | complete on one host | self, frozen public FastAPI, and a dynamic control pass with truthful `PARTIAL_CONTEXT` and advisory `UNKNOWN` |
-| P1 | measured token reduction | not measured | no paired baseline/treatment agent run; estimated diagnostics stay labeled estimated |
+| P1 | measured token reduction | not measured | no paired baseline/treatment agent run; estimated diagnostics stay labeled estimated; one observed demo run saw 52% with no saved artifact, see Dogfood evidence boundary |
 | P2 | repository description and topics | blocked externally | GitHub CLI authentication must be restored |
-| P3 | Devpost copy | prepared | product description, technical story, boundaries, and video script in launch kit |
-| P3 | Devpost submission | not submitted | public video, `/feedback` session ID, verified release URL, and form submission remain |
+| P3 | public launch copy | prepared | product description, technical story, boundaries, and video script in launch kit |
 
 ## Product-facing assets
 
@@ -45,10 +44,10 @@ complete and must not be described as complete.
   success screenshot.
 - `../demo/verified-cli-transcript.md` preserves copyable commands and the
   source transcript for accessibility and review.
-- `../demo/build-week-demo.md` provides a reusable 96-second narrated demo and
+- `../demo/demo-runbook.md` provides a reusable 96-second narrated demo and
   a publication checklist. It is not evidence that a video was recorded.
-- `../promotion/launch-kit.md` keeps README, release notes, YouTube, and Devpost
-  claims aligned with the same product truth.
+- `../promotion/launch-kit.md` keeps README, release notes, YouTube, and public
+  launch claims aligned with the same product truth.
 
 ## Dogfood evidence boundary
 
@@ -60,11 +59,26 @@ routing context while remaining `PARTIAL_CONTEXT`; conformance remains
 `UNKNOWN`. That is one-host product evidence for index/query usability, not
 proof of runtime equivalence or multi-platform release readiness.
 
-The run reports an estimated diagnostic and no paired measurement. README or
-Devpost may say “estimated potential token reduction” only. “Measured token
-reduction” requires a preregistered baseline/treatment pair with repository
-commit, command, configuration, actual agent reads/tokens, failures, and result
-artifacts recorded.
+The run reports an estimated diagnostic and no paired measurement. For this
+run, README or any public launch copy may say “estimated potential token
+reduction” only. “Measured token reduction” requires a preregistered
+baseline/treatment pair with repository commit, command, configuration, actual
+agent reads/tokens, failures, and result artifacts recorded.
+
+Public copy may additionally report the separate single-run demo observation
+below, provided it is attributed to one recorded run and carries its stated
+limits. That permission covers only an explicitly labeled observation; it does
+not relax the bar above for any claim phrased as measured, benchmarked, typical,
+or expected.
+
+A separate, single recorded demo run was observed to show a 52% token
+reduction. That number comes from one demo session only: there is no saved
+run artifact and no committed paired baseline/treatment run behind it, so it
+is an observation, not a measurement, and public copy must not call it
+"measured." Promoting it to measured requires re-running the demo under the
+preregistered baseline/treatment pair described above, with repository
+commit, command, configuration, actual agent reads/tokens, failures, and
+result artifacts committed to the repository.
 
 ## Highest-value next action
 

@@ -17,21 +17,29 @@ development, and governance documentation.
   specifications.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
-- `release/`: maintainer-owned release runbooks. The stable `0.4.3` checklist
-  is the canonical two-phase immutable publication gate; the stable `0.4.2`
+- `release/`: maintainer-owned release runbooks. The stable `0.5.0` candidate checklist
+  is the canonical two-phase immutable publication gate; the stable `0.4.3`
   checklist and earlier checklists remain historical release evidence.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
 - `promotion/`: public-preview launch copy and promotion guardrails.
-- `demo/`: recording and live-demo runbooks; the Build Week runbook is the
-  canonical under-three-minute submission script and evidence checklist.
+- `demo/`: recording and live-demo runbooks; `demo/demo-runbook.md` is the
+  canonical under-three-minute demo script and evidence checklist.
 - `../algorithms/paper/`: metadata-only archive of algorithm and supply-chain
   references used to design implementation milestones.
 - `roadmap.md`: current staged implementation plan and deferred work.
 
 Repository-local skills live under `.agents/skills/`. Durable but non-normative
 context lives under `.agents/memories/`.
+
+## Start here
+
+- [Install and initialize](quickstart.md): copy one installation block, then run `repogrammar init`.
+- Connect [Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or [opencode](quickstart-opencode.md).
+- [CLI reference](specifications/cli.md): when to initialize, sync, or rebuild.
+- [Limitations](limitations.md): supported scope and evidence boundaries.
+- [Autosync efficiency evidence](reports/autosync-efficiency.md) and [recorded progress demo](demo/index-progress.summary.json).
 
 ## Canonical source by topic
 
@@ -53,8 +61,17 @@ context lives under `.agents/memories/`.
   `plans/top-20-language-expansion-plan.md`. The ADR freezes the TIOBE July
   2026 planning snapshot and defines the evidence required before a language
   can be described as supported; TypeScript is tracked separately as an extra.
-  Go's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`.
+  The 2026-08-01 campaign remains strict `0/20` and is consolidated in
+  `reports/language-support/top-20-final-program-audit.md` and the machine-
+  readable `reports/language-support/top-20-program-summary.json`. Ecosystem,
+  manifest/lockfile, provider/version/license, `UNKNOWN` resolution, and
+  source-free security/performance evidence live in the adjacent language-
+  support matrices. This is `PARTIAL_AUDITED_PROGRESS`, not a support claim.
+  Go's N1 preflight, source-free `.go` discovery, and bounded static
+  `go.mod`/`go.work` dependency-inventory contract are
+  `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`; Go
+  remains `discovered_only` and unsupported, and no Go command or semantic
+  worker is authorized.
   PHP's N1 preflight plus discovery-only implementation record are
   `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`; PHP is
   `discovered_only` and unsupported, and no parser/worker dependency or
@@ -65,8 +82,13 @@ context lives under `.agents/memories/`.
   semantic runtime behavior is authorized. The exact pause checkpoint and
   paste-ready stage-3 resume goal are in
   `plans/swift-n1-qualification-handoff.md`.
-  Ruby's N1 preflight plus discovery-only implementation record are
+  Ruby's N1 preflight, discovery record, and bounded exact-`Gemfile.lock`
+  dependency inventory contract are
   `decisions/ADR-0022-ruby-prism-minitest-preflight.md`.
+  Java's structural preview remains incomplete, while ADR-0030 now also owns
+  the bounded exact-root/nested-`pom.xml` direct dependency-inventory contract;
+  it is not a Maven effective model, javac/JDT provider, classpath/JAR resolver,
+  or Java completion claim.
 - v0.2 agent adoption and read displacement:
   `decisions/ADR-0013-agent-adoption-read-displacement.md`,
   `plans/v0.2-agent-adoption-read-displacement-plan.md`,
@@ -80,20 +102,23 @@ context lives under `.agents/memories/`.
   `experiments/v0.2-real-repo-dogfood.md`.
 - Public-preview growth readiness:
   `reports/public-preview-growth-readiness.md`, `quickstart.md`,
-  `quickstart-codex.md`, `quickstart-claude.md`, `limitations.md`,
+  `quickstart-codex.md`, `quickstart-claude.md`, `quickstart-opencode.md`,
+  `limitations.md`,
   `examples/python-fastapi-pytest.md`, and `promotion/launch-kit.md`.
-- Build Week demo and Developer Tools evidence:
-  `demo/build-week-demo.md`, `quickstart-codex.md`, and
+- Demo script and Developer Tools evidence:
+  `demo/demo-runbook.md`, `quickstart-codex.md`, and
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
-- Stable `0.4.3` two-phase immutable publication and split-installation gate:
+- Stable `0.5.0` candidate two-phase immutable publication gate:
+  `release/stable-v0.5.0-release-checklist.md`.
+- Stable `0.4.3` publication evidence remains in
   `release/stable-v0.4.3-release-checklist.md`.
 - Stable `0.4.2` publication evidence remains in
   `release/stable-v0.4.2-release-checklist.md`.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
-- Build Week zero-friction onboarding authority and execution evidence:
+- Zero-friction onboarding authority and execution evidence:
   `decisions/ADR-0026-zero-friction-onboarding-orchestration.md`,
   `plans/build-week-zero-friction-onboarding-plan.md`. The ADR freezes new
   language/framework/provider scope and preserves install, repo-local state,

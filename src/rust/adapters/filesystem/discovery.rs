@@ -3,15 +3,27 @@
 use super::bounded_read::{read_file_bounded, BoundedReadError};
 use super::git::{GitContext, GitContextResolution};
 use super::resource_limits::{DiscoveryLimits, DiscoveryResourceBudget};
+use crate::adapters::languages::ada::{AdaLanguageAdapter, AdaPathClassification};
+use crate::adapters::languages::assembly::{AssemblyLanguageAdapter, AssemblyPathClassification};
 use crate::adapters::languages::cpp::CppLanguageAdapter;
-use crate::adapters::languages::csharp::CSharpLanguageAdapter;
+use crate::adapters::languages::csharp::{CSharpLanguageAdapter, CSharpPathClassification};
+use crate::adapters::languages::fortran::{FortranLanguageAdapter, FortranPathClassification};
 use crate::adapters::languages::go::GoLanguageAdapter;
 use crate::adapters::languages::java::JavaLanguageAdapter;
+use crate::adapters::languages::matlab::{MatlabLanguageAdapter, MatlabPathClassification};
+use crate::adapters::languages::object_pascal::{
+    ObjectPascalLanguageAdapter, ObjectPascalPathClassification,
+};
 use crate::adapters::languages::php::{PhpLanguageAdapter, PhpPathClassification};
 use crate::adapters::languages::python::PythonLanguageAdapter;
+use crate::adapters::languages::r::{RLanguageAdapter, RPathClassification};
 use crate::adapters::languages::ruby::{RubyLanguageAdapter, RubyPathClassification};
 use crate::adapters::languages::rust::RustLanguageAdapter;
+use crate::adapters::languages::sql::{SqlLanguageAdapter, SqlPathClassification};
 use crate::adapters::languages::swift::{SwiftLanguageAdapter, SwiftPathClassification};
+use crate::adapters::languages::visual_basic::{
+    VisualBasicLanguageAdapter, VisualBasicPathClassification,
+};
 use crate::core::model::ContentHash;
 use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
@@ -418,6 +430,69 @@ fn language_for_path(path: &str) -> Option<DiscoveredLanguage> {
 }
 
 fn classify_language_path(path: &str) -> LanguagePathClassification {
+    match VisualBasicLanguageAdapter::classify_path(path) {
+        VisualBasicPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::VisualBasic);
+        }
+        VisualBasicPathClassification::Config => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::VisualBasicConfig);
+        }
+        VisualBasicPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        VisualBasicPathClassification::NotVisualBasic => {}
+    }
+    match ObjectPascalLanguageAdapter::classify_path(path) {
+        ObjectPascalPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::ObjectPascal);
+        }
+        ObjectPascalPathClassification::DelphiConfig => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::DelphiConfig);
+        }
+        ObjectPascalPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        ObjectPascalPathClassification::NotObjectPascal => {}
+    }
+    match AdaLanguageAdapter::classify_path(path) {
+        AdaPathClassification::Source(_) => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Ada);
+        }
+        AdaPathClassification::Config(_) => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::AdaConfig);
+        }
+        AdaPathClassification::NotAda => {}
+    }
+    match FortranLanguageAdapter::classify_path(path) {
+        FortranPathClassification::Source(_) => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Fortran);
+        }
+        FortranPathClassification::Config => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::FortranConfig);
+        }
+        FortranPathClassification::NotFortran => {}
+    }
+    match MatlabLanguageAdapter::classify_path(path) {
+        MatlabPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Matlab);
+        }
+        MatlabPathClassification::PackageConfig => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::MatlabConfig);
+        }
+        MatlabPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        MatlabPathClassification::NotMatlab => {}
+    }
+    match AssemblyLanguageAdapter::classify_path(path) {
+        AssemblyPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Assembly);
+        }
+        AssemblyPathClassification::ExcludedPreprocessedSource => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        AssemblyPathClassification::NotAssembly => {}
+    }
     match PhpLanguageAdapter::classify_path(path) {
         PhpPathClassification::Source => {
             return LanguagePathClassification::Supported(DiscoveredLanguage::Php);
@@ -454,11 +529,44 @@ fn classify_language_path(path: &str) -> LanguagePathClassification {
         }
         SwiftPathClassification::NotSwift => {}
     }
+    match RLanguageAdapter::classify_path(path) {
+        RPathClassification::Source => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::R);
+        }
+        RPathClassification::Config => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::RConfig);
+        }
+        RPathClassification::Excluded(_) => {
+            return LanguagePathClassification::LanguageSpecificExclusion;
+        }
+        RPathClassification::NotR => {}
+    }
+    match SqlLanguageAdapter::classify_path(path) {
+        SqlPathClassification::Generic => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::Sql);
+        }
+        SqlPathClassification::Migration => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::SqlMigration);
+        }
+        SqlPathClassification::Schema => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::SqlSchema);
+        }
+        SqlPathClassification::Catalog => {
+            return LanguagePathClassification::Supported(DiscoveredLanguage::SqlCatalog);
+        }
+        SqlPathClassification::NotSql => {}
+    }
     if path == "pyproject.toml" || path == "setup.cfg" || path == "setup.py" {
         return LanguagePathClassification::Supported(DiscoveredLanguage::PythonConfig);
     }
     if path == "Cargo.toml" || path.ends_with("/Cargo.toml") {
         return LanguagePathClassification::Supported(DiscoveredLanguage::RustConfig);
+    }
+    if JavaLanguageAdapter::is_project_config_path(path) {
+        return LanguagePathClassification::Supported(DiscoveredLanguage::JavaConfig);
+    }
+    if CSharpLanguageAdapter::classify_path(path) == CSharpPathClassification::Config {
+        return LanguagePathClassification::Supported(DiscoveredLanguage::CSharp);
     }
     if path == "compile_commands.json" || path == "vcpkg.json" || path == "conanfile.txt" {
         return LanguagePathClassification::Supported(DiscoveredLanguage::CppConfig);
@@ -653,6 +761,71 @@ mod tests {
     }
 
     #[test]
+    fn discovers_conservative_ada_and_fortran_source_config_inventory() {
+        let workspace = TempWorkspace::new("discovery-ada-fortran");
+        fs::create_dir_all(workspace.path().join("ada")).expect("create Ada dir");
+        fs::create_dir_all(workspace.path().join("fortran")).expect("create Fortran dir");
+        fs::create_dir_all(workspace.path().join("alire")).expect("create Alire dir");
+        for path in [
+            "ada/main.adb",
+            "ada/main.ads",
+            "demo.gpr",
+            "alire.toml",
+            "alire/alire.lock",
+            "fortran/fixed.f",
+            "fortran/free.f90",
+            "fpm.toml",
+        ] {
+            fs::write(workspace.path().join(path), "inventory\n").expect("write inventory file");
+        }
+        for path in [
+            "ada/alternate.ada",
+            "fortran/preprocessed.F90",
+            "fortran/preprocessed.fpp",
+            "fortran/unproven.fi",
+        ] {
+            fs::write(workspace.path().join(path), "deferred\n").expect("write deferred file");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Ada and Fortran inventory");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("ada/main.adb", DiscoveredLanguage::Ada),
+                ("ada/main.ads", DiscoveredLanguage::Ada),
+                ("alire.toml", DiscoveredLanguage::AdaConfig),
+                ("alire/alire.lock", DiscoveredLanguage::AdaConfig),
+                ("demo.gpr", DiscoveredLanguage::AdaConfig),
+                ("fortran/fixed.f", DiscoveredLanguage::Fortran),
+                ("fortran/free.f90", DiscoveredLanguage::Fortran),
+                ("fpm.toml", DiscoveredLanguage::FortranConfig),
+            ]
+        );
+        for path in [
+            "ada/alternate.ada",
+            "fortran/preprocessed.F90",
+            "fortran/preprocessed.fpp",
+            "fortran/unproven.fi",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+                }),
+                "missing unsupported skip for {path}: {:?}",
+                report.skipped
+            );
+        }
+    }
+
+    #[test]
     fn discovers_tsjs_project_configs_as_metadata() {
         let workspace = TempWorkspace::new("discovery-tsjs-configs");
         fs::write(
@@ -697,6 +870,129 @@ mod tests {
                 ("tsconfig.json", DiscoveredLanguage::TsJsConfig),
             ]
         );
+    }
+
+    #[test]
+    fn discovers_vbnet_without_admitting_vb6_or_globalizing_vb_exclusions() {
+        let workspace = TempWorkspace::new("discovery-visual-basic");
+        for directory in ["src", "nested", "bin", ".vs/project"] {
+            fs::create_dir_all(workspace.path().join(directory)).expect("create VB fixture dir");
+        }
+        fs::write(workspace.path().join("src/Program.vb"), [0xff, 0xfe, 0xfd])
+            .expect("write binary VB source");
+        fs::write(workspace.path().join("App.vbproj"), "<Project/>").expect("write VB project");
+        fs::write(workspace.path().join("nested/Library.vbproj"), "<Project/>")
+            .expect("write nested VB project");
+        fs::write(workspace.path().join("legacy.vbp"), "VB6").expect("write deferred VB6 project");
+        fs::write(workspace.path().join("Form1.frm"), "VB6").expect("write deferred VB6 form");
+        fs::write(workspace.path().join("bin/Generated.vb"), "generated")
+            .expect("write generated VB source");
+        fs::write(
+            workspace.path().join(".vs/project/App.vbproj"),
+            "<Project/>",
+        )
+        .expect("write Visual Studio cache project");
+        fs::write(workspace.path().join("bin/keep.py"), "value = 1\n")
+            .expect("write non-VB source under bin");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover VB.NET inventory");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.vbproj", DiscoveredLanguage::VisualBasicConfig),
+                ("bin/keep.py", DiscoveredLanguage::Python),
+                (
+                    "nested/Library.vbproj",
+                    DiscoveredLanguage::VisualBasicConfig
+                ),
+                ("src/Program.vb", DiscoveredLanguage::VisualBasic),
+            ]
+        );
+        for path in ["bin/Generated.vb", ".vs/project/App.vbproj"] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path
+                        && skipped.reason == SkippedReason::LanguageSpecificExclusion
+                }),
+                "missing language-specific skip for {path}: {:?}",
+                report.skipped
+            );
+        }
+        for path in ["legacy.vbp", "Form1.frm"] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+            }));
+        }
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn discovers_object_pascal_but_qualifies_only_exact_delphi_projects() {
+        let workspace = TempWorkspace::new("discovery-object-pascal-delphi");
+        for directory in ["src", "packages", "nested", "__history", "__recovery"] {
+            fs::create_dir_all(workspace.path().join(directory))
+                .expect("create Object Pascal fixture dir");
+        }
+        fs::write(workspace.path().join("src/Unit1.pas"), [0xff, 0xfe, 0xfd])
+            .expect("write binary Object Pascal source");
+        fs::write(workspace.path().join("App.dpr"), "program App;")
+            .expect("write Delphi project source");
+        fs::write(
+            workspace.path().join("packages/Tools.dpk"),
+            "package Tools;",
+        )
+        .expect("write Delphi package source");
+        fs::write(workspace.path().join("nested/App.dproj"), "<Project/>")
+            .expect("write Delphi project metadata");
+        for path in ["unit.pp", "program.lpr", "project.lpi", "package.lpk"] {
+            fs::write(workspace.path().join(path), "Free Pascal")
+                .expect("write deferred Free Pascal candidate");
+        }
+        fs::write(workspace.path().join("__history/Unit1.pas"), "backup")
+            .expect("write Delphi history source");
+        fs::write(workspace.path().join("__recovery/App.dproj"), "<Project/>")
+            .expect("write Delphi recovery metadata");
+        fs::write(workspace.path().join("__history/keep.py"), "value = 1\n")
+            .expect("write non-Pascal history file");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Object Pascal inventory");
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("App.dpr", DiscoveredLanguage::ObjectPascal),
+                ("__history/keep.py", DiscoveredLanguage::Python),
+                ("nested/App.dproj", DiscoveredLanguage::DelphiConfig),
+                ("packages/Tools.dpk", DiscoveredLanguage::ObjectPascal),
+                ("src/Unit1.pas", DiscoveredLanguage::ObjectPascal),
+            ]
+        );
+        for path in ["__history/Unit1.pas", "__recovery/App.dproj"] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::LanguageSpecificExclusion
+            }));
+        }
+        for path in ["unit.pp", "program.lpr", "project.lpi", "package.lpk"] {
+            assert!(report.skipped.iter().any(|skipped| {
+                skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+            }));
+        }
     }
 
     #[test]
@@ -817,6 +1113,132 @@ mod tests {
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("module example.test/module"));
         assert!(!debug.contains("package tests"));
+    }
+
+    #[test]
+    fn discovers_source_free_sql_artifacts_and_exact_r_inventory() {
+        let workspace = TempWorkspace::new("discovery-sql-r");
+        for directory in [
+            "db/migrations",
+            "R",
+            "nested",
+            "renv/library/R-4.4/pkg/R",
+            ".Rproj.user/session",
+        ] {
+            fs::create_dir_all(workspace.path().join(directory)).expect("create SQL/R fixture dir");
+        }
+        for path in [
+            "query.sql",
+            "schema.sql",
+            "catalog.sql",
+            "db/migrations/001_init.sql",
+        ] {
+            fs::write(workspace.path().join(path), [0xff, 0xfe, 0xfd])
+                .expect("write binary SQL inventory");
+        }
+        for path in [
+            "DESCRIPTION",
+            "NAMESPACE",
+            "renv.lock",
+            "nested/DESCRIPTION",
+        ] {
+            fs::write(workspace.path().join(path), "must not execute R\n")
+                .expect("write R metadata inventory");
+        }
+        fs::write(workspace.path().join("R/main.R"), [0xff, 0xfe, 0xfd])
+            .expect("write binary R source inventory");
+        fs::write(workspace.path().join("R/model.r"), [0xff, 0xfe, 0xfd])
+            .expect("write binary lowercase R source inventory");
+        fs::write(
+            workspace
+                .path()
+                .join("renv/library/R-4.4/pkg/R/generated.R"),
+            "ignored\n",
+        )
+        .expect("write managed R library source");
+        fs::write(
+            workspace
+                .path()
+                .join("renv/library/R-4.4/pkg/R/lowercase.r"),
+            "ignored\n",
+        )
+        .expect("write managed lowercase R library source");
+        fs::write(
+            workspace.path().join(".Rproj.user/session/history.R"),
+            "ignored\n",
+        )
+        .expect("write RStudio state source");
+        for path in [
+            "other.SQL",
+            ".Rprofile",
+            "project.Rproj",
+            "notes.Rmd",
+            "report.rmd",
+        ] {
+            fs::write(workspace.path().join(path), "deferred\n")
+                .expect("write deferred SQL/R candidate");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover SQL/R inventory");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("DESCRIPTION", DiscoveredLanguage::RConfig),
+                ("NAMESPACE", DiscoveredLanguage::RConfig),
+                ("R/main.R", DiscoveredLanguage::R),
+                ("R/model.r", DiscoveredLanguage::R),
+                ("catalog.sql", DiscoveredLanguage::SqlCatalog),
+                (
+                    "db/migrations/001_init.sql",
+                    DiscoveredLanguage::SqlMigration
+                ),
+                ("nested/DESCRIPTION", DiscoveredLanguage::RConfig),
+                ("query.sql", DiscoveredLanguage::Sql),
+                ("renv.lock", DiscoveredLanguage::RConfig),
+                ("schema.sql", DiscoveredLanguage::SqlSchema),
+            ]
+        );
+        for path in [
+            ".Rproj.user/session/history.R",
+            "renv/library/R-4.4/pkg/R/generated.R",
+            "renv/library/R-4.4/pkg/R/lowercase.r",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path
+                        && skipped.reason == SkippedReason::LanguageSpecificExclusion
+                }),
+                "{path}: {:?}",
+                report.skipped
+            );
+        }
+        for path in [
+            "other.SQL",
+            ".Rprofile",
+            "project.Rproj",
+            "notes.Rmd",
+            "report.rmd",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path && skipped.reason == SkippedReason::UnsupportedExtension
+                }),
+                "{path}: {:?}",
+                report.skipped
+            );
+        }
+        let debug = format!("{report:?}");
+        assert!(!debug.contains("must not execute R"));
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -1194,6 +1616,7 @@ mod tests {
         let workspace = TempWorkspace::new("discovery-java");
         fs::create_dir_all(workspace.path().join("src/main/java/com/example"))
             .expect("create java source dir");
+        fs::create_dir_all(workspace.path().join("modules/api")).expect("create module dir");
         fs::create_dir_all(workspace.path().join("build/classes")).expect("create build dir");
         fs::create_dir_all(workspace.path().join("out/classes")).expect("create out dir");
         fs::write(
@@ -1215,6 +1638,14 @@ mod tests {
         .expect("write out java");
         fs::write(workspace.path().join("Demo.class"), b"bytecode").expect("write class");
         fs::write(workspace.path().join("build.gradle"), "plugins {}\n").expect("write gradle");
+        fs::write(workspace.path().join("pom.xml"), "<project/>\n").expect("write root pom");
+        fs::write(workspace.path().join("modules/api/pom.xml"), "<project/>\n")
+            .expect("write nested pom");
+        fs::write(
+            workspace.path().join("modules/api/pom.xml.bak"),
+            "<project/>\n",
+        )
+        .expect("write pom lookalike");
 
         let report = FilesystemFileDiscovery
             .discover(FileDiscoveryRequest::new(
@@ -1228,10 +1659,14 @@ mod tests {
                 .iter()
                 .map(|file| (file.path.as_str(), file.language))
                 .collect::<Vec<_>>(),
-            vec![(
-                "src/main/java/com/example/DemoController.java",
-                DiscoveredLanguage::Java
-            )]
+            vec![
+                ("modules/api/pom.xml", DiscoveredLanguage::JavaConfig),
+                ("pom.xml", DiscoveredLanguage::JavaConfig),
+                (
+                    "src/main/java/com/example/DemoController.java",
+                    DiscoveredLanguage::Java
+                ),
+            ]
         );
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "build" && skipped.reason == SkippedReason::DefaultExcludedDirectory
@@ -1244,6 +1679,10 @@ mod tests {
         }));
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "build.gradle" && skipped.reason == SkippedReason::UnsupportedExtension
+        }));
+        assert!(report.skipped.iter().any(|skipped| {
+            skipped.path == "modules/api/pom.xml.bak"
+                && skipped.reason == SkippedReason::UnsupportedExtension
         }));
     }
 
@@ -1286,19 +1725,19 @@ mod tests {
                 .iter()
                 .map(|file| (file.path.as_str(), file.language))
                 .collect::<Vec<_>>(),
-            vec![(
-                "Controllers/CatalogController.cs",
-                DiscoveredLanguage::CSharp
-            )]
+            vec![
+                (
+                    "Controllers/CatalogController.cs",
+                    DiscoveredLanguage::CSharp
+                ),
+                ("Demo.csproj", DiscoveredLanguage::CSharp)
+            ]
         );
         assert!(report.skipped.iter().any(|skipped| {
             skipped.path == "obj" && skipped.reason == SkippedReason::DefaultExcludedDirectory
         }));
         assert!(!report.skipped.iter().any(|skipped| skipped.path == "bin"
             && skipped.reason == SkippedReason::DefaultExcludedDirectory));
-        assert!(report.skipped.iter().any(|skipped| {
-            skipped.path == "Demo.csproj" && skipped.reason == SkippedReason::UnsupportedExtension
-        }));
     }
 
     #[test]
@@ -1589,6 +2028,88 @@ mod tests {
     }
 
     #[test]
+    fn ada_fortran_size_limit_is_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-ada-fortran-size-boundary");
+        fs::write(
+            workspace.path().join("exact.adb"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Ada source");
+        fs::write(
+            workspace.path().join("too_large.ads"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too-large Ada source");
+        fs::write(
+            workspace.path().join("exact.f90"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Fortran source");
+        fs::write(
+            workspace.path().join("fpm.toml"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too-large fpm manifest");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Ada/Fortran size boundary");
+        assert!(report
+            .files
+            .iter()
+            .any(|file| { file.path == "exact.adb" && file.language == DiscoveredLanguage::Ada }));
+        assert!(report.files.iter().any(|file| {
+            file.path == "exact.f90" && file.language == DiscoveredLanguage::Fortran
+        }));
+        for path in ["too_large.ads", "fpm.toml"] {
+            assert!(report
+                .skipped
+                .iter()
+                .any(|skip| { skip.path == path && skip.reason == SkippedReason::TooLarge }));
+        }
+    }
+
+    #[test]
+    fn sql_and_r_size_limits_are_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-sql-r-size-boundary");
+        for (path, size) in [
+            ("exact.sql", DEFAULT_MAX_FILE_BYTES as usize),
+            ("too_large.sql", DEFAULT_MAX_FILE_BYTES as usize + 1),
+            ("exact.R", DEFAULT_MAX_FILE_BYTES as usize),
+            ("nested/DESCRIPTION", DEFAULT_MAX_FILE_BYTES as usize + 1),
+        ] {
+            if let Some(parent) = workspace.path().join(path).parent() {
+                fs::create_dir_all(parent).expect("create SQL/R size fixture parent");
+            }
+            fs::write(workspace.path().join(path), vec![b'x'; size])
+                .expect("write SQL/R size fixture");
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover SQL/R size boundary");
+
+        assert!(report
+            .files
+            .iter()
+            .any(|file| { file.path == "exact.sql" && file.language == DiscoveredLanguage::Sql }));
+        assert!(report
+            .files
+            .iter()
+            .any(|file| { file.path == "exact.R" && file.language == DiscoveredLanguage::R }));
+        for path in ["too_large.sql", "nested/DESCRIPTION"] {
+            assert!(report
+                .skipped
+                .iter()
+                .any(|skip| { skip.path == path && skip.reason == SkippedReason::TooLarge }));
+        }
+    }
+
+    #[test]
     fn ruby_size_limit_is_inclusive_at_one_mebibyte() {
         let workspace = TempWorkspace::new("discovery-ruby-size-boundary");
         fs::write(
@@ -1671,6 +2192,62 @@ mod tests {
         }));
         assert!(report.skipped.iter().any(|skip| {
             skip.path == "Package@swift-6.3.swift" && skip.reason == SkippedReason::TooLarge
+        }));
+    }
+
+    #[test]
+    fn visual_basic_size_limit_is_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-visual-basic-size-boundary");
+        fs::write(
+            workspace.path().join("exact.vb"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Visual Basic limit file");
+        fs::write(
+            workspace.path().join("too_large.vbproj"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too large Visual Basic project");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Visual Basic size boundary");
+
+        assert!(report.files.iter().any(|file| {
+            file.path == "exact.vb" && file.language == DiscoveredLanguage::VisualBasic
+        }));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "too_large.vbproj" && skip.reason == SkippedReason::TooLarge
+        }));
+    }
+
+    #[test]
+    fn object_pascal_size_limit_is_inclusive_at_one_mebibyte() {
+        let workspace = TempWorkspace::new("discovery-object-pascal-size-boundary");
+        fs::write(
+            workspace.path().join("exact.pas"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize],
+        )
+        .expect("write exact Object Pascal limit file");
+        fs::write(
+            workspace.path().join("too_large.dproj"),
+            vec![b'x'; DEFAULT_MAX_FILE_BYTES as usize + 1],
+        )
+        .expect("write too large Delphi project");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover Object Pascal size boundary");
+
+        assert!(report.files.iter().any(|file| {
+            file.path == "exact.pas" && file.language == DiscoveredLanguage::ObjectPascal
+        }));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "too_large.dproj" && skip.reason == SkippedReason::TooLarge
         }));
     }
 
@@ -2383,5 +2960,168 @@ mod tests {
         assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
         assert!(!debug.contains("packages/app/ignored.ts"));
         assert!(!debug.contains("packages/app/secrets/hidden.ts"));
+    }
+
+    #[test]
+    fn discovers_matlab_package_inventory_and_bounded_assembly_source_only() {
+        let workspace = TempWorkspace::new("discovery-matlab-assembly");
+        fs::create_dir_all(workspace.path().join("pkg/resources"))
+            .expect("create MATLAB package resources");
+        fs::write(workspace.path().join("main.m"), [0xff, 0xfe, 0xfd])
+            .expect("write binary-shaped MATLAB source inventory");
+        fs::write(
+            workspace.path().join("pkg/resources/mpackage.json"),
+            r#"{"name":"Demo","version":"1.0.0","id":"af92112b-8b66-44d1-b4b1-848f54affa3e","schemaVersion":"1.1.0"}"#,
+        )
+        .expect("write MATLAB package definition");
+        fs::write(workspace.path().join("start.s"), ".text\nentry:\n ret\n")
+            .expect("write lowercase assembly source");
+        fs::write(workspace.path().join("preprocessed.S"), "#define VALUE 1\n")
+            .expect("write preprocessed assembly source");
+        fs::write(workspace.path().join("project.sb3"), b"PK\x03\x04")
+            .expect("write unsupported Scratch archive");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover MATLAB and assembly inventory");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("main.m", DiscoveredLanguage::Matlab),
+                (
+                    "pkg/resources/mpackage.json",
+                    DiscoveredLanguage::MatlabConfig,
+                ),
+                ("start.s", DiscoveredLanguage::Assembly),
+            ]
+        );
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "preprocessed.S" && skip.reason == SkippedReason::LanguageSpecificExclusion
+        }));
+        assert!(report.skipped.iter().any(|skip| {
+            skip.path == "project.sb3" && skip.reason == SkippedReason::UnsupportedExtension
+        }));
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("Demo"));
+        assert!(!debug.contains("entry"));
+    }
+
+    #[test]
+    fn discovers_matlab_selection_with_code_generation_exclusions() {
+        let workspace = TempWorkspace::new("discovery-matlab-exclusions");
+        for directory in [
+            "+pkg",
+            "tests",
+            "codegen/lib/demo",
+            "codegen/resources",
+            "slprj/_simcommon",
+            "sccprj/modelref",
+        ] {
+            fs::create_dir_all(workspace.path().join(directory))
+                .expect("create MATLAB selection fixture dir");
+        }
+        fs::write(workspace.path().join("main.m"), [0xff, 0xfe, 0xfd])
+            .expect("write binary MATLAB source inventory");
+        fs::write(workspace.path().join("+pkg/function.m"), "% helper\n")
+            .expect("write package MATLAB source");
+        fs::write(workspace.path().join("tests/CatalogTest.m"), "% test\n")
+            .expect("write MATLAB test source");
+        fs::write(
+            workspace.path().join("codegen/lib/demo/build.m"),
+            "generated\n",
+        )
+        .expect("write MATLAB Coder output");
+        fs::write(
+            workspace.path().join("codegen/resources/mpackage.json"),
+            "generated\n",
+        )
+        .expect("write generated package definition candidate");
+        fs::write(
+            workspace.path().join("slprj/_simcommon/cache.m"),
+            "generated\n",
+        )
+        .expect("write Simulink cache output");
+        fs::write(
+            workspace.path().join("sccprj/modelref/model.m"),
+            "generated\n",
+        )
+        .expect("write Simulink Coder build output");
+        fs::write(workspace.path().join("codegen/kept.py"), "value = 1\n")
+            .expect("write non-MATLAB source under codegen");
+        fs::write(workspace.path().join("slprj/kept.ts"), "export {};\n")
+            .expect("write non-MATLAB source under slprj");
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover MATLAB selection inventory");
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.language))
+                .collect::<Vec<_>>(),
+            vec![
+                ("+pkg/function.m", DiscoveredLanguage::Matlab),
+                ("codegen/kept.py", DiscoveredLanguage::Python),
+                ("main.m", DiscoveredLanguage::Matlab),
+                ("slprj/kept.ts", DiscoveredLanguage::TypeScript),
+                ("tests/CatalogTest.m", DiscoveredLanguage::Matlab),
+            ]
+        );
+        for path in [
+            "codegen/lib/demo/build.m",
+            "codegen/resources/mpackage.json",
+            "slprj/_simcommon/cache.m",
+            "sccprj/modelref/model.m",
+        ] {
+            assert!(
+                report.skipped.iter().any(|skipped| {
+                    skipped.path == path
+                        && skipped.reason == SkippedReason::LanguageSpecificExclusion
+                }),
+                "{path}"
+            );
+        }
+        let debug = format!("{report:?}");
+        assert!(!debug.contains(workspace.path().to_string_lossy().as_ref()));
+        assert!(!debug.contains("generated"));
+    }
+
+    #[test]
+    fn rejects_matlab_symlink_escape_without_following_it() {
+        let workspace = TempWorkspace::new("discovery-matlab-symlink");
+        let outside = TempWorkspace::new("discovery-matlab-symlink-outside");
+        fs::write(outside.path().join("outside.m"), "% outside\n")
+            .expect("write outside MATLAB source");
+
+        if !create_test_symlink_file(
+            &outside.path().join("outside.m"),
+            &workspace.path().join("link.m"),
+        ) {
+            return;
+        }
+
+        let report = FilesystemFileDiscovery
+            .discover(FileDiscoveryRequest::new(
+                workspace.path().display().to_string(),
+            ))
+            .expect("discover MATLAB symlink");
+
+        assert!(report.files.is_empty());
+        assert!(report
+            .skipped
+            .iter()
+            .any(|skip| skip.path == "link.m" && skip.reason == SkippedReason::SymlinkEscape));
     }
 }

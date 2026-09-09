@@ -206,6 +206,7 @@ pub(crate) fn derived_from_for_target(target: &str) -> Option<&'static str> {
     } else if target.starts_with("jest_vitest.")
         || target.starts_with("mocha.")
         || target.starts_with("node_test.")
+        || target.starts_with("playwright.")
     {
         Some("tsjs_jest_vitest_structural_anchors")
     } else if target.starts_with("next.") {

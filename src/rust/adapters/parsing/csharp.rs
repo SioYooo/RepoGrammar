@@ -13,12 +13,13 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    SourceDocument, SourceParser,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tree_sitter::{Node, Parser};
 
+mod project_config;
 mod test_data;
 
 pub(crate) const CSHARP_ANCHOR_ENGINE: &str = "repogrammar-csharp-syntax";
@@ -26,6 +27,7 @@ pub(crate) const CSHARP_ANCHOR_METHOD: &str = "tree_sitter_csharp_structural_anc
 
 const ASPNET_MVC_NAMESPACE: &str = "Microsoft.AspNetCore.Mvc";
 const EFCORE_NAMESPACE: &str = "Microsoft.EntityFrameworkCore";
+const FLUENTVALIDATION_NAMESPACE: &str = "FluentValidation";
 const XUNIT_NAMESPACE: &str = "Xunit";
 const NUNIT_NAMESPACE: &str = "NUnit.Framework";
 const MSTEST_NAMESPACE: &str = "Microsoft.VisualStudio.TestTools.UnitTesting";
@@ -97,6 +99,9 @@ impl SourceParser for CSharpSyntaxParser {
         if document.language != Language::CSharp {
             return Err(ParseError::UnsupportedLanguage);
         }
+        if is_csproj_document(&document) {
+            return project_config::parse(document);
+        }
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
@@ -111,6 +116,26 @@ impl SourceParser for CSharpSyntaxParser {
         scanner.scan_tree(tree.root_node())?;
         scanner.finish()
     }
+
+    fn parse_with_context_output(
+        &self,
+        document: SourceDocument<'_>,
+        context: &ParserProjectContext,
+    ) -> Result<SourceParseOutput, ParseError> {
+        if document.language == Language::CSharp && is_csproj_document(&document) {
+            return project_config::parse_output(document);
+        }
+        self.parse_with_context(document, context)
+            .map(SourceParseOutput::from_report)
+    }
+}
+
+fn is_csproj_document(document: &SourceDocument<'_>) -> bool {
+    document
+        .path
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.ends_with(".csproj"))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -316,10 +341,25 @@ impl<'a> CSharpTreeScanner<'a> {
                 context.usings.as_ref(),
             );
 
+        // Ordered after the ASP.NET and EF Core arms so one class never claims
+        // two framework roles: a unit holding two is dropped from family
+        // support silently instead of reporting a conflict.
+        let fluent_validator = controller_target.is_none()
+            && !db_context
+            && node.kind() == "class_declaration"
+            && base_is_exact(
+                &bases,
+                "AbstractValidator",
+                FLUENTVALIDATION_NAMESPACE,
+                context.usings.as_ref(),
+            );
+
         let kind = if controller_target.is_some() {
             CodeUnitKind::AspNetController
         } else if db_context {
             CodeUnitKind::EfCoreDbContext
+        } else if fluent_validator {
+            CodeUnitKind::FluentValidationValidator
         } else {
             CodeUnitKind::Class
         };
@@ -375,6 +415,30 @@ impl<'a> CSharpTreeScanner<'a> {
                     format!("csharp_class_shape={class_shape}"),
                 ],
                 "bounded C# EF Core DbContext anchor",
+            )?);
+            self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
+        } else if fluent_validator {
+            self.semantic_facts.push(structural_anchor_fact(
+                &self.document,
+                &unit,
+                SemanticFactKind::Type,
+                "fluentvalidation.AbstractValidator",
+                vec![
+                    "provider_resolved=false".to_string(),
+                    "csharp_anchor_kind=fluentvalidation_validator".to_string(),
+                    format!("csharp_visibility_shape={visibility}"),
+                    format!("csharp_class_shape={class_shape}"),
+                ],
+                "bounded C# FluentValidation validator anchor",
+            )?);
+            self.semantic_facts.push(unknown_fact(
+                &self.document,
+                &unit,
+                UnknownReasonCode::FrameworkMagic,
+                "csharp_fluentvalidation_rule_chain",
+                "fluentvalidation_rule_chain",
+                "FluentValidation rule builder chains and validator resolution are runtime behavior",
+                Vec::new(),
             )?);
             self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
         } else if has_non_exact_known_attribute(

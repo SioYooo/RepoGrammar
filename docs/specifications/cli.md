@@ -52,11 +52,25 @@ Maintenance:
 - `version`
 - `help`
 
+Inventory modes are evidence-sensitive. A SQL-only repository reports
+`indexing: file_manifest_only`, `parser: deferred`, zero parser attempts, and
+its exact `sql*` file tokens through `files`; CLI output never contains SQL
+text. An R-source-only repository behaves the same. Exact R metadata changes
+the mode to `syntax_only_code_units`, and `units` may show `r-config`
+`project_config` units. This does not advertise SQL or R support. Remote/local
+renv source values and arbitrary DESCRIPTION/NAMESPACE text must never appear
+in human or JSON output.
+
 ## Help contract
 
 `repogrammar --help`, `repogrammar -h`, and `repogrammar help` must print a
-compact top-level journey of no more than 25 lines centered on `setup`, `find`,
-and `doctor`, with `help --all` as the explicit complete command inventory.
+compact help page of no more than 25 lines with aligned command descriptions.
+It leads with `init` for the current repository, then `find`, `families`, `sync`,
+`resync`, `status`, `doctor`, and optional agent `install`; `setup` remains the
+combined compatibility workflow. `help --all` exposes the complete inventory.
+Successful human `init` output explains that ordinary edits use autosync or
+`sync`, full rebuilds use `resync`, and uncertain readiness uses `doctor`.
+Plain `init` already builds the index; no extra `index` invocation is required.
 `repogrammar help <command>`,
 `repogrammar <command> --help`, and `repogrammar <command> -h` must print
 command-specific usage, supported subcommands where applicable, accepted
@@ -167,7 +181,7 @@ output so terminal users are not flooded with machine progress events.
 ## Repository state commands
 
 `repogrammar setup [--project <path>] [--target
-auto|codex|claude-code] [--yes] [--dry-run] [--no-autosync] [--json]
+auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json]
 [--progress auto|always|never]` is the primary user-facing onboarding
 orchestrator. It composes the existing machine-level installation and
 repository lifecycle boundaries; it does not replace either boundary or invoke
@@ -299,6 +313,11 @@ behavior: it creates or repairs repo-local state, must not run indexing, and
 must not start auto-sync. `init --state-only --resync` and `init --state-only
 --autosync` must fail cleanly before creating state; `init --state-only
 --no-autosync` is accepted as a redundant safe opt-out.
+
+Default successful human bootstrap output summarizes indexed units, actual
+autosync state, and the next commands. Internal repaired-entry and generation
+fields remain available through `--verbose`; state-only and failure diagnostics
+retain their detailed output.
 
 JSON output for bootstrap must preserve the existing top-level init fields and
 include `resync` and `autosync` sub-results where applicable. If indexing fails
@@ -471,8 +490,13 @@ Doctor JSON must use `checks.manifest_schema_version` and
 `checks.schema_version` field. The product payload schema token stays at the
 top-level `schema_version`, never inside `checks`. When storage can be inspected,
 doctor JSON also
-reports `checks.dependency_records` and `checks.dirty_records` so stale/dirty
-storage diagnostics are machine-readable. It must also report
+reports `checks.derived_record_dependencies` and `checks.dirty_records` so
+stale/dirty storage diagnostics are machine-readable.
+`checks.derived_record_dependencies` counts rows of the
+`derived_record_dependencies` incremental-invalidation graph. It must not be
+named `dependency_records`: that name belongs to the unrelated ADR-0030
+third-party dependency inventory table, which has no CLI or MCP projection in
+this slice. It must also report
 `checks.storage_layout`, `checks.mutable_database_present`,
 `checks.legacy_generation_layout_present`, `checks.wal_bytes`, and
 `checks.shm_bytes`. Legacy-only storage and mixed mutable-plus-legacy storage
@@ -532,14 +556,31 @@ owned semantic facts in a new building generation inside
 that generation active while downgrading any previously active row to
 validated. Human and JSON output must report the authoritative generation mode,
 actual `parser_attempted_files`, `indexed_units`, and `semantic_facts` counts,
-`semantic_worker`, and `mining: deferred`. A generation containing only `go`,
-`go-config`, `php`, `php-config`, `ruby`, `ruby-config`, `swift`, and/or
-`swift-config` inventory tokens,
-or no accepted source/configuration tokens, reports
-`indexing: file_manifest_only` and
-`parser: deferred`. A generation containing any parser-capable language token
-reports `indexing: syntax_only_code_units` and `parser: syntax_only`, including
-unchanged mixed-repository incremental rounds with zero parser attempts. The
+`semantic_worker`, and `mining: deferred`. `indexing` is decided by
+one rule and one input: a generation reports `syntax_only_code_units` when it
+holds code units and `file_manifest_only` when it holds none. `parser` restates
+that same decision and is not a separate claim about whether the parser ran;
+`parser_attempted_files` is the field that reports the work done this round, and
+the two are allowed to differ in both directions.
+
+Deriving `indexing` from discovery instead is forbidden, because discovery can
+only say what a run intended to parse. An admitted file that does not decode, or
+one whose frontend recognizes no declaration, yields a generation holding
+nothing, and a discovery-derived answer would report
+`syntax_only_code_units` beside `indexed_units: 0` while every later query read
+the recorded count and answered `file_manifest_only`.
+
+The consequences are unchanged for every ordinary case. A generation containing
+only inventory-only `go`, `php`, `ruby`, `swift`, `ada`, `fortran`, or deferred
+non-admitted config paths, or no accepted source/configuration paths, holds no
+unit and so reports `indexing: file_manifest_only` and `parser: deferred`. Exact
+parser-capable dependency inputs — `go.mod`, `go.work`, `composer.json`,
+`composer.lock`, `Gemfile.lock`, `Package.resolved`, `alire.toml`,
+`alire.lock`, and `fpm.toml` — produce project-config units and therefore report
+`indexing: syntax_only_code_units` and `parser: syntax_only`, as does any other
+generation that holds units. This remains true for unchanged mixed-repository
+incremental rounds with zero parser attempts, because those generations still
+hold their copied-forward units. The
 CLI emits at most one truthful unsupported/inventory-only warning per accepted
 manifest token, not one warning per file. By default, `semantic_worker` is
 `deferred`.
@@ -572,12 +613,21 @@ dirty/dependency state, and then activates the new generation. If a safe
 precondition is not met, `sync` must
 fall back to the full rebuild path and report `sync_mode:
 full_rebuild_fallback` with a `fallback_reason`.
-Inventory-only `go`, `go-config`, `php`, `php-config`, `ruby`, `ruby-config`,
-`swift`, and `swift-config` deltas are an explicit token-based exception while
-those tokens are absent from
+Inventory-only `go`, `php`, deferred `php-config`, `ruby`, deferred
+`ruby-config`, `swift`, deferred `swift-config`, `ada`, deferred `ada-config`,
+`fortran`, and deferred `fortran-config` deltas are an explicit
+token-based exception while those source/config tokens are absent from
 `ParserProjectContext`: only bounded file metadata is added, modified, removed,
-or copied, claim-bearing legacy records for Go, PHP, Ruby, and Swift paths are purged,
-and parser-attempt/reparse counts remain zero. Ruby discovery records the stable
+or copied, claim-bearing legacy records for their inventory-only paths are
+purged, and parser-attempt/reparse counts remain zero. Exact dependency inputs
+are path-qualified exceptions: root/nested `go.mod` and `go.work`,
+`composer.json`, `composer.lock`, `Gemfile.lock`, `Package.resolved`,
+`alire.toml`, `alire.lock`, and `fpm.toml` are
+parsed by their bounded static inventory adapters, so their deltas reparse
+file-locally and unchanged evidence-bound dependency rows copy forward.
+`go.mod` may emit Go Modules requirements and claim-scoped UNKNOWNs; `go.work`
+emits only a workspace-selection UNKNOWN. Neither path reads `.go` source or
+runs a Go command. Ruby discovery records the stable
 `language_specific_exclusion` skip token for `.bundle` and `.ruby-lsp` path
 components; PHP uses the same token for exact `.composer` and `.phpunit.cache`
 components. Neither language-specific policy globally hides those directories
@@ -601,8 +651,8 @@ scanning, syntax parsing, local support-fact recording, semantic-worker
 deferred/running state, candidate/family construction, and persistence
 validation. Known work uses exact completed/total counts and exact integer
 percentages. Inventory-only progress must say that work was deferred or
-inventoried; it must not label Go, PHP, Ruby, or Swift metadata traversal as parsed
-source.
+inventoried; it must not label Go, PHP, Ruby, Swift, Ada, or Fortran metadata
+traversal as parsed source.
 Unknown work must remain explicit and must not display fabricated
 percentages or ETAs.
 Progress events must not include source snippets, source paths, content hashes,
@@ -643,21 +693,31 @@ before generation preparation, an over-limit repository cannot activate a new
 generation. During `init`, the same failure remains an initialization
 `failed_step: "resync"`; state initialization may have succeeded, but the
 `resync` sub-result is null and autosync is not started.
-Autosync polling evaluates Git ignore with the same accepted-manifest policy as
-manual discovery, batching every supported candidate through one
-`git check-ignore -z --stdin` subprocess per fingerprint pass (about 10 ms for a
-few hundred paths, roughly one percent of the default 1000 ms poll) rather than
-one process per file. Supported Git-ignored candidates are excluded before the
-aggregate fingerprint file/byte ceilings are charged, so `autosync run` and a
-manual Git-aware `sync` no longer disagree about whether a repository is within
-accepted limits. When Git is absent or errors, the pass falls back to safe
-no-ignore filtering exactly as discovery does. The fingerprint stays
-metadata-only, so a same-size, same-modification-time edit is invisible to
-polling until another change or a manual `sync`; `sync` remains the
-authoritative Git-aware indexing operation and always recomputes content hashes.
-Each pass counts the Git-ignored supported files it excluded and records that
-bounded, path-free count with the Git-ignore status to the daemon log on change;
-surfacing it through `autosync status --json` is a deferred follow-up.
+Autosync fingerprints share manual discovery's Git-ignore policy. Git's bounded
+`ls-files --others --ignored --exclude-standard --directory` output prunes wholly
+untracked ignored directories before Rust traversal. Tracked descendants and
+ignore exceptions remain visible. A batch `git check-ignore` filters remaining
+candidates before file/byte admission. Git errors restore conservative no-ignore
+traversal, including a complete retry when filtering fails after pruning.
+The path-free ignored-file count covers visited candidates, not unenumerated
+pruned subtrees. It is a diagnostic count, not total ignored repository size.
+
+Native macOS/Linux notifications coalesce changes into bounded wakeup hints.
+A retained hint forces the existing content-hashing sync even when metadata is
+unchanged; a failed sync is not acknowledged until a retry succeeds. Native
+idle mode checks lifecycle state at most every ten seconds and reconciles
+metadata every sixty seconds. `stop` still terminates the owned daemon directly.
+Watcher startup failure or event loss is logged and falls back to metadata
+polling. Polling starts at `--poll-ms` and backs off during inactivity to
+30 seconds (or the configured interval if longer), resetting after changes.
+Retries use exponential delay capped at sixty seconds and preserve pending
+work without requiring another edit. Debouncing retains `--debounce-ms`; sync
+uses the existing dependency-aware incremental path and authoritative fallback.
+Metadata-only reconciliation cannot detect a same-size, same-mtime edit when
+native events are unavailable or lost. Explicit `sync` recomputes content hashes;
+query-time hash validation remains authoritative. No battery-life percentage
+or runtime-equivalence claim follows from reduced scanning.
+
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -689,9 +749,9 @@ semantic-worker environment, computes the initial repository fingerprint,
 initializes daemon log/startup state, and completes one immediate service
 heartbeat. That heartbeat revalidates the exact `starting` lock owner,
 repository readiness, and a second repository fingerprint; the second
-fingerprint becomes the polling baseline. Only after those fallible steps
+fingerprint becomes the reconciliation baseline. Only after those fallible steps
 succeed may the same lock owner atomically transition its exact
-PID-plus-startup-nonce record to `ready` and enter the polling loop. The
+PID-plus-startup-nonce record to `ready` and enter the event/reconciliation loop. The
 transition quarantines the owned `starting` record and installs `ready` with a
 no-overwrite link, so a non-cooperating replacement is preserved and readiness
 fails closed rather than overwriting another owner. The parent reports
@@ -703,8 +763,8 @@ persists only one sanitized low-cardinality code:
 `repository_state_unavailable`, `daemon_lock_refused`,
 `child_exited_before_ready`, `startup_timeout`, or
 `first_heartbeat_failed`; raw worker errors, paths, source, environment values,
-credentials, nonces, and daemon internals are excluded. The worker polls a lightweight
-supported-file metadata fingerprint, debounces changes, and calls the existing
+credentials, nonces, and daemon internals are excluded. The worker uses native event hints and periodic supported-file metadata
+reconciliation, debounces changes, and calls the existing
 `sync` implementation when indexed files are added, removed, or modified. The
 daemon records a sanitized `repository fingerprint failed` previous-attempt
 error and remains alive when a later polling fingerprint transiently fails;
@@ -913,8 +973,10 @@ accepts `auto`, `all`, `none`, single concrete ids, and comma-separated
 concrete target lists. Recognized concrete ids are `codex`, `claude-code`
 (`claude` alias), `cursor`, `opencode`, `hermes`, `gemini`, `antigravity`, and
 `kiro`. `repogrammar install` with no flags launches a simple TUI-style text
-wizard when running in an interactive terminal. The wizard supports multi-select
-Codex and Claude Code in one run, shows existing RepoGrammar-managed receipts,
+wizard when running in an interactive terminal. The wizard menu is data-driven
+over the live targets (currently `1 = Codex`, `2 = Claude Code`,
+`3 = opencode`), supports multi-select in one run through comma-separated
+numbers or agent names, shows existing RepoGrammar-managed receipts,
 uses `a` as the default automatic selection, selects only detected
 not-yet-managed agents through that default, reports a no-op when that set is
 empty, and lets users explicitly add missing supported agents on later runs.
@@ -923,7 +985,9 @@ Noninteractive live writes require `--yes`. `install --yes`, `install
 --dry-run`, and explicit `--target ... --yes` must never prompt. The current
 implementation supports `--target codex --scope global` through the native
 Codex MCP CLI, `--target claude-code --scope global` through the native Claude
-Code MCP CLI, and safe `--target all --scope global --yes` through the same
+Code MCP CLI, `--target opencode --scope global` through the file-based
+opencode global config writer (no opencode CLI is executed), and safe
+`--target all --scope global --yes` through the same
 all-or-rollback transaction. In the interactive wizard, anonymous telemetry
 consent remains default-no, while the final reviewed install-plan confirmation
 is default-yes. `all` and `auto` resolve to the current first-class live targets
@@ -936,8 +1000,11 @@ when possible, runs a read-only MCP self-test before native configuration,
 writes one managed receipt per configured target, and rolls back all changes
 from the same run if any selected agent install, native verification, receipt
 write, or final product `tools/list` self-test fails. Before any command-path or
-native write, the installer uses the selected agent's bounded, read-only native `mcp get`
-operation. Only an exact target-specific not-found response is absent; unknown
+native write, the installer uses the selected agent's bounded, read-only
+ownership probe — the native `mcp get` operation for Codex and Claude Code, and
+a direct config-file read for the file-based opencode writer. Only an exact
+target-specific not-found response (or, for opencode, the `mcp.repogrammar` key
+being absent) is absent; unknown
 or malformed probe output fails closed and is not echoed. A same-name native
 entry without a RepoGrammar receipt is foreign. A receipt whose native entry is
 missing, has a different scope or executable, or does not use exactly the

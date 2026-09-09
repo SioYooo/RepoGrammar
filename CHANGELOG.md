@@ -1,5 +1,83 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 — release candidate
+
+### Changed
+
+- Terminal indexing now renders a width-bounded colored progress bar with real
+  stage counts; plain logs and JSON remain compatible. `init` and concise help
+  explain the current-directory bootstrap and when to sync or rebuild.
+
+- Autosync uses native macOS/Linux file events with coalescing and periodic
+  reconciliation, prunes ignored untracked directories before fingerprint
+  traversal, and backs off idle polling and failed retries. Failed syncs keep
+  pending changes until success. These are background-work improvements, not
+  a measured battery-life claim.
+- Reorganized the README around installation, use, background updates, and
+  explicit capability limits; removed competition and demo-result framing.
+
+### Added
+
+- Added opencode as the third live agent target for global-scope installs, as
+  the first file-based writer. `repogrammar install --target opencode --scope
+  global --yes` writes the exact `mcp.repogrammar` local entry into
+  `$XDG_CONFIG_HOME/opencode/opencode.json` (default
+  `~/.config/opencode/opencode.json`) without executing an opencode CLI. The
+  writer is idempotent, preserves unknown fields, refuses malformed files,
+  backs up a pre-existing file before repair, writes atomically with reparse
+  verification, records file-creation evidence in the existing receipt fields,
+  and uninstalls by removing only the managed key (deleting the file only when
+  RepoGrammar created it and it would otherwise be empty). The interactive
+  installer wizard is now a data-driven menu over the live targets
+  (1=Codex, 2=Claude Code, 3=opencode), and `setup --target opencode` is
+  accepted. Project-local opencode writes remain deferred.
+
+- Added the isolated Top-20 language and third-party-library campaign audit:
+  20 ranked completion reviews plus a TypeScript-extra review, a 21-record JSON
+  summary, ecosystem/provider/version/license/manifest/lockfile/`UNKNOWN`
+  matrices, and a source-free correctness/security/completeness/performance
+  review. The strict result is `PARTIAL_AUDITED_PROGRESS` with `0/20` languages
+  complete and zero production reviewed-contract packs; inventory and
+  structural evidence do not claim full language or arbitrary-library support.
+
+- Added an exact-version-scoped `LibraryContractRegistry` domain boundary. It
+  deterministically rejects duplicate or overlapping contract claims, refuses
+  manifest-only/versionless lookup, and never treats a contract match as family
+  proof without separate source-anchor and external-symbol evidence. No
+  production library contract pack is shipped by this change.
+- Added bounded, non-executing Maven dependency inventory for exact root/nested
+  `pom.xml` inputs. Static direct `groupId:artifactId` declarations retain
+  bounded literal requirements, Maven test/runtime scope where provable, and
+  optionality; parent/effective-model inheritance, dependency management/BOMs,
+  profiles, properties, artifact variants, plugins, malformed XML, and resource
+  limits remain `java_dependency_inventory` typed `UNKNOWN`. No Maven, Gradle,
+  javac, plugin, annotation processor, project code, or dependency code runs.
+- Added bounded, non-executing Go Modules inventory for exact root/nested
+  `go.mod` inputs. Valid `require` declarations retain exact module versions and
+  direct/indirect state; malformed, conflicting, graph-changing, workspace, and
+  resource-bounded cases remain claim-scoped typed `UNKNOWN`. `.go` source is
+  never read or parsed, `go.work` creates no dependency rows, and no Go command,
+  resolver, dependency, child process, or network operation executes.
+- Added bounded direct RubyGems declaration inventory from the unique top-level
+  `DEPENDENCIES` section of exact `Gemfile.lock`. Scope and resolved version stay
+  unknown; executable Ruby/Bundler DSLs and non-registry or ambiguous inputs are
+  never evaluated or promoted to dependency behavior.
+- Added language-neutral three-state dependency directness and schema-v13
+  persistence. Exact SwiftPM `Package.resolved` schema 2/3 now receives a
+  bounded duplicate-key-rejecting static read that records exact semantic-
+  version pins with unknown scope/directness while discarding locations and
+  revisions. Swift source and executable/toolchain configuration remain
+  inventory-only; no Swift, SwiftPM, Xcode, plugin, macro, child process, or
+  network operation executes, and no family or language-support claim follows.
+- Added bounded unique-member parsing for exact Composer JSON/lock inputs.
+  Manifest `require` and `require-dev` entries become direct scoped declarations;
+  lock package entries retain unknown directness and explicit coherence/install/
+  runtime uncertainty. PHP source and PHPUnit XML remain inventory-only, and no
+  PHP, Composer, autoloader, plugin, script, dependency, child process, or
+  network operation executes.
+
 ## 0.4.3 — 2026-07-22 stable channel
 
 ### Fixed
@@ -1031,7 +1109,8 @@ either check fails.
   on Windows without publishing a Windows artifact. Preview npm publication
   uses dist-tag `preview`, and local workflow changes alone remain no proof of
   external publication.
-- ADR-0025 now records the Swift N1 architecture/security preflight plus bounded
+- At that historical preflight stage, ADR-0025 recorded the Swift N1
+  architecture/security preflight plus bounded
   discovery/configuration inventory without adding a dependency, toolchain,
   worker, parser, project model, code unit, IR, fact, typed `UNKNOWN`, family,
   or support behavior. Stable `swift`/`swift-config` classification inventories
@@ -1110,10 +1189,13 @@ either check fails.
 - ADR-0022 now records the Ruby N1 preflight plus bounded discovery/configuration
   implementation without adding Ruby runtime support or a production
   dependency. Stable `ruby`/`ruby-config` classification, Ruby-specific
-  `.bundle`/`.ruby-lsp` exclusions, source-store/parser bypass, one warning per
-  manifest token, file-manifest/mixed-mode reporting, incremental metadata
-  deltas, legacy-claim purge, and Git-aware discovery versus Git-independent
-  autosync fingerprinting advance Ruby only to `discovered_only`. The exact
+  `.bundle`/`.ruby-lsp` exclusions, source-store/parser bypass for Ruby source,
+  and a bounded pure Rust config parser advance Ruby only to `discovered_only`.
+  Exact `Gemfile.lock` can now persist strict direct `rubygems` manifest
+  declarations; executable DSLs, unsupported sources/variants,
+  malformed/conflicting input, and resource limits emit source-free
+  `ruby_dependency_inventory` `UNKNOWN`s. Unrelated incremental source edits
+  copy dependency rows forward. The exact
   direct `ruby.minitest.test_method` family remains staged behind an immutable
   `ruby-prism` artifact, explicit CRuby
   4.0 syntax profile, future authoritative typed obligations, support >= 3,
@@ -1130,10 +1212,9 @@ either check fails.
   `4.0.6` plus optional LF, and the worker receives only bounded `.rb` bytes plus
   normalized profile metadata. The Minitest anchor requires a lexically earlier
   unconditional program-body require and a source-visibly public method. Ruby
-  discovery persists only path/hash/size/token metadata and stores no source
-  text, code unit, IR, fact, typed `UNKNOWN`, family, project model, or support
-  claim; Ruby remains unsupported and all later qualification gates remain
-  open.
+  source remains inventory-only; config units and dependency UNKNOWNs do not
+  create Ruby source IR, a framework family, or a support/readiness claim. Ruby
+  remains unsupported and all later qualification gates remain open.
 - Fixed aggregate filesystem discovery ceilings now bound accepted supported
   files (100,000), accepted bytes (512 MiB), reported skips (100,000), visited
   entries (250,000), and directory depth (256), with inclusive exact-boundary

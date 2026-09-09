@@ -122,7 +122,19 @@ same-generation `Cargo.toml` code units exist. Non-Rust repositories, or
 repositories with no discovered `Cargo.toml`, skip this substage. The provider runs
 `cargo metadata --format-version=1 --no-deps`, parses
 workspace/package/target/feature/dependency metadata into owned
-`PROJECT_CONFIG` semantic facts, and returns recoverable `UNKNOWN`s for
+`PROJECT_CONFIG` semantic facts. Under ADR-0030 it also translates each direct
+dependency into a language-neutral `manifest_declared` `DependencyRecord` with
+package name, requirement when supplied by Cargo, scope, optionality, and
+manifest evidence. Because `--no-deps` is used, these records do not claim a
+resolved transitive graph, installed version, source, checksum, or external
+symbol. The indexing application writes the records through the shared
+generation session into schema v14 `dependency_records`; active reads validate
+their closed tokens and same-generation evidence again. This persistence does
+not expose package names on CLI/MCP and does not promote package presence to a
+semantic or family claim. Full builds and incremental sync both run this stage;
+incremental sync deliberately recomputes Cargo provider facts and dependencies
+instead of copying them from the base generation. The adapter returns
+recoverable `UNKNOWN`s for
 unavailable Cargo, unreadable project configuration, or missing manifest
 candidates. Absolute manifest paths returned by Cargo are scoped against the
 canonical project root before they are accepted, so symlink-equivalent roots do
@@ -200,8 +212,10 @@ required implementation and final completion audit land.
 ## Swift preflight strategy
 
 ADR-0025 accepts a future Swift worker design. The separate discovery-only
-inventory is implemented but invokes and admits no dependency, toolchain,
-worker, semantic runtime, or support behavior. The production
+inventory and bounded `Package.resolved` schema-2/3 reader are implemented but
+invoke and admit no production dependency, toolchain, worker, semantic runtime,
+or support behavior. Static lock rows are internal project metadata, not worker
+admission or installed-package proof. The production
 syntax candidate is `SwiftParser`/`SwiftSyntax` 603.0.2 in a separately reviewed
 OS-sandboxed worker, differentially qualified against the exact Swift 6.3.3
 compiler. SwiftSyntax output is structural and cannot prove module identity,
@@ -219,9 +233,9 @@ macros/plugins/generators, use ambient caches/credentials/toolchain state,
 spawn descendants, write outside an empty private temporary directory, or use
 network access.
 
-A separate future bounded project-model parser may receive manifest and
-`Package.resolved` bytes, but may accept only the ADR's static allowlist and
-emit a sanitized normalized profile. `.swift-version` is auxiliary toolchain-
+A separate future bounded project-model parser may receive executable manifest
+bytes and may extend the current lockfile inventory only through the ADR's
+static allowlist and a sanitized normalized profile. `.swift-version` is auxiliary toolchain-
 selector inventory, not package dialect evidence. The exact
 `swift.xctest.test_method` family, future claim-impact obligations,
 resource/protocol limits, artifact/platform gates, and eleven atomic stages are
@@ -288,6 +302,18 @@ Dynamic import, non-literal `require`, `eval`, prototype mutation, proxies,
 decorator rewrites, ambient globals without project context, and bundler-only
 aliases remain typed `UNKNOWN` unless a configured provider proves a narrower
 claim.
+
+Dependency inventory is intentionally separate from this worker. The bounded
+root `package.json` parser can emit ADR-0030 npm `manifest_declared` records
+through `SourceParseOutput` without executing Node, npm, package scripts, or
+dependency code. It accepts the four exact npm dependency sections, retains
+bounded requirements, represents peer scope as `unknown`, and ties every row to
+the manifest code unit and content hash. Parser output cannot claim provider
+resolution or external-symbol identity. Unchanged static records copy forward
+only with unchanged evidence during incremental sync; a changed manifest goes
+through the existing project-context full-rebuild gate. This inventory does not
+upgrade the transitional TS/JS lane or prove library behavior or family
+membership.
 
 Version policy:
 
@@ -528,7 +554,10 @@ certainty for recognized framework-shaped code units; these records are not
 worker facts and remain blocked from family claims as insufficient support.
 The default Python indexing path can now call the checked-in
 `src/workers/python/worker.py` in private parse-document mode to extract
-CPython `ast` code-unit metadata for `.py` files. This private mode has its own
+CPython `ast` code-unit metadata for `.py` files. Local debug and test builds
+prefer that checkout worker so a stale packaging-smoke copy under `target/`
+cannot masquerade as the current Rust protocol peer. Release builds continue
+to resolve their installed bundled worker first. This private mode has its own
 exact host/worker contract tuple, currently `protocol_version=1` and
 `contract_revision=2`; both fields are required in every parse-document request
 and normal response, and the normal response requires a strict lowercase
@@ -608,9 +637,17 @@ facts are RepoGrammar-owned and are not emitted by the CPython worker itself.
 The worker also has a private `parse_project_config` mode for exact root
 `pyproject.toml`, `setup.cfg`, and `setup.py`. It uses standard-library
 `tomllib`, `configparser`, and CPython `ast` respectively and never executes
-`setup.py`. Only sanitized literal project/config context from calls lexically
-traced to `setuptools` imports with no recognized name, relevant attribute, or
-namespace mutation is returned. Setup must be a direct unconditional
+`setup.py`. Its host/worker tuple is `protocol_version=1` plus
+`contract_revision=1`; missing or stale revisions return the same sanitized
+`PYTHON_FRONTEND_CONTRACT_MISMATCH` class used by the private document mode.
+In addition to sanitized project/config context, the same response
+can carry ADR-0030 PyPI `manifest_declared` records. `pyproject.toml` covers
+literal PEP 621 dependencies/optional dependencies, build-system requirements,
+and PEP 735-style string dependency groups when `tomllib` is available;
+`setup.cfg` covers literal install/build/test/extra requirement lines. Static
+`setup.py` dependency arrays are accepted only from calls lexically traced to
+`setuptools` imports with no recognized name, relevant attribute, or namespace
+mutation. Setup must be a direct unconditional
 zero-positional module-body call with no keyword unpacking and unique relevant
 keywords. Its `package_dir` must be a complete unique string-to-string mapping;
 a finder root must be the direct `packages=` value and use at most one literal
@@ -621,16 +658,32 @@ abstain. A recognized call with computed, incomplete, duplicate, unpacked,
 overridable, or top-level-unreachable relevant config produces
 `MissingProjectConfig`; `setup()` remains valid empty config. Exactly one
 authoritative setup call is required; multiple calls produce typed
-`ConflictingFacts`. Default indexing uses that private mode while Rust still
-reads each
-file through the source-store path/hash/size boundary and translates the
+`ConflictingFacts`. A trusted dependency-bearing setup call outside that direct
+authority shape produces dependency-inventory `UNKNOWN`, including a call
+inside a conditional block. Dependency names are normalized by the PEP 503
+comparison rule. The stored requirement is a bounded ASCII suffix after the
+name; URL/path suffixes are deliberately omitted because they may contain
+repository paths or credentials. Dynamic, malformed, over-limit, or otherwise incomplete
+dependency fields produce `python_dependency_inventory` typed `UNKNOWN` while
+independent safe source-root context remains usable. Python runtimes without
+`tomllib` return `MissingDependency`/`MissingProjectConfig` UNKNOWNs for the
+TOML and dependency-inventory claims rather than guessing. Default indexing
+uses that private mode while Rust still reads each file through the source-store
+path/hash/size boundary and translates the
 summary into a `python-config` file, `project_config` code unit, and internal
 `PROJECT_CONFIG`/`STRUCTURAL` or `UNKNOWN` records. Fact provenance records the
 actual parser method rather than labeling every format as `tomllib`. These
 config records are not provider facts, are not passed to family construction,
 and remain blocked from claim-input readiness as insufficient support. The
-`setup.py` scan does not infer arbitrary helper-call side effects beyond
-explicit lexical mutation forms. The same Python worker
+dependency rows are likewise context only, persist through the shared schema
+v11 store, and copy forward only with an unchanged evidence unit. They never
+prove installed versions, external symbols, library behavior, or family
+membership. The project-config response is capped at 2 MiB; an oversized
+dependency projection is replaced by `ResourceLimit` UNKNOWN rather than
+crossing the Rust host boundary. Relevant TOML tables or `project.dynamic` with
+invalid types also produce dependency-inventory UNKNOWN. The `setup.py` scan
+does not infer arbitrary helper-call side effects beyond explicit lexical
+mutation forms. The same Python worker
 has a semantic-worker-compatible NDJSON project mode that builds a bounded
 repo-local module graph from requested `.py` files, applies sanitized
 `pyproject.toml` source roots when `tomllib` is available, emits structural

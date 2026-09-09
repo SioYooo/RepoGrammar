@@ -329,13 +329,17 @@ Go's N1 preflight is accepted in
 `docs/decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`, and
 its discovery/config module now inventories bounded `.go`, root/nested
 `go.mod`, and root/nested `go.work` under distinct `go`/`go-config` tokens.
-Default indexing treats both tokens as parser-source-read-free inventory, aggregates
-one path-free unsupported warning per token, persists no Go units/facts/IR/
-families, reports Go-only generations as `file_manifest_only`, and keeps
-inventory-only source/config deltas incremental with zero Go reparses. Warning
-derivation uses the whole manifest, and copy-forward purges claim-bearing
-records for Go paths. Frontend/IR must restore token-based project-context
-invalidation before adding Go semantics. A
+Default indexing keeps `.go` source bytes parser/source-store free and persists
+only their file metadata. Exact config bytes enter a bounded non-executing
+static adapter: valid `go.mod` `require` declarations become evidence-bound
+`go_modules` rows with exact version requirements and direct/transitive state;
+malformed, conflicting, graph-changing, and resource-bounded cases become
+claim-scoped UNKNOWN, while `go.work` emits only workspace-selection UNKNOWN.
+Config deltas reparse file-locally, unchanged dependency evidence copies
+forward, and `.go` deltas retain zero parser attempts while purging legacy
+claims. No source IR, family, resolved graph, selected build/workspace, runtime,
+or support claim follows. Frontend/IR must restore token-based project-context
+invalidation before adding Go source semantics. A
 pure path classifier records normalized Go-tool exclusion, `_test.go`, and the
 dated Go 1.26.5 known GOOS/GOARCH suffix shape without selecting a build
 environment; source marker scanning remains deferred. Go is therefore
@@ -358,11 +362,19 @@ exact `.php` and the four accepted Composer/PHPUnit config basenames. One pure
 classifier gives config precedence, applies PHP-only `.composer`/
 `.phpunit.cache` exclusions without globally hiding other languages, and leaves
 exact `vendor` under the existing global exclusion. Indexing stores only path/
-raw-byte hash/size/token metadata, bypasses source-store/parser work, emits one
-path-free warning per token, reports honest file-manifest/mixed modes, keeps
-inventory deltas incremental, and purges legacy PHP claim records. No config is
-decoded or parsed; custom `vendor-dir`, project profile, dependency, worker,
-parser, unit, IR, fact, `UNKNOWN`, family, and readiness remain unimplemented.
+raw-byte hash/size/token metadata for PHP source and PHPUnit XML, bypasses their
+source-store/parser work, emits one path-free warning per inventory-only token,
+reports honest file-manifest/mixed modes, keeps inventory deltas incremental,
+and purges legacy PHP claim records. Exact `composer.json` and
+`composer.lock` are the bounded static-metadata exception: supplied UTF-8 JSON
+passes the shared unique-member/resource gate and emits only Composer dependency
+rows plus claim-scoped `php_dependency_inventory` uncertainty. Manifest rows
+are direct scoped declarations; lock rows preserve their package-section scope
+and exact version while directness and manifest coherence remain unknown.
+Source URLs are discarded, no code executes, and no family/readiness/support
+claim follows. Custom `vendor-dir`, selected project profile, Composer
+content-hash coherence, worker, source parser, semantic IR/facts, and family
+remain unimplemented.
 The candidate production frontend remains `mago-syntax` 1.43.0 only in a
 separately reviewed OS-sandboxed worker. Official PHP 8.5.8 `php -n -l` is the
 isolated syntax-validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/
@@ -377,11 +389,14 @@ is `discovered_only` and unsupported. Stable `swift`/`swift-config` tokens
 persist bounded path/hash/size/token metadata for exact `.swift` and the exact
 Swift config basename grammar through one pure classifier. Exact `.build` and
 `.swiftpm` are Swift-only exclusions; other languages below them remain
-visible. Source/config bytes bypass the source store and parser, Swift-only
-generations are `file_manifest_only`, warnings are one per token, deltas remain
-incremental, and legacy claim records are purged. No dependency, toolchain,
-worker, parser, project model, unit, IR, fact, typed `UNKNOWN`, family, or
-readiness behavior exists. The production syntax candidate is exact
+visible. Swift source and every config input except exact `Package.resolved`
+bypass the source store and parser; legacy claim records are purged. Exact
+schema-2/3 lock bytes enter the bounded unique-member static reader and may
+persist exact SwiftPM semantic-version pins with unknown scope/directness, while
+malformed or unsupported pins become claim-scoped UNKNOWN. Dependency evidence
+copies forward incrementally. No toolchain, worker, source parser, source IR,
+family, install/build/runtime state, or readiness behavior exists. The
+production syntax candidate is exact
 SwiftSyntax 603.0.2 in a separately reviewed worker, qualified against the
 exact Swift 6.3.3 compiler. Exact 6.3.3 SourceKit/sourcekitd is only an isolated
 semantic identity candidate and must not open or build the target repository.
@@ -403,12 +418,16 @@ combining it with production artifact admission.
 Ruby's N1 preflight and bounded discovery/config module are recorded in
 `docs/decisions/ADR-0022-ruby-prism-minitest-preflight.md`; Ruby is now
 `discovered_only` and unsupported. Stable `ruby`/`ruby-config` tokens persist
-bounded source-free file metadata through one pure path classifier, Ruby-only
-`.bundle`/`.ruby-lsp` exclusion, parser/source-store bypass, deterministic
-one-per-token warnings, honest file-manifest/mixed modes, incremental metadata
-deltas, and legacy-claim purge. Autosync retains its generic Git-independent
-fingerprint policy. No unit, IR, fact, `UNKNOWN`, family, readiness promotion,
-dependency, or Ruby/Bundler execution is added. The `ruby-prism` 1.9.0 candidate
+bounded inventory through one pure path classifier and Ruby-only
+`.bundle`/`.ruby-lsp` exclusions. Ruby source and every config except exact
+`Gemfile.lock` remain source-store/parser free. A bounded pure Rust lock
+parser stores one project-config unit, source-free
+`ruby_dependency_inventory` `UNKNOWN`s, and strict direct `rubygems`
+declarations from exact `Gemfile.lock` `DEPENDENCIES`; executable DSLs and
+unqualified config variants remain inventory-only and are never evaluated.
+Dependency rows copy forward across unrelated incremental edits. No Ruby
+source IR, family, readiness promotion,
+or Ruby/Bundler execution is added. The `ruby-prism` 1.9.0 candidate
 remains native C99/FFI and unauthorized until the separate checksum/vendor,
 platform, corpus/fuzz, range/diagnostic, resource, and OS-sandbox gates pass.
 The first target remains the exact direct `ruby.minitest.test_method` slice;
@@ -416,6 +435,47 @@ alternate engines, dynamic loading, inheritance, metaprogramming, generated
 sources, and runtime test behavior remain non-claims or future typed
 obligations. The incomplete semantic gate and four-part record are in
 `docs/reports/language-support/ruby-completion-review.md`.
+
+MATLAB's N3 slice is `discovered_only` and unsupported. Stable `matlab` and
+`matlab-config` tokens persist lowercase `.m` inventory and exact root/nested
+`resources/mpackage.json`. Source bytes never reach the source store or parser.
+Bounded R2024b+ package-definition JSON may add project-config units, direct
+`matlab_add_on` declarations, and `matlab_dependency_inventory` UNKNOWNs, but
+does not prove source syntax, resolution, installation, external symbols,
+MATLAB/Octave execution, Simulink, a family, or readiness. The incomplete gate
+is recorded in ADR-0037 and
+`docs/reports/language-support/matlab-completion-review.md`.
+
+Assembly's N4 slice is a bounded structural substrate and unsupported. It
+admits lowercase `.s` only, excludes preprocessed `.S`, scans a conservative
+x86-64 ELF GNU as 2.46 AT&T candidate profile, and persists module/label/
+containment/selected lexical facts together with mandatory profile uncertainty.
+It never assembles, preprocesses, links, executes, reads includes, or supports
+a family. Dialect, architecture, ABI, object-format, and symbol resolution are
+non-claims. ADR-0038 and
+`docs/reports/language-support/assembly-completion-review.md` record the gate.
+
+Scratch's N4 product integration is `NO_GO`: `.sb3` remains undiscovered and
+unsupported because current ports are UTF-8 text-only and no ZIP/deflate
+dependency has passed admission. A disconnected, stored-entry-only archive and
+JSON security preflight proves bounded rejection behavior, not Scratch support.
+ADR-0039 and `docs/reports/language-support/scratch-completion-review.md` require
+a binary-document port and maintained ZIP/deflate qualification before product
+discovery may change.
+
+The 2026-08-01 five-round checkpoint is audited as
+`PARTIAL_AUDITED_PROGRESS`: strict completion remains `0/20`, TypeScript extra
+is incomplete, 17 of 20 dependency-ecosystem tokens have bounded consumers,
+and the exact-version reviewed-contract registry has zero production packs. A
+2026-08-14 continuation ran under an added zero-external-dependency constraint;
+it advanced SQL from `discovered_only` to `structural_substrate` at 7/9 through
+ADR-0040's bounded frontend, and partitioned every other lane by whether its
+binding gate needs an artifact that constraint forbids. Strict completion is
+still `0/20`.
+`docs/reports/language-support/top-20-final-program-audit.md` and
+`docs/reports/language-support/top-20-program-summary.json` are the consolidated
+human- and machine-readable snapshots. These additions do not change the
+Python-first v0.1 scope or authorize a public support claim.
 
 Existing structural paths are starting evidence, not grandfathered completion.
 Per language, completion requires discovery/configuration, an authoritative

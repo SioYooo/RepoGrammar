@@ -1,8 +1,8 @@
-# RepoGrammar Build Week Submission Kit
+# RepoGrammar Launch Kit
 
-This file is the single repository authority for Devpost, video-description,
-and launch copy. Public release evidence must be copied here only after it has
-been independently verified.
+This file is the single repository authority for product identity,
+positioning, one-liners, video description, and launch copy. Public release
+evidence must be copied here only after it has been independently verified.
 
 ## Product identity
 
@@ -84,13 +84,14 @@ stale or incompatible state.
 
 ## Pre-existing foundation
 
-Before the Build Week product-core line, the repository already contained the
-Rust architecture, local SQLite generations, bounded Python family mining, the
-pattern-family CLI, read-only MCP transport, and conservative UNKNOWN policy.
-The published baseline is recorded at commit `33715e4` in the
+Before the product-core work described below, the repository already
+contained the Rust architecture, local SQLite generations, bounded Python
+family mining, the pattern-family CLI, read-only MCP transport, and
+conservative UNKNOWN policy. The published baseline is recorded at commit
+`33715e4` in the
 [product-core RC verdict](../experiments/product-core-rc-verdict.md).
 
-## Build Week additions
+## Product-core additions
 
 The commit, code, test, and specification history records these additions:
 
@@ -124,10 +125,10 @@ RepoGrammar itself does not call GPT-5.6 or the OpenAI API. GPT-5.6 was the
 development and demo reasoning surface; RepoGrammar supplied local repository
 evidence to the coding agent.
 
-## Five-minute judge path
+## Five-minute walkthrough
 
 Use the exact public installer and commands in the root [README](../../README.md).
-The judge path pins the immutable `v0.4.3` `install.sh`, installs only the
+The walkthrough pins the immutable `v0.4.3` `install.sh`, installs only the
 product binary and bundled worker, optionally wires a coding agent with
 `repogrammar install`, and initializes each repository separately with
 `repogrammar init`. It does not require Rust or Cargo. It clones the
@@ -142,7 +143,7 @@ MIT-licensed `fastapi/full-stack-fastapi-template` at commit
 6. repository-state cleanup.
 
 The recording-specific task and stale-evidence recovery sequence are in the
-[demo runbook](../demo/build-week-demo.md).
+[demo runbook](../demo/demo-runbook.md).
 
 ## Evidence boundaries and limitations
 
@@ -205,9 +206,16 @@ Use:
 - “estimated potential read displacement”; and
 - “local product MCP self-test passed” only when that exact fact was verified.
 
+One exception is authorized: the 52% token reduction seen in a single recorded
+demo run may be reported when it is attributed to that one run and carries its
+limits, as `../reports/public-preview-growth-readiness.md` records. It is an
+observation, not a measurement.
+
 Do not claim:
 
-- measured token savings or a percentage reduction;
+- measured token savings, or any percentage reduction stated as measured,
+  benchmarked, typical, or expected rather than as the single-run observation
+  above;
 - hallucination prevention;
 - proven conformance or runtime equivalence;
 - sound/complete static analysis;
@@ -216,21 +224,13 @@ Do not claim:
 - public GitHub/npm availability before the registry and finalizer evidence
   above exists.
 
-## Human-only submission fields
+## Launch checklist
 
 ```text
-Public YouTube demo: <PENDING HUMAN VIDEO WORK>
-Codex /feedback Session ID: <PENDING HUMAN ACTION>
-Devpost submission URL: <PENDING HUMAN SUBMISSION>
+Public demo video: <PENDING HUMAN VIDEO WORK>
 ```
-
-## Final human checklist
 
 - [ ] Record from the exact current demo runbook.
 - [ ] Add English voice, captions, and editing.
 - [ ] Upload the video to YouTube and verify signed-out access.
-- [ ] Run `/feedback` in the appropriate Codex session and copy the accepted
-      Session ID; do not infer one from a local identifier.
-- [ ] Paste the final text from this file into Devpost and submit.
-- [ ] Replace only the three human-only placeholders above with the public
-      video URL, Session ID, and Devpost submission URL.
+- [ ] Replace the placeholder above with the public video URL.
