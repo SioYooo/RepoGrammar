@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.5.0 — GitHub binary release candidate
+## 0.5.0 — 2026-09-09 GitHub binary release
 
 ### Changed
 

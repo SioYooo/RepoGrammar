@@ -5,9 +5,9 @@ Python 3.10+, Bash, curl, tar, and gzip are required; Rust and Node.js are not.
 
 ## Install
 
-The commands below target the `0.5.0` release candidate. Until its GitHub publication
-and asset verification finish, `0.4.3` remains the verified public release;
-use the [source installation](#source-installation) for candidate testing.
+The commands below install the verified GitHub binary release `0.5.0`.
+This version is not published to npm; use these GitHub assets or the
+[source installation](#source-installation).
 
 Copy this block on macOS or glibc-based Linux. It verifies the installer before
 execution, then the installer verifies the matching native archive:

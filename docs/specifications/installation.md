@@ -193,13 +193,12 @@ contributor source-build path. It must not duplicate native agent configuration
 or product-deletion ownership logic outside the Rust application, and it must
 not create or modify `.repogrammar/`.
 
-The current release-source manifests use candidate stable identity `0.5.0`. A source
-build or source install must report that identity consistently across Cargo and
-npm, but the manifest value alone does not establish a tag, release artifact,
-registry publication, or public stable channel. Stable acquisition is pinned
-to the independently verified public `0.4.3` GitHub Release and npm package;
-the source manifest by itself remains insufficient evidence. The `0.5.0`
-candidate is not a public release until its GitHub-only checklist passes.
+The current release-source manifests use stable identity `0.5.0`. Source
+builds report that version consistently across Cargo and the local npm
+manifest. Public GitHub acquisition is now pinned to the independently verified
+`v0.5.0` binary release; its [completed evidence record](../release/stable-v0.5.0-release-checklist.md#evidence-record)
+binds the ten assets to the exact successful build. npm publication remains
+`0.4.3`; the local manifest version does not imply registry publication.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:

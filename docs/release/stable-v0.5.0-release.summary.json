@@ -1,0 +1,134 @@
+{
+  "schema": "github-binary-release.v1",
+  "verdict": "GITHUB_RELEASE_READY",
+  "version": "0.5.0",
+  "source_commit": "881e0d0b243e9c1884413929d1cc55830051e369",
+  "annotated_tag_object": "827cdb8bdf85ca9b50c240c4f4167b3e2d921dba",
+  "build_run": {
+    "id": 34314166404,
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "conclusion": "success",
+    "url": "https://github.com/SioYooo/RepoGrammar/actions/runs/34314166404"
+  },
+  "release": {
+    "id": 385246396,
+    "html_url": "https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.0",
+    "published_at": "2026-09-09T05:29:13Z",
+    "immutable": true,
+    "draft": false,
+    "prerelease": false
+  },
+  "assets": [
+    {
+      "name": "repogrammar-aarch64-apple-darwin.tar.gz",
+      "size": 4901927,
+      "sha256": "e419dfc7627c56e67ab5b55a94d66fc79da31e111d3f175951a37885775610d6"
+    },
+    {
+      "name": "repogrammar-aarch64-apple-darwin.tar.gz.sha256",
+      "size": 106,
+      "sha256": "11ccd50a19764337f2f706848231f0b1674752a47e969080ec2788a75ba09a11"
+    },
+    {
+      "name": "repogrammar-x86_64-apple-darwin.tar.gz",
+      "size": 5103317,
+      "sha256": "96ccb3512bcd5e5d7d4dfea3c0caf04b6b51e944d4dc68e5b7b1137634a0fe4e"
+    },
+    {
+      "name": "repogrammar-x86_64-apple-darwin.tar.gz.sha256",
+      "size": 105,
+      "sha256": "39e2659607830b7667c8f177fad7fca6b92c9eefb0a92d9f6a005c3aced5b860"
+    },
+    {
+      "name": "repogrammar-aarch64-unknown-linux-gnu.tar.gz",
+      "size": 5159139,
+      "sha256": "714c1b15cd0e017a6f259adbafc2fb174d1cbdde70f98984925bec85bbd33baf"
+    },
+    {
+      "name": "repogrammar-aarch64-unknown-linux-gnu.tar.gz.sha256",
+      "size": 111,
+      "sha256": "f603f8a8a271a892e526d1e438de878e9ee0ec824f95ca044ee034f6ebd2698d"
+    },
+    {
+      "name": "repogrammar-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 5349502,
+      "sha256": "48055e3c08f4e74d633ef12573e9a10b8a1c8e34d20158bdd8f50818a266f907"
+    },
+    {
+      "name": "repogrammar-x86_64-unknown-linux-gnu.tar.gz.sha256",
+      "size": 110,
+      "sha256": "709334f90087ac02f69d2fc377a162ff1805d5e3a57e78e981f8add46b4d0a9d"
+    },
+    {
+      "name": "install.sh",
+      "size": 30126,
+      "sha256": "058681c4ecd5a2a1af0249f0a5b9d8166876592a53f5ede18d5b7097c08f4755"
+    },
+    {
+      "name": "install.sh.sha256",
+      "size": 77,
+      "sha256": "b4eb64895fff32124e7e0ee110a9bdf03ccbe242948357e0390113059c47e1f9"
+    }
+  ],
+  "verification": {
+    "public_bytes_equal_retained": true,
+    "sha256_sidecars": "passed",
+    "release_attestation": "passed",
+    "asset_attestations_passed": 10,
+    "native_build_and_packaged_smoke_platforms": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu"
+    ],
+    "local_public_smoke": {
+      "version": "repogrammar 0.5.0",
+      "installer_exit": 0,
+      "init_exit": 0,
+      "init_status": "initialized",
+      "active_generation": "gen-000001",
+      "storage": "available",
+      "native_public_smoke": "passed",
+      "isolated_installation": true,
+      "canonical_temporary_paths": true
+    }
+  },
+  "npm": {
+    "published": false,
+    "dist_tags_before": {
+      "latest": "0.4.3",
+      "preview": "0.2.0-preview.0"
+    },
+    "dist_tags_after": {
+      "latest": "0.4.3",
+      "preview": "0.2.0-preview.0"
+    },
+    "versions_before": [
+      "0.2.0-preview.0",
+      "0.2.2",
+      "0.4.0",
+      "0.4.1",
+      "0.4.2",
+      "0.4.3"
+    ],
+    "versions_after": [
+      "0.2.0-preview.0",
+      "0.2.2",
+      "0.4.0",
+      "0.4.1",
+      "0.4.2",
+      "0.4.3"
+    ]
+  },
+  "limitations": [
+    "No measured battery-life percentage.",
+    "Windows and musl are not release targets.",
+    "Strict Top-20 language completion remains 0/20."
+  ],
+  "verification_notes": [
+    "An initial local installer smoke used a macOS symlinked temporary prefix and was correctly rejected; the final successful smoke used canonical private temporary paths.",
+    "The ad hoc init smoke assertion was corrected to the existing initialized JSON status; product code and public assets were unchanged.",
+    "Tag-triggered duplicate build 34314978391 was cancelled; public assets are exclusively from successful build-only run 34314166404."
+  ]
+}

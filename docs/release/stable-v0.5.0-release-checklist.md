@@ -5,8 +5,8 @@ compiled Linux/macOS binaries and installer on GitHub. Do not stage or publish
 npm, change npm dist-tags, or require npm 2FA for this release. The existing npm
 package tests and local pack remain compatibility checks.
 
-Status: `CANDIDATE_NOT_PUBLISHED`. This checklist does not establish publication,
-measured battery savings, runtime equivalence, or additional language support.
+Status: `GITHUB_RELEASE_READY`, verified 2026-09-09. The [public release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.0) is immutable and contains ten verified assets.
+This does not establish measured battery savings, runtime equivalence, or additional language support.
 
 ## Source and build gate
 
@@ -97,10 +97,12 @@ this release's completion criterion. Report npm explicitly as not published.
 
 ## Evidence record
 
-- Source commit and annotated tag object: pending.
-- Successful build-only run id and attempt: pending.
-- Ten retained/public asset checksums and byte comparison: pending.
-- Immutable GitHub release URL and attestations: pending.
-- Public native and isolated installer/init smoke: pending.
-- npm: not published; registry and dist-tags unchanged.
-- Verdict: `CANDIDATE_NOT_PUBLISHED`.
+- Source commit: `881e0d0b243e9c1884413929d1cc55830051e369`.
+- Annotated tag object: `827cdb8bdf85ca9b50c240c4f4167b3e2d921dba`.
+- Successful [build-only run 34314166404](https://github.com/SioYooo/RepoGrammar/actions/runs/34314166404), attempt 1; all four native packaged-product smokes and Linux ABI gates passed.
+- [Immutable GitHub release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.0), id `385246396`, published `2026-09-09T05:29:13Z`.
+- All ten public assets matched retained bytes, passed SHA-256 verification, and passed `gh release verify-asset`; `gh release verify` passed.
+- The public macOS arm64 archive passed packaged-product/uninstall smoke. The downloaded public installer installed `repogrammar 0.5.0` in a canonical temporary HOME/data/command layout; `init --yes --no-autosync --progress never --json` returned `initialized`, available storage, and `gen-000001`.
+- npm was not published or retagged: `latest=0.4.3`, `preview=0.2.0-preview.0` before and after.
+- Full asset digests and verification notes: [machine-readable summary](stable-v0.5.0-release.summary.json).
+- Verdict: `GITHUB_RELEASE_READY`.
