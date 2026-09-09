@@ -2407,7 +2407,7 @@ fn base64_decode_bounded(encoded: &str) -> Result<Vec<u8>, String> {
         return Err("npm provenance DSSE payload is outside the supported bound".to_string());
     }
     let mut decoded = Vec::with_capacity(output_len);
-    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let last = index + 1 == bytes.len() / 4;
         let a = base64_value(chunk[0]);
         let b = base64_value(chunk[1]);
@@ -8826,13 +8826,13 @@ verify-stable-release-evidence --evidence-dir evidence
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-        for value in [b"f".as_slice(), b"fo", b"foo", b"foobar"] {
+        for value in [b"f".as_slice(), b"fo", b"foo", b"foof", b"foofo", b"foobar"] {
             assert_eq!(
                 base64_decode_bounded(&base64_encode(value)),
                 Ok(value.to_vec())
             );
         }
-        for malformed in ["", "Zg=", "Zh==", "Zm9=", "Zm=v", "Zm9v\n"] {
+        for malformed in ["", "Zg=", "Zh==", "Zm9=", "Zm=v", "Zm9v\n", "Zm9vZh=="] {
             assert!(base64_decode_bounded(malformed).is_err(), "{malformed}");
         }
     }

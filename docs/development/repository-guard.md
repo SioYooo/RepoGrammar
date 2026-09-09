@@ -442,3 +442,9 @@ stable requires exact
 `latest=0.5.0`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
 without registry writes. Manual release dispatch remains build-only and manual
 finalization remains read-only.
+
+The bounded provenance Base64 decoder iterates exact four-byte arrays after
+rejecting non-multiple lengths. Padding and canonical trailing-bit checks also
+apply to a partial final block after complete blocks; these boundaries are
+covered by the standard Base64 regression. This form satisfies current stable
+Clippy without suppressing its fixed-chunk lint.
