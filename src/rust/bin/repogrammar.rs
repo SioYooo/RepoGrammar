@@ -2,6 +2,7 @@ use repogrammar::adapters::filesystem::change_fingerprint::{
     repository_change_fingerprint, repository_change_fingerprint_report,
     RepositoryChangeFingerprint,
 };
+use repogrammar::adapters::filesystem::change_watcher::RepositoryChangeWatcher;
 use repogrammar::adapters::filesystem::discovery::FilesystemFileDiscovery;
 use repogrammar::adapters::filesystem::source_store::FilesystemSourceStore;
 use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
@@ -103,6 +104,73 @@ const AUTOSYNC_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const UNINSTALL_HELPER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const UNINSTALL_PARENT_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
 static AUTOSYNC_STARTUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const AUTOSYNC_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Events are wakeup hints; only a successful sync acknowledges a change.
+struct AutosyncSchedule {
+    pending: bool,
+    failures: u32,
+    next_scan: Instant,
+    retry_at: Instant,
+    idle_rounds: u32,
+}
+
+impl AutosyncSchedule {
+    fn new(now: Instant) -> Self {
+        Self {
+            pending: false,
+            failures: 0,
+            next_scan: now,
+            retry_at: now,
+            idle_rounds: 0,
+        }
+    }
+
+    fn due(&mut self, now: Instant, event: bool) -> bool {
+        self.pending |= event;
+        if event {
+            self.idle_rounds = 0;
+        }
+        now >= self.retry_at && (self.pending || now >= self.next_scan)
+    }
+
+    fn wait_interval(&self, native: bool, poll_ms: u64) -> Duration {
+        if native {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_millis(
+                poll_ms
+                    .saturating_mul(1u64 << self.idle_rounds.min(10))
+                    .min(poll_ms.max(30_000)),
+            )
+        }
+    }
+
+    fn scanned(&mut self, now: Instant, native: bool, poll_ms: u64) {
+        self.next_scan = now
+            + if native {
+                AUTOSYNC_RECONCILE_INTERVAL
+            } else {
+                Duration::from_millis(poll_ms)
+            };
+    }
+
+    fn failed(&mut self, now: Instant, poll_ms: u64) {
+        self.pending = true;
+        self.failures = self.failures.saturating_add(1);
+        let delay = poll_ms
+            .saturating_mul(1u64 << self.failures.min(10))
+            .min(60_000);
+        self.retry_at = now + Duration::from_millis(delay);
+    }
+
+    fn succeeded(&mut self) {
+        self.pending = false;
+        self.failures = 0;
+        self.idle_rounds = 0;
+    }
+}
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -363,6 +431,9 @@ struct ProductProgressSink<'a> {
     command: &'a str,
     interactive: bool,
     last_width: usize,
+    columns: usize,
+    unicode: bool,
+    color: bool,
 }
 
 impl<'a> ProductProgressSink<'a> {
@@ -371,13 +442,29 @@ impl<'a> ProductProgressSink<'a> {
             command,
             interactive,
             last_width: 0,
+            columns: std::env::var("COLUMNS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(80),
+            unicode: std::env::var("LC_ALL")
+                .or_else(|_| std::env::var("LC_CTYPE"))
+                .or_else(|_| std::env::var("LANG"))
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .contains("utf"),
+            color: std::env::var_os("NO_COLOR").is_none(),
         }
     }
 
     fn emit(&mut self, event: &ProgressEvent) {
         if self.interactive {
-            let (frame, width) =
-                render_interactive_index_progress_event(self.command, event, self.last_width);
+            let (frame, width) = render_interactive_index_progress_event(
+                self.command,
+                event,
+                self.columns,
+                self.unicode,
+                self.color,
+            );
             eprint!("{frame}");
             self.last_width = width;
         } else {
@@ -398,18 +485,15 @@ impl<'a> ProductProgressSink<'a> {
 fn render_interactive_index_progress_event(
     command: &str,
     event: &ProgressEvent,
-    previous_width: usize,
+    columns: usize,
+    unicode: bool,
+    color: bool,
 ) -> (String, usize) {
-    let line = render_index_progress_event(command, event)
-        .trim_end_matches('\n')
-        .to_string();
-    let width = line.chars().count();
-    let mut frame = format!("\r{line}");
-    let padding = previous_width.saturating_sub(width);
-    if padding > 0 {
-        frame.push_str(&" ".repeat(padding));
-    }
-    (frame, width)
+    let line = repogrammar::interfaces::cli::progress::render_terminal_index_progress_event(
+        command, event, columns, unicode, color,
+    );
+    let width = usize::from(!line.is_empty());
+    (format!("\r\x1b[2K{line}"), width)
 }
 
 impl InstallTelemetryPrompt for ProductInstallTelemetryPrompt {
@@ -979,6 +1063,8 @@ impl ProductCliRuntime {
             }
         };
         let startup_nonce = startup_nonce_from_process();
+        // Subscribe before establishing the baseline so startup edits remain pending.
+        let mut watcher = RepositoryChangeWatcher::new(&root).ok();
         let env_lookup = |key: &str| std::env::var(key).ok();
         let initialized = initialize_autosync_service(
             || match self.autosync_terminal_repository_state(&request) {
@@ -1036,8 +1122,35 @@ impl ProductCliRuntime {
         }
         let mut failure_log = AutosyncFailureLogState::default();
         let mut fingerprint_observation: Option<String> = None;
+        append_autosync_daemon_log(
+            Some(&log_path),
+            if watcher.is_some() {
+                "autosync: native events enabled; periodic metadata reconciliation every 60s"
+            } else {
+                "autosync: native events unavailable; using metadata polling"
+            },
+        );
+        let mut schedule = AutosyncSchedule::new(Instant::now());
         loop {
-            std::thread::sleep(Duration::from_millis(settings.poll_ms));
+            let retry_wait = schedule.retry_at.saturating_duration_since(Instant::now());
+            let event = if !retry_wait.is_zero() {
+                // Leave the coalesced event queued; a noisy tree cannot bypass backoff.
+                std::thread::sleep(retry_wait.min(Duration::from_secs(10)));
+                false
+            } else if let Some(active) = &watcher {
+                match active.wait(schedule.wait_interval(true, settings.poll_ms)) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        append_autosync_daemon_log(Some(&log_path),
+                            "autosync: native event stream failed; reconciling and falling back to metadata polling");
+                        watcher = None;
+                        true
+                    }
+                }
+            } else {
+                std::thread::sleep(schedule.wait_interval(false, settings.poll_ms));
+                false
+            };
             // Best-effort cross-version step-down. If the run state shows a
             // strictly newer engine stamped it after this daemon reclaimed the
             // stamp at startup, step down early to avoid needless cross-version
@@ -1135,13 +1248,21 @@ impl ProductCliRuntime {
                     ));
                 }
             }
+            if !schedule.due(Instant::now(), event) {
+                continue;
+            }
+            if let Some(active) = &watcher {
+                active.refresh_ignore_filter();
+            }
             let fingerprint_started = Instant::now();
+            schedule.scanned(fingerprint_started, watcher.is_some(), settings.poll_ms);
             let next = match self.repository_fingerprint(&request) {
                 Ok(next) => {
                     record_autosync_runtime_recovery(&log_path, &mut failure_log, request.quiet);
                     next
                 }
                 Err(_) => {
+                    schedule.failed(Instant::now(), settings.poll_ms);
                     record_autosync_runtime_failure(
                         &autosync_request,
                         &log_path,
@@ -1153,7 +1274,8 @@ impl ProductCliRuntime {
                     continue;
                 }
             };
-            if next == current {
+            if next == current && !schedule.pending {
+                schedule.idle_rounds = schedule.idle_rounds.saturating_add(1);
                 continue;
             }
             std::thread::sleep(Duration::from_millis(settings.debounce_ms));
@@ -1161,6 +1283,7 @@ impl ProductCliRuntime {
             let stable = match self.repository_fingerprint_report(&request) {
                 Ok(stable) => stable,
                 Err(_) => {
+                    schedule.failed(Instant::now(), settings.poll_ms);
                     record_autosync_runtime_failure(
                         &autosync_request,
                         &log_path,
@@ -1172,10 +1295,9 @@ impl ProductCliRuntime {
                     continue;
                 }
             };
-            if stable.digest == current {
+            if stable.digest == current && !schedule.pending {
                 continue;
             }
-            current = stable.digest.clone();
             log_autosync_fingerprint_observation(
                 &log_path,
                 &mut fingerprint_observation,
@@ -1200,6 +1322,8 @@ impl ProductCliRuntime {
             let started = Instant::now();
             match self.index_repository("sync", sync_request) {
                 Ok(outcome) => {
+                    current = stable.digest;
+                    schedule.succeeded();
                     for line in failure_log.success_lines() {
                         append_autosync_daemon_log(Some(&log_path), &line);
                         if !request.quiet {
@@ -1219,6 +1343,7 @@ impl ProductCliRuntime {
                     );
                 }
                 Err(_error) => {
+                    schedule.failed(Instant::now(), settings.poll_ms);
                     let message = AutosyncRecordedFailure::SyncFailed.as_str();
                     let lines = failure_log.failure_lines(message, started.elapsed().as_millis());
                     for line in lines {
@@ -1822,7 +1947,10 @@ impl CliRuntime for ProductCliRuntime {
             request.quiet,
             request.stderr_is_terminal,
         );
-        let interactive_progress = emit_progress && request.stderr_is_terminal;
+        let interactive_progress = emit_progress
+            && request.stderr_is_terminal
+            && std::env::var_os("CI").is_none()
+            && std::env::var("TERM").as_deref() != Ok("dumb");
         let mut progress_sink = ProductProgressSink::new(command, interactive_progress);
         let result = {
             let mut progress = |event| {
@@ -2987,6 +3115,47 @@ fn parse_opencode_mcp_probe(output: &str, scope: InstallScope) -> Option<NativeM
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autosync_schedule_coalesces_events_and_retries_unacknowledged_changes() {
+        let now = Instant::now();
+        let mut schedule = AutosyncSchedule::new(now);
+        assert!(schedule.due(now, false));
+        schedule.scanned(now, true, 1000);
+        assert!(!schedule.due(now + Duration::from_secs(59), false));
+        assert!(schedule.due(now + Duration::from_secs(60), false));
+        assert!(schedule.due(now, true));
+        schedule.failed(now, 1000);
+        assert!(!schedule.due(now + Duration::from_secs(1), true));
+        assert!(schedule.due(now + Duration::from_secs(2), false));
+        assert!(
+            schedule.pending,
+            "failed sync must retry without a second edit"
+        );
+        for _ in 0..100 {
+            schedule.failed(now, 1000);
+        }
+        assert_eq!(schedule.retry_at - now, Duration::from_secs(60));
+        schedule.succeeded();
+        assert!(!schedule.pending);
+        assert_eq!(schedule.failures, 0);
+    }
+
+    #[test]
+    fn autosync_schedule_bounds_idle_polling_and_resets_on_events() {
+        let now = Instant::now();
+        let mut schedule = AutosyncSchedule::new(now);
+        assert_eq!(schedule.wait_interval(false, 1000), Duration::from_secs(1));
+        schedule.idle_rounds = 100;
+        assert_eq!(schedule.wait_interval(false, 1000), Duration::from_secs(30));
+        assert_eq!(
+            schedule.wait_interval(false, 600_000),
+            Duration::from_secs(600)
+        );
+        assert_eq!(schedule.wait_interval(true, 1000), Duration::from_secs(10));
+        schedule.due(now, true);
+        assert_eq!(schedule.wait_interval(false, 1000), Duration::from_secs(1));
+    }
     use repogrammar::application::install::{
         OpencodeConfigRemovalAction, OpencodeConfigWriteAction,
     };
@@ -3229,21 +3398,25 @@ mod tests {
             "stored file metadata",
             WorkUnits::known(12, 236).expect("valid work"),
         );
-        let (long_frame, long_width) = render_interactive_index_progress_event("sync", &long, 0);
+        let (long_frame, long_width) =
+            render_interactive_index_progress_event("sync", &long, 96, true, false);
 
         assert!(long_frame.starts_with('\r'));
         assert!(!long_frame.contains('\n'));
-        assert!(long_frame.contains("sync: [#-------------------] 5% 12/236 file_scanning"));
+        assert!(long_frame.contains("5% 12/236"));
+        assert!(long_frame.starts_with("\r\x1b[2Ksync / Scan"));
 
         let short = ProgressEvent::new(ProgressStage::ProjectDiscovery, "done", WorkUnits::Unknown);
         let (short_frame, short_width) =
-            render_interactive_index_progress_event("sync", &short, long_width);
+            render_interactive_index_progress_event("sync", &short, 96, true, false);
 
         assert!(short_frame.starts_with('\r'));
         assert!(!short_frame.contains('\n'));
-        assert!(short_frame.contains("sync: [working] project_discovery: done"));
+        assert!(short_frame.contains("sync / Discover"));
+        assert!(short_frame.contains("working"));
         assert!(!short_frame.contains('%'));
-        assert!(short_frame.ends_with(&" ".repeat(long_width - short_width)));
+        assert!(short_frame.starts_with("\r\x1b[2K"));
+        assert_eq!((long_width, short_width), (1, 1));
     }
 
     #[test]

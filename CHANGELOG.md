@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.5.0 — release candidate
+
+### Changed
+
+- Terminal indexing now renders a width-bounded colored progress bar with real
+  stage counts; plain logs and JSON remain compatible. `init` and concise help
+  explain the current-directory bootstrap and when to sync or rebuild.
+
+- Autosync uses native macOS/Linux file events with coalescing and periodic
+  reconciliation, prunes ignored untracked directories before fingerprint
+  traversal, and backs off idle polling and failed retries. Failed syncs keep
+  pending changes until success. These are background-work improvements, not
+  a measured battery-life claim.
+- Reorganized the README around installation, use, background updates, and
+  explicit capability limits; removed competition and demo-result framing.
+
 ### Added
 
 - Added opencode as the third live agent target for global-scope installs, as

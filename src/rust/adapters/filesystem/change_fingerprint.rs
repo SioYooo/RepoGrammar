@@ -26,7 +26,8 @@ pub struct RepositoryChangeFingerprint {
     /// applied/not-repository/unavailable classification.
     pub git_ignore_status: GitIgnoreStatus,
     /// Count of supported candidate files excluded because Git reported them
-    /// ignored this pass. Bounded by the visited-entry budget; never a path.
+    /// ignored this pass. Pruned subtrees are not enumerated or counted.
+    /// Bounded by the visited-entry budget; never a path.
     pub git_ignored_skipped: u64,
 }
 
@@ -65,15 +66,27 @@ fn repository_change_fingerprint_with_limits(
     let canonical_root = fs::canonicalize(&root).map_err(|_| {
         FileDiscoveryError::InvalidRoot("repository root is not readable".to_string())
     })?;
+    let mut git = GitContext::resolve(&root);
+    let ignored_directories = match &git {
+        Ok(context) => match context.ignored_untracked_directories() {
+            Ok(directories) => directories,
+            Err(()) => {
+                git = Err(GitContextResolution::Unavailable);
+                BTreeSet::new()
+            }
+        },
+        Err(_) => BTreeSet::new(),
+    };
     let mut state = FingerprintState {
         root,
         canonical_root,
         max_file_bytes,
         candidates: Vec::new(),
+        ignored_directories,
         budget: DiscoveryResourceBudget::new(limits),
     };
     state.walk(PathBuf::new())?;
-    state.finish(repository_root)
+    state.finish(git, limits)
 }
 
 /// One accepted supported-file candidate, retained in walk order before Git
@@ -90,6 +103,7 @@ struct FingerprintState {
     canonical_root: PathBuf,
     max_file_bytes: u64,
     candidates: Vec<FingerprintCandidate>,
+    ignored_directories: BTreeSet<String>,
     budget: DiscoveryResourceBudget,
 }
 
@@ -125,6 +139,7 @@ impl FingerprintState {
                 let name = relative.file_name().and_then(|value| value.to_str());
                 if is_repogrammar_state_directory_name(name)
                     || is_default_excluded_directory_name(name)
+                    || self.ignored_directories.contains(&relative_path)
                 {
                     continue;
                 }
@@ -169,9 +184,20 @@ impl FingerprintState {
 
     fn finish(
         mut self,
-        repository_root: &str,
+        git: Result<GitContext, GitContextResolution>,
+        limits: DiscoveryLimits,
     ) -> Result<RepositoryChangeFingerprint, FileDiscoveryError> {
-        let (git_ignore_status, ignored) = resolve_git_ignored(repository_root, &self.candidates);
+        let (git_ignore_status, ignored) = resolve_git_ignored(git, &self.candidates);
+        if git_ignore_status == GitIgnoreStatus::Unavailable && !self.ignored_directories.is_empty()
+        {
+            // A later Git failure invalidates pruning too: restore the complete
+            // conservative inventory rather than retaining a partially filtered pass.
+            self.ignored_directories.clear();
+            self.candidates.clear();
+            self.budget = DiscoveryResourceBudget::new(limits);
+            self.walk(PathBuf::new())?;
+        }
+
         let git_ignored_skipped = u64::try_from(ignored.len()).unwrap_or(u64::MAX);
 
         let mut entries: Vec<String> = Vec::with_capacity(self.candidates.len());
@@ -209,10 +235,10 @@ impl FingerprintState {
 /// is unavailable or errors, fall back to no-ignore filtering (keep every
 /// candidate) instead of silently dropping files.
 fn resolve_git_ignored(
-    repository_root: &str,
+    git: Result<GitContext, GitContextResolution>,
     candidates: &[FingerprintCandidate],
 ) -> (GitIgnoreStatus, BTreeSet<String>) {
-    match GitContext::resolve(Path::new(repository_root)) {
+    match git {
         Ok(context) => {
             let paths: Vec<String> = candidates
                 .iter()
@@ -609,7 +635,153 @@ mod tests {
         let report = repository_change_fingerprint_with_limits(&root, 64, limits(3, 64, 100, 10))
             .expect("Git-ignored files must not breach the accepted ceiling");
         assert_eq!(report.git_ignore_status, GitIgnoreStatus::Applied);
-        assert_eq!(report.git_ignored_skipped, 20);
+        assert_eq!(report.git_ignored_skipped, 0); // subtree was never visited
+    }
+
+    #[test]
+    fn fingerprint_prunes_ignored_subtrees_before_entry_and_depth_budgets() {
+        let workspace = TempWorkspace::new("fingerprint-pruned-traversal");
+        assert!(git_init(&workspace));
+        assert!(!is_default_excluded_directory_name(Some("scratch-output")));
+        fs::write(workspace.path().join(".gitignore"), "scratch-output/\n").unwrap();
+        fs::create_dir_all(workspace.path().join("scratch-output/deep/nested")).unwrap();
+        for index in 0..100 {
+            fs::write(
+                workspace
+                    .path()
+                    .join(format!("scratch-output/deep/nested/{index}.ts")),
+                "x",
+            )
+            .unwrap();
+        }
+        fs::write(workspace.path().join("kept.ts"), "x").unwrap();
+        let root = workspace.path().display().to_string();
+        // Four root entries are visited; none of the 102 ignored descendants
+        // consume traversal budgets. Before pruning this required 106 entries.
+        let report = repository_change_fingerprint_with_limits(&root, 64, limits(1, 64, 4, 0))
+            .expect("ignored subtree must not be traversed");
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::Applied);
+        fs::write(workspace.path().join(".gitignore"), "").unwrap();
+        assert_limit(
+            repository_change_fingerprint_with_limits(&root, 64, limits(101, 1024, 4, 10)),
+            FileDiscoveryLimitKind::VisitedEntries,
+            4,
+            5,
+        );
+    }
+
+    #[test]
+    fn fingerprint_pruning_preserves_tracked_files_negations_and_nested_project_rules() {
+        let workspace = TempWorkspace::new("fingerprint-pruning-git-semantics");
+        assert!(git_init(&workspace));
+        assert!(!is_default_excluded_directory_name(Some("scratch-output")));
+        fs::create_dir_all(workspace.path().join("project/scratch-output")).unwrap();
+        fs::create_dir_all(workspace.path().join("project/choices/keep")).unwrap();
+        fs::create_dir_all(workspace.path().join("project/choices/drop")).unwrap();
+        fs::write(
+            workspace.path().join(".gitignore"),
+            "project/scratch-output/\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace.path().join("project/choices/.gitignore"),
+            "*\n!keep/\n!keep/**\n",
+        )
+        .unwrap();
+        for path in [
+            "scratch-output/tracked.ts",
+            "scratch-output/ignored.ts",
+            "choices/keep/a.ts",
+            "choices/drop/a.ts",
+        ] {
+            fs::write(workspace.path().join("project").join(path), "x").unwrap();
+        }
+        assert!(Command::new("git")
+            .args(["add", "-f", "project/scratch-output/tracked.ts"])
+            .current_dir(workspace.path())
+            .status()
+            .unwrap()
+            .success());
+        let directories = GitContext::resolve(&workspace.path().join("project"))
+            .unwrap()
+            .ignored_untracked_directories()
+            .unwrap();
+        assert!(
+            !directories.contains("scratch-output"),
+            "tracked descendants must prevent collapsing"
+        );
+        assert!(directories.contains("choices/drop"));
+        let root = workspace.path().join("project").display().to_string();
+        let baseline = repository_change_fingerprint_report(&root, 64).unwrap();
+        assert_eq!(baseline.git_ignore_status, GitIgnoreStatus::Applied);
+        for path in ["scratch-output/ignored.ts", "choices/drop/a.ts"] {
+            fs::write(
+                workspace.path().join("project").join(path),
+                "ignored change",
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            repository_change_fingerprint_report(&root, 64)
+                .unwrap()
+                .digest,
+            baseline.digest
+        );
+        for path in ["scratch-output/tracked.ts", "choices/keep/a.ts"] {
+            let before = repository_change_fingerprint_report(&root, 64)
+                .unwrap()
+                .digest;
+            fs::write(
+                workspace.path().join("project").join(path),
+                "visible change",
+            )
+            .unwrap();
+            assert_ne!(
+                repository_change_fingerprint_report(&root, 64)
+                    .unwrap()
+                    .digest,
+                before
+            );
+        }
+    }
+
+    #[test]
+    fn fingerprint_git_failure_after_pruning_restores_the_full_inventory() {
+        let workspace = TempWorkspace::new("fingerprint-pruning-late-git-failure");
+        assert!(git_init(&workspace));
+        assert!(!is_default_excluded_directory_name(Some("scratch-output")));
+        fs::create_dir(workspace.path().join("scratch-output")).unwrap();
+        fs::write(workspace.path().join(".gitignore"), "scratch-output/\n").unwrap();
+        fs::write(workspace.path().join("scratch-output/a.ts"), "x").unwrap();
+        fs::write(workspace.path().join("kept.ts"), "x").unwrap();
+        let context = GitContext::resolve(workspace.path()).unwrap();
+        let mut state = FingerprintState {
+            root: workspace.path().to_path_buf(),
+            canonical_root: fs::canonicalize(workspace.path()).unwrap(),
+            max_file_bytes: 64,
+            ignored_directories: context.ignored_untracked_directories().unwrap(),
+            candidates: Vec::new(),
+            budget: DiscoveryResourceBudget::new(limits(2, 64, 100, 10)),
+        };
+        state.walk(PathBuf::new()).unwrap();
+        assert_eq!(state.candidates.len(), 1);
+        // Force check-ignore to fail only after the pruned walk has completed.
+        fs::write(workspace.path().join(".git/index"), "invalid index").unwrap();
+        let report = state.finish(Ok(context), limits(2, 64, 100, 10)).unwrap();
+        assert_eq!(report.git_ignore_status, GitIgnoreStatus::Unavailable);
+        let root = workspace.path().display().to_string();
+        assert_eq!(
+            report.digest,
+            repository_change_fingerprint_report(&root, 64)
+                .unwrap()
+                .digest
+        );
+        assert_limit(
+            repository_change_fingerprint_with_limits(&root, 64, limits(1, 64, 100, 10)),
+            FileDiscoveryLimitKind::AcceptedFiles,
+            1,
+            2,
+        );
     }
 
     #[test]

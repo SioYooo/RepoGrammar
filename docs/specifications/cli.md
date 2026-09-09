@@ -64,8 +64,13 @@ in human or JSON output.
 ## Help contract
 
 `repogrammar --help`, `repogrammar -h`, and `repogrammar help` must print a
-compact top-level journey of no more than 25 lines centered on `setup`, `find`,
-and `doctor`, with `help --all` as the explicit complete command inventory.
+compact help page of no more than 25 lines with aligned command descriptions.
+It leads with `init` for the current repository, then `find`, `families`, `sync`,
+`resync`, `status`, `doctor`, and optional agent `install`; `setup` remains the
+combined compatibility workflow. `help --all` exposes the complete inventory.
+Successful human `init` output explains that ordinary edits use autosync or
+`sync`, full rebuilds use `resync`, and uncertain readiness uses `doctor`.
+Plain `init` already builds the index; no extra `index` invocation is required.
 `repogrammar help <command>`,
 `repogrammar <command> --help`, and `repogrammar <command> -h` must print
 command-specific usage, supported subcommands where applicable, accepted
@@ -308,6 +313,11 @@ behavior: it creates or repairs repo-local state, must not run indexing, and
 must not start auto-sync. `init --state-only --resync` and `init --state-only
 --autosync` must fail cleanly before creating state; `init --state-only
 --no-autosync` is accepted as a redundant safe opt-out.
+
+Default successful human bootstrap output summarizes indexed units, actual
+autosync state, and the next commands. Internal repaired-entry and generation
+fields remain available through `--verbose`; state-only and failure diagnostics
+retain their detailed output.
 
 JSON output for bootstrap must preserve the existing top-level init fields and
 include `resync` and `autosync` sub-results where applicable. If indexing fails
@@ -683,21 +693,31 @@ before generation preparation, an over-limit repository cannot activate a new
 generation. During `init`, the same failure remains an initialization
 `failed_step: "resync"`; state initialization may have succeeded, but the
 `resync` sub-result is null and autosync is not started.
-Autosync polling evaluates Git ignore with the same accepted-manifest policy as
-manual discovery, batching every supported candidate through one
-`git check-ignore -z --stdin` subprocess per fingerprint pass (about 10 ms for a
-few hundred paths, roughly one percent of the default 1000 ms poll) rather than
-one process per file. Supported Git-ignored candidates are excluded before the
-aggregate fingerprint file/byte ceilings are charged, so `autosync run` and a
-manual Git-aware `sync` no longer disagree about whether a repository is within
-accepted limits. When Git is absent or errors, the pass falls back to safe
-no-ignore filtering exactly as discovery does. The fingerprint stays
-metadata-only, so a same-size, same-modification-time edit is invisible to
-polling until another change or a manual `sync`; `sync` remains the
-authoritative Git-aware indexing operation and always recomputes content hashes.
-Each pass counts the Git-ignored supported files it excluded and records that
-bounded, path-free count with the Git-ignore status to the daemon log on change;
-surfacing it through `autosync status --json` is a deferred follow-up.
+Autosync fingerprints share manual discovery's Git-ignore policy. Git's bounded
+`ls-files --others --ignored --exclude-standard --directory` output prunes wholly
+untracked ignored directories before Rust traversal. Tracked descendants and
+ignore exceptions remain visible. A batch `git check-ignore` filters remaining
+candidates before file/byte admission. Git errors restore conservative no-ignore
+traversal, including a complete retry when filtering fails after pruning.
+The path-free ignored-file count covers visited candidates, not unenumerated
+pruned subtrees. It is a diagnostic count, not total ignored repository size.
+
+Native macOS/Linux notifications coalesce changes into bounded wakeup hints.
+A retained hint forces the existing content-hashing sync even when metadata is
+unchanged; a failed sync is not acknowledged until a retry succeeds. Native
+idle mode checks lifecycle state at most every ten seconds and reconciles
+metadata every sixty seconds. `stop` still terminates the owned daemon directly.
+Watcher startup failure or event loss is logged and falls back to metadata
+polling. Polling starts at `--poll-ms` and backs off during inactivity to
+30 seconds (or the configured interval if longer), resetting after changes.
+Retries use exponential delay capped at sixty seconds and preserve pending
+work without requiring another edit. Debouncing retains `--debounce-ms`; sync
+uses the existing dependency-aware incremental path and authoritative fallback.
+Metadata-only reconciliation cannot detect a same-size, same-mtime edit when
+native events are unavailable or lost. Explicit `sync` recomputes content hashes;
+query-time hash validation remains authoritative. No battery-life percentage
+or runtime-equivalence claim follows from reduced scanning.
+
 The lock records process id, host when available, OS, start time, and
 RepoGrammar version. Active or unknown lock ownership is refused with guidance
 to run `repogrammar doctor`; confirmed stale same-host locks may be replaced
@@ -729,9 +749,9 @@ semantic-worker environment, computes the initial repository fingerprint,
 initializes daemon log/startup state, and completes one immediate service
 heartbeat. That heartbeat revalidates the exact `starting` lock owner,
 repository readiness, and a second repository fingerprint; the second
-fingerprint becomes the polling baseline. Only after those fallible steps
+fingerprint becomes the reconciliation baseline. Only after those fallible steps
 succeed may the same lock owner atomically transition its exact
-PID-plus-startup-nonce record to `ready` and enter the polling loop. The
+PID-plus-startup-nonce record to `ready` and enter the event/reconciliation loop. The
 transition quarantines the owned `starting` record and installs `ready` with a
 no-overwrite link, so a non-cooperating replacement is preserved and readiness
 fails closed rather than overwriting another owner. The parent reports
@@ -743,8 +763,8 @@ persists only one sanitized low-cardinality code:
 `repository_state_unavailable`, `daemon_lock_refused`,
 `child_exited_before_ready`, `startup_timeout`, or
 `first_heartbeat_failed`; raw worker errors, paths, source, environment values,
-credentials, nonces, and daemon internals are excluded. The worker polls a lightweight
-supported-file metadata fingerprint, debounces changes, and calls the existing
+credentials, nonces, and daemon internals are excluded. The worker uses native event hints and periodic supported-file metadata
+reconciliation, debounces changes, and calls the existing
 `sync` implementation when indexed files are added, removed, or modified. The
 daemon records a sanitized `repository fingerprint failed` previous-attempt
 error and remains alive when a later polling fingerprint transiently fails;

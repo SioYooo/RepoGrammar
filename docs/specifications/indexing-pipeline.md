@@ -1439,13 +1439,22 @@ as discovery and fails closed before retaining an over-limit directory entry or
 fingerprint record. Although it hashes path, size, modification-time, and
 language metadata rather than content, accepted-byte accounting uses each
 supported file's metadata size to align its admission units with indexing.
-Polling evaluates Git ignore with the same accepted-manifest policy as manual
-discovery so the two paths agree on which files are in scope. To keep the ~1s
-poll cheap, one fingerprint pass batches every supported candidate through a
-single `git check-ignore -z --stdin` subprocess (measured at roughly 10 ms for a
-few hundred paths, about one percent of the default 1000 ms poll) instead of one
-process per file; when Git is absent or errors, the pass applies the same safe
-no-ignore warning fallback discovery uses and reports `unavailable`.
+Fingerprinting evaluates Git ignore with the same accepted-manifest policy as
+manual discovery. Before walking, one bounded-output
+`git ls-files --others --ignored --exclude-standard --directory -z` call obtains
+Git's collapsed wholly untracked ignored directories. The walker skips those
+subtrees before enumeration, including ignored worktree/build trees. Git keeps
+directories with tracked descendants expanded, preserving tracked-but-ignored
+files; Git itself applies negation, nested ignore, and parent-worktree rules.
+Remaining supported candidates use one `git check-ignore -z --stdin` subprocess,
+not one process per directory or file. If either Git step fails, fingerprinting
+uses the conservative no-ignore inventory and reports `unavailable`; a failure
+after pruning causes a complete unpruned rewalk. A non-Git repository also keeps
+the unfiltered inventory. Pruned descendants consume no traversal budget and
+are not counted in `git_ignored_skipped`, which counts only visited supported
+candidates. The deterministic pruning regression fixture visits four root
+entries instead of 106 entries; this is traversal evidence, not measured battery
+savings.
 
 Every Git subprocess RepoGrammar runs against an analyzed repository is
 constructed through one hardened entrypoint. An analyzed repository is
@@ -1463,8 +1472,8 @@ rather than only for repositories the user cloned themselves. Because
 Git-ignored supported files are excluded before accepted-file/byte charging,
 they no longer count toward the fingerprint budgets, so `autosync run` and manual
 `sync` no longer disagree about whether the same repository is within accepted
-limits. Each pass also counts, but never logs by path, the number of Git-ignored
-supported files it excluded; the daemon records that bounded count and the
+limits. Each pass also counts, but never logs by path, the number of visited Git-ignored
+supported candidates it excluded; the daemon records that bounded count and the
 Git-ignore status to its log on change, and surfacing it through
 `autosync status --json` is deferred. The subsequent `sync` remains the
 authoritative Git-aware path. The reported-skipped-path budget does not apply

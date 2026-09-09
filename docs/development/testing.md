@@ -1795,8 +1795,8 @@ matrix that exercises installation boundaries without live machine writes.
 Release-policy tests must cover both npm channels. Preview requires the exact
 manifest prerelease under `preview`; before any stable exists, npm's required
 `latest` may point to that same exact prerelease as a bounded preview-only
-state. The current stable gate requires exact `latest=0.4.3`, exact
-`preview=0.2.0-preview.0`, the preview, prior public `0.4.2`, and new stable
+state. The current stable gate requires exact `latest=0.5.0`, exact
+`preview=0.2.0-preview.0`, the preview, prior public `0.4.3`, and new stable
 versions in the registry inventory, the explicit absence of the failed or
 abandoned `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates, and a
 retained-candidate SRI match. Any other prerelease under `preview`, any
@@ -1892,3 +1892,22 @@ Rust, worker, installer, and repo-guard gates:
 Unavailable optional scanners, missing lockfiles, and environment warnings such
 as multiple `repogrammar` executables on PATH must be reported in the release
 readiness summary. They are not silent passes.
+
+## Autosync efficiency regression gate
+
+The native watcher tests cover real source creation on macOS/Linux, bounded
+event coalescing, state/read noise, and event-loss fallback. Schedule tests use
+an injected `Instant` to prove the sixty-second reconciliation deadline,
+unacknowledged retry, and bounded idle/failure backoff. Fingerprint tests prove
+Git-ignored directory pruning before entry/depth admission while preserving
+tracked files, ignore negations, nested project roots, and complete conservative
+recovery after a late Git failure. These are correctness and work-count tests,
+not battery measurements. Native Linux evidence must come from Linux CI.
+
+The indexing demo is recorded from a real PTY using
+`src/experiments/record_index_demo.py` with optional development-only `pillow`
+and `pyte`. It creates a temporary fixture, runs the real `init`, stops only
+that fixture's daemon, and records playback timing and binary/output hashes in
+`docs/demo/index-progress.summary.json`. Re-record when visible progress or
+init output changes; inspect intermediate and final GIF frames. Playback time
+is not runtime performance evidence.

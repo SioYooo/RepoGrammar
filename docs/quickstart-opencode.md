@@ -1,25 +1,7 @@
 # opencode Quickstart
 
-This source-checkout flow installs RepoGrammar and configures the global
-opencode MCP integration. Use it whenever the exact-version availability gate
-in `quickstart.md` does not pass or contributor dogfood is desired.
-
-opencode integration is file-based: RepoGrammar writes the managed
-`mcp.repogrammar` entry into `$XDG_CONFIG_HOME/opencode/opencode.json`
-(default `$HOME/.config/opencode/opencode.json`) directly and never runs an
-`opencode` CLI for wiring, probing, or removal.
-
-## Install The Command
-
-```text
-git clone https://github.com/SioYooo/RepoGrammar.git
-cd RepoGrammar
-cargo build --release
-bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
-repogrammar version
-```
-
-The current Python analysis path requires Python 3.10 or newer as `python3`.
+Install the CLI using the [general quickstart](quickstart.md#install), then
+connect this agent and initialize each repository. Python 3.10+ is required.
 
 ## Review And Apply opencode Wiring
 
@@ -97,16 +79,4 @@ follow-up handles for exact `show_family` calls. If RepoGrammar returns
 `UNKNOWN`, fallback, stale evidence, or omitted spans, state that reason and use
 normal source reads for the affected files.
 
-## Exact No-Build Path
-
-After the exact npm version, complete npm channel mapping, and matching GitHub
-asset pass the availability gate in `quickstart.md`:
-
-```text
-npx --yes --package @sioyooo/repogrammar@0.4.3 \
-  repogrammar install --target opencode --scope global --yes --no-telemetry
-npx --yes --package @sioyooo/repogrammar@0.4.3 \
-  repogrammar init --project /path/to/your/repo --yes
-```
-
-If any check fails, use the source acquisition path above.
+For installation, updates, and cleanup, return to the [general quickstart](quickstart.md).

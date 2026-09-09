@@ -1,0 +1,24 @@
+{
+  "command": "repogrammar init",
+  "working_directory": "isolated temporary fixture",
+  "fixture": {
+    "python_files": 40,
+    "config_files": 1,
+    "description": "20 FastAPI routers and 20 pytest modules; no dependencies installed or fixture code executed"
+  },
+  "exit_code": 0,
+  "elapsed_seconds": 3.055,
+  "terminal": {
+    "columns": 96,
+    "rows": 12,
+    "TERM": "xterm-256color"
+  },
+  "binary_sha256": "27cd6266d556c5f7317ae2203b24924a43a78df34ed8b9435d07152e63fddd6d",
+  "captured_output_sha256": "e4be69092115d74e24be632c67f57c2dc0e65e2156ac07d224cee3eb60b89e5e",
+  "captured_screen_updates": 102,
+  "gif_frames": 31,
+  "playback_seconds": 7.854,
+  "playback_note": "Actual PTY output; representative frames retained, each held at least 160ms and at most 700ms, final frame held 3s. Playback is not a runtime benchmark. Title bar is presentation chrome, not CLI output.",
+  "cleanup": "Stopped only the temporary fixture autosync; temporary directory removed",
+  "reproduce": "python src/experiments/record_index_demo.py --binary target/debug/repogrammar (requires pillow and pyte; use --font on Linux)"
+}

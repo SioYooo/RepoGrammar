@@ -111,6 +111,15 @@ GNAT/gprbuild/alr/fpm/compiler/preprocessor commands, execute repository or
 dependency code, or resolve a graph. Libadalang and Flang remain qualification
 subjects, not accepted production dependencies.
 
+## Native filesystem notification boundary
+
+ADR-0053 accepts exact `notify` 8.2.0 with only `macos_fsevent` enabled.
+Concrete native watcher and event types stay in the filesystem adapter. The
+composition root receives only a coalesced boolean hint or a source-free typed
+failure, retains periodic fingerprint reconciliation, and visibly falls back to
+polling when native notification fails. A notification is never index freshness
+or filesystem-confinement evidence.
+
 ## Tree-sitter boundary
 
 Tree-sitter is the intended universal syntax technology, but parser AST nodes

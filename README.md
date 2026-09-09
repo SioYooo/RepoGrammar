@@ -1,381 +1,184 @@
-<h1 align="center">RepoGrammar</h1>
+# RepoGrammar
 
-<p align="center">
-  <strong>Give coding agents your repository's conventions—not another pile of search results.</strong>
-</p>
+Repository conventions for coding agents.
 
-<p align="center">
-  Local-first, source-backed pattern context with bounded read plans and honest abstention.
-</p>
+[Documentation](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md) · [Quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md) · [Changelog](https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md) · [Contributing](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md)
 
-<p align="center">
-  <a href="https://github.com/SioYooo/RepoGrammar/releases/tag/v0.4.3"><img alt="Stable version 0.4.3" src="https://img.shields.io/badge/stable-0.4.3-7c3aed?style=flat-square"></a>
-  <img alt="Local first" src="https://img.shields.io/badge/context-local--first-0f766e?style=flat-square">
-  <img alt="Read-only MCP" src="https://img.shields.io/badge/MCP-read--only-2563eb?style=flat-square">
-  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square"></a>
-</p>
+RepoGrammar indexes repeated implementations in your repository and gives coding
+agents a source-backed read plan: examples of how this codebase implements a
+route, fixture, model, or data-access role, with the evidence behind each match.
+When the evidence is insufficient, it returns `UNKNOWN` with a recovery action.
 
-<p align="center">
-  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md">Quickstart</a>
-  ·
-  <a href="https://github.com/SioYooo/RepoGrammar/tree/main/docs">Documentation</a>
-  ·
-  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md">Limitations</a>
-  ·
-  <a href="https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md">Changelog</a>
-</p>
+It runs locally and exposes a pattern-first CLI and one read-only MCP tool.
+There are no LLM calls, API keys, embeddings, or cloud services in the analysis
+path. Python 3.10+ is required for the bundled Python analyzer.
 
----
+![RepoGrammar indexing a temporary fixture repository](https://raw.githubusercontent.com/SioYooo/RepoGrammar/main/docs/assets/index-progress.gif)
 
-Coding agents repeatedly read the same files to rediscover how a repository
-implements routes, fixtures, models, and data access. RepoGrammar turns those
-repeated implementations into a compact map of **pattern families** before an
-agent reads source broadly.
-
-When repository evidence is strong, the agent gets representative examples,
-source-backed metadata, and a hash-checked read plan. When it is not,
-RepoGrammar returns a typed `UNKNOWN` with a recovery action instead of filling
-the gap with a plausible guess.
-
-> **The promise:** less source rereading without pretending uncertain static
-> evidence is fact.
-
-The index is pre-computed structure an agent would otherwise re-derive by
-reading files: one lookup returns the compatible implementations, their
-provenance, and the smallest set of source still worth reading. One recorded
-demo run observed a **52% reduction in token use**.
-
-That figure is a single observed run, not a controlled benchmark. There is no
-committed paired baseline/treatment artifact behind it, and it will vary by
-repository, task, and agent — see
-[growth readiness](https://github.com/SioYooo/RepoGrammar/blob/main/docs/reports/public-preview-growth-readiness.md)
-for the measurement bar this project holds itself to before calling a number
-measured.
-
-```text
-repository source
-      │
-      ▼
-local evidence index ──► compatible pattern families ──► bounded read plan
-      │                              │
-      └── freshness checks           └──► UNKNOWN / PARTIAL_CONTEXT + recovery
-```
-
-## Why RepoGrammar
-
-| Pattern-aware | Evidence-gated | Agent-ready |
-| --- | --- | --- |
-| Finds how this repository repeatedly implements a role, not merely where a string appears. | Keeps provenance, freshness, unresolved semantics, and exceptions attached to every claim. | Serves compact context through a pattern-first CLI and one read-only MCP tool, `repogrammar_context`. |
-
-RepoGrammar complements text search, semantic search, and symbol graphs. Those
-tools locate code; RepoGrammar adds a repository-local contract for deciding
-which repeated implementations are compatible, what still needs to be read,
-and when the answer must abstain.
+*Recorded from a real CLI run on a fixture repository; playback is slowed for readability.*
 
 ## Quick start
 
-RepoGrammar supports macOS and glibc-based Linux. Windows and musl Linux are
-not currently supported installation targets.
+Requires **Python 3.10+**, Bash, `curl`, `tar`, and `gzip`. macOS and glibc Linux
+are supported. Rust, Cargo, Node.js, Docker, and API keys are not required.
 
-### Prerequisites
+### 1. Install — copy and run
 
-- Python 3.10 or later;
-- Bash;
-- `curl`, `tar`, and `gzip`; and
-- network access to GitHub Releases during installation.
-
-Verify the required tools before installing:
+This single block downloads the pinned installer, verifies its checksum, and
+installs the CLI. It does not alter coding-agent settings or index a repository.
 
 ```bash
-python3 --version
-bash --version
-curl --version
-tar --version
-gzip --version
-```
-
-The Python version must be 3.10 or later. Rust, Cargo, Node.js, Docker, an LLM,
-and API keys are not required for the binary installation path.
-
-### 1. Download and install the CLI
-
-Use a temporary directory so the installer files do not remain in a project:
-
-```bash
-mkdir -p /tmp/repogrammar-install
-cd /tmp/repogrammar-install
-
-curl -fsSLO \
-  https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh
-curl -fsSLO \
-  https://github.com/SioYooo/RepoGrammar/releases/download/v0.4.3/install.sh.sha256
-```
-
-Verify the installer itself on macOS:
-
-```bash
-shasum -a 256 -c install.sh.sha256
-```
-
-On Linux, use `sha256sum -c install.sh.sha256` instead. Then install the CLI:
-
-```bash
-bash install.sh --version v0.4.3 --install-cli-only --yes
-
+(
+set -eu
+install_tmp="$(mktemp -d)"
+trap 'rm -rf "$install_tmp"' EXIT
+cd "$install_tmp"
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh.sha256
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c install.sh.sha256
+else
+  shasum -a 256 -c install.sh.sha256
+fi
+bash install.sh --version v0.5.0 --install-cli-only --yes
+) &&
 export PATH="$HOME/.local/bin:$PATH"
 repogrammar version
 ```
 
-The expected output is `repogrammar 0.4.3`. The installer downloads and
-checksum-verifies the matching native archive and bundled Python worker,
-installs the managed command under `$HOME/.local/bin`, and records the product
-receipt. It does not configure a coding agent or create repository-local
-`.repogrammar/` state.
+Add the `export PATH` line to `~/.zshrc` or `~/.bashrc` once to keep the command
+available in new terminals. Expected version: `0.5.0`.
 
-To make the PATH change persistent, add this line once to `~/.zshrc` for Zsh or
-`~/.bashrc` for Bash, then start a new shell:
+### 2. Index your project
+
+From your project's directory:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+repogrammar init
 ```
 
-### 2. Optionally connect a coding agent
+That is all: `init` builds the current project's index and starts background
+updates. There is no global repository scanner. Run `init` once in each project.
+The explicit form `repogrammar init --project "$PWD" --yes` does the same thing;
+use `--no-autosync` for CI or a one-shot index.
 
-Skip this step when only the CLI is needed. To detect an installed Codex or
-Claude Code client and configure the read-only RepoGrammar MCP server globally:
+### 3. Connect your coding agent (optional)
 
 ```bash
 repogrammar install --target auto --scope global --yes --no-telemetry
 ```
 
-Restart an already-running coding-agent session after this command completes.
-Agent installation does not initialize a repository and does not edit global
-instruction files by default.
+Restart the coding-agent session after connecting. Choose a specific client with
+`--target codex`, `--target claude-code`, or `--target opencode`.
 
-### 3. Initialize each repository
+| I want to… | Guide |
+| --- | --- |
+| Install, update, or troubleshoot | [Quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md) |
+| Connect Codex | [Codex setup](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md) |
+| Connect Claude Code | [Claude Code setup](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md) |
+| Connect opencode | [opencode setup](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-opencode.md) |
+| See every command | Run `repogrammar help --all` or read the [CLI reference](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/cli.md) |
+| Understand evidence and limits | [Limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) |
+| Remove the installation | [Uninstall guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md#remove-an-installation-or-index) |
 
-Every repository needs its own local RepoGrammar state and index:
+## When should I index again?
 
-```bash
-cd /path/to/repository
+| Situation | Action |
+| --- | --- |
+| First time in a project | `repogrammar init` |
+| Normal edits while autosync is running | Nothing; updates run in the background |
+| Autosync is stopped, or you want an immediate update | `repogrammar sync` |
+| You need a full rebuild, or recovery guidance requests one | `repogrammar resync` |
+| You are unsure whether the index is ready | `repogrammar status`; use `repogrammar doctor` for recovery |
 
-repogrammar init --project "$PWD" --yes
+`index` remains available for compatibility. Use `init` to start, `sync` for
+ordinary changes, and `resync` to rebuild. Do not repeatedly run `init` after
+normal edits.
 
-repogrammar status \
-  --project "$PWD"
-```
+## Usage
 
-`init` creates `.repogrammar/`, builds the active index, and starts that
-repository's optional autosync daemon by default. Do not manually edit
-`.repogrammar/`. For CI or a deterministic one-shot index, use:
-
-```bash
-repogrammar init \
-  --project "$PWD" \
-  --yes \
-  --no-autosync \
-  --progress never
-```
-
-Run `init` once in every additional repository. The CLI and coding-agent
-integration are machine-level installations and do not need to be repeated.
-There is no global repository scanner.
-
-For machine-readable status and recovery guidance:
+Find examples for an exact repository location:
 
 ```bash
-repogrammar status --project "$PWD" --json
-repogrammar doctor --project "$PWD" --json
-```
-
-Follow the reported recovery action instead of manually modifying
-`.repogrammar/`. If the shell reports `repogrammar: command not found`, run
-`export PATH="$HOME/.local/bin:$PATH"` and verify that
-`$HOME/.local/bin/repogrammar` exists.
-
-Already have Node.js? The same immutable version is also available through the
-thin npm launcher:
-
-```bash
-npx --yes --package @sioyooo/repogrammar@0.4.3 repogrammar version
-```
-
-See the [full quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
-for advanced installation, CI, explicit instruction synchronization, manual
-sync, and cleanup. Use `repogrammar uninstall --dry-run` to preview complete
-managed-machine removal, `repogrammar disconnect --target all --yes` to remove
-only agent integrations, and
-`repogrammar uninit --project /path/to/repository --yes` to remove one
-repository's local index.
-
-## Five-minute verification path
-
-After cloning this repository and completing the installation above, run the
-following commands from the RepoGrammar repository root. This path exercises
-the installed release binary, repository initialization, storage readiness,
-family inventory, and one source-backed pattern lookup without requiring Rust
-or Cargo:
-
-```bash
-repogrammar version
-
-repogrammar init \
-  --project "$PWD" \
-  --yes \
-  --no-autosync \
-  --progress never
-
-repogrammar status --project "$PWD"
+repogrammar find "path/to/routes.py:7" --project "$PWD" --mode compact
 repogrammar families --project "$PWD"
-
-repogrammar find \
-  "src/fixtures/python/release/v0_1/positive-strong-evidence/routes.py:7" \
-  --project "$PWD" \
-  --mode compact \
-  --verbosity minimal
+repogrammar sync --project "$PWD"
 ```
 
-The expected evidence is:
+Start with an exact path or symbol when available. Framework-qualified queries
+such as `FastAPI route` are also supported. See the [CLI reference](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/cli.md)
+for the complete commands and the [MCP contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md)
+for coding-agent integration.
 
-- `repogrammar version` reports `0.4.3`;
-- status reports an initialized repository, available storage, and an active
-  generation;
-- `families` reports ready implementation pattern groups; and
-- `find` reports `pattern family found`, identifies
-  `Python · FastAPI Route`, and returns a bounded source span to read. It still
-  states that dynamic or runtime behavior remains unproven.
+## Background updates
 
-If coding-agent integration was enabled, verify the native MCP registration as
-an additional machine-level check:
+`init` starts a daemon for that repository. On macOS and Linux, native file
+notifications coalesce edits before a sync. Idle native operation reconciles
+metadata periodically instead of rescanning the tree every second. Git-ignored
+untracked directories are pruned before fingerprint traversal, while tracked
+files and ignore exceptions remain visible.
+
+If native watching fails, autosync logs the fallback and polls with bounded
+idle backoff. Failed syncs retry with bounded backoff even without another edit.
+File notifications are hints; explicit `sync` and query-time hashes remain the
+freshness authority. These changes reduce background work; no battery-life
+percentage is claimed.
 
 ```bash
-codex mcp get repogrammar --json
-# or: claude mcp get repogrammar
-# or, for opencode, check the mcp.repogrammar entry:
-cat "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+repogrammar autosync status --project "$PWD"
+repogrammar autosync stop --project "$PWD"
+repogrammar autosync start --project "$PWD"
 ```
 
-For the full end-to-end walkthrough—including a target-repository patch,
-runtime test, stale-evidence rejection, explicit sync, and cleanup—follow the
-[demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/demo-runbook.md).
+For CI or one-shot analysis, initialize with `--no-autosync`. See the
+[autosync contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/cli.md) for intervals and recovery.
 
-## What you get
+## How it works
 
-- **Pattern families** — repeated, compatible implementations with support,
-  variation, exception, and counterexample context.
-- **Metadata-first evidence** — repo-relative paths, content hashes, bounded
-  ranges, provenance, and unresolved obligations; source spans are opt-in.
-- **Prioritized read plans** — the smallest source-backed set the agent should
-  inspect before making a change.
-- **Static alignment** — a conservative check of whether a target matches an
-  evidenced family without upgrading static similarity into runtime proof.
-- **Typed recovery** — stale, ambiguous, dynamic, unsupported, and
-  insufficient cases become `UNKNOWN` or `PARTIAL_CONTEXT` with an explicit
-  next action.
+```text
+repository → local index → pattern families → examples + bounded read plan
+                                └──────────→ UNKNOWN + recovery action
+```
 
-## Latest in `0.4.3`
+- **Repository conventions:** find compatible implementations and their exceptions.
+- **Verifiable context:** every result carries provenance and freshness checks.
+- **Incremental updates:** native filesystem events wake autosync; changes use the
+  existing incremental indexer. Periodic reconciliation and polling fallback
+  handle unavailable watchers.
+- **Agent integration:** connect Codex, Claude Code, or opencode through MCP.
 
-| Area | Current behavior |
-| --- | --- |
-| Onboarding | `install.sh` installs the binary, optional agent MCP wiring reuses the validated product-receipt command path even with Conda/venv PATH prefixes, and `init` owns each repository's index and autosync. |
-| Queries | Exact-first resolution also understands qualified concept phrases such as `FastAPI route`; `mode` controls evidence gathering and `verbosity` controls payload density. |
-| Conformance | `check` returns static-alignment certificates with explicit unresolved obligations and never claims runtime equivalence. |
-| Freshness | Query-time hashes reject stale evidence; explicit `sync` is authoritative, while default repo-local autosync is a best-effort convenience. |
-| Efficiency | Dependency-aware incremental sync and Python interface hashes avoid unnecessary rebuild work while full/incremental equivalence gates protect results. |
-| Metrics | Source-free query-outcome accounting reports estimated potential read displacement across outcomes; it is not measured token savings or a causal result. |
+Text search finds strings; symbol graphs connect declarations and references.
+RepoGrammar adds evidence about repeated implementation patterns. Use them
+together. Static alignment is not proof of runtime equivalence.
 
-See the [changelog](https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md)
-for the complete version history and the
-[CLI specification](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/cli.md)
-for the exact command contract.
+## Scope and limitations
 
-## How it stays trustworthy
+The official language focus is Python: FastAPI, pytest, Pydantic, and SQLAlchemy.
+Other languages have bounded structural or dependency-inventory capabilities;
+these are not full language support. The strict Top-20 qualification program
+remains **0/20 complete**. Read the [language audit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/reports/language-support/top-20-final-program-audit.md)
+for the evidence and unresolved gates.
 
-1. **Discover locally.** Language adapters and bounded semantic workers extract
-   structural facts without executing target-repository application code.
-2. **Qualify conservatively.** Tree-sitter proposes candidates; syntax
-   similarity alone cannot prove family membership.
-3. **Return metadata first.** Results preserve hashes, bounded locations,
-   provenance, evidence strength, and remaining read obligations.
-4. **Enforce freshness.** Each repository owns its `.repogrammar/` SQLite
-   generations and optional daemon; there is no global repository scanner.
-5. **Abstain by type.** Unsupported confidence becomes an actionable typed
-   result, not a hidden fallback.
+RepoGrammar is pre-1.0. It is not a sound whole-program analyzer, and neither a
+syntax match nor a dependency declaration proves behavior. Dynamic dispatch,
+unsupported frameworks, stale indexes, and incomplete semantics can result in
+abstention. Read [known limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md) before relying on a result.
 
-The Rust implementation follows a dependency-inverted
-`core → ports → application → adapters → interfaces` architecture. Read the
-[architecture overview](https://github.com/SioYooo/RepoGrammar/blob/main/docs/architecture/overview.md)
-and [MCP contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md)
-for the deeper design.
+Public binary targets are macOS arm64/x86_64 and glibc Linux arm64/x86_64.
+Windows and musl Linux are not supported installation targets.
 
-## Language and framework boundary
+## Development
 
-| Language | Current evidence boundary |
-| --- | --- |
-| **Python** — FastAPI, pytest, Pydantic, SQLAlchemy | Official Python-first structural substrate; strict Top-20 completion remains open |
-| **C** | Structural substrate plus shared bounded vcpkg/Conan declarations; no translation-unit or external-symbol authority |
-| **C++** | Structural substrate plus bounded vcpkg/Conan declarations; no complete template/include/ABI semantics |
-| **Java** | Structural substrate plus literal direct Maven declarations; no effective model, classpath, or javac/JDT authority |
-| **C#** | Structural substrate; no C# project/NuGet inventory or Roslyn/MSBuild authority |
-| **JavaScript** | Conservative exact-anchor structural substrate plus root npm manifest declarations; package/runtime semantics remain incomplete |
-| **Visual Basic .NET** | Discovery plus literal `.vbproj` NuGet declarations; no Roslyn/MSBuild source semantics |
-| **SQL** | Discovery/config metadata only; dialect, migration, catalog, and extension semantics remain unknown |
-| **R** | Discovery plus bounded CRAN/Bioconductor/renv metadata; source, project, NSE, and dispatch semantics remain open |
-| **Rust** | Structural self-dogfood plus Cargo manifest/project metadata; no complete module, macro, trait, or external-symbol semantics |
-| **Delphi/Object Pascal** | Discovery plus literal Delphi package declarations; no authoritative compiler/project/source model |
-| **Scratch** | Product integration is `NO_GO` pending a binary-document port and vetted ZIP/deflate boundary; `.sb3` remains unsupported |
-| **Go** | Discovery plus bounded `go.mod` declarations; source stays parser-free and no Go command executes |
-| **PHP** | Discovery plus bounded Composer manifest/lock inventory; no PHP/Composer execution or source semantics |
-| **Swift** | Discovery plus bounded SwiftPM schema-2/3 lock pins; no Swift/SwiftPM/Xcode execution or source semantics |
-| **Ada** | Discovery plus unconditional literal Alire declarations; no Libadalang/GNAT project/source authority |
-| **Assembly** | Bounded x86-64 GNU-as-profile lexical candidates only; target, macro, include, link, and symbol semantics remain unknown |
-| **MATLAB** | Discovery plus bounded R2024b+ add-on declarations; no MATLAB/Octave/Simulink execution or source semantics |
-| **Fortran** | Discovery plus literal root fpm declarations; no compiler/project/module/ABI authority |
-| **Ruby** | Discovery plus bounded direct `Gemfile.lock` declarations; no Ruby/Bundler execution or source semantics |
-| **TypeScript (extra; not Top-20 denominator)** | Conservative exact-anchor structural substrate plus root npm declarations; full pinned Program/TypeChecker project semantics remain incomplete |
+```bash
+cargo build --locked
+cargo test --workspace --all-features
+```
 
-The frozen July 2026 Top-20 program is currently **0/20 complete** under its
-nine-gate evidence contract. See the
-[final program audit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/reports/language-support/top-20-final-program-audit.md);
-inventory and structural evidence must not be read as full language or
-arbitrary third-party-library support.
+Read [CONTRIBUTING.md](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md) and the [testing policy](https://github.com/SioYooo/RepoGrammar/blob/main/docs/development/testing.md)
+for the full checks. Architecture and specifications live in [docs/](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md).
+Report bugs through [GitHub Issues](https://github.com/SioYooo/RepoGrammar/issues);
+report security issues according to [SECURITY.md](https://github.com/SioYooo/RepoGrammar/blob/main/SECURITY.md).
 
-RepoGrammar is pre-1.0. Its MCP API and preview analyzers remain experimental,
-and it is not a sound whole-program static analyzer or a runtime-equivalence
-oracle. Stable artifacts target macOS arm64/x86_64 and glibc Linux
-arm64/x86_64 at the documented minimum versions; Windows and musl are not
-public release targets.
+## License
 
-RepoGrammar itself does not call an LLM, embeddings API, vector database, or
-cloud model. Python 3.10 or newer is required for the bounded Python analyzer;
-Rust/Cargo is not required for the verified release path. The exact safety and
-platform boundaries live in [limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
-
-## Built with AI, directed by a human
-
-RepoGrammar was developed through a human-directed GPT-5.6 workflow. ChatGPT
-helped plan and review the work; Codex implemented and tested scoped changes;
-the human maintainer owns the product insight, architecture, evidence policy,
-scope, review, merge authority, and public approvals.
-
-Recording and launch copy stays in the
-[demo runbook](https://github.com/SioYooo/RepoGrammar/blob/main/docs/demo/demo-runbook.md)
-and [launch kit](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md),
-leaving this README focused on the developer tool.
-
-## Community
-
-- Start with the [general quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md),
-  [Codex guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md),
-  [Claude Code guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md),
-  or [opencode guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-opencode.md).
-- Browse the [documentation map](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md)
-  and [known limitations](https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md).
-- Report bugs or propose improvements with the repository's
-  [issue templates](https://github.com/SioYooo/RepoGrammar/issues/new/choose).
-- Review [CONTRIBUTING](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md),
-  [SECURITY](https://github.com/SioYooo/RepoGrammar/blob/main/SECURITY.md), and the
-  [Code of Conduct](https://github.com/SioYooo/RepoGrammar/blob/main/CODE_OF_CONDUCT.md)
-  before contributing.
-
-RepoGrammar is licensed under the [MIT License](https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE).
+[MIT](https://github.com/SioYooo/RepoGrammar/blob/main/LICENSE).

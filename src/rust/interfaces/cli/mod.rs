@@ -1,5 +1,7 @@
 //! CLI argument boundary for the `repogrammar` binary.
 
+pub mod progress;
+
 use crate::application::autosync::{AutosyncReport, AutosyncSettings};
 use crate::application::conformance::{AlignmentComputation, ALIGNMENT_DEVIATION_CAP};
 use crate::application::indexing::IndexingOutcome;
@@ -622,22 +624,27 @@ fn usage() -> String {
     help_text(&[
         "Usage: repogrammar <command> [options]",
         "",
-        "Find source-backed implementation patterns without reading the whole repository.",
+        "Find source-backed implementation patterns in your repository.",
         "",
-        "Quick start:",
-        "  repogrammar setup",
-        "  repogrammar find \"How are API routes implemented?\"",
+        "Options:",
+        "  -h, --help       Show help.",
+        "  -V, --version    Show the installed version.",
         "",
-        "Core commands:",
-        "  setup      Wire your agent, index this repository, and keep it fresh.",
-        "  find       Find the best-supported implementation pattern for a target.",
-        "  families   Summarize implementation pattern groups that are ready.",
-        "  doctor     Diagnose readiness and show the next recovery action.",
+        "Commands:",
+        "  init             Index the current directory and start automatic sync.",
+        "  find <target>    Find implementation patterns for a file or question.",
+        "  families         List implementation pattern families.",
+        "  sync             Update the index after ordinary source changes.",
+        "  resync           Rebuild the entire index and analysis.",
+        "  status           Show index readiness and automatic sync status.",
+        "  doctor           Diagnose problems and show recovery commands.",
+        "  install          Connect RepoGrammar to a coding agent.",
+        "  setup            Connect an agent and index the repository in one plan.",
         "",
-        "Learn more:",
-        "  repogrammar help <command>   Command options and safety notes.",
-        "  repogrammar help --all       Complete command list.",
-        "  repogrammar version          Installed version.",
+        "Start here: repogrammar init",
+        "Already initialized? Automatic sync handles edits; use sync for a manual update.",
+        "",
+        "Run repogrammar help <command> for options, or repogrammar help --all for all commands.",
     ])
 }
 
@@ -759,7 +766,8 @@ pub fn command_usage(command: &str) -> Option<String> {
         "init" => Some(help_text(&[
             "Usage: repogrammar init [--project <path>|--path <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never] [--quiet|--verbose]",
             "",
-            "Creates repository-local RepoGrammar state under .repogrammar/, builds or refreshes the active index, and starts autosync by default.",
+            "Indexes the current directory, creates repository-local state under .repogrammar/, and starts autosync by default.",
+            "No separate index command is needed. After ordinary edits use sync; use resync for a full rebuild or doctor to diagnose problems.",
             "Use --state-only only for low-level lifecycle repair without indexing. Without --write-gitignore it avoids tracked .gitignore edits and writes Git exclude hygiene instead.",
             "--yes is accepted as an agent-safe noninteractive confirmation flag; it does not broaden init writes.",
             "--resync and --autosync remain accepted as explicit compatibility spellings of the defaults. Use --no-autosync for CI or one-shot indexing.",
@@ -787,9 +795,9 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --json                             Emit machine-readable output.",
             "  --quiet, --verbose                 Accepted lifecycle verbosity flags.",
         ])),
-        "index" => Some(index_or_sync_usage("index", "Build a fresh index and atomically activate it.")),
-        "sync" => Some(index_or_sync_usage("sync", "Rebuild the active index after repository changes.")),
-        "resync" => Some(index_or_sync_usage("resync", "Rebuild the active index and static-analysis facts after repository changes.")),
+        "index" => Some(index_or_sync_usage("index", "Build a fresh index after init --state-only. Ordinary init already builds the index.")),
+        "sync" => Some(index_or_sync_usage("sync", "Update the index after ordinary source changes. Unchanged repositories keep their active generation.")),
+        "resync" => Some(index_or_sync_usage("resync", "Rebuild the entire index and static-analysis facts. Use when doctor requests a full rebuild.")),
         "autosync" => Some(help_text(&[
             "Usage: repogrammar autosync [status|enable|start|stop|disable|run] [options]",
             "",
@@ -1048,7 +1056,7 @@ fn index_or_sync_usage(command: &str, summary: &str) -> String {
         &format!("Usage: repogrammar {command} [--project <path>|--path <path>] [--json] [--progress auto|always|never] [--quiet|--verbose]"),
         "",
         summary,
-        "Requires initialized repo-local state and writes a new validated active generation. Agents may run resync after init when analysis is missing or stale, and autosync start when subsequent edits should update automatically.",
+        "Requires initialized repo-local state. Start a new repository with repogrammar init; use repogrammar doctor if indexing is unavailable.",
         "",
         "Options:",
         "  --project <path>, --path <path>     Repository root. Defaults to the current directory.",
@@ -7701,7 +7709,7 @@ where
                 })
                 .ok();
             if options.state_only {
-                let progress = init_progress_stderr(options);
+                let progress = init_progress_stderr(options, std::io::stderr().is_terminal());
                 if options.json {
                     return CliOutput::success_with_stderr(
                         init_outcome_json(&outcome, status.as_ref()),
@@ -7766,7 +7774,7 @@ where
                 }
             }
 
-            let progress = init_progress_stderr(options);
+            let progress = init_progress_stderr(options, std::io::stderr().is_terminal());
             if options.json {
                 CliOutput::success_with_stderr(
                     init_bootstrap_json(
@@ -7785,6 +7793,7 @@ where
                         status.as_ref(),
                         resync_outcome.as_ref(),
                         autosync_report.as_ref(),
+                        options.verbose,
                     ),
                     progress,
                 )
@@ -7794,12 +7803,17 @@ where
     }
 }
 
-fn init_progress_stderr(options: &LifecycleOptions) -> String {
+fn init_progress_stderr(options: &LifecycleOptions, stderr_is_terminal: bool) -> String {
+    // The indexing runtime already renders live terminal progress. Do not append
+    // a synthetic initialization event after its final result.
+    if stderr_is_terminal && !options.state_only {
+        return String::new();
+    }
     if !should_emit_progress(
         options.progress,
         options.json,
         options.quiet,
-        std::io::stderr().is_terminal(),
+        stderr_is_terminal,
     ) {
         return String::new();
     }
@@ -9401,7 +9415,21 @@ fn init_bootstrap_human(
     status: Option<&RepositoryStatusReport>,
     resync_outcome: Option<&IndexingOutcome>,
     autosync_report: Option<&AutosyncReport>,
+    verbose: bool,
 ) -> String {
+    if !verbose {
+        if let Some(indexed) = resync_outcome {
+            let autosync = match autosync_report {
+                Some(report) if report.running => "running",
+                Some(_) => "stopped",
+                None => "not started by this command",
+            };
+            return format!(
+                "Init complete\nIndexed {} units\nAutosync {autosync}\n\nNext: repogrammar find <target>\nUpdates: repogrammar sync after ordinary edits; repogrammar resync for a full rebuild.\nTroubleshooting: repogrammar doctor\n",
+                indexed.indexed_units,
+            );
+        }
+    }
     let mut output = init_outcome_human(outcome, status);
     if let Some(outcome) = resync_outcome {
         output.push_str(&format!(
@@ -9415,6 +9443,11 @@ fn init_bootstrap_human(
             "autosync: started\nrunning: {}\nenabled: {}\n",
             report.running, report.enabled
         ));
+    }
+    if resync_outcome.is_some() {
+        output.push_str(
+            "\nIndex built. No separate index command is needed.\nNext: repogrammar find <target>\nUpdates: repogrammar sync after ordinary edits; repogrammar resync for a full rebuild.\nTroubleshooting: repogrammar doctor\n",
+        );
     }
     output
 }
@@ -9458,7 +9491,8 @@ fn init_bootstrap_failure(
                 state.outcome,
                 state.status,
                 state.resync_outcome,
-                state.autosync_report
+                state.autosync_report,
+                true,
             )
         ),
     )
@@ -12650,7 +12684,25 @@ mod tests {
             .stdout
             .contains("Usage: repogrammar <command> [options]"));
         assert!(output.stdout.contains("repogrammar help <command>"));
-        assert!(output.stdout.contains("repogrammar setup"));
+        assert!(output.stdout.contains("Start here: repogrammar init"));
+        for command in [
+            "init",
+            "find <target>",
+            "families",
+            "sync",
+            "resync",
+            "status",
+            "install",
+            "setup",
+        ] {
+            assert!(
+                output
+                    .stdout
+                    .lines()
+                    .any(|line| line.starts_with(&format!("  {command} "))),
+                "missing {command}"
+            );
+        }
         assert!(output.stdout.contains("find"));
         assert!(output.stdout.contains("doctor"));
         assert!(output.stdout.contains("repogrammar help --all"));
@@ -13600,6 +13652,18 @@ mod tests {
         assert!(output
             .stdout
             .contains("Create or repair lifecycle state without indexing or autosync"));
+
+        assert!(output.stdout.contains("Indexes the current directory"));
+        assert!(output
+            .stdout
+            .contains("No separate index command is needed"));
+        assert!(run(["help", "index"])
+            .stdout
+            .contains("after init --state-only"));
+        assert!(run(["help", "sync"])
+            .stdout
+            .contains("ordinary source changes"));
+        assert!(run(["help", "resync"]).stdout.contains("entire index"));
 
         let full = run(["help", "--all"]);
         assert_eq!(full.status, 0);
@@ -16962,6 +17026,47 @@ mod tests {
     }
 
     #[test]
+    fn plain_init_indexes_current_directory_and_explains_later_updates() {
+        let workspace = TempWorkspace::new("cli-init-current-dir-guidance");
+        let runtime = BootstrapRuntime::default();
+        let output = run_with_context_and_runtime(["init"], workspace.path(), &|_| None, &runtime);
+        assert_eq!(output.status, 0);
+        assert_eq!(runtime.index_calls.get(), 1);
+        assert_eq!(runtime.autosync_calls.get(), 1);
+        assert!(workspace.path().join(DEFAULT_STATE_DIR).is_dir());
+        for internal in [
+            "state_dir:",
+            "repaired_entry:",
+            "active_generation:",
+            "git_info_exclude:",
+        ] {
+            assert!(
+                !output.stdout.contains(internal),
+                "default output exposes {internal}"
+            );
+        }
+        for guidance in [
+            "Init complete",
+            "Indexed ",
+            "Autosync running",
+            "repogrammar sync after ordinary edits",
+            "repogrammar resync for a full rebuild",
+            "repogrammar doctor",
+        ] {
+            assert!(output.stdout.contains(guidance), "missing {guidance}");
+        }
+    }
+
+    #[test]
+    fn init_terminal_progress_uses_the_live_renderer_without_a_final_synthetic_bar() {
+        let options =
+            parse_lifecycle_options("init", &["--progress".to_string(), "always".to_string()])
+                .unwrap();
+        assert!(init_progress_stderr(&options, true).is_empty());
+        assert!(init_progress_stderr(&options, false).contains("100%"));
+    }
+
+    #[test]
     fn init_human_output_mentions_deferred_storage_without_claiming_indexing() {
         let workspace = TempWorkspace::new("cli-init-human");
         let env = |_: &str| None;
@@ -16998,7 +17103,8 @@ mod tests {
         assert_eq!(value["storage"], "available");
         assert_eq!(value["indexing"], "syntax_only_code_units");
 
-        let human_output = run_with_context_and_runtime(["init"], workspace.path(), &env, &runtime);
+        let human_output =
+            run_with_context_and_runtime(["init", "--verbose"], workspace.path(), &env, &runtime);
 
         assert_eq!(human_output.status, 0);
         assert!(human_output.stdout.contains("created: false"));

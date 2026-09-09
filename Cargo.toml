@@ -1,6 +1,6 @@
 [package]
 name = "repogrammar"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2021"
 description = "Repository pattern-family analysis engine bootstrap"
 license = "MIT"
@@ -39,3 +39,5 @@ tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-java = "0.23"
 tree-sitter-rust = "0.24"
+# Production: native filesystem wakeup hints; ADR-0053 retains fingerprint fallback.
+notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }

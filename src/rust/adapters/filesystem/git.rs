@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -200,6 +200,54 @@ impl GitContext {
             }
         }
         Ok(ignored)
+    }
+
+    /// Git collapses only wholly untracked ignored directories. A directory
+    /// containing tracked files stays expanded, so those files remain visible.
+    pub(crate) fn ignored_untracked_directories(&self) -> Result<BTreeSet<String>, ()> {
+        let mut child = git_command()
+            .arg("-C")
+            .arg(self.worktree_root.join(&self.project_prefix))
+            .args([
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+                "--",
+                ".",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| ())?;
+        let mut bytes = Vec::new();
+        let read_result = child
+            .stdout
+            .take()
+            .ok_or(())?
+            .take(CHECK_IGNORE_MAX_STDIN_BYTES as u64 + 1)
+            .read_to_end(&mut bytes);
+        if read_result.is_err() || bytes.len() > CHECK_IGNORE_MAX_STDIN_BYTES {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(());
+        }
+        if !child.wait().map_err(|_| ())?.success() {
+            return Err(());
+        }
+        let mut directories = BTreeSet::new();
+        for entry in bytes
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+        {
+            let path = std::str::from_utf8(entry).map_err(|_| ())?;
+            if let Some(directory) = path.strip_suffix('/') {
+                directories.insert(directory.to_string());
+            }
+        }
+        Ok(directories)
     }
 
     pub(crate) fn check_ignore_policy(&self, project_relative_path: &str) -> Result<bool, ()> {

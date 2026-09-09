@@ -1,18 +1,7 @@
 # Codex Quickstart
 
-This flow keeps machine integration and repository initialization explicit.
-Use the general quickstart's exact-version availability gate; when any check
-fails, acquire from source.
-
-## Acquire RepoGrammar From Source
-
-```text
-git clone https://github.com/SioYooo/RepoGrammar.git
-cd RepoGrammar
-cargo build --release
-bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
-repogrammar version
-```
+Install the CLI using the [general quickstart](quickstart.md#install), then
+connect this agent and initialize each repository. Python 3.10+ is required.
 
 ## Preview And Apply Codex Wiring
 
@@ -25,8 +14,8 @@ Then initialize each repository separately:
 
 ```text
 cd /path/to/your/repo
-repogrammar init --project "$PWD" --yes
-repogrammar status --project "$PWD"
+repogrammar init
+repogrammar status
 ```
 
 Agent installation never creates `.repogrammar/`; repository `init` never
@@ -55,14 +44,9 @@ refreshes only an exact known legacy block, preserves unrelated instructions,
 and refuses foreign or malformed marker content. It does not create
 `.repogrammar/`, run setup, or mirror `CLAUDE.md`.
 
-## Use Codex And GPT-5.6
+## Use RepoGrammar in Codex
 
-Open Codex in the configured repository. Use `/mcp` to confirm the
-`repogrammar` server is connected. Use `/model` and select an available
-GPT-5.6 family option; model names and availability can vary by account and
-Codex surface, so do not hardcode a hidden or unavailable slug. The official
-Codex slash-command reference describes `/model` as the current-task model
-selector.
+Restart Codex and open it in the initialized repository.
 
 Ask:
 
@@ -79,47 +63,6 @@ typed uncertainty. `UNKNOWN`, fallback, stale evidence, or omitted spans mean
 Codex must state the reason and use normal source reads for the affected files;
 they must never be upgraded into a confident family claim.
 
-RepoGrammar does not run GPT-5.6 or call the OpenAI API itself. GPT-5.6 is the
-Codex development/demo reasoning surface, while RepoGrammar is the local MCP
-developer tool supplying conservative repository context. No OpenAI API key is
-required by RepoGrammar.
+RepoGrammar runs locally and does not require an OpenAI API key.
 
-## Capture The Codex Feedback Session ID
-
-Keep the exact Codex task used to build or validate this work open:
-
-1. Type `/status` and record the visible task identifier for internal traceability.
-2. Type `/feedback` in that same task.
-3. Review the feedback text and choose whether to include logs; never include
-   secrets or private repository content.
-4. Submit the feedback and copy the Session ID shown by the confirmation into:
-   `Feedback Session ID: <paste verified /feedback Session ID here>`.
-5. If the client does not display a Session ID, leave the placeholder and ask
-   the Codex support channel which identifier is accepted. Do not substitute
-   the `/status` task ID without confirmation.
-
-Official Codex documentation says `/feedback` opens the feedback dialog and
-can optionally include logs; it does not promise in the public reference that
-every client displays a Session ID. The guarded placeholder avoids inventing
-feedback evidence.
-
-References:
-
-- [Codex slash commands](https://learn.chatgpt.com/docs/reference/slash-commands#available-slash-commands)
-- [GPT-5.6 family in Codex surfaces](https://learn.chatgpt.com/docs/whats-new#choose-the-right-gpt-56-model)
-
-## Exact No-Build Path
-
-After the exact npm version, complete npm channel mapping, and matching GitHub
-asset pass the availability gate in `quickstart.md`, keep every no-build
-command pinned because the npm launcher does not install a bare command on
-`PATH`:
-
-```text
-npx --yes --package @sioyooo/repogrammar@0.4.3 \
-  repogrammar install --target codex --scope global --yes --no-telemetry
-npx --yes --package @sioyooo/repogrammar@0.4.3 \
-  repogrammar init --project /path/to/your/repo --yes
-```
-
-If any check fails, use the source acquisition path above.
+For installation, updates, and cleanup, return to the [general quickstart](quickstart.md).

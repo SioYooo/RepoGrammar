@@ -164,8 +164,8 @@ are independently verified. Workflow success or local packaging never proves
 that either registry publication occurred.
 Preview documentation must use an explicit preview tag such as
 `v0.2.0-preview.0` rather than relying on GitHub's `latest` redirect. Stable
-candidate and post-publication documentation should pin `v0.4.3` for
-reproducible acquisition. Public-install claims may identify `v0.4.3` as the
+candidate and post-publication documentation should pin `v0.5.0` for
+reproducible acquisition. Public-install claims may identify `v0.5.0` as the
 latest verified public stable only after its GitHub, npm, provenance, and
 finalizer evidence all pass. When a `latest` or explicit artifact lookup fails,
 installers must report
@@ -196,12 +196,13 @@ contributor source-build path. It must not duplicate native agent configuration
 or product-deletion ownership logic outside the Rust application, and it must
 not create or modify `.repogrammar/`.
 
-The current release-source manifests use stable identity `0.4.3`. A source
+The current release-source manifests use candidate stable identity `0.5.0`. A source
 build or source install must report that identity consistently across Cargo and
 npm, but the manifest value alone does not establish a tag, release artifact,
 registry publication, or public stable channel. Stable acquisition is pinned
 to the independently verified public `0.4.3` GitHub Release and npm package;
-the source manifest by itself remains insufficient evidence.
+the source manifest by itself remains insufficient evidence. The `0.5.0`
+candidate is not a public release until its independent finalizer passes.
 
 Before GitHub Release artifacts exist, source checkouts must remain dogfoodable
 through explicit contributor paths:
@@ -317,7 +318,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.4.3.tgz` for the current
+  `npm install -g ./sioyooo-repogrammar-0.5.0.tgz` for the current
   source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 

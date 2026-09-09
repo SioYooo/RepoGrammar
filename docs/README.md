@@ -17,8 +17,8 @@ development, and governance documentation.
   specifications.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
-- `release/`: maintainer-owned release runbooks. The stable `0.4.3` checklist
-  is the canonical two-phase immutable publication gate; the stable `0.4.2`
+- `release/`: maintainer-owned release runbooks. The stable `0.5.0` candidate checklist
+  is the canonical two-phase immutable publication gate; the stable `0.4.3`
   checklist and earlier checklists remain historical release evidence.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
@@ -32,6 +32,14 @@ development, and governance documentation.
 
 Repository-local skills live under `.agents/skills/`. Durable but non-normative
 context lives under `.agents/memories/`.
+
+## Start here
+
+- [Install and initialize](quickstart.md): copy one installation block, then run `repogrammar init`.
+- Connect [Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or [opencode](quickstart-opencode.md).
+- [CLI reference](specifications/cli.md): when to initialize, sync, or rebuild.
+- [Limitations](limitations.md): supported scope and evidence boundaries.
+- [Autosync efficiency evidence](reports/autosync-efficiency.md) and [recorded progress demo](demo/index-progress.summary.json).
 
 ## Canonical source by topic
 
@@ -102,7 +110,9 @@ context lives under `.agents/memories/`.
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
-- Stable `0.4.3` two-phase immutable publication and split-installation gate:
+- Stable `0.5.0` candidate two-phase immutable publication gate:
+  `release/stable-v0.5.0-release-checklist.md`.
+- Stable `0.4.3` publication evidence remains in
   `release/stable-v0.4.3-release-checklist.md`.
 - Stable `0.4.2` publication evidence remains in
   `release/stable-v0.4.2-release-checklist.md`.

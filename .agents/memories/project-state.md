@@ -929,8 +929,10 @@ collection at 100,000. Exact limits succeed and plus one fails with a typed,
 path/source-free invalid-input error before any generation is prepared. The
 autosync fingerprint charges accepted metadata file sizes even though it hashes
 only metadata, keeping watcher admission conservative with the next index.
-It does not evaluate Git ignore during polling, so supported Git-ignored files
-count and may make autosync stricter than manual discovery. A durable security
+Fingerprinting now evaluates Git ignore, prunes wholly untracked ignored
+directories, and excludes ignored candidates before accepted-file admission.
+Native event hints reduce idle fingerprint passes, with periodic reconciliation
+and explicit polling fallback; this is not measured battery-life evidence. A durable security
 follow-up remains open: aggregate bounds limit work but do not close the
 pre-existing canonicalize-then-reopen tree-swap race. Discovery, source reads,
 and fingerprinting eventually need one cross-platform no-follow,
