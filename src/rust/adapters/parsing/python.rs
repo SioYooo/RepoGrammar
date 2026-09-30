@@ -34,7 +34,7 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
+    ParserProjectSession, PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -45,6 +45,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+mod project_session;
 
 /// Origin engine stamped on facts produced by the CPython `ast` frontend. Used
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
@@ -75,6 +77,34 @@ const MAX_PYTHON_FACT_ASSUMPTIONS: usize = 7;
 const MAX_PYTHON_FACT_ASSUMPTION_BYTES: usize = 128;
 const DEFAULT_PYTHON_FRONTEND_TIMEOUT: Duration = Duration::from_secs(30);
 const PYTHON_FRONTEND_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const PYTHON_FRONTEND_UNSUPPORTED_RUNTIME_EXIT: i32 = 78;
+const PYTHON_FRONTEND_UNSUPPORTED_RUNTIME_MARKER: &[u8] =
+    b"repogrammar-python-runtime-unsupported\n";
+// Interpreter startup precedes our bootstrap: reject ambient Python paths,
+// sitecustomize/usercustomize and .pth startup code before any private mode.
+const PYTHON_FRONTEND_ISOLATION_ARGS: &[&str] = &["-I", "-S"];
+// Admit the configured interpreter before loading the worker, in that same
+// process. Removing -c's empty import entry avoids importing a repository-local
+// runpy.py; restore the direct-script argv/import directory before dispatch.
+const PYTHON_FRONTEND_BOOTSTRAP: &str = r#"import sys
+if sys.version_info[0] != 3 or sys.version_info[1] < 10:
+    sys.stdout.write('repogrammar-python-runtime-unsupported\n')
+    sys.exit(78)
+if sys.path and sys.path[0] == '':
+    del sys.path[0]
+import os, runpy
+sys.argv = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0])))
+runpy.run_path(sys.argv[0], run_name='__main__')
+"#;
+
+#[cfg(test)]
+#[path = "../../integration_tests/python_runtime_qualification.rs"]
+mod python_runtime_qualification_tests;
+
+#[cfg(test)]
+#[path = "../../integration_tests/python_project_session.rs"]
+mod python_project_session_tests;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonAstParser {
@@ -132,25 +162,32 @@ impl PythonAstParser {
             return Err(ParseError::UnsupportedLanguage);
         }
         let output = self.parse_document(&document, context)?;
-        let ParsedPythonDocument {
-            mut report,
-            interface_hash,
-        } = parse_worker_response(&document, &output.response)?;
-        if output.context_omitted {
-            report.diagnostics.push(ParseDiagnostic {
-                path: document.path.to_string(),
-                range: None,
-                severity: ParseDiagnosticSeverity::Warning,
-                message: "python parse context omitted because request exceeded size limit"
-                    .to_string(),
-            });
-        }
-        Ok(SourceParseOutput {
-            report,
-            python_interface_hash: Some(interface_hash),
-            dependencies: Vec::new(),
-        })
+        python_document_output(&document, &output.response, output.context_omitted)
     }
+}
+
+fn python_document_output(
+    document: &SourceDocument<'_>,
+    response: &str,
+    context_omitted: bool,
+) -> Result<SourceParseOutput, ParseError> {
+    let ParsedPythonDocument {
+        mut report,
+        interface_hash,
+    } = parse_worker_response(document, response)?;
+    if context_omitted {
+        report.diagnostics.push(ParseDiagnostic {
+            path: document.path.to_string(),
+            range: None,
+            severity: ParseDiagnosticSeverity::Warning,
+            message: "python parse context omitted because request exceeded size limit".to_string(),
+        });
+    }
+    Ok(SourceParseOutput {
+        report,
+        python_interface_hash: Some(interface_hash),
+        dependencies: Vec::new(),
+    })
 }
 
 impl SourceParser for PythonAstParser {
@@ -182,6 +219,31 @@ impl SourceParser for PythonAstParser {
 
     fn python_frontend_version(&self) -> Option<String> {
         self.probe_interpreter_version()
+    }
+
+    fn begin_project_session(
+        &self,
+        context: &ParserProjectContext,
+    ) -> Result<Option<Box<dyn ParserProjectSession>>, ParseError> {
+        if !project_session_selected(
+            std::env::var_os("REPOGRAMMAR_PYTHON_PROJECT_SESSION").as_deref(),
+        )? {
+            return Ok(None);
+        }
+        Ok(Some(Box::new(
+            project_session::PythonProjectSession::start(self, context)?,
+        )))
+    }
+}
+
+fn project_session_selected(selection: Option<&std::ffi::OsStr>) -> Result<bool, ParseError> {
+    match selection {
+        None => Ok(true),
+        Some(value) if value == "1" => Ok(true),
+        Some(value) if value == "0" => Ok(false),
+        Some(_) => Err(ParseError::Internal(
+            "python project-session selection must be 0 or 1".into(),
+        )),
     }
 }
 
@@ -304,8 +366,8 @@ impl PythonAstParser {
 
     /// Single-file interface probe: one bounded worker call returning the
     /// deterministic interface hash of `text` at `path`, with no whole-project
-    /// context. Any failure mode — request too large, worker unavailable,
-    /// timeout, contract mismatch, malformed response — maps to
+    /// context. Any failure mode — request too large, unsupported runtime,
+    /// worker unavailable, timeout, contract mismatch, malformed response — maps to
     /// [`PythonInterfaceProbe::Unverified`] so the incremental-sync preflight
     /// falls back to a full rebuild rather than guessing an interface.
     fn extract_interface(&self, path: &str, text: &str) -> PythonInterfaceProbe {
@@ -341,6 +403,7 @@ impl PythonAstParser {
     fn probe_interpreter_version(&self) -> Option<String> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
+            .args(PYTHON_FRONTEND_ISOLATION_ARGS)
             .arg("-c")
             .arg("import sys;print('%d.%d.%d' % sys.version_info[:3])")
             .stdin(Stdio::null())
@@ -397,6 +460,9 @@ impl PythonAstParser {
     ) -> Result<String, ParseError> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
+            .args(PYTHON_FRONTEND_ISOLATION_ARGS)
+            .arg("-c")
+            .arg(PYTHON_FRONTEND_BOOTSTRAP)
             .arg(&self.worker_script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -455,15 +521,22 @@ impl PythonAstParser {
         }
 
         let status = wait_for_python_frontend(&mut child, deadline)?;
+        let output = read_receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| ParseError::Timeout)?
+            .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
+        // Admission may close stdin before a large request finishes writing.
+        // Its exact status/marker pair must not be hidden by that broken pipe.
+        if status.code() == Some(PYTHON_FRONTEND_UNSUPPORTED_RUNTIME_EXIT)
+            && output == PYTHON_FRONTEND_UNSUPPORTED_RUNTIME_MARKER
+        {
+            return Err(ParseError::PythonFrontendInterpreterUnsupported);
+        }
         let write_result = write_receiver
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .map_err(|_| ParseError::Timeout)?;
         write_result
             .map_err(|_| ParseError::Internal("python ast frontend request failed".into()))?;
-        let output = read_receiver
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| ParseError::Timeout)?
-            .map_err(|_| ParseError::Internal("python ast frontend failed".into()))?;
         if !status.success() {
             if revisioned_contract
                 && status.code() == Some(2)
@@ -555,38 +628,35 @@ fn parse_document_payload(
         let object = payload
             .as_object_mut()
             .expect("parse document payload must be an object");
-        object.insert(
-            "module_paths".to_string(),
-            json!(context.python_module_paths),
-        );
-        object.insert(
-            "source_roots".to_string(),
-            json!(context.python_source_roots),
-        );
-        object.insert(
-            "module_files".to_string(),
-            json!(context
+        let Value::Object(fields) = python_project_context_payload(context) else {
+            unreachable!("project context payload is an object");
+        };
+        object.extend(fields);
+    }
+    payload
+}
+
+fn python_project_context_payload(context: &ParserProjectContext) -> Value {
+    json!({
+        "module_paths": context.python_module_paths,
+        "source_roots": context.python_source_roots,
+        "module_files": context
                 .python_module_files
                 .iter()
                 .map(|file| json!({
                     "path": &file.path,
                     "text": &file.text,
                 }))
-                .collect::<Vec<_>>()),
-        );
-        object.insert(
-            "conftest_files".to_string(),
-            json!(context
+                .collect::<Vec<_>>(),
+        "conftest_files": context
                 .python_conftest_files
                 .iter()
                 .map(|file| json!({
                     "path": &file.path,
                     "text": &file.text,
                 }))
-                .collect::<Vec<_>>()),
-        );
-    }
-    payload
+                .collect::<Vec<_>>()
+    })
 }
 
 /// Validate an `extract_interface` worker response into a probe result. Treats
@@ -5726,7 +5796,7 @@ def _api_client():
             "import json\nimport sys\npayload = json.loads(sys.stdin.readline())\nraise SystemExit(2 if 'contract_revision' in payload else 0)\n",
         )
         .expect("old worker fixture");
-        let parser = PythonAstParser::with_worker(platform_python_executable(), worker);
+        let parser = PythonAstParser::with_worker(PythonAstParser::default().executable, worker);
 
         let result = parser.parse(document("def ok():\n    pass\n"));
 
@@ -5799,7 +5869,7 @@ def _api_client():
         )
         .expect("sleeping worker fixture");
         let parser = PythonAstParser::with_worker_timeout(
-            platform_python_executable(),
+            PythonAstParser::default().executable,
             worker,
             Duration::from_millis(100),
         );
@@ -5828,7 +5898,10 @@ def _api_client():
 
     #[test]
     fn missing_frontend_is_reported_as_internal_error() {
-        let parser = PythonAstParser::with_worker("python3", PathBuf::from("missing-worker.py"));
+        let parser = PythonAstParser::with_worker(
+            PythonAstParser::default().executable,
+            PathBuf::from("missing-worker.py"),
+        );
 
         assert!(matches!(
             parser.parse(document("def ok():\n    pass\n")),

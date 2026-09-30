@@ -28,6 +28,10 @@ except ModuleNotFoundError:  # Python < 3.11.
 PROTOCOL_VERSION = 1
 PARSE_DOCUMENT_CONTRACT_REVISION = 2
 PROJECT_CONFIG_CONTRACT_REVISION = 1
+PROJECT_SESSION_REVISION = 1
+MAX_SESSION_HEADER_BYTES = 4096
+MAX_SESSION_PARSE_REQUESTS = 100_000
+MAX_PARSE_DOCUMENT_OUTPUT_BYTES = 2 * 1_048_576
 DEFAULT_REQUEST_ID = "repogrammar-python-semantic-worker"
 MAX_STDIN_BYTES = 1_048_576
 MAX_PROJECT_ROOT_CHARS = 4096
@@ -490,7 +494,9 @@ def build_module_symbol_index(
     file_records: list[tuple[str, str, str]],
     source_roots: list[str],
 ) -> tuple[dict[str, dict[str, tuple[str, str]]], dict[str, set[str]]]:
-    parsed_modules: dict[str, tuple[str, ast.Module]] = {}
+    # Only package re-export projections survive this pass. The full AST of
+    # each context module is ephemeral, including in a persistent session.
+    parsed_modules: dict[str, tuple[str, list[tuple[int, str | None, list[tuple[str, str | None]]]]]] = {}
     symbol_index: dict[str, dict[str, tuple[str, str]]] = {}
     literal_all_index: dict[str, set[str]] = {}
     for path, source, _file_hash in sorted(file_records):
@@ -501,7 +507,13 @@ def build_module_symbol_index(
         except SyntaxError:
             continue
         for module_name in module_names_for_path(path, source_roots):
-            parsed_modules[module_name] = (path, tree)
+            reexports = [
+                (node.level, node.module, [(alias.name, alias.asname) for alias in node.names])
+                for node in tree.body
+                if isinstance(node, ast.ImportFrom)
+                and (path == "__init__.py" or path.endswith("/__init__.py"))
+            ]
+            parsed_modules[module_name] = (path, reexports)
             direct_symbols = module_direct_symbols(tree)
             if direct_symbols:
                 symbol_index[module_name] = {
@@ -511,29 +523,27 @@ def build_module_symbol_index(
             if literal_all is not None:
                 literal_all_index[module_name] = literal_all
 
-    for module_name, (path, tree) in sorted(parsed_modules.items()):
+    for module_name, (path, reexports) in sorted(parsed_modules.items()):
         if not (path == "__init__.py" or path.endswith("/__init__.py")):
             continue
         package_symbols = symbol_index.setdefault(module_name, {})
-        for node in tree.body:
-            if not isinstance(node, ast.ImportFrom):
-                continue
+        for level, imported_name, aliases in reexports:
             imported_module = (
-                relative_import_base([module_name], path, node.level, node.module)
-                if node.level
-                else node.module
+                relative_import_base([module_name], path, level, imported_name)
+                if level
+                else imported_name
             )
             if imported_module is None:
                 continue
-            for alias in node.names:
-                if alias.name == "*":
+            for name, asname in aliases:
+                if name == "*":
                     for exported in sorted(literal_all_index.get(imported_module, set())):
                         resolved = symbol_index.get(imported_module, {}).get(exported)
                         if resolved is not None:
                             package_symbols.setdefault(exported, resolved)
                     continue
-                local_name = alias.asname or alias.name
-                resolved = symbol_index.get(imported_module, {}).get(alias.name)
+                local_name = asname or name
+                resolved = symbol_index.get(imported_module, {}).get(name)
                 if resolved is not None:
                     package_symbols.setdefault(local_name, resolved)
 
@@ -5327,23 +5337,40 @@ def parse_document(payload: dict[str, Any]) -> int:
     module_files = safe_module_file_records(payload.get("module_files"))
     if module_paths is None or source_roots is None or conftest_files is None or module_files is None:
         return 2
+    context = document_context(module_paths, source_roots, conftest_files, module_files)
+    message(document_result(payload, context))
+    return 0
+
+
+def document_context(module_paths, source_roots, conftest_files, module_files):
     source_roots = sorted(set([*source_roots, *infer_source_roots(module_paths)]))
     module_index = build_module_index(module_paths, source_roots)
     module_symbols, module_all_names = build_module_symbol_index(module_files, source_roots)
     fixture_index = conftest_fixture_index(conftest_files)
+    return (
+        module_index if module_paths else None,
+        source_roots,
+        fixture_index,
+        module_symbols if module_files else None,
+        module_all_names if module_files else None,
+    )
+
+
+def document_result(payload, context):
+    module_index, source_roots, fixture_index, module_symbols, module_all_names = context
+    text = payload["text"]
     units, diagnostics, facts = analyze_source(
         payload["path"],
         text,
         payload["content_hash"],
         payload["repository_revision"],
-        module_index if module_paths else None,
+        module_index,
         source_roots,
         applicable_conftest_fixture_name_counts(payload["path"], fixture_index),
-        module_symbols if module_files else None,
-        module_all_names if module_files else None,
+        module_symbols,
+        module_all_names,
     )
-    message(
-        {
+    return {
             "protocol_version": PROTOCOL_VERSION,
             "contract_revision": PARSE_DOCUMENT_CONTRACT_REVISION,
             "mode": "parse_document",
@@ -5353,8 +5380,6 @@ def parse_document(payload: dict[str, Any]) -> int:
             "facts": facts,
             "diagnostics": diagnostics,
         }
-    )
-    return 0
 
 
 def extract_interface(payload: dict[str, Any]) -> int:
@@ -6588,6 +6613,151 @@ def analyze_project(payload: dict[str, Any]) -> int:
     return 0
 
 
+def unique_session_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate session object member")
+        value[key] = item
+    return value
+
+
+def read_session_frame(limit):
+    raw = sys.stdin.buffer.readline(limit + 1)
+    if not raw or len(raw) > limit or not raw.endswith(b"\n"):
+        raise ValueError("invalid project session frame")
+    return json.loads(raw, object_pairs_hook=unique_session_object), raw[:-1]
+
+
+def session_frame(payload, limit):
+    text = json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n"
+    if len(text.encode("utf-8")) > limit:
+        raise ValueError("project session frame exceeds limit")
+    return text
+
+
+def project_session() -> int:
+    """Private supplied-bytes protocol; never opens an analyzed source path.
+
+    Control headers and legacy data each have independent fixed caps. Initial
+    source context is discarded immediately after compact projection creation.
+    A clean EOS plus successful process exit is required before activation.
+    """
+    header = None
+    try:
+        header, _raw = read_session_frame(MAX_SESSION_HEADER_BYTES)
+        base_fields = {
+            "protocol_version", "contract_revision", "project_session_revision", "session_id",
+            "context_hash", "request_id", "message_type",
+        }
+        if (
+            not isinstance(header, dict) or set(header) != base_fields
+            or header.get("protocol_version") != PROTOCOL_VERSION
+            or type(header.get("protocol_version")) is not int
+            or header.get("contract_revision") != PARSE_DOCUMENT_CONTRACT_REVISION
+            or type(header.get("contract_revision")) is not int
+            or header.get("project_session_revision") != PROJECT_SESSION_REVISION
+            or type(header.get("project_session_revision")) is not int
+            or header.get("message_type") != "start"
+            or type(header.get("request_id")) is not int or header["request_id"] != 0
+            or not is_strict_content_hash(header.get("context_hash"))
+            or header.get("session_id") != "index:" + header["context_hash"][7:]
+        ):
+            raise ValueError("invalid session start")
+        payload, raw = read_session_frame(MAX_STDIN_BYTES)
+        if (
+            "sha256:" + hashlib.sha256(raw).hexdigest() != header["context_hash"]
+            or not isinstance(payload, dict)
+            or set(payload) != {"module_paths", "source_roots", "module_files", "conftest_files"}
+        ):
+            raise ValueError("invalid project context")
+        module_paths = safe_path_list(payload["module_paths"], require_python=True)
+        source_roots = safe_path_list(payload["source_roots"])
+        module_files = safe_module_file_records(payload["module_files"])
+        conftest_files = safe_conftest_file_records(payload["conftest_files"])
+        if module_paths is None or source_roots is None or module_files is None or conftest_files is None:
+            raise ValueError("invalid project context")
+        context = document_context(module_paths, source_roots, conftest_files, module_files)
+        empty_context = document_context([], [], [], [])
+        # Do not leave source strings live in the first-frame payload, raw bytes,
+        # file records, or the caller's stack for the duration of the session.
+        payload.clear()
+        del payload, raw, module_files, conftest_files, module_paths, source_roots
+        identity = {key: header[key] for key in base_fields - {"request_id", "message_type"}}
+        sys.stdout.write(session_frame({**header, "message_type": "ready"}, MAX_SESSION_HEADER_BYTES))
+        sys.stdout.flush()
+        expected_id = 1
+        source_bytes = 0
+        while True:
+            header, _raw = read_session_frame(MAX_SESSION_HEADER_BYTES)
+            if (
+                not isinstance(header, dict)
+                or any(header.get(key) != value for key, value in identity.items())
+                or any(type(header.get(key)) is not int for key in ["protocol_version", "contract_revision", "project_session_revision"])
+                or type(header.get("request_id")) is not int
+                or header["request_id"] != expected_id
+            ):
+                raise ValueError("invalid session identity")
+            if header.get("message_type") == "finish":
+                if set(header) != base_fields:
+                    raise ValueError("invalid session finish")
+                sys.stdout.write(session_frame({**header, "message_type": "end_of_stream"}, MAX_SESSION_HEADER_BYTES))
+                sys.stdout.flush()
+                # EOF, rather than another command, ends this session. The host
+                # supervises this read with the same bounded shutdown deadline.
+                if sys.stdin.buffer.read(1):
+                    raise ValueError("trailing session data")
+                return 0
+            if (
+                header.get("message_type") != "parse"
+                or set(header) != base_fields | {"content_hash", "use_context"}
+                or not is_strict_content_hash(header.get("content_hash"))
+                or type(header.get("use_context")) is not bool
+                or expected_id > MAX_SESSION_PARSE_REQUESTS
+            ):
+                raise ValueError("invalid session request")
+            payload, _raw = read_session_frame(MAX_STDIN_BYTES)
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {
+                    "protocol_version", "contract_revision", "mode", "path",
+                    "content_hash", "repository_revision", "text",
+                }
+                or payload.get("protocol_version") != PROTOCOL_VERSION
+                or type(payload.get("protocol_version")) is not int
+                or payload.get("contract_revision") != PARSE_DOCUMENT_CONTRACT_REVISION
+                or type(payload.get("contract_revision")) is not int
+                or payload.get("mode") != "parse_document"
+                or not is_safe_repo_relative_path(payload.get("path"))
+                or not payload["path"].endswith(".py")
+                or not isinstance(payload.get("text"), str)
+                or payload.get("content_hash") != header["content_hash"]
+                or "sha256:" + hashlib.sha256(payload["text"].encode("utf-8")).hexdigest() != header["content_hash"]
+            ):
+                raise ValueError("invalid document request")
+            source_bytes += len(payload["text"].encode("utf-8"))
+            if source_bytes > MAX_TOTAL_SOURCE_BYTES:
+                raise ValueError("session source budget exceeded")
+            result = document_result(payload, context if header["use_context"] else empty_context)
+            result_frame = session_frame(result, MAX_PARSE_DOCUMENT_OUTPUT_BYTES)
+            sys.stdout.write(session_frame({**header, "message_type": "result"}, MAX_SESSION_HEADER_BYTES))
+            sys.stdout.write(result_frame)
+            sys.stdout.flush()
+            del payload, result, result_frame, _raw
+            expected_id += 1
+    except Exception:
+        # Low-cardinality rejection only: no paths, source, exception payload,
+        # environment values, or partially trusted facts become a success.
+        sys.stdout.write(session_frame({
+            "protocol_version": PROTOCOL_VERSION,
+            "project_session_revision": PROJECT_SESSION_REVISION,
+            "message_type": "error",
+            "error_code": "PYTHON_PROJECT_SESSION_FAILURE",
+        }, MAX_SESSION_HEADER_BYTES))
+        sys.stdout.flush()
+        return 2
+
+
 def dispatch(payload: Any) -> int:
     if isinstance(payload, dict) and payload.get("mode") == "parse_document":
         return parse_document(payload)
@@ -6599,6 +6769,8 @@ def dispatch(payload: Any) -> int:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--project-session"]:
+        return project_session()
     try:
         payload = json.loads(read_stdin())
     except Exception:

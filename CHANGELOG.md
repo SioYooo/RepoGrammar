@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- Current source indexing uses a bounded, isolated Python project session for
+  two or more planned Python parses. Context is sent once and detailed ASTs are
+  ephemeral; canonical output, UNKNOWN and freshness contracts are unchanged.
+  One-file incremental transport remains unchanged. Published 0.5.0 artifacts
+  retain their shipped implementation.
+
+- Current source install/setup resolve verified Codex/Claude global profile
+  paths and write a short conditional RepoGrammar guide, with `--no-instructions`
+  opt-out. Same-path instruction-only backfill preserves native MCP state and
+  receipts; unsafe profile relocation is refused. Full repository/MCP guidance
+  is unchanged. Agent adoption and token effects remain unmeasured.
+
+### Fixed
+
+- Unsupported fuzzy queries with no possible indexed path/member locus skip
+  the complete unit inventory. UNKNOWN/recovery, payloads and freshness checks
+  remain unchanged.
+- The private Python frontend now checks the published Python 3.10+ requirement
+  before worker dispatch in each existing request process. Unsupported runtimes
+  yield a typed, source-free recovery error; interface probes remain unverified.
+  This does not add a Python semantic provider or promote language completion.
+
 ## 0.5.0 — 2026-09-09 GitHub binary release
 
 ### Changed
@@ -250,17 +274,18 @@ or measured-token-savings claim.
 
 ## 0.4.0 — 2026-07-20 stable channel
 
-RepoGrammar `0.4.0` is the forward-only Build Week stable candidate. The
+RepoGrammar `0.4.0` is the published forward-only Build Week stable release. The
 retained `v0.3.2` tag and 11-asset private draft are bound to the earlier
 `26ce59e` source; its release workflow was cancelled before the protected npm
 staging job ran. The tag, draft, and candidate bytes remain historical audit
 evidence and are not moved, replaced, published, or reused. Current source
-changes therefore advance to the unoccupied `0.4.0` identity.
+therefore advanced to the previously unoccupied `0.4.0` identity.
 
-This source record does not prove that the `v0.4.0` tag, immutable GitHub
-Release, npm package, provenance, dist-tags, or public finalizer exist. Those
-facts must be independently recorded only after the canonical stable checklist
-completes. The release makes no production-readiness, 1.0 API-stability,
+The annotated `v0.4.0` tag, immutable 11-asset GitHub Release, staged and
+human-approved npm package, provenance, dist-tags, and public installation
+paths were independently verified by finalizer run `29747390860`, which
+emitted `STABLE_RELEASE_READY`. The exact identities are recorded in the
+canonical stable checklist. The release makes no production-readiness, 1.0 API-stability,
 sound-analysis, runtime-equivalence, Windows-support, hallucination-prevention,
 or measured-token-savings claim.
 

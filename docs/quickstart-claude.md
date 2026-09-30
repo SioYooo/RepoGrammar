@@ -22,10 +22,14 @@ canonical target id `claude-code`.
 
 ## Verify The Global Claude Code Pre-flight
 
-First identify the actual global guide used by your Claude Code installation or
-local policy. RepoGrammar does not discover or guess that path. If you have
-verified that the common candidate below is your active guide, inspect or
-refresh it independently of MCP wiring:
+Current source builds use absolute `CLAUDE_CONFIG_DIR`, defaulting to
+`$HOME/.claude/CLAUDE.md` only when it is unset. `install --dry-run` shows the actual path; confirmed
+install writes a short conditional guide or refreshes its safely owned section.
+Use `--no-instructions` to register MCP without that write. An empty/relative
+explicit `REPOGRAMMAR_INSTRUCTION_FILE_CLAUDE_CODE` override stays deferred.
+Published 0.5.0 artifacts retain their shipped override-only wiring.
+
+Inspect the actual selected path; these commands assume the default profile:
 
 ```text
 repogrammar instructions status --file "$HOME/.claude/CLAUDE.md" --json
@@ -34,7 +38,8 @@ repogrammar instructions sync --file "$HOME/.claude/CLAUDE.md" --yes
 ```
 
 Use a different explicit path when local policy places the guide elsewhere.
-Sync creates or appends the exact managed block when it is absent, refreshes
+Explicit-file sync creates the full v3 repository gate when absent, keeps a
+current short v4 global profile unchanged, refreshes
 only an exact known legacy block, preserves unrelated instructions, and refuses
 foreign or malformed marker content. It does not create `.repogrammar/`, run
 setup, or mirror `AGENTS.md`.

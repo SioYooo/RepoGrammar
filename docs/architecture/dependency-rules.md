@@ -171,6 +171,26 @@ the xUnit runtime, or user data providers, and it must preserve open-world
 UNKNOWNs for partial, inherited, generic, conditional, external, or ambiguous
 member sets.
 
+The optional owned `ParserProjectSession` boundary under ADR-0055 exposes
+`parse` and `finish`, never CPython ASTs, process handles or foreign types to
+the application/core. The indexing application owns its generation lifetime;
+the Python adapter owns `-I -S` startup, bounded transport and child shutdown.
+Detailed AST/source state is ephemeral and returned facts remain owned.
+Timeout, crash or incomplete EOS cannot activate partially trusted analysis.
+
+Tree-sitter 0.27 returns node-kind text borrowed from the parsed tree. Private
+adapter records may borrow that text only while translating it; emitted
+RepoGrammar-owned UNKNOWN facts copy the kind into owned assumptions. A parser
+borrow must never become a storage/core lifetime or require an artificial
+`'static` promise. The borrowed-kind regression and existing parser fixtures
+qualify this compatibility boundary without changing semantic support.
+
+The separately reviewed release-action maintenance update pins
+`softprops/action-gh-release` 3.0.3 to
+`efb35369e0ad2afab669f228072c1b0d510eae64`. The installer workflow contract
+must require that exact commit; its privilege, immutable-release and Node 24
+requirements remain intact. This is not a new release or a performance claim.
+
 Tree-sitter is not a complete semantic analyzer. It can generate syntax
 features, changed ranges, code-unit candidates, decorator/call shapes, and
 structural fingerprints, but compiler-native semantic facts take precedence over
@@ -203,6 +223,13 @@ not run during default indexing because it executes user code.
 The current implemented Python slice uses a checked-in CPython `ast` worker for
 structural code-unit extraction only. It does not run Pyrefly, Pyright, mypy,
 `ty`, RightTyper, or repository code.
+Its existing Python 3.10+ interpreter requirement is admitted once inside each
+private request process, before loading the worker. The parser port exposes only
+the source-free `PythonFrontendInterpreterUnsupported` error; application code
+routes all document/config failures through one recovery formatter, while the
+interface probe remains `Unverified`. Bootstrap helpers must not import from
+the extra current-directory entry that `-c` introduces. No interpreter probe
+cache, third-party provider, runtime acquisition, or dependency is added.
 The Rust ports layer now defines a RepoGrammar-owned future Python provider
 boundary for candidate-scoped provider requests, provenance assumptions, cache
 key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is

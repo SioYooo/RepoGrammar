@@ -33,7 +33,7 @@ libc = "0.2.186"
 # Production: Rust self-dogfood indexing uses Tree-sitter Rust for tolerant
 # structural code-unit extraction without executing Cargo, rustc, build scripts,
 # or procedural macros.
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"

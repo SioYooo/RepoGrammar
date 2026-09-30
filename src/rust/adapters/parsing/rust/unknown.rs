@@ -6,10 +6,10 @@ use crate::core::model::{
 use crate::ports::parser::{ParseError, SourceDocument};
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct RustUnknownSpec {
+pub(super) struct RustUnknownSpec<'a> {
     pub(super) reason: &'static str,
     pub(super) affected_claim: &'static str,
-    pub(super) kind: &'static str,
+    pub(super) kind: &'a str,
     pub(super) note: &'static str,
 }
 
@@ -18,7 +18,7 @@ pub(super) fn fact(
     unit: &CodeUnit,
     start_byte: usize,
     end_byte: usize,
-    spec: RustUnknownSpec,
+    spec: RustUnknownSpec<'_>,
 ) -> Result<SemanticFact, ParseError> {
     fact_with_assumptions(document, unit, start_byte, end_byte, spec, Vec::new())
 }
@@ -28,7 +28,7 @@ pub(super) fn fact_with_assumptions(
     unit: &CodeUnit,
     start_byte: usize,
     end_byte: usize,
-    spec: RustUnknownSpec,
+    spec: RustUnknownSpec<'_>,
     extra_assumptions: Vec<String>,
 ) -> Result<SemanticFact, ParseError> {
     let mut assumptions = vec![
@@ -69,7 +69,51 @@ pub(super) fn project_config_unknown_fact(
     unit: &CodeUnit,
     start_byte: usize,
     end_byte: usize,
-    spec: RustUnknownSpec,
+    spec: RustUnknownSpec<'_>,
 ) -> Result<SemanticFact, ParseError> {
     fact(document, unit, start_byte, end_byte, spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::filesystem::discovery::sha256_hex;
+    use crate::core::model::{ContentHash, Language, RepositoryRevision};
+    use crate::ports::parser::SourceParser;
+
+    #[test]
+    fn borrowed_syntax_kind_is_copied_into_owned_unknown_fact() {
+        let text = "fn run() { example!(); }";
+        let document = || SourceDocument {
+            path: "fixture.rs",
+            language: Language::Rust,
+            text,
+            content_hash: ContentHash::new(format!("sha256:{}", sha256_hex(text.as_bytes())))
+                .expect("hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("revision"),
+        };
+        let report = super::super::RustSyntaxParser
+            .parse(document())
+            .expect("real grammar parses macro");
+        let kind = String::from("macro_invocation");
+        let result = fact(
+            &document(),
+            &report.units[0],
+            0,
+            text.len(),
+            RustUnknownSpec {
+                reason: "MacroOrPreprocessor",
+                affected_claim: "rust_macro_expansion",
+                kind: &kind,
+                note: "Rust macro syntax is not expanded",
+            },
+        )
+        .expect("borrowed parser kind accepted");
+        drop(kind);
+        assert_eq!(result.kind, SemanticFactKind::Unknown);
+        assert_eq!(result.certainty, FactCertainty::Unknown);
+        assert!(result
+            .assumptions
+            .contains(&"rust_unknown_kind=macro_invocation".to_string()));
+    }
 }

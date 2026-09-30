@@ -165,6 +165,9 @@ pub struct InstallRequest {
     pub print_config_target: Option<AgentTarget>,
     pub assume_yes: bool,
     pub no_permissions: bool,
+    /// Register MCP without adding or refreshing a managed instruction section.
+    /// Previously receipted instruction ownership is retained for disconnect.
+    pub no_instructions: bool,
     pub telemetry_enabled: bool,
     pub telemetry_explicitly_configured: bool,
 }
@@ -180,6 +183,7 @@ impl Default for InstallRequest {
             print_config_target: None,
             assume_yes: false,
             no_permissions: false,
+            no_instructions: false,
             telemetry_enabled: false,
             telemetry_explicitly_configured: false,
         }
@@ -231,9 +235,8 @@ pub struct InstallExecutionContext {
     pub command_dir_on_path: bool,
     pub data_dir: String,
     pub current_dir: String,
-    /// Resolved absolute instruction-file paths per target. Populated only when a
-    /// `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override resolves to an absolute
-    /// path; otherwise instruction writing stays deferred for that target.
+    /// Resolved absolute instruction-file paths. Known Codex/Claude global paths
+    /// honor their profile directories; explicit invalid overrides stay deferred.
     pub instruction_files: Vec<(AgentTarget, String)>,
 }
 
@@ -439,6 +442,11 @@ pub fn execute_install(
     configurator: &impl NativeAgentConfigurator,
     self_tester: &impl McpSelfTestRunner,
 ) -> Result<InstallExecutionOutcome, RepoGrammarError> {
+    let mut effective_context = context.clone();
+    if request.no_instructions {
+        effective_context.instruction_files.clear();
+    }
+    let context = &effective_context;
     require_live_write_confirmation(request)?;
     require_global_live_scope(request.scope)?;
     validate_execution_context(context)?;
@@ -447,10 +455,17 @@ pub fn execute_install(
 
     let mut targets_to_configure = Vec::new();
     let mut targets_to_reconfigure = Vec::new();
+    let mut instruction_refresh_targets = Vec::new();
     let mut skipped_targets = Vec::new();
     for target in selected_targets {
         match inspect_agent_integration(context, target, request.scope, configurator)? {
-            AgentIntegrationInspection::OwnedCurrent => skipped_targets.push(target),
+            AgentIntegrationInspection::OwnedCurrent => {
+                if owned_instruction_needs_refresh(context, target, request.scope)? {
+                    instruction_refresh_targets.push(target);
+                } else {
+                    skipped_targets.push(target);
+                }
+            }
             AgentIntegrationInspection::OwnedOutdated => targets_to_reconfigure.push(target),
             AgentIntegrationInspection::Unmanaged => targets_to_configure.push(target),
             AgentIntegrationInspection::Foreign => {
@@ -473,14 +488,48 @@ pub fn execute_install(
             }
         }
     }
+    for target in &targets_to_reconfigure {
+        // A profile change must not orphan the old receipt's instruction path.
+        owned_instruction_needs_refresh(context, *target, request.scope)?;
+    }
+    let new_instruction_snapshots = targets_to_configure
+        .iter()
+        .map(|target| {
+            let snapshot = match instruction_file_for(context, *target) {
+                Some(path) => {
+                    preflight_global_instruction(Path::new(path))?;
+                    Some(capture_file_snapshot(
+                        Path::new(path),
+                        "managed instruction file",
+                    )?)
+                }
+                None => None,
+            };
+            Ok((*target, snapshot))
+        })
+        .collect::<Result<Vec<_>, RepoGrammarError>>()?;
     let reconfiguration_snapshots = targets_to_reconfigure
         .iter()
         .copied()
         .map(|target| capture_owned_integration(context, target, request.scope, configurator))
         .collect::<Result<Vec<_>, _>>()?;
+    let instruction_refresh_snapshots = instruction_refresh_targets
+        .iter()
+        .copied()
+        .map(|target| capture_owned_integration(context, target, request.scope, configurator))
+        .collect::<Result<Vec<_>, _>>()?;
+    for snapshot in reconfiguration_snapshots
+        .iter()
+        .chain(instruction_refresh_snapshots.iter())
+    {
+        verify_owned_integration_unchanged(context, request.scope, configurator, snapshot)?;
+    }
     let command_record = install_cli_command(context)?;
 
-    if targets_to_configure.is_empty() && targets_to_reconfigure.is_empty() {
+    if targets_to_configure.is_empty()
+        && targets_to_reconfigure.is_empty()
+        && instruction_refresh_targets.is_empty()
+    {
         if let Err(error) =
             self_tester.self_test(&command_record.executable_path, &context.current_dir)
         {
@@ -511,6 +560,24 @@ pub fn execute_install(
 
     let mut mutations = InstallMutationLog::default();
     let mut receipt_paths = Vec::new();
+
+    for snapshot in instruction_refresh_snapshots {
+        mutations.reconfigured_snapshots.push(snapshot.clone());
+        let refresh = refresh_owned_instruction(request, context, &snapshot);
+        match refresh {
+            Ok(path) => receipt_paths.push(path),
+            Err(error) => {
+                let rollback = rollback_install_run(
+                    request,
+                    context,
+                    configurator,
+                    &mutations,
+                    &command_record,
+                );
+                return Err(install_rollback_error(error, rollback));
+            }
+        }
+    }
 
     // Drop the stale native entry for each drifted target before re-adding it at
     // the authority, because `mcp add` may reject or duplicate an existing name.
@@ -556,13 +623,27 @@ pub fn execute_install(
         let reconfigured = targets_to_reconfigure.contains(&target);
         if !reconfigured {
             mutations.configured_targets.push(target);
+            mutations.new_instruction_snapshots.push(
+                new_instruction_snapshots
+                    .iter()
+                    .find(|(candidate, _)| *candidate == target)
+                    .and_then(|(_, snapshot)| snapshot.clone()),
+            );
             mutations
                 .created_config_files
                 .push(opencode_action_created_config_file(&action));
         }
+        let previous_instruction = mutations
+            .reconfigured_snapshots
+            .iter()
+            .find(|snapshot| snapshot.target == target)
+            .and_then(|snapshot| snapshot.receipt_instruction.as_ref());
         let (instruction_path, instruction_action) = match instruction_file_for(context, target) {
-            Some(path) => match write_managed_instruction_section(Path::new(path)) {
-                Ok(instruction_action) => (Some(path.to_string()), instruction_action),
+            Some(path) => match write_global_managed_instruction_section(Path::new(path)) {
+                Ok(action) => (
+                    Some(path.to_string()),
+                    previous_instruction.map_or(action, |(_, original)| *original),
+                ),
                 Err(error) => {
                     let rollback = rollback_install_run(
                         request,
@@ -574,7 +655,10 @@ pub fn execute_install(
                     return Err(install_rollback_error(error, rollback));
                 }
             },
-            None => (None, InstructionAction::Deferred),
+            None => previous_instruction
+                .map_or((None, InstructionAction::Deferred), |(path, action)| {
+                    (Some(display_path(path)), *action)
+                }),
         };
         let receipt_path = match write_install_receipt(
             request,
@@ -586,11 +670,6 @@ pub fn execute_install(
         ) {
             Ok(receipt_path) => receipt_path,
             Err(error) => {
-                if !reconfigured {
-                    mutations
-                        .configured_instructions
-                        .push((instruction_path, instruction_action));
-                }
                 let rollback = rollback_install_run(
                     request,
                     context,
@@ -602,9 +681,6 @@ pub fn execute_install(
             }
         };
         if !reconfigured {
-            mutations
-                .configured_instructions
-                .push((instruction_path, instruction_action));
             mutations.new_receipt_paths.push(receipt_path.clone());
         }
         receipt_paths.push(receipt_path);
@@ -614,6 +690,7 @@ pub fn execute_install(
         .configured_targets
         .iter()
         .chain(targets_to_reconfigure.iter())
+        .chain(instruction_refresh_targets.iter())
         .chain(skipped_targets.iter())
     {
         match configurator.inspect_mcp_server(*target, request.scope, &context.current_dir) {
@@ -660,6 +737,7 @@ pub fn execute_install(
         return Err(install_rollback_error(error, rollback));
     }
 
+    targets_to_reconfigure.extend(instruction_refresh_targets);
     let reconfigured_any = !targets_to_reconfigure.is_empty();
     Ok(InstallExecutionOutcome {
         command: "install",
@@ -1432,7 +1510,7 @@ fn capture_owned_integration(
     };
 
     let mut instruction_paths = Vec::new();
-    let receipt_instruction = if let Some(path) = receipt_instruction_file_path(&receipt_path) {
+    let receipt_instruction = if let Some(path) = receipt_instruction_file_path(&receipt_path)? {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
             return Err(RepoGrammarError::InvalidInput(
@@ -1941,7 +2019,7 @@ struct InstallMutationLog {
     /// Parallel to `configured_targets`: the agent config file this run created
     /// from scratch for that target, when its writer recorded one.
     created_config_files: Vec<Option<PathBuf>>,
-    configured_instructions: Vec<(Option<String>, InstructionAction)>,
+    new_instruction_snapshots: Vec<Option<FileSnapshot>>,
     new_receipt_paths: Vec<String>,
     reconfigured_snapshots: Vec<OwnedIntegrationSnapshot>,
 }
@@ -1991,16 +2069,12 @@ fn rollback_install_run(
             }
         }
     }
-    for (index, (path, action)) in mutations.configured_instructions.iter().enumerate().rev() {
+    for (index, snapshot) in mutations.new_instruction_snapshots.iter().enumerate().rev() {
         if safe_new_cleanup.get(index) != Some(&true) {
             continue;
         }
-        let wrote_section = matches!(
-            action,
-            InstructionAction::Created | InstructionAction::Appended | InstructionAction::Replaced
-        );
-        if let (Some(path), true) = (path, wrote_section) {
-            if let Err(error) = revert_managed_instruction(Path::new(path), *action) {
+        if let Some(snapshot) = snapshot {
+            if let Err(error) = restore_file_snapshot(snapshot, "managed instruction file") {
                 failures.push(format!("instruction rollback failed: {error}"));
             }
         }
@@ -2435,14 +2509,6 @@ fn write_install_receipt(
             ))
         })?;
     }
-    if receipt_path.exists() {
-        let backup = receipt_path.with_extension("json.bak");
-        fs::copy(&receipt_path, &backup).map_err(|error| {
-            RepoGrammarError::InvalidInput(format!(
-                "failed to back up existing install receipt: {error}"
-            ))
-        })?;
-    }
     let receipt = json!({
         "schema_version": 1,
         "managed_by": "repogrammar",
@@ -2457,6 +2523,22 @@ fn write_install_receipt(
         "telemetry_enabled": request.telemetry_enabled,
         "created_unix_seconds": unix_seconds(),
     });
+    replace_install_receipt(&receipt_path, &receipt, action.target, request.scope)
+}
+
+fn replace_install_receipt(
+    receipt_path: &Path,
+    receipt: &serde_json::Value,
+    target: AgentTarget,
+    scope: InstallScope,
+) -> Result<String, RepoGrammarError> {
+    if receipt_path.exists() {
+        fs::copy(receipt_path, receipt_path.with_extension("json.bak")).map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to back up existing install receipt: {error}"
+            ))
+        })?;
+    }
     let contents = format!("{receipt}\n");
     let temporary = receipt_path.with_extension("json.tmp");
     fs::write(&temporary, contents).map_err(|error| {
@@ -2464,15 +2546,15 @@ fn write_install_receipt(
             "failed to write temporary install receipt: {error}"
         ))
     })?;
-    validate_receipt_ownership(&temporary, action.target, request.scope)?;
-    fs::rename(&temporary, &receipt_path).map_err(|error| {
+    validate_receipt_ownership(&temporary, target, scope)?;
+    fs::rename(&temporary, receipt_path).map_err(|error| {
         let _ = fs::remove_file(&temporary);
         RepoGrammarError::InvalidInput(format!(
             "failed to atomically write install receipt: {error}"
         ))
     })?;
-    validate_receipt_ownership(&receipt_path, action.target, request.scope)?;
-    Ok(display_path(&receipt_path))
+    validate_receipt_ownership(receipt_path, target, scope)?;
+    Ok(display_path(receipt_path))
 }
 
 fn validate_receipt_ownership(
@@ -2522,13 +2604,21 @@ fn receipt_targets_authority(receipt_path: &Path, authority_executable: &str) ->
     }
 }
 
-fn receipt_instruction_file_path(receipt_path: &Path) -> Option<String> {
-    let contents = fs::read_to_string(receipt_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    value
-        .get("instruction_file_path")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
+fn receipt_instruction_file_path(receipt_path: &Path) -> Result<Option<String>, RepoGrammarError> {
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(receipt_path).map_err(|_| {
+            RepoGrammarError::InvalidInput("install receipt is unreadable".to_string())
+        })?)
+        .map_err(|_| RepoGrammarError::InvalidInput("install receipt is malformed".to_string()))?;
+    match value.get("instruction_file_path") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(path)) if Path::new(path).is_absolute() => {
+            Ok(Some(path.clone()))
+        }
+        _ => Err(RepoGrammarError::InvalidInput(
+            "install receipt instruction path is malformed; preserving owned state".to_string(),
+        )),
+    }
 }
 
 /// Recover the `instruction_action` recorded at install time so uninstall can
@@ -2608,6 +2698,12 @@ pub const MANAGED_INSTRUCTION_END: &str = "<!-- END REPOGRAMMAR MANAGED SECTION 
 /// below for exact, reversible refresh.
 pub const MANAGED_INSTRUCTION_VERSION: u32 = 3;
 const MANAGED_INSTRUCTION_VERSION_MARKER: &str = "<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 3 -->";
+/// The concise global profile is separate from the full repository/MCP contract.
+pub const GLOBAL_INSTRUCTION_VERSION: u32 = 4;
+pub const GLOBAL_AGENT_PREFLIGHT: &str = "\
+## RepoGrammar
+
+When RepoGrammar MCP is available and `.repogrammar/` exists, use `repogrammar_context` for implementation/debugging tasks requiring repository conventions, analogues, repeated implementations, or framework roles. Read repository instructions first. Start with the most precise path/locator, unit/member, or role; request `find_analogues` in `compact` mode and consume its `read_plan`. On `UNKNOWN`, `FALLBACK`, stale, or insufficient evidence, use ordinary repository tools; candidate handles do not prove support. Skip documentation-only work and exact lookups that need no convention or analogue evidence. Do not initialize, resync, or start autosync without authorization.";
 
 /// Canonical agent pre-flight contract shared by managed instruction files and
 /// the MCP initialize response. It is deliberately repository-agnostic and
@@ -2632,6 +2728,7 @@ Skip this gate for pure documentation or prose; operational release, git, enviro
 pub enum ManagedInstructionState {
     Missing,
     Current,
+    GlobalCurrent,
     OutdatedV2,
     OutdatedV1,
     OutdatedGlobalV0,
@@ -2643,7 +2740,7 @@ impl ManagedInstructionState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Missing => "missing",
-            Self::Current => "current",
+            Self::Current | Self::GlobalCurrent => "current",
             Self::OutdatedV2 | Self::OutdatedV1 | Self::OutdatedGlobalV0 => "outdated",
             Self::Foreign => "foreign",
             Self::Malformed => "malformed",
@@ -2653,6 +2750,7 @@ impl ManagedInstructionState {
     pub fn content_version(self) -> Option<u32> {
         match self {
             Self::Current => Some(MANAGED_INSTRUCTION_VERSION),
+            Self::GlobalCurrent => Some(GLOBAL_INSTRUCTION_VERSION),
             Self::OutdatedV2 => Some(2),
             Self::OutdatedV1 => Some(1),
             Self::OutdatedGlobalV0 => Some(0),
@@ -2813,6 +2911,12 @@ pub fn managed_instruction_block() -> String {
     )
 }
 
+pub fn global_managed_instruction_block() -> String {
+    format!(
+        "{MANAGED_INSTRUCTION_BEGIN}\n<!-- REPOGRAMMAR MANAGED CONTENT VERSION: 4 -->\n{GLOBAL_AGENT_PREFLIGHT}\n{MANAGED_INSTRUCTION_END}"
+    )
+}
+
 /// Exact previously shipped v2 gate. Keeping this separate from the current
 /// authority makes a byte-exact v2 block refreshable without accepting edited
 /// or partially upgraded marker bodies as RepoGrammar-owned.
@@ -2879,23 +2983,42 @@ pub fn instruction_env_var(target: AgentTarget) -> String {
     )
 }
 
-/// Resolve a target's instruction-file path from an environment override. Returns
-/// `None` (deferred) unless the override resolves to an absolute path, because
-/// RepoGrammar must not guess real Codex/Claude instruction-file locations.
+/// Resolve an explicit override, or a known global Codex/Claude profile path.
+/// A present empty/relative override never falls through to a default.
 pub fn resolve_instruction_file<F>(target: AgentTarget, lookup: &F) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let raw = lookup(&instruction_env_var(target))?;
+    if let Some(raw) = lookup(&instruction_env_var(target)) {
+        return absolute_instruction_path(&raw).map(|path| display_path(&path));
+    }
+    let (profile_key, default_directory, filename) = match target {
+        AgentTarget::Codex => ("CODEX_HOME", ".codex", "AGENTS.md"),
+        AgentTarget::ClaudeCode => ("CLAUDE_CONFIG_DIR", ".claude", "CLAUDE.md"),
+        _ => return None,
+    };
+    let directory = match lookup(profile_key) {
+        Some(raw) => absolute_instruction_path(&raw)?,
+        None => absolute_instruction_path(&lookup("HOME")?)?.join(default_directory),
+    };
+    if target == AgentTarget::Codex {
+        let shadow = directory.join("AGENTS.override.md");
+        match fs::symlink_metadata(&shadow) {
+            // Invalid shadows are selected too, so the regular-file admission
+            // refuses them instead of writing a base guide Codex may not read.
+            Ok(metadata) if !metadata.is_file() || metadata.len() > 0 => {
+                return Some(display_path(&shadow));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return None,
+            _ => {}
+        }
+    }
+    Some(display_path(&directory.join(filename)))
+}
+
+fn absolute_instruction_path(raw: &str) -> Option<PathBuf> {
     let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if Path::new(trimmed).is_absolute() {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
+    (!trimmed.is_empty() && Path::new(trimmed).is_absolute()).then(|| PathBuf::from(trimmed))
 }
 
 fn malformed_managed_section_error() -> RepoGrammarError {
@@ -2955,6 +3078,8 @@ fn classify_managed_instruction_contents(contents: &str) -> ManagedInstructionSt
     let section = contents[start..end].trim_end_matches('\n');
     if section == managed_instruction_block() {
         ManagedInstructionState::Current
+    } else if section == global_managed_instruction_block() {
+        ManagedInstructionState::GlobalCurrent
     } else if section == legacy_managed_instruction_block_v2() {
         ManagedInstructionState::OutdatedV2
     } else if section == legacy_managed_instruction_block_v1() {
@@ -3359,6 +3484,7 @@ fn managed_instruction_refusal(
         ManagedInstructionState::Malformed => Some(ManagedInstructionRefusal::MalformedSection),
         ManagedInstructionState::Missing
         | ManagedInstructionState::Current
+        | ManagedInstructionState::GlobalCurrent
         | ManagedInstructionState::OutdatedV2
         | ManagedInstructionState::OutdatedV1
         | ManagedInstructionState::OutdatedGlobalV0 => None,
@@ -3417,7 +3543,10 @@ pub fn manage_instruction_file(
     match request.operation {
         ManagedInstructionOperation::Status => unreachable!("status returned above"),
         ManagedInstructionOperation::Sync => {
-            if inspection.state == ManagedInstructionState::Current {
+            if matches!(
+                inspection.state,
+                ManagedInstructionState::Current | ManagedInstructionState::GlobalCurrent
+            ) {
                 return Ok(ManagedInstructionOutcome {
                     operation: request.operation,
                     state_before: inspection.state,
@@ -3547,6 +3676,19 @@ pub fn manage_instruction_file(
 pub fn write_managed_instruction_section(
     path: &Path,
 ) -> Result<InstructionAction, RepoGrammarError> {
+    write_managed_instruction_block(path, &managed_instruction_block())
+}
+
+fn write_global_managed_instruction_section(
+    path: &Path,
+) -> Result<InstructionAction, RepoGrammarError> {
+    write_managed_instruction_block(path, &global_managed_instruction_block())
+}
+
+fn write_managed_instruction_block(
+    path: &Path,
+    block: &str,
+) -> Result<InstructionAction, RepoGrammarError> {
     require_regular_instruction_file(path)?;
     let existed = path.is_file();
     let existing = if existed {
@@ -3556,18 +3698,25 @@ pub fn write_managed_instruction_section(
     } else {
         String::new()
     };
-    let block = managed_instruction_block();
     let state = classify_managed_instruction_contents(&existing);
     let (next, action) = match state {
-        ManagedInstructionState::Current => return Ok(InstructionAction::Unchanged),
-        ManagedInstructionState::OutdatedV2
+        ManagedInstructionState::Current | ManagedInstructionState::GlobalCurrent
+            if managed_instruction_span(&existing)?.is_some_and(|(start, end)| {
+                existing[start..end].trim_end_matches('\n') == block
+            }) =>
+        {
+            return Ok(InstructionAction::Unchanged);
+        }
+        ManagedInstructionState::Current
+        | ManagedInstructionState::GlobalCurrent
+        | ManagedInstructionState::OutdatedV2
         | ManagedInstructionState::OutdatedV1
         | ManagedInstructionState::OutdatedGlobalV0 => {
             let (start, end) =
                 managed_instruction_span(&existing)?.ok_or_else(malformed_managed_section_error)?;
             let mut next = String::with_capacity(existing.len());
             next.push_str(&existing[..start]);
-            next.push_str(&block);
+            next.push_str(block);
             next.push('\n');
             next.push_str(&existing[end..]);
             (next, InstructionAction::Replaced)
@@ -3583,7 +3732,7 @@ pub fn write_managed_instruction_section(
                     next.push('\n');
                 }
                 next.push('\n');
-                next.push_str(&block);
+                next.push_str(block);
                 next.push('\n');
                 (next, InstructionAction::Appended)
             }
@@ -3592,7 +3741,7 @@ pub fn write_managed_instruction_section(
         ManagedInstructionState::Malformed => return Err(malformed_managed_section_error()),
     };
     atomic_write_instruction(path, &next, if existed { Some(&existing) } else { None })?;
-    verify_managed_instruction_present(path, &block)?;
+    verify_managed_instruction_present(path, block)?;
     Ok(action)
 }
 
@@ -3639,6 +3788,7 @@ pub fn remove_managed_instruction_section(
     let (start, end) = match state {
         ManagedInstructionState::Missing => return Ok(InstructionAction::NotPresent),
         ManagedInstructionState::Current
+        | ManagedInstructionState::GlobalCurrent
         | ManagedInstructionState::OutdatedV2
         | ManagedInstructionState::OutdatedV1
         | ManagedInstructionState::OutdatedGlobalV0 => {
@@ -3703,6 +3853,71 @@ fn instruction_file_for(context: &InstallExecutionContext, target: AgentTarget) 
         .iter()
         .find(|(candidate, _)| *candidate == target)
         .map(|(_, path)| path.as_str())
+}
+
+fn preflight_global_instruction(path: &Path) -> Result<ManagedInstructionState, RepoGrammarError> {
+    let state = inspect_managed_instruction_file(path)?.state;
+    match state {
+        ManagedInstructionState::Foreign => Err(foreign_managed_section_error()),
+        ManagedInstructionState::Malformed => Err(malformed_managed_section_error()),
+        _ => Ok(state),
+    }
+}
+
+/// Inspect instruction readiness independently of the already-owned native MCP
+/// entry. Path migration requires an explicit disconnect so one receipt never
+/// loses authority over an older section. A deferred/opt-out target preserves it.
+pub fn owned_instruction_needs_refresh(
+    context: &InstallExecutionContext,
+    target: AgentTarget,
+    scope: InstallScope,
+) -> Result<bool, RepoGrammarError> {
+    let Some(desired) = instruction_file_for(context, target) else {
+        return Ok(false);
+    };
+    let receipt = receipt_path(context, target, scope);
+    let previous = receipt_instruction_file_path(&receipt)?;
+    if let Some(previous) = &previous {
+        if !same_path(Path::new(previous), Path::new(desired)) {
+            return Err(RepoGrammarError::InvalidInput(
+                "InstructionRelocationRequired: disconnect the owned agent integration before selecting a different instruction profile path".to_string(),
+            ));
+        }
+    }
+    let state = preflight_global_instruction(Path::new(desired))?;
+    Ok(state != ManagedInstructionState::GlobalCurrent || previous.is_none())
+}
+
+fn refresh_owned_instruction(
+    request: &InstallRequest,
+    context: &InstallExecutionContext,
+    snapshot: &OwnedIntegrationSnapshot,
+) -> Result<String, RepoGrammarError> {
+    let path = instruction_file_for(context, snapshot.target).ok_or_else(|| {
+        RepoGrammarError::InvalidInput(
+            "managed instruction refresh path is unavailable".to_string(),
+        )
+    })?;
+    let written = write_global_managed_instruction_section(Path::new(path))?;
+    let action = snapshot
+        .receipt_instruction
+        .as_ref()
+        .map_or(written, |(_, original)| *original);
+    let mut receipt: serde_json::Value =
+        serde_json::from_slice(snapshot.receipt.contents.as_deref().ok_or_else(|| {
+            RepoGrammarError::InvalidInput("owned install receipt is missing".to_string())
+        })?)
+        .map_err(|_| {
+            RepoGrammarError::InvalidInput("owned install receipt is malformed".to_string())
+        })?;
+    receipt["instruction_file_path"] = json!(path);
+    receipt["instruction_action"] = json!(action.as_str());
+    replace_install_receipt(
+        &snapshot.receipt.path,
+        &receipt,
+        snapshot.target,
+        request.scope,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -5086,6 +5301,9 @@ mod tests {
             enabled: true,
         });
         configurator.script_inspections([
+            (AgentTarget::Codex, old_state.clone()),
+            // Inspection, snapshot capture, then pre-mutation revalidation must
+            // all see the old owner; inject the foreign entry during rollback.
             (AgentTarget::Codex, old_state.clone()),
             (AgentTarget::Codex, old_state),
             (AgentTarget::Codex, replacement_state),
@@ -6617,8 +6835,9 @@ mod tests {
         assert!(written.contains(MANAGED_INSTRUCTION_BEGIN));
         assert!(written.contains(MANAGED_INSTRUCTION_END));
         assert!(written.contains("repogrammar_context"));
-        assert!(written.contains("mode: \"compact\""));
-        assert!(written.contains("repogrammar stats"));
+        assert!(written.contains("`compact`"));
+        assert_eq!(written.trim_end(), global_managed_instruction_block());
+        assert!(written.len() < 1_024);
         let receipt = fs::read_to_string(&outcome.receipt_paths[0]).expect("receipt");
         let value: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
         assert_eq!(value["instruction_action"], "created");
@@ -7626,6 +7845,355 @@ mod tests {
             Err(RepoGrammarError::InvalidInput(
                 "test configurator supports the opencode target only".to_string(),
             ))
+        }
+    }
+
+    #[test]
+    fn global_instruction_paths_honor_profiles_shadows_and_explicit_deferral() {
+        let home = TempDir::new("global-instruction-home");
+        let profile = TempDir::new("global-instruction-profile");
+        let lookup = |key: &str| match key {
+            "HOME" => Some(display_path(&home.path)),
+            "CODEX_HOME" | "CLAUDE_CONFIG_DIR" => Some(display_path(&profile.path)),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup),
+            Some(display_path(&profile.file("AGENTS.md")))
+        );
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::ClaudeCode, &lookup),
+            Some(display_path(&profile.file("CLAUDE.md")))
+        );
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Opencode, &lookup),
+            None
+        );
+        let shadow = profile.file("AGENTS.override.md");
+        fs::write(&shadow, "shadow guidance\n").expect("shadow");
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup),
+            Some(display_path(&shadow))
+        );
+        fs::write(&shadow, "").expect("empty shadow");
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &lookup),
+            Some(display_path(&profile.file("AGENTS.md")))
+        );
+        for raw in ["", "  ", "relative/guide.md"] {
+            let explicit = |key: &str| {
+                if key == instruction_env_var(AgentTarget::Codex) {
+                    Some(raw.to_string())
+                } else {
+                    lookup(key)
+                }
+            };
+            assert_eq!(
+                resolve_instruction_file(AgentTarget::Codex, &explicit),
+                None
+            );
+        }
+        let absolute = |key: &str| {
+            if key == instruction_env_var(AgentTarget::Codex) {
+                Some(display_path(&home.file("custom.md")))
+            } else {
+                lookup(key)
+            }
+        };
+        assert_eq!(
+            resolve_instruction_file(AgentTarget::Codex, &absolute),
+            Some(display_path(&home.file("custom.md")))
+        );
+        for key in ["CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+            let invalid = |requested: &str| {
+                if requested == key {
+                    Some("relative".to_string())
+                } else {
+                    lookup(requested)
+                }
+            };
+            let target = if key == "CODEX_HOME" {
+                AgentTarget::Codex
+            } else {
+                AgentTarget::ClaudeCode
+            };
+            assert_eq!(resolve_instruction_file(target, &invalid), None);
+        }
+    }
+
+    #[test]
+    fn global_instruction_profile_is_short_reversible_and_preserves_repository_gate() {
+        let home = TempDir::new("global-profile-guide");
+        let path = home.file("CLAUDE.md");
+        fs::write(&path, "keep user guidance\n").expect("seed");
+        assert_eq!(
+            write_global_managed_instruction_section(&path).expect("append"),
+            InstructionAction::Appended
+        );
+        let before = fs::read(&path).expect("guide");
+        assert_eq!(
+            write_global_managed_instruction_section(&path).expect("repeat"),
+            InstructionAction::Unchanged
+        );
+        assert_eq!(fs::read(&path).expect("unchanged"), before);
+        assert_eq!(
+            inspect_managed_instruction_file(&path)
+                .expect("inspect")
+                .state,
+            ManagedInstructionState::GlobalCurrent
+        );
+        assert!(global_managed_instruction_block().len() < 1_024);
+        assert!(AGENT_PREFLIGHT_GATE.contains("before any non-trivial code location is sought"));
+        let status = manage_instruction_file(&ManagedInstructionRequest {
+            path: path.clone(),
+            operation: ManagedInstructionOperation::Sync,
+            dry_run: false,
+            assume_yes: true,
+        })
+        .expect("sync");
+        assert_eq!(status.disposition, ManagedInstructionDisposition::Unchanged);
+        remove_managed_instruction_section(&path).expect("remove");
+        assert_eq!(
+            fs::read_to_string(&path).expect("preserved"),
+            "keep user guidance\n"
+        );
+    }
+
+    #[test]
+    fn global_instruction_backfill_is_instruction_only_and_rollback_is_exact() {
+        for fail in [false, true] {
+            let workspace = TempInstallWorkspace::new("global-backfill");
+            let home = TempDir::new("global-backfill-home");
+            let path = home.file("AGENTS.md");
+            fs::write(&path, "keep me\n").expect("seed");
+            let request = InstallRequest {
+                target: AgentTarget::Codex,
+                assume_yes: true,
+                ..InstallRequest::default()
+            };
+            let configurator = FakeConfigurator::default();
+            execute_install(
+                &request,
+                &workspace.context,
+                &configurator,
+                &FakeSelfTest::default(),
+            )
+            .expect("MCP only");
+            let receipt =
+                receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
+            let original = fs::read(&receipt).expect("receipt");
+            let backup = receipt.with_extension("json.bak");
+            fs::copy(&receipt, &backup).expect("backup");
+            let mut context = workspace.context.clone();
+            context
+                .instruction_files
+                .push((AgentTarget::Codex, display_path(&path)));
+            configurator.actions.borrow_mut().clear();
+            let tester = FakeSelfTest {
+                fail_on_call: fail.then_some(2),
+                ..FakeSelfTest::default()
+            };
+            let result = execute_install(&request, &context, &configurator, &tester);
+            assert!(
+                configurator.actions.borrow().is_empty(),
+                "backfill must not rewrite native MCP"
+            );
+            if fail {
+                assert!(result
+                    .expect_err("failure")
+                    .to_string()
+                    .contains("rolled back"));
+                assert_eq!(fs::read(&receipt).expect("restored receipt"), original);
+                assert_eq!(fs::read(&backup).expect("restored backup"), original);
+                assert_eq!(
+                    fs::read_to_string(&path).expect("restored guide"),
+                    "keep me\n"
+                );
+            } else {
+                let result = result.expect("backfill");
+                assert!(result.configured_targets.is_empty());
+                assert_eq!(result.reconfigured_targets, [AgentTarget::Codex]);
+                assert_eq!(
+                    inspect_managed_instruction_file(&path)
+                        .expect("profile")
+                        .state,
+                    ManagedInstructionState::GlobalCurrent
+                );
+                execute_install(&request, &context, &configurator, &FakeSelfTest::default())
+                    .expect("idempotent");
+                assert!(configurator.actions.borrow().is_empty());
+                execute_disconnect(
+                    &disconnect_request(AgentTarget::Codex),
+                    &context,
+                    &configurator,
+                )
+                .expect("disconnect");
+                assert_eq!(
+                    fs::read_to_string(&path).expect("preserved guide"),
+                    "keep me\n"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_instruction_opt_out_preserves_old_receipt_and_rejects_relocation() {
+        let workspace = TempInstallWorkspace::new("global-receipt-preservation");
+        let home = TempDir::new("global-receipt-home");
+        let path = home.file("AGENTS.md");
+        let mut context = workspace.context.clone();
+        context
+            .instruction_files
+            .push((AgentTarget::Codex, display_path(&path)));
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        execute_install(&request, &context, &configurator, &FakeSelfTest::default())
+            .expect("install");
+        let receipt = receipt_path(&context, AgentTarget::Codex, InstallScope::Global);
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt).expect("receipt")).expect("JSON");
+        old["executable_path"] = json!("/old/repogrammar");
+        fs::write(&receipt, format!("{old}\n")).expect("obsolete receipt");
+        configurator.set_native_present(AgentTarget::Codex, "/old/repogrammar");
+        let guide_before = fs::read(&path).expect("guide");
+        let mut optout = request.clone();
+        optout.no_instructions = true;
+        execute_install(&optout, &context, &configurator, &FakeSelfTest::default())
+            .expect("refresh MCP only");
+        let current: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt).expect("receipt")).expect("JSON");
+        assert_eq!(current["instruction_file_path"], json!(display_path(&path)));
+        assert_eq!(current["instruction_action"], "created");
+        assert_eq!(fs::read(&path).expect("unchanged"), guide_before);
+        context.instruction_files[0].1 = display_path(&home.file("different.md"));
+        configurator.actions.borrow_mut().clear();
+        let before = fs::read(&receipt).expect("receipt");
+        assert!(
+            execute_install(&request, &context, &configurator, &FakeSelfTest::default())
+                .expect_err("relocation")
+                .to_string()
+                .contains("InstructionRelocationRequired")
+        );
+        assert!(configurator.actions.borrow().is_empty());
+        assert_eq!(fs::read(&receipt).expect("preserved receipt"), before);
+        execute_disconnect(
+            &disconnect_request(AgentTarget::Codex),
+            &context,
+            &configurator,
+        )
+        .expect("receipt driven disconnect");
+        assert!(
+            !path.exists(),
+            "original created-file ownership survives refresh"
+        );
+    }
+
+    #[test]
+    fn global_instruction_new_install_failure_restores_known_legacy_guide() {
+        let workspace = TempInstallWorkspace::new("global-legacy-rollback");
+        let home = TempDir::new("global-legacy-guide");
+        let path = home.file("AGENTS.md");
+        fs::write(
+            &path,
+            format!("keep me\n\n{}\n", managed_instruction_block()),
+        )
+        .expect("legacy seed");
+        let original = fs::read(&path).expect("original");
+        let mut context = workspace.context.clone();
+        context
+            .instruction_files
+            .push((AgentTarget::Codex, display_path(&path)));
+        let request = InstallRequest {
+            target: AgentTarget::Codex,
+            assume_yes: true,
+            ..InstallRequest::default()
+        };
+        let configurator = FakeConfigurator::default();
+        let failure = FakeSelfTest {
+            fail_on_call: Some(2),
+            ..FakeSelfTest::default()
+        };
+        execute_install(&request, &context, &configurator, &failure)
+            .expect_err("final test failure");
+        assert_eq!(fs::read(&path).expect("restored"), original);
+        assert_eq!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::NotFound
+        );
+    }
+
+    #[test]
+    fn global_instruction_foreign_and_malformed_sections_refuse_before_native_writes() {
+        for body in [
+            format!("{MANAGED_INSTRUCTION_BEGIN}\nforeign\n{MANAGED_INSTRUCTION_END}\n"),
+            format!("{MANAGED_INSTRUCTION_BEGIN}\npartial\n"),
+        ] {
+            let workspace = TempInstallWorkspace::new("global-foreign-refusal");
+            let home = TempDir::new("global-foreign-guide");
+            let path = home.file("CLAUDE.md");
+            fs::write(&path, &body).expect("seed");
+            let mut context = workspace.context.clone();
+            context
+                .instruction_files
+                .push((AgentTarget::ClaudeCode, display_path(&path)));
+            let request = InstallRequest {
+                target: AgentTarget::ClaudeCode,
+                assume_yes: true,
+                ..InstallRequest::default()
+            };
+            let configurator = FakeConfigurator::default();
+            execute_install(&request, &context, &configurator, &FakeSelfTest::default())
+                .expect_err("refusal");
+            assert!(configurator.actions.borrow().is_empty());
+            assert_eq!(fs::read_to_string(&path).expect("unchanged"), body);
+            assert!(!workspace.command_path().exists());
+        }
+    }
+
+    #[test]
+    fn global_instruction_malformed_receipt_paths_preserve_all_owned_state() {
+        for invalid in [json!(7), json!("relative/AGENTS.md")] {
+            let workspace = TempInstallWorkspace::new("global-invalid-receipt-path");
+            let home = TempDir::new("global-invalid-receipt-guide");
+            let path = home.file("AGENTS.md");
+            let mut context = workspace.context.clone();
+            context
+                .instruction_files
+                .push((AgentTarget::Codex, display_path(&path)));
+            let request = InstallRequest {
+                target: AgentTarget::Codex,
+                assume_yes: true,
+                ..InstallRequest::default()
+            };
+            let configurator = FakeConfigurator::default();
+            execute_install(&request, &context, &configurator, &FakeSelfTest::default())
+                .expect("install");
+            let receipt = receipt_path(&context, AgentTarget::Codex, InstallScope::Global);
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&receipt).expect("receipt")).expect("JSON");
+            value["instruction_file_path"] = invalid;
+            let receipt_before = format!("{value}\n");
+            fs::write(&receipt, &receipt_before).expect("invalid path");
+            let guide_before = fs::read(&path).expect("guide");
+            configurator.actions.borrow_mut().clear();
+            execute_install(&request, &context, &configurator, &FakeSelfTest::default())
+                .expect_err("bad receipt refusal");
+            execute_disconnect(
+                &disconnect_request(AgentTarget::Codex),
+                &context,
+                &configurator,
+            )
+            .expect_err("bad disconnect refusal");
+            assert!(configurator.actions.borrow().is_empty());
+            assert_eq!(
+                fs::read_to_string(&receipt).expect("receipt preserved"),
+                receipt_before
+            );
+            assert_eq!(fs::read(&path).expect("guide preserved"), guide_before);
         }
     }
 

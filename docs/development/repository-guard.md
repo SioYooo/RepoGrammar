@@ -19,11 +19,13 @@ The prior npm `latest=0.4.3` is preserved.
 
 ```text
 cargo run --quiet --bin repo-guard -- check
+cargo run --quiet --bin repo-guard -- check-geo
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
 cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap]
 cargo run --quiet --bin repo-guard -- payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>]
+cargo run --quiet --bin repo-guard -- performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>]
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall]
 cargo run --quiet --bin repo-guard -- smoke-npm-package --tarball <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version>
@@ -105,6 +107,36 @@ the candidate directory remains inside the normal repository scan. The check
 does not traverse a recognized linked checkout, so cost is bounded per active
 agent worktree rather than by the size of each checkout.
 
+## check-geo
+
+`check-geo` validates the repository-native discovery assets without making any
+network requests or changing product behavior. It is a separate explicit check,
+not a search-ranking or indexing oracle. The corpus is bounded to 256 KiB and
+20–30 unique queries, includes branded and unbranded questions, and names
+ChatGPT Search, Google Search, and Bing Search separately. Each expected
+canonical URL must agree with an existing, repository-contained source path.
+
+`NOT_MEASURED` and `UNKNOWN` observations require a reason and null mention,
+citation, cited URL, rank, and evidence fields. An `OBSERVED` row requires typed
+outcomes and an existing evidence reference. The guard checks the shape and
+reference; a reviewer must still verify that the evidence captures the named
+engine, query, date, and result. A passed check does not prove that a URL is
+indexed, cited, visible, or causally improved.
+
+The corpus's pinned publication version is checked against the immutable
+GitHub release summary. Explicit current-version markers in `limitations.md`
+and the launch kit, the launch kit's dated npm record, and README installer
+pins must agree with that evidence. Historical release files, recorded demo
+transcripts, and dated experiment reports are not mechanically scanned or
+rewritten. This is a local consistency check; it does not discover newer remote
+releases or refresh the npm registry. Refresh the release evidence and baseline
+together when a later public release is verified.
+
+Unit tests reject stale current markers/install pins, fabricated unmeasured
+results, observations without captures, duplicate queries, missing or escaping
+canonical paths, malformed JSON, and oversized input. Existing release-byte
+read helpers are reused; no GEO runtime dependency or telemetry is added.
+
 ## sync-agent-guides
 
 The sync command accepts only root `AGENTS.md` or root `CLAUDE.md` as `--from`.
@@ -116,6 +148,46 @@ The diff command compares two Git revisions with `git diff --name-only`. If any
 `src/` path changes, at least one documentation or agent-material path must also
 change. This is a minimum gate, not proof that the documentation is semantically
 complete.
+
+## Independent warm serving and full-generation comparison
+
+The performance experiment helpers under `src/experiments/performance/` are
+report-only complements to the cold-process `performance-eval` command:
+
+```text
+python3 src/experiments/performance/warm_queries.py --bin <pinned-binary> --project <frozen-initialized-copy> --out <temporary-output> --repetitions 8
+python3 src/experiments/performance/compare_generations.py <baseline.sqlite> <candidate.sqlite> --out <comparison.json>
+python3 src/experiments/performance/warm_queries.test.py
+python3 src/experiments/performance/compare_generations.test.py
+```
+
+Warm serving pins the complete active-index fingerprint, selected target
+hashes, binary/harness/helper hashes and whole response hashes. Use the same
+index in both arms and compare those hashes explicitly. Native macOS/Linux
+CPU/RSS covers one sequential persistent serving process; two warmups per
+case/tier are discarded. Requests, partial frames and child shutdown have
+bounded deadlines. Estimated tokens remain `ceil(UTF-8 bytes / 4)`.
+
+The full-generation comparator admits all current owned SQLite tables and
+checks integrity/foreign keys. It canonicalizes JSON with duplicate rejection
+and compares sorted row-hash multisets, preserving duplicates. Clock/generation
+identity and planner statistics are excluded. It is a strict full-index A/B
+check with resource caps, not a replacement for `sync-equivalence` or
+product-eval. Outputs contain hashes/counts, never source rows. See
+[the measured sprint](../experiments/efficiency-sprint.md) for bounds and scope.
+
+For private transport qualification, `performance-eval` accepts
+`--python-project-session on|off` and applies the selection only to its isolated
+child environment. This avoids adding a shell wrapper to the timed path. The
+report records the requested state; actual worker counters must establish
+whether the selected binary supports it. It is not a public product option.
+
+The raw incremental `semantic_facts` DTO currently includes an allocator
+high-water offset and is not an actual fact/write/work count. Preserve it as a
+reported diagnostic; use complete stored-row counts/hashes for equivalence,
+and do not rank optimizations from that field. Other unobservable host phases
+remain `NOT_MEASURED`. See the
+[invalidation audit](../experiments/incremental-invalidation-audit.md).
 
 ## product-eval
 
@@ -215,6 +287,70 @@ bytes" claim is declarable only from a before/after diff of two
 `payload-bytes.summary.json` runs — one at a baseline commit and one after a
 precision slice lands — over the same fixture. The before/after protocol and the
 guardrail expectations are documented in `docs/development/testing.md`.
+
+## performance-eval
+
+`performance-eval` writes `performance-results.json` (`performance-results.v1`)
+from isolated copies of a committed synthetic template or an explicitly supplied
+local source snapshot. It never downloads a corpus, changes a real index, starts
+autosync, runs repository code, or changes agent configuration. Pin and record a
+real corpus's commit/tree before supplying `--fixture`; export a self-dogfood
+snapshot with `git archive`, rather than copying live build/index/Git state.
+
+The default template expands `app.py` to `--python-files` identical module
+templates; its conftest/test files are additional Python files. Each repetition
+uses separate, identical native and diagnostic workspaces. Both receive the
+same sequential mutations. This prevents the diagnostic pass from consuming a
+change before the native measurement. Fresh `init --yes --no-autosync` includes
+actual indexing, followed by repeated full resync, zero-delta sync, Python
+body/comment/interface edits, file add/remove, config change, and Rust/TSJS
+one-file edits. A supplied
+real snapshot is left byte-identical: only full/unchanged indexing is measured;
+its synthetic mutation scenarios are explicitly unavailable.
+
+Native measurements use `/usr/bin/time -l` on macOS and `-v` on Linux with
+`LC_ALL=C`. They report wall/user/system CPU and peak RSS separately from
+portable product counters. RSS is the native child-rusage maximum, not the
+simultaneous sum of every process's resident memory. Missing or malformed
+resource output is `NOT_MEASURED`. macOS sandbox denial of `kern.clockrate`
+fails the run explicitly; rerun with the requested resource access rather than
+accepting partial CPU output as valid evidence. Timings are machine-dependent;
+there are no absolute timing thresholds in CI.
+
+The diagnostic pass loads only the selected, hashed RepoGrammar-owned Python
+worker through `src/experiments/performance/observe_worker.py`. Delegated
+binary/text reads support both legacy EOF requests and future newline sessions.
+At most one 2 MiB frame is retained. Numeric aggregates record worker dispatch
+count, exact input/output bytes, request modes, repeated module/conftest source
+bytes and AST-parse calls. They do not count separate interpreter-version
+probes. Inclusive worker-function timers overlap and include observer overhead;
+they are diagnostic, excluded from native A/B measurements, and cannot be
+subtracted from native wall time to infer storage time. Native and diagnostic
+semantic-fact/IR/aggregate-shape fingerprints must agree. This limited observer
+check omits file/unit/family-detail ledgers and is explicitly marked separately
+from complete canonical analysis. It does not replace the full equivalence and
+product safety gates. Diagnostic worker-load and command-wall times belong to
+the instrumented pass only. Binary/worker/observer/harness hashes are pinned at
+entry and rechecked before reporting; the checkout HEAD is metadata, while the
+hashes identify the actual producer, including uncommitted instrumentation.
+
+Exact family/member/path, fuzzy/abstention CLI requests and MCP
+`find_analogues`/`show_family`/`inspect_readiness` requests record bytes, the shared
+bytes/4 token estimate, read-plan/candidate counts, and latency samples. These
+are cold launches; MCP wire bytes include initialization. They are not warm
+serving latency, host token usage, savings or an adoption experiment. Detailed
+host phases, rows written, live autosync and warm-agent observations remain
+explicitly `NOT_MEASURED` where this harness cannot identify them.
+Every query repetition must agree on canonical response content and byte
+count. A compact response's exact path may come from `read_plan.items` when
+selected evidence is omitted. Unavailable family/member/path loci produce
+explicit `NOT_MEASURED` rows instead of disappearing from the matrix.
+
+All product commands have an explicit timeout and bounded 16 MiB stdout/stderr.
+Timeout/pipe-drain failure terminates the isolated Unix process group. Raw
+source, query text and worker responses are not written into the report; local
+workspace cleanup follows the existing evaluation harness. Failed or
+incomplete runs are harness errors, not performance improvements.
 
 ## smoke-packaged-artifact
 

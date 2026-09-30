@@ -1,0 +1,229 @@
+{
+  "execution_blockers": [
+    "agent_budget_and_auth_isolation_not_authorized",
+    "identical_index_not_prepared"
+  ],
+  "measurement_status": "NOT_MEASURED",
+  "repetitions": 1,
+  "runs": [
+    {
+      "arm": "A2",
+      "eligible": false,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": "ae417013a21c9e53ff4f81c3d1339dff645f2b954f8770d29ae3c28ac4fac0f9",
+      "mcp_calls": null,
+      "ordinal": 0,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "documentation_only",
+      "task_sha256": "ae31226f1cb05df3044018720979c561c1acbaa9aa187b1236251e493f4b139f",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A0",
+      "eligible": false,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 1,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "exact_lookup",
+      "task_sha256": "935605f39943a3d7d0c9e9af6ae3acdaf696038450a9d324c1ad370fab4120d8",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A1",
+      "eligible": true,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 2,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "route_convention",
+      "task_sha256": "8903f5bbc74fe7051a91c0ddf696dc02ea4fb0745d2b4a8f0c4923989b79b1d8",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A2",
+      "eligible": true,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": "ae417013a21c9e53ff4f81c3d1339dff645f2b954f8770d29ae3c28ac4fac0f9",
+      "mcp_calls": null,
+      "ordinal": 3,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "route_convention",
+      "task_sha256": "8903f5bbc74fe7051a91c0ddf696dc02ea4fb0745d2b4a8f0c4923989b79b1d8",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A2",
+      "eligible": true,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": "ae417013a21c9e53ff4f81c3d1339dff645f2b954f8770d29ae3c28ac4fac0f9",
+      "mcp_calls": null,
+      "ordinal": 4,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "fixture_convention",
+      "task_sha256": "16f6eb328b71ed55b1dba01d734ed9091308c6b8c19b45ea4daf58a802ea35bd",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A0",
+      "eligible": true,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 5,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "route_convention",
+      "task_sha256": "8903f5bbc74fe7051a91c0ddf696dc02ea4fb0745d2b4a8f0c4923989b79b1d8",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A2",
+      "eligible": false,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": "ae417013a21c9e53ff4f81c3d1339dff645f2b954f8770d29ae3c28ac4fac0f9",
+      "mcp_calls": null,
+      "ordinal": 6,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "exact_lookup",
+      "task_sha256": "935605f39943a3d7d0c9e9af6ae3acdaf696038450a9d324c1ad370fab4120d8",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A1",
+      "eligible": false,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 7,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "exact_lookup",
+      "task_sha256": "935605f39943a3d7d0c9e9af6ae3acdaf696038450a9d324c1ad370fab4120d8",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A1",
+      "eligible": true,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 8,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "fixture_convention",
+      "task_sha256": "16f6eb328b71ed55b1dba01d734ed9091308c6b8c19b45ea4daf58a802ea35bd",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A0",
+      "eligible": true,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 9,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "fixture_convention",
+      "task_sha256": "16f6eb328b71ed55b1dba01d734ed9091308c6b8c19b45ea4daf58a802ea35bd",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A0",
+      "eligible": false,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 10,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "documentation_only",
+      "task_sha256": "ae31226f1cb05df3044018720979c561c1acbaa9aa187b1236251e493f4b139f",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    },
+    {
+      "arm": "A1",
+      "eligible": false,
+      "host_cost_usd": null,
+      "host_tokens": null,
+      "instruction_sha256": null,
+      "mcp_calls": null,
+      "ordinal": 11,
+      "source_bytes_read": null,
+      "status": "NOT_MEASURED",
+      "task_id": "documentation_only",
+      "task_sha256": "ae31226f1cb05df3044018720979c561c1acbaa9aa187b1236251e493f4b139f",
+      "task_success": null,
+      "worktree_sha256": "c3a80e3d96e851152e4ba840d0097fc7f4e7f848ced2f0a507b24ba325459632"
+    }
+  ],
+  "schema_version": "agent-adoption-plan.v1",
+  "seed": 20260930,
+  "tasks": [
+    {
+      "eligible": true,
+      "oracle": {
+        "decorator": "router.get",
+        "file": "routes.py"
+      },
+      "prompt": "Before adding another route, identify this repository's route registration convention. Return only JSON with file and decorator keys.",
+      "task_id": "route_convention"
+    },
+    {
+      "eligible": true,
+      "oracle": {
+        "file": "tests/conftest.py",
+        "name": "api_client"
+      },
+      "prompt": "Before adding tests that need an API client, identify the existing fixture's registered name and definition file. Return only JSON with file and name keys.",
+      "task_id": "fixture_convention"
+    },
+    {
+      "eligible": false,
+      "oracle": {
+        "file": "README.md",
+        "text": "This fixture demonstrates repository conventions.\n"
+      },
+      "prompt": "Edit only README.md: replace 'This fixture shows repository conventions.' with 'This fixture demonstrates repository conventions.' Do not change code.",
+      "task_id": "documentation_only"
+    },
+    {
+      "eligible": false,
+      "oracle": {
+        "name": "list_users"
+      },
+      "prompt": "Read routes.py and return only JSON with a name key: the function decorated with the GET route /users. This is an exact lookup.",
+      "task_id": "exact_lookup"
+    }
+  ]
+}

@@ -8,12 +8,12 @@ use crate::application::indexing::IndexingOutcome;
 use crate::application::install::{
     binary_name, disconnect_targets_for_display, known_agent_targets, manage_instruction_file,
     normalize_concrete_targets, normalized_lexical_path, owned_install_receipt_exists,
-    plan_install, resolve_instruction_file, supported_concrete_targets, target_adapter,
-    targets_for_display, AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget,
-    DisconnectExecutionOutcome, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
-    InstallScope, ManagedInstructionOperation, ManagedInstructionOutcome,
-    ManagedInstructionRefusal, ManagedInstructionRequest, ManagedInstructionState,
-    MANAGED_INSTRUCTION_VERSION,
+    owned_instruction_needs_refresh, plan_install, resolve_instruction_file,
+    supported_concrete_targets, target_adapter, targets_for_display, AgentDisconnectRequest,
+    AgentIntegrationInspection, AgentTarget, DisconnectExecutionOutcome, InstallExecutionContext,
+    InstallExecutionOutcome, InstallRequest, InstallScope, ManagedInstructionOperation,
+    ManagedInstructionOutcome, ManagedInstructionRefusal, ManagedInstructionRequest,
+    ManagedInstructionState, GLOBAL_INSTRUCTION_VERSION, MANAGED_INSTRUCTION_VERSION,
 };
 #[cfg(test)]
 use crate::application::install::{MANAGED_INSTRUCTION_BEGIN, MANAGED_INSTRUCTION_END};
@@ -660,7 +660,7 @@ fn full_usage() -> String {
         "  repogrammar <command> -h",
         "",
         "Project lifecycle:",
-        "  setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
+        "  setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
         "      Complete agent wiring, repository indexing, autosync, and MCP self-test in one plan.",
         "  init [--project <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
         "      Create repo-local state, build the active index, and start autosync by default.",
@@ -749,7 +749,7 @@ fn help_text(lines: &[&str]) -> String {
 pub fn command_usage(command: &str) -> Option<String> {
     match command {
         "setup" => Some(help_text(&[
-            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json] [--progress auto|always|never]",
+            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
             "",
             "Builds one reversible onboarding plan, asks once, then wires a detected agent, initializes and indexes the repository, starts autosync, and verifies the read-only MCP server.",
             "Telemetry remains off. Missing agents do not prevent repository-only setup. Foreign or malformed integration is never overwritten.",
@@ -760,6 +760,7 @@ pub fn command_usage(command: &str) -> Option<String> {
             "  --yes                             Confirm the complete plan noninteractively.",
             "  --dry-run                         Inspect the plan without any writes.",
             "  --no-autosync                     Build the active index without starting background sync.",
+            "  --no-instructions                 Skip managed instruction writes; retain prior receipt ownership.",
             "  --json                            Emit one machine-readable result object.",
             "  --progress auto|always|never      Control indexing progress on stderr.",
         ])),
@@ -1106,7 +1107,7 @@ fn query_usage(_command: &str, usage_line: &str, summary: &str) -> String {
 
 fn install_usage(command: &str, summary: &str) -> String {
     help_text(&[
-        &format!("Usage: repogrammar {command} [--target <target[,target]>] [--scope global|project-local] [--location global|local] [--dry-run] [--yes] [--print-config [target]] [--telemetry|--no-telemetry] [--no-permissions]"),
+        &format!("Usage: repogrammar {command} [--target <target[,target]>] [--scope global|project-local] [--location global|local] [--dry-run] [--yes] [--print-config [target]] [--telemetry|--no-telemetry] [--no-permissions] [--no-instructions]"),
         "",
         summary,
         "Installer commands configure agent integration only; they do not initialize, index, or rewrite .repogrammar/.",
@@ -1123,6 +1124,7 @@ fn install_usage(command: &str, summary: &str) -> String {
         "  --print-config [target]             Print MCP config snippet without live writes.",
         "  --telemetry, --no-telemetry         Explicit anonymous telemetry consent choice for install.",
         "  --no-permissions                   Reserve no extra permission prompts.",
+        "  --no-instructions                  Skip managed instruction writes; retain prior receipt ownership.",
     ])
 }
 
@@ -3768,7 +3770,17 @@ where
             self.install_context,
         ) {
             Ok(AgentIntegrationInspection::OwnedCurrent) => {
-                SetupAgentIntegrationState::OwnedCurrent
+                if owned_instruction_needs_refresh(
+                    self.install_context,
+                    target,
+                    InstallScope::Global,
+                )
+                .map_err(|_| setup_error(SetupFailureClass::AgentDetectionFailed))?
+                {
+                    SetupAgentIntegrationState::OwnedOutdated
+                } else {
+                    SetupAgentIntegrationState::OwnedCurrent
+                }
             }
             Ok(AgentIntegrationInspection::OwnedOutdated) => {
                 SetupAgentIntegrationState::OwnedOutdated
@@ -3807,7 +3819,10 @@ where
         targets: &[AgentTarget],
     ) -> Result<SetupAgentMutation, SetupOperationError> {
         self.runtime
-            .install_agent_integration(setup_install_request(targets), self.install_context.clone())
+            .install_agent_integration(
+                setup_install_request(targets, self.options.no_instructions),
+                self.install_context.clone(),
+            )
             .map(|outcome| SetupAgentMutation {
                 newly_configured: outcome.configured_targets,
                 reconfigured: outcome.reconfigured_targets,
@@ -3907,7 +3922,7 @@ where
         Err(error) => return CliOutput::failure(2, format!("{error}\n")),
     };
     let repository_root = repository_root(current_dir, options.project_path.as_deref());
-    let install_context = match install_execution_context(current_dir, env_lookup) {
+    let mut install_context = match install_execution_context(current_dir, env_lookup) {
         Ok(context) => context,
         Err(_) => {
             return setup_planning_error(
@@ -3917,6 +3932,9 @@ where
             );
         }
     };
+    if options.no_instructions {
+        install_context.instruction_files.clear();
+    }
     let probe = CliSetupProbe {
         runtime,
         env_lookup,
@@ -3927,6 +3945,7 @@ where
     request.target = options.target;
     request.dry_run = options.dry_run;
     request.autosync = options.autosync;
+    request.write_instructions = !options.no_instructions;
     let plan = match plan_setup(request, &probe) {
         Ok(plan) => plan,
         Err(failure) => return setup_planning_error(options.json, failure.stage, failure.class),
@@ -3944,7 +3963,7 @@ where
     } else {
         let response = match prompt.prompt_setup_confirmation(&format!(
             "{}\nProceed with setup? [Y/n] ",
-            setup_plan_human(&plan)
+            setup_plan_human_with_instructions(&plan, &install_context)
         )) {
             Ok(response) => response,
             Err(error) => return CliOutput::failure(2, format!("{error}\n")),
@@ -3973,6 +3992,11 @@ where
             stdout: output,
             stderr: String::new(),
         }
+    } else if options.dry_run {
+        CliOutput::success(setup_plan_human_with_instructions(
+            &plan,
+            &operations.install_context,
+        ))
     } else if status == 0 {
         CliOutput::success(setup_outcome_human(&plan, &outcome))
     } else {
@@ -3980,7 +4004,7 @@ where
     }
 }
 
-fn setup_install_request(targets: &[AgentTarget]) -> InstallRequest {
+fn setup_install_request(targets: &[AgentTarget], no_instructions: bool) -> InstallRequest {
     InstallRequest {
         target: if targets.len() == supported_concrete_targets().len() {
             AgentTarget::AllSupported
@@ -3991,6 +4015,7 @@ fn setup_install_request(targets: &[AgentTarget]) -> InstallRequest {
         assume_yes: true,
         telemetry_enabled: false,
         telemetry_explicitly_configured: false,
+        no_instructions,
         selected_targets: targets.to_vec(),
         ..InstallRequest::default()
     }
@@ -4060,6 +4085,33 @@ fn setup_plan_human(plan: &SetupPlan) -> String {
     }
     output.push_str("- telemetry: unchanged by setup; off by default\n");
     output.push_str("- rollback: only changes created and owned by this run\n");
+    output
+}
+
+fn setup_plan_human_with_instructions(
+    plan: &SetupPlan,
+    context: &InstallExecutionContext,
+) -> String {
+    let mut output = setup_plan_human(plan);
+    if !plan.request().write_instructions {
+        output.push_str(
+            "- agent instructions: skipped (--no-instructions); prior ownership retained\n",
+        );
+    } else if let Some(action) = plan.action(SetupStage::AgentIntegration) {
+        for target in &action.targets {
+            let path = context
+                .instruction_files
+                .iter()
+                .find(|(candidate, _)| candidate == target);
+            match path {
+                Some((_, path)) => output.push_str(&format!(
+                    "- {} instructions: conditional managed section -> {path}\n",
+                    target.as_str()
+                )),
+                None => output.push_str(&format!("- {} instructions: deferred\n", target.as_str())),
+            }
+        }
+    }
     output
 }
 
@@ -4188,6 +4240,7 @@ fn setup_outcome_json(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
         "status": setup_outcome_status_token(outcome.status),
         "target": setup_target_token(plan.request().target),
         "autosync_requested": plan.request().autosync,
+        "instructions_requested": plan.request().write_instructions,
         "telemetry_changed": false,
         "telemetry_enabled_by_setup": false,
         "ready_agent_targets": ready_agent_targets.iter().map(|target| target.as_str()).collect::<Vec<_>>(),
@@ -4575,7 +4628,18 @@ fn instruction_session_restart_recommended(outcome: &ManagedInstructionOutcome) 
     outcome.operation == ManagedInstructionOperation::Sync
         && !outcome.dry_run
         && outcome.refusal.is_none()
-        && outcome.state_after == ManagedInstructionState::Current
+        && matches!(
+            outcome.state_after,
+            ManagedInstructionState::Current | ManagedInstructionState::GlobalCurrent
+        )
+}
+
+fn instruction_expected_version(outcome: &ManagedInstructionOutcome) -> u32 {
+    if outcome.state_before == ManagedInstructionState::GlobalCurrent {
+        GLOBAL_INSTRUCTION_VERSION
+    } else {
+        MANAGED_INSTRUCTION_VERSION
+    }
 }
 
 fn instruction_outcome_json(outcome: &ManagedInstructionOutcome) -> String {
@@ -4586,7 +4650,7 @@ fn instruction_outcome_json(outcome: &ManagedInstructionOutcome) -> String {
         "state_before": outcome.state_before.as_str(),
         "state_after": outcome.state_after.as_str(),
         "detected_content_version": outcome.state_before.content_version(),
-        "expected_content_version": MANAGED_INSTRUCTION_VERSION,
+        "expected_content_version": instruction_expected_version(outcome),
         "file_existed": outcome.file_existed,
         "dry_run": outcome.dry_run,
         "would_change": outcome.would_change,
@@ -4626,7 +4690,7 @@ fn instruction_outcome_human(outcome: &ManagedInstructionOutcome) -> String {
         outcome.operation.as_str(),
         outcome.state_before.as_str(),
         outcome.disposition.as_str(),
-        MANAGED_INSTRUCTION_VERSION,
+        instruction_expected_version(outcome),
         if outcome.dry_run { " dry_run=true" } else { "" }
     );
     if instruction_session_restart_recommended(outcome) {
@@ -5326,7 +5390,20 @@ where
     }
     targets
         .into_iter()
-        .flat_map(|target| target_adapter(target).describe_paths(request.scope, env_lookup))
+        .flat_map(|target| {
+            let adapter = target_adapter(target);
+            if request.no_instructions {
+                vec![
+                    adapter.native_plan_line(request.scope),
+                    format!(
+                        "instruction: opt-out for {}; prior ownership retained",
+                        target.as_str()
+                    ),
+                ]
+            } else {
+                adapter.describe_paths(request.scope, env_lookup)
+            }
+        })
         .collect()
 }
 
@@ -8334,6 +8411,7 @@ struct SetupCliOptions {
     yes: bool,
     dry_run: bool,
     autosync: bool,
+    no_instructions: bool,
     json: bool,
     progress: ProgressMode,
 }
@@ -8346,6 +8424,7 @@ impl Default for SetupCliOptions {
             yes: false,
             dry_run: false,
             autosync: true,
+            no_instructions: false,
             json: false,
             progress: ProgressMode::Auto,
         }
@@ -8600,6 +8679,10 @@ fn parse_setup_options(rest: &[String]) -> Result<SetupCliOptions, String> {
             }
             "--no-autosync" => {
                 options.autosync = false;
+                index += 1;
+            }
+            "--no-instructions" => {
+                options.no_instructions = true;
                 index += 1;
             }
             "--json" => {
@@ -9207,6 +9290,10 @@ fn parse_install_options(rest: &[String]) -> Result<InstallRequest, String> {
             }
             "--no-permissions" => {
                 request.no_permissions = true;
+                index += 1;
+            }
+            "--no-instructions" => {
+                request.no_instructions = true;
                 index += 1;
             }
             other => return Err(format!("unknown installer option: {other}")),
@@ -19209,6 +19296,74 @@ mod tests {
         assert!(output.stdout.contains("native_mcp: codex mcp add"));
         assert!(output.stdout.contains("instruction: deferred"));
         assert!(output.stdout.contains("REPOGRAMMAR_INSTRUCTION_FILE_CODEX"));
+    }
+
+    #[test]
+    fn global_instruction_cli_plans_defaults_opt_out_and_profile_status_without_writes() {
+        let project = TempWorkspace::new("global-instruction-cli-project");
+        let home = TempWorkspace::new("global-instruction-cli-home");
+        let env = |key: &str| (key == "HOME").then(|| home.path().display().to_string());
+        let plan = run_with_context(
+            ["install", "--target", "codex", "--dry-run"],
+            project.path(),
+            &env,
+        );
+        assert_eq!(plan.status, 0);
+        assert!(plan
+            .stdout
+            .contains(&home.path().join(".codex/AGENTS.md").display().to_string()));
+        let skip = run_with_context(
+            [
+                "install",
+                "--target",
+                "codex",
+                "--dry-run",
+                "--no-instructions",
+            ],
+            project.path(),
+            &env,
+        );
+        assert_eq!(skip.status, 0);
+        assert!(skip.stdout.contains("instruction: opt-out"));
+        assert!(!skip.stdout.contains("managed section ->"));
+        assert_eq!(fs::read_dir(home.path()).expect("isolated home").count(), 0);
+        assert!(
+            parse_install_options(&["--no-instructions".to_string()])
+                .expect("install option")
+                .no_instructions
+        );
+        assert!(
+            parse_setup_options(&["--no-instructions".to_string()])
+                .expect("setup option")
+                .no_instructions
+        );
+        assert!(setup_install_request(&[AgentTarget::Codex], true).no_instructions);
+
+        let guide = home.path().join("AGENTS.md");
+        fs::write(
+            &guide,
+            format!(
+                "{}\n",
+                crate::application::install::global_managed_instruction_block()
+            ),
+        )
+        .expect("global profile");
+        let status = run_with_context(
+            [
+                "instructions",
+                "status",
+                "--file",
+                guide.to_str().expect("guide"),
+                "--json",
+            ],
+            project.path(),
+            &env,
+        );
+        assert_eq!(status.status, 0);
+        let value: Value = serde_json::from_str(&status.stdout).expect("status JSON");
+        assert_eq!(value["state_before"], "current");
+        assert_eq!(value["detected_content_version"], 4);
+        assert_eq!(value["expected_content_version"], 4);
     }
 
     #[test]

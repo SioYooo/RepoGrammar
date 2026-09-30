@@ -45,6 +45,14 @@ exact identifier.
 3. **Local-context read plan (unchanged).** Where term retrieval abstains and its
    preconditions still hold (a path-shaped target resolving to one indexed file or
    unit), the existing `PARTIAL_CONTEXT` local-context fallback still applies.
+   It reads the validated indexed-file inventory first. Only a match through
+   the existing path matcher or a possible admitted `unit:{indexed_path}#`
+   identity justifies loading the unit inventory. An impossible locus preserves
+   the original UNKNOWN and proceeds to the ordinary directory fallback.
+   Possible loci retain the full resolver, ambiguity/generation checks and
+   source freshness gates; the prefilter cannot select a family or create
+   semantic evidence. This avoids unrelated unit hydration without caching a
+   readiness or freshness verdict.
 4. **Directory / composite scope resolution.** When every earlier stage still
    abstained on a `query target` block and the parsed target
    named a directory scope (a `/`-containing token that is not a file locator,

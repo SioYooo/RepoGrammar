@@ -96,6 +96,9 @@ pub enum ParseError {
     UnsupportedLanguage,
     Timeout,
     PythonFrontendContractMismatch,
+    /// The selected interpreter is outside the published Python 3.10+ host
+    /// requirement; no private frontend worker was dispatched.
+    PythonFrontendInterpreterUnsupported,
     Internal(String),
 }
 
@@ -112,7 +115,8 @@ pub enum PythonInterfaceProbe {
     /// hash.
     Computed(String),
     /// The interface could not be computed — the parser does not analyze Python,
-    /// or the worker errored, timed out, or reported a contract mismatch. The
+    /// or the host runtime is unsupported, or the worker errored, timed out, or
+    /// reported a contract mismatch. The
     /// preflight treats this as `python_interface_unverified` and falls back to a
     /// full rebuild; it never guesses an interface.
     Unverified,
@@ -142,6 +146,16 @@ pub trait SourceParser {
             .map(SourceParseOutput::from_report)
     }
 
+    /// Optional, explicitly owned generation-local frontend session. Callers
+    /// finish it before activating any returned analysis; dropping a failed
+    /// session must terminate its worker rather than reuse partial state.
+    fn begin_project_session(
+        &self,
+        _context: &ParserProjectContext,
+    ) -> Result<Option<Box<dyn ParserProjectSession>>, ParseError> {
+        Ok(None)
+    }
+
     /// Compute the file-local Python interface hash for `text` at `path`. The
     /// default is the conservative-safe answer for any parser that does not
     /// analyze Python (`Unverified` forces a full rebuild); only the Python
@@ -158,7 +172,7 @@ pub trait SourceParser {
     ///
     /// The Python worker is a checked-in script executed by the host interpreter,
     /// so the frontend can only parse grammar that interpreter already knows: a
-    /// host implementing Python 3.9 rejects `match`, `except*`, and PEP 695
+    /// admitted host implementing Python 3.10 rejects `except*` and PEP 695
     /// generics as plain syntax errors. That makes the version a real analysis
     /// boundary rather than environment trivia, and reporting it is what turns an
     /// unexplained degraded file into an actionable one.
@@ -169,8 +183,15 @@ pub trait SourceParser {
     ///
     /// `None` for any parser that does not analyze Python and whenever the version
     /// cannot be established; callers must report the boundary as unknown rather
-    /// than guessing a version.
+    /// than guessing a version. This diagnostic does not admit the runtime;
+    /// private requests enforce the published Python 3.10+ requirement
+    /// separately inside their existing worker process.
     fn python_frontend_version(&self) -> Option<String> {
         None
     }
+}
+
+pub trait ParserProjectSession {
+    fn parse(&mut self, document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError>;
+    fn finish(&mut self) -> Result<(), ParseError>;
 }

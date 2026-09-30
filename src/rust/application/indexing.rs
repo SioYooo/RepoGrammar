@@ -70,8 +70,8 @@ use crate::ports::index_store::{
 };
 use crate::ports::parser::{
     ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    ParserProjectFileContext, ParserTsJsPathAlias, PythonInterfaceProbe, SourceDocument,
-    SourceParseOutput, SourceParser,
+    ParserProjectFileContext, ParserProjectSession, ParserTsJsPathAlias, PythonInterfaceProbe,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 use crate::ports::python_provider::{
     PythonProviderCandidate, PythonProviderKind, PythonProviderOperation, PythonProviderRequest,
@@ -753,6 +753,7 @@ where
         WorkUnits::Unknown,
     );
     let parser_context = parser_project_context(&request, &report, source_store, parser)?;
+    let mut python_session = begin_python_project_session(parser, &parser_context, &report.files)?;
     for (index, file) in report.files.iter().enumerate() {
         if discovered_file_is_inventory_only(file) {
             emit_progress(
@@ -778,7 +779,9 @@ where
             report: parse_report,
             python_interface_hash,
             dependencies,
-        } = match parser.parse_with_context_output(
+        } = match parse_in_project_session(
+            parser,
+            &mut python_session,
             SourceDocument {
                 path: &source.path,
                 language: language_from_discovered(file.language),
@@ -810,6 +813,9 @@ where
             }
             Err(ParseError::PythonFrontendContractMismatch) => {
                 return Err(python_frontend_contract_mismatch_error());
+            }
+            Err(ParseError::PythonFrontendInterpreterUnsupported) => {
+                return Err(python_frontend_interpreter_unsupported_error());
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -844,6 +850,9 @@ where
             "parsed source files",
             known_work_units(index + 1, report.files.len()),
         );
+    }
+    if let Some(frontend) = python_session.as_mut() {
+        frontend.finish().map_err(python_project_session_error)?;
     }
     if degraded_python {
         extend_python_frontend_version_warning(&mut warnings, parser);
@@ -1529,6 +1538,7 @@ where
         WorkUnits::Unknown,
     );
     let parser_context = parser_project_context(&request, &report, source_store, parser)?;
+    let mut python_session = begin_python_project_session(parser, &parser_context, &changed_files)?;
     let mut parser_attempted_files = 0usize;
     let mut parser_semantic_facts = Vec::new();
     let mut framework_role_facts = Vec::new();
@@ -1558,7 +1568,9 @@ where
             report: parse_report,
             python_interface_hash,
             dependencies,
-        } = match parser.parse_with_context_output(
+        } = match parse_in_project_session(
+            parser,
+            &mut python_session,
             SourceDocument {
                 path: &source.path,
                 language: language_from_discovered(file.language),
@@ -1590,6 +1602,9 @@ where
             }
             Err(ParseError::PythonFrontendContractMismatch) => {
                 return Err(python_frontend_contract_mismatch_error());
+            }
+            Err(ParseError::PythonFrontendInterpreterUnsupported) => {
+                return Err(python_frontend_interpreter_unsupported_error());
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -1627,6 +1642,9 @@ where
             "parsed source files",
             known_work_units(index + 1, changed_files.len()),
         );
+    }
+    if let Some(frontend) = python_session.as_mut() {
+        frontend.finish().map_err(python_project_session_error)?;
     }
     if degraded_python {
         extend_python_frontend_version_warning(&mut warnings, parser);
@@ -2259,6 +2277,56 @@ struct ParseStorageOutcome {
     parse_degraded: bool,
 }
 
+fn begin_python_project_session(
+    parser: &impl SourceParser,
+    context: &ParserProjectContext,
+    files: &[DiscoveredFile],
+) -> Result<Option<Box<dyn ParserProjectSession>>, RepoGrammarError> {
+    // A body-only incremental edit needs one parse, regardless of project size.
+    // Preserve the existing single-request path when there is no amortization.
+    if files
+        .iter()
+        .filter(|file| file.language == DiscoveredLanguage::Python)
+        .take(2)
+        .count()
+        < 2
+    {
+        return Ok(None);
+    }
+    parser
+        .begin_project_session(context)
+        .map_err(python_project_session_error)
+}
+
+fn parse_in_project_session(
+    parser: &impl SourceParser,
+    session: &mut Option<Box<dyn ParserProjectSession>>,
+    document: SourceDocument<'_>,
+    context: &ParserProjectContext,
+) -> Result<SourceParseOutput, ParseError> {
+    if document.language == Language::Python {
+        if let Some(session) = session.as_mut() {
+            return session.parse(document);
+        }
+    }
+    parser.parse_with_context_output(document, context)
+}
+
+fn python_project_session_error(error: ParseError) -> RepoGrammarError {
+    match error {
+        ParseError::PythonFrontendContractMismatch => python_frontend_contract_mismatch_error(),
+        ParseError::PythonFrontendInterpreterUnsupported => {
+            python_frontend_interpreter_unsupported_error()
+        }
+        ParseError::Timeout => {
+            RepoGrammarError::InvalidInput("python project frontend session timed out".into())
+        }
+        ParseError::UnsupportedLanguage | ParseError::Internal(_) => {
+            RepoGrammarError::InvalidInput("python project frontend session failed".into())
+        }
+    }
+}
+
 fn parser_project_context(
     request: &IndexingRequest,
     report: &FileDiscoveryReport,
@@ -2719,6 +2787,9 @@ fn python_source_roots_from_project_config(
             }
             Err(ParseError::PythonFrontendContractMismatch) => {
                 return Err(python_frontend_contract_mismatch_error());
+            }
+            Err(ParseError::PythonFrontendInterpreterUnsupported) => {
+                return Err(python_frontend_interpreter_unsupported_error());
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -6344,6 +6415,13 @@ fn source_store_error(error: SourceStoreError) -> RepoGrammarError {
 fn python_frontend_contract_mismatch_error() -> RepoGrammarError {
     RepoGrammarError::InvalidInput(
         "PythonFrontendContractMismatch: rebuild or reinstall RepoGrammar so the product binary and bundled Python worker come from the same release"
+            .to_string(),
+    )
+}
+
+fn python_frontend_interpreter_unsupported_error() -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(
+        "PythonFrontendInterpreterUnsupported: configure REPOGRAMMAR_PYTHON_EXECUTABLE with Python 3.10 or newer within 3.x, then retry indexing"
             .to_string(),
     )
 }

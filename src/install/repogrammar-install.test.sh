@@ -906,7 +906,7 @@ require_workflow_match "$PREPARE_RELEASE_JOB" 'overwrite_files:[[:space:]]+false
   "a rerun must never overwrite an existing draft candidate"
 require_workflow_match "$PREPARE_RELEASE_JOB" 'fail_on_unmatched_files:[[:space:]]+true' \
   "missing candidate assets must fail release preparation"
-require_workflow_match "$PREPARE_RELEASE_JOB" 'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228' \
+require_workflow_match "$PREPARE_RELEASE_JOB" 'softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64' \
   "the privileged GitHub release action must be pinned to the reviewed commit"
 require_workflow_match "$PREPARE_RELEASE_JOB" "^    if: github\.event_name == 'push' && github\.ref_type == 'tag' && needs\.classify\.outputs\.channel == 'preview'$" \
   "GitHub-only stable releases must not race an automatic dual-channel draft"

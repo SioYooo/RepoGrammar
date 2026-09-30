@@ -215,6 +215,14 @@ where
 {
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
     match args.as_slice() {
+        [command, rest @ ..] if command == "performance-eval" => {
+            match performance_eval_command(root, rest) {
+                Ok(report) => CommandResult::ok(report),
+                Err(error) => {
+                    CommandResult::err(format!("performance evaluation failed: {error}\n"))
+                }
+            }
+        }
         [command, rest @ ..] if command == "product-eval" => match product_eval_command(root, rest)
         {
             Ok(report) => CommandResult::ok(report),
@@ -233,6 +241,10 @@ where
             }
         }
         [command] if command == "check" => run_check(root),
+        [command] if command == "check-geo" => match check_geo_assets(root) {
+            Ok(()) => CommandResult::ok("GEO assets passed; search visibility is not inferred\n"),
+            Err(error) => CommandResult::err(format!("GEO assets failed: {error}\n")),
+        },
         [command, flag, source] if command == "sync-agent-guides" && flag == "--from" => {
             match sync_agent_guides(root, source) {
                 Ok(()) => CommandResult::ok("agent guides synchronized\n"),
@@ -360,7 +372,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | check-geo | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -6888,6 +6900,1198 @@ fn run_payload_measure(
     Ok(payload_measure_report(&summary, &summary_file))
 }
 
+// Report-only isolated performance harness. Native runs never load the observer.
+const PERFORMANCE_FIXTURE: &str = "src/fixtures/evaluation/performance";
+const PERFORMANCE_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+const PERFORMANCE_OBSERVER_COUNTERS: &[&str] = &[
+    "worker_spawns",
+    "input_bytes",
+    "output_bytes",
+    "input_frames",
+    "module_context_source_bytes",
+    "conftest_context_source_bytes",
+    "module_context_records",
+    "conftest_context_records",
+    "parse_requests_without_context",
+    "ast_parse_calls",
+    "malformed_frames",
+    "oversized_frames",
+];
+
+struct PerformanceOptions {
+    out: PathBuf,
+    binary: PathBuf,
+    fixture: PathBuf,
+    worker: PathBuf,
+    condition: String,
+    repetitions: usize,
+    python_files: usize,
+    timeout: std::time::Duration,
+    synthetic: bool,
+    python_project_session: Option<bool>,
+}
+
+fn performance_options(root: &Path, args: &[String]) -> Result<PerformanceOptions, String> {
+    let (mut out, mut binary, mut fixture, mut worker) = (None, None, None, None);
+    let mut condition = "baseline".to_string();
+    let (mut repetitions, mut python_files, mut timeout_seconds) = (3, 16, 600);
+    let mut python_project_session = None;
+    let mut index = 0;
+    while index < args.len() {
+        let flag = &args[index];
+        let value = product_eval_take_value(args, &mut index, flag)?;
+        match flag.as_str() {
+            "--out" => out = Some(PathBuf::from(value)),
+            "--bin" => binary = Some(value),
+            "--fixture" => fixture = Some(PathBuf::from(value)),
+            "--worker" => worker = Some(PathBuf::from(value)),
+            "--condition" => condition = validate_condition_token(&value)?,
+            "--python-project-session" => {
+                python_project_session = Some(match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("Python project-session selection must be on/off".into()),
+                });
+            }
+            "--repetitions" => repetitions = value.parse().map_err(|_| "invalid repetitions")?,
+            "--python-files" => {
+                python_files = value.parse().map_err(|_| "invalid Python file count")?
+            }
+            "--timeout-seconds" => {
+                timeout_seconds = value.parse().map_err(|_| "invalid timeout")?
+            }
+            other => return Err(format!("unknown performance-eval argument '{other}'")),
+        }
+        index += 1;
+    }
+    if !(1..=9).contains(&repetitions)
+        || !(1..=256).contains(&python_files)
+        || !(1..=3600).contains(&timeout_seconds)
+    {
+        return Err(
+            "bounds: repetitions 1..9, Python files 1..256, timeout seconds 1..3600".into(),
+        );
+    }
+    let synthetic = fixture.is_none();
+    let fixture = fixture.unwrap_or_else(|| root.join(PERFORMANCE_FIXTURE));
+    let out = out.ok_or("--out <dir> is required")?;
+    Ok(PerformanceOptions {
+        out: if out.is_absolute() {
+            out
+        } else {
+            root.join(out)
+        },
+        binary: resolve_product_binary(root, binary.as_deref())?,
+        fixture: fs::canonicalize(if fixture.is_absolute() {
+            fixture
+        } else {
+            root.join(fixture)
+        })
+        .map_err(|_| "performance fixture is unavailable")?,
+        worker: fs::canonicalize(
+            worker.unwrap_or_else(|| root.join("src/workers/python/worker.py")),
+        )
+        .map_err(|_| "performance worker is unavailable")?,
+        condition,
+        repetitions,
+        python_files,
+        timeout: std::time::Duration::from_secs(timeout_seconds),
+        synthetic,
+        python_project_session,
+    })
+}
+
+fn performance_not_measured(reason: &str) -> serde_json::Value {
+    serde_json::json!({"state": "NOT_MEASURED", "reason": reason})
+}
+
+fn performance_hash_bytes(bytes: &[u8]) -> String {
+    hex_digest(Sha256::digest(bytes).as_slice())
+}
+
+fn performance_native_resources(stderr: &str, platform: &str) -> serde_json::Value {
+    let (mut user, mut system, mut rss, mut wall) = (None, None, None, None);
+    for line in stderr.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if platform == "macos" {
+            if words.len() == 6 && words[1] == "real" && words[3] == "user" && words[5] == "sys" {
+                wall = words[0].parse::<f64>().ok();
+                user = words[2].parse::<f64>().ok();
+                system = words[4].parse::<f64>().ok();
+            }
+            if line.trim().ends_with("maximum resident set size") {
+                rss = words.first().and_then(|word| word.parse::<u64>().ok());
+            }
+        } else if platform == "linux" {
+            let trimmed = line.trim();
+            if let Some(value) = trimmed.strip_prefix("User time (seconds):") {
+                user = value.trim().parse::<f64>().ok();
+            }
+            if let Some(value) = trimmed.strip_prefix("System time (seconds):") {
+                system = value.trim().parse::<f64>().ok();
+            }
+            if let Some(value) = trimmed.strip_prefix("Maximum resident set size (kbytes):") {
+                rss = value
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|value| value.checked_mul(1024));
+            }
+            if let Some(value) =
+                trimmed.strip_prefix("Elapsed (wall clock) time (h:mm:ss or m:ss):")
+            {
+                let parts: Option<Vec<f64>> = value
+                    .trim()
+                    .split(':')
+                    .map(|word| word.parse().ok())
+                    .collect();
+                wall = parts
+                    .filter(|parts| (2..=3).contains(&parts.len()))
+                    .map(|parts| {
+                        parts
+                            .into_iter()
+                            .fold(0.0, |total, part| total * 60.0 + part)
+                    });
+            }
+        }
+    }
+    let valid = [user, system, wall]
+        .iter()
+        .all(|value| value.is_some_and(|number| number.is_finite() && number >= 0.0))
+        && rss.is_some();
+    serde_json::json!({
+        "state": if valid { "MEASURED" } else { "NOT_MEASURED" },
+        "reason": if valid { None } else { Some("native_time_resource_collection_failed") },
+        "tool": if platform == "macos" { "/usr/bin/time -l" } else { "/usr/bin/time -v" },
+        "native_wall_seconds": if valid { wall } else { None },
+        "user_cpu_seconds": if valid { user } else { None },
+        "system_cpu_seconds": if valid { system } else { None },
+        "peak_rss_bytes": if valid { rss } else { None },
+        "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+    })
+}
+
+fn performance_capture(
+    mut command: Command,
+    input: Option<&[u8]>,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    use std::process::Stdio;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+    let mut child = command
+        .spawn()
+        .map_err(|_| "performance command could not execute")?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or("performance stdout unavailable")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or("performance stderr unavailable")?;
+    let (stdout_sender, stdout_receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout
+            .by_ref()
+            .take(PERFORMANCE_OUTPUT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes);
+        let _ = stdout_sender.send(result);
+    });
+    let (stderr_sender, stderr_receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stderr
+            .by_ref()
+            .take(PERFORMANCE_OUTPUT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes);
+        let _ = stderr_sender.send(result);
+    });
+    let stdin_result = if let Some(input) = input {
+        if input.len() > 32 * 1024 {
+            performance_terminate(&mut child);
+            return Err("performance MCP request exceeds 32 KiB".into());
+        }
+        let mut stdin = child.stdin.take().ok_or("performance stdin unavailable")?;
+        let request = input.to_vec();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = stdin.write_all(&request);
+            drop(stdin);
+            let _ = sender.send(result);
+        });
+        Some(receiver)
+    } else {
+        None
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(_) => {
+                performance_terminate(&mut child);
+                return Err("performance wait failed".into());
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            performance_terminate(&mut child);
+            return Err("performance command timed out; isolated process group terminated".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    let stdout = match stdout_receiver
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+    {
+        Ok(result) => result.map_err(|_| "performance stdout could not be read")?,
+        Err(_) => {
+            performance_terminate(&mut child);
+            return Err("performance stdout drain exceeded deadline".into());
+        }
+    };
+    let stderr = match stderr_receiver
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+    {
+        Ok(result) => result.map_err(|_| "performance stderr could not be read")?,
+        Err(_) => {
+            performance_terminate(&mut child);
+            return Err("performance stderr drain exceeded deadline".into());
+        }
+    };
+    if let Some(receiver) = stdin_result {
+        if !matches!(
+            receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())),
+            Ok(Ok(()))
+        ) {
+            performance_terminate(&mut child);
+            return Err("performance request write failed or exceeded deadline".into());
+        }
+    }
+    if stdout.len() as u64 > PERFORMANCE_OUTPUT_LIMIT
+        || stderr.len() as u64 > PERFORMANCE_OUTPUT_LIMIT
+    {
+        return Err("performance command exceeded 16 MiB output bound".into());
+    }
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn performance_terminate(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn performance_timed_command(
+    workspace: &EvalWorkspace,
+    args: &[String],
+    input: Option<&[u8]>,
+    options: &PerformanceOptions,
+) -> Result<(serde_json::Value, serde_json::Value, usize), String> {
+    let mut native = Command::new("/usr/bin/time");
+    native
+        .arg(if env::consts::OS == "macos" {
+            "-l"
+        } else {
+            "-v"
+        })
+        .arg(&workspace.binary)
+        .args(args);
+    native
+        .env_clear()
+        .current_dir(&workspace.project)
+        .env("LC_ALL", "C");
+    let isolated = workspace.command();
+    for (key, value) in isolated.get_envs() {
+        if let Some(value) = value {
+            native.env(key, value);
+        }
+    }
+    native.env("REPOGRAMMAR_PYTHON_WORKER", &options.worker);
+    if let Some(enabled) = options.python_project_session {
+        native.env(
+            "REPOGRAMMAR_PYTHON_PROJECT_SESSION",
+            if enabled { "1" } else { "0" },
+        );
+    }
+    let started = std::time::Instant::now();
+    let output = performance_capture(native, input, options.timeout)?;
+    let harness_wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if !output.status.success() {
+        let resources = String::from_utf8_lossy(&output.stderr);
+        if resources.contains("sysctl kern.clockrate: Operation not permitted") {
+            return Err(
+                "native time -l requires macOS resource access outside this sandbox".into(),
+            );
+        }
+        return Err(format!(
+            "performance product command failed (exit {:?})",
+            output.status.code()
+        ));
+    }
+    let bytes = output.stdout.len();
+    let value = if input.is_some() {
+        performance_mcp_content(&output.stdout)?
+    } else {
+        serde_json::from_slice(&output.stdout)
+            .map_err(|_| "performance product output was not JSON")?
+    };
+    let mut resources =
+        performance_native_resources(&String::from_utf8_lossy(&output.stderr), env::consts::OS);
+    resources["harness_wall_ms"] = serde_json::json!(harness_wall_ms);
+    Ok((value, resources, bytes))
+}
+
+fn performance_mcp_content(stdout: &[u8]) -> Result<serde_json::Value, String> {
+    for line in stdout.split(|byte| *byte == b'\n') {
+        let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message["id"].as_u64() == Some(1) {
+            let text = message["result"]["content"][0]["text"]
+                .as_str()
+                .ok_or("MCP result missing JSON content")?;
+            return serde_json::from_str(text).map_err(|_| "MCP content was not JSON".into());
+        }
+    }
+    Err("MCP produced no measured tool-call response".into())
+}
+
+fn performance_observe_command(
+    root: &Path,
+    workspace: &EvalWorkspace,
+    args: &[String],
+    options: &PerformanceOptions,
+) -> Result<serde_json::Value, String> {
+    let sink = workspace.root.join("worker-counts.jsonl");
+    fs::write(&sink, []).map_err(|_| "could not reset worker count sink")?;
+    let mut command = workspace.command();
+    command
+        .args(args)
+        .env(
+            "REPOGRAMMAR_PYTHON_WORKER",
+            root.join("src/experiments/performance/observe_worker.py"),
+        )
+        .env("REPOGRAMMAR_OBSERVED_WORKER", &options.worker)
+        .env("REPOGRAMMAR_OBSERVER_OUT", &sink);
+    if let Some(enabled) = options.python_project_session {
+        command.env(
+            "REPOGRAMMAR_PYTHON_PROJECT_SESSION",
+            if enabled { "1" } else { "0" },
+        );
+    }
+    let started = std::time::Instant::now();
+    let output = performance_capture(command, None, options.timeout)?;
+    let diagnostic_command_wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if !output.status.success() {
+        return Err("diagnostic product command failed".into());
+    }
+    let outcome: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "diagnostic product output was not JSON")?;
+    if performance_index_outcome(&outcome)["status"] != "complete" {
+        return Err("diagnostic indexing did not complete".into());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&sink)
+        .map_err(|_| "worker count sink unreadable")?
+        .take(PERFORMANCE_OUTPUT_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "worker count sink unreadable")?;
+    if bytes.len() as u64 > PERFORMANCE_OUTPUT_LIMIT {
+        return Err("worker observer output exceeds bound".into());
+    }
+    let mut observed = performance_aggregate_observer(&bytes)?;
+    observed["diagnostic_command_wall_ms"] = serde_json::json!(diagnostic_command_wall_ms);
+    Ok(observed)
+}
+
+fn performance_aggregate_observer(bytes: &[u8]) -> Result<serde_json::Value, String> {
+    let mut counters: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut modes: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut timings: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut worker_ns = 0_u64;
+    let mut worker_load_ns = Some(0_u64);
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let event: serde_json::Value =
+            serde_json::from_slice(line).map_err(|_| "worker observer emitted malformed JSON")?;
+        if event["schema_version"] != "python-observer.v1" {
+            return Err("worker observer schema mismatch".into());
+        }
+        for (key, map) in [
+            ("counters", &mut counters),
+            ("requests_by_mode", &mut modes),
+            ("diagnostic_inclusive_function_ns", &mut timings),
+        ] {
+            for (field, value) in event[key]
+                .as_object()
+                .ok_or("observer metric object missing")?
+            {
+                let allowed = match key {
+                    "counters" => PERFORMANCE_OBSERVER_COUNTERS.contains(&field.as_str()),
+                    "requests_by_mode" => [
+                        "parse_document",
+                        "extract_interface",
+                        "parse_project_config",
+                        "project_context",
+                        "session_start",
+                        "session_parse",
+                        "session_end",
+                        "other",
+                    ]
+                    .contains(&field.as_str()),
+                    _ => [
+                        "ast_parse",
+                        "build_module_index",
+                        "build_module_symbol_index",
+                        "conftest_fixture_index",
+                        "analyze_source",
+                        "interface_hash",
+                    ]
+                    .contains(&field.as_str()),
+                };
+                if !allowed {
+                    return Err(
+                        "observer field is outside the source-free numeric allowlist".into(),
+                    );
+                }
+                let number = value
+                    .as_u64()
+                    .ok_or("observer metric is not an unsigned integer")?;
+                let total = map.entry(field.clone()).or_default();
+                *total = total
+                    .checked_add(number)
+                    .ok_or("observer aggregate overflow")?;
+            }
+        }
+        worker_ns = worker_ns
+            .checked_add(
+                event["diagnostic_worker_ns"]
+                    .as_u64()
+                    .ok_or("observer worker time missing")?,
+            )
+            .ok_or("observer time overflow")?;
+        worker_load_ns = match (worker_load_ns, event["diagnostic_worker_load_ns"].as_u64()) {
+            (Some(total), Some(value)) => Some(
+                total
+                    .checked_add(value)
+                    .ok_or("observer load time overflow")?,
+            ),
+            _ => None,
+        };
+    }
+    for key in PERFORMANCE_OBSERVER_COUNTERS {
+        counters.entry(key.to_string()).or_default();
+    }
+    Ok(
+        serde_json::json!({"counters": counters, "requests_by_mode": modes,
+            "diagnostic_inclusive_function_ns": timings, "diagnostic_worker_ns": worker_ns, "diagnostic_worker_load_ns": worker_load_ns,
+            "timing_caveat": "separate instrumented pass; inclusive timers overlap and include observer overhead; excluded from native A/B resources",
+            "version_probe_spawns": performance_not_measured("observer sees worker dispatch only, not executable version probes"),
+        }),
+    )
+}
+
+fn performance_owned_fingerprint(workspace: &EvalWorkspace) -> Result<String, String> {
+    let ledgers = sync_equivalence_dump_store_ledgers(&workspace.project.join(".repogrammar"))?;
+    let value = serde_json::json!({"facts": ledgers.facts_local, "provider": ledgers.facts_provider,
+        "ir_nodes": ledgers.ir_nodes, "ir_edges": ledgers.ir_edges, "repo_shape": ledgers.repo_shape});
+    Ok(performance_hash_bytes(
+        canonical_json_string(&value).as_bytes(),
+    ))
+}
+
+fn performance_index_counters(value: &serde_json::Value) -> serde_json::Value {
+    let mut counters = serde_json::Map::new();
+    for key in [
+        "discovered_files",
+        "stored_files",
+        "parser_attempted_files",
+        "indexed_units",
+        "semantic_facts",
+        "added_files",
+        "modified_files",
+        "removed_files",
+        "unchanged_files",
+        "copied_forward_files",
+        "reparsed_files",
+        "families_recomputed",
+    ] {
+        counters.insert(
+            key.to_string(),
+            value.get(key).cloned().unwrap_or(serde_json::Value::Null),
+        );
+    }
+    counters.insert(
+        "sync_mode".into(),
+        value
+            .get("sync_mode")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    counters.insert(
+        "fallback_reason".into(),
+        value
+            .get("fallback_reason")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    serde_json::Value::Object(counters)
+}
+
+fn performance_index_outcome(value: &serde_json::Value) -> &serde_json::Value {
+    value
+        .get("resync")
+        .filter(|value| value.is_object())
+        .unwrap_or(value)
+}
+
+fn performance_prepare_synthetic(project: &Path, python_files: usize) -> Result<(), String> {
+    let template =
+        fs::read(project.join("app.py")).map_err(|_| "synthetic app template missing")?;
+    for file in 1..python_files {
+        fs::write(project.join(format!("module_{file:04}.py")), &template)
+            .map_err(|_| "could not expand synthetic modules")?;
+    }
+    Ok(())
+}
+
+fn performance_source_inventory(project: &Path) -> Result<serde_json::Value, String> {
+    let mut files = Vec::new();
+    collect_fixture_files(project, project, &mut files)?;
+    let (mut bytes, mut python_bytes, mut python_files, mut conftest_bytes) =
+        (0_u64, 0_u64, 0_u64, 0_u64);
+    for (relative, path) in &files {
+        let size = fs::metadata(path)
+            .map_err(|_| "could not inspect performance source inventory")?
+            .len();
+        bytes = bytes.checked_add(size).ok_or("source inventory overflow")?;
+        if relative.ends_with(".py") {
+            python_files += 1;
+            python_bytes = python_bytes
+                .checked_add(size)
+                .ok_or("Python inventory overflow")?;
+            if relative == "conftest.py" || relative.ends_with("/conftest.py") {
+                conftest_bytes = conftest_bytes
+                    .checked_add(size)
+                    .ok_or("conftest inventory overflow")?;
+            }
+        }
+    }
+    Ok(
+        serde_json::json!({"regular_files": files.len(), "file_bytes": bytes,
+            "python_files": python_files, "python_source_bytes": python_bytes,
+            "conftest_source_bytes": conftest_bytes,
+            "scope": "fixture inventory before init; bytes are not measured filesystem read traffic or admitted parser workload",
+        }),
+    )
+}
+
+fn performance_patch(project: &Path, scenario: &str) -> Result<(), String> {
+    match scenario {
+        "python_body_edit" => {
+            sync_equivalence_replace_once(project, "app.py", "return []", "return [1]")
+        }
+        "python_interface_preserving_edit" => {
+            let path = project.join("app.py");
+            let mut bytes = fs::read(&path).map_err(|_| "synthetic Python module missing")?;
+            bytes.extend_from_slice(b"\n# interface-preserving comment\n");
+            fs::write(path, bytes).map_err(|_| "could not write synthetic comment".into())
+        }
+        "python_interface_change" => {
+            let path = project.join("app.py");
+            let mut bytes = fs::read(&path).map_err(|_| "synthetic Python module missing")?;
+            bytes.extend_from_slice(b"\ndef added_public_function():\n    return 2\n");
+            fs::write(path, bytes).map_err(|_| "could not write interface change".into())
+        }
+        "python_add" => fs::write(project.join("added.py"), b"def added():\n    return 3\n")
+            .map_err(|_| "could not add synthetic Python file".into()),
+        "python_remove" => fs::remove_file(project.join("added.py"))
+            .map_err(|_| "could not remove synthetic Python file".into()),
+        "project_config_change" => sync_equivalence_replace_once(
+            project,
+            "pyproject.toml",
+            "version = \"0.0.0\"",
+            "version = \"0.0.1\"",
+        ),
+        "rust_one_file_edit" => {
+            sync_equivalence_replace_once(project, "helper.rs", "    1", "    2")
+        }
+        "tsjs_one_file_edit" => {
+            sync_equivalence_replace_once(project, "router.ts", "res.json([])", "res.json([1])")
+        }
+        _ => Ok(()),
+    }
+}
+
+fn performance_query_row(
+    category: &str,
+    surface: &str,
+    value: &serde_json::Value,
+    response_bytes: usize,
+    timings: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let samples: Vec<u128> = timings
+        .iter()
+        .filter_map(|sample| {
+            sample["harness_wall_ms"]
+                .as_f64()
+                .map(|value| value.round() as u128)
+        })
+        .collect();
+    let mut samples = samples;
+    samples.sort_unstable();
+    serde_json::json!({"category": category, "surface": surface, "status": value.get("status"),
+        "response_bytes": response_bytes,
+        "estimated_tokens": response_bytes.div_ceil(4), "token_measurement_kind": "ESTIMATED", "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+        "read_plan_items": value["read_plan"]["items"].as_array().map(Vec::len),
+        "selected_family_count": usize::from(value["query_route"]["selected_family_id"].as_str().is_some()),
+        "candidate_family_count": value["query_route"]["candidate_family_ids"].as_array().map(Vec::len),
+        "hydrated_family_count": value["query_route"]["hydrated_family_count"],
+        "unknown_count": value["unknowns"].as_array().map(Vec::len),
+        "freshness_state": value.get("freshness").and_then(|freshness| freshness.as_str().or_else(|| freshness.get("status").and_then(serde_json::Value::as_str))),
+        "includes_product_process_startup": true,
+        "latency_ms": {"p50": percentile(&samples, 50), "p95": percentile(&samples, 95)},
+        "machine_samples": timings,
+    })
+}
+
+fn performance_accept_query_sample(
+    previous: &mut Option<(String, usize)>,
+    value: &serde_json::Value,
+    bytes: usize,
+) -> Result<(), String> {
+    let canonical = canonical_json_string(value);
+    if previous
+        .as_ref()
+        .is_some_and(|(first, size)| *first != canonical || *size != bytes)
+    {
+        return Err("performance query content/bytes changed between repetitions".into());
+    }
+    *previous = Some((canonical, bytes));
+    Ok(())
+}
+
+fn performance_exact_path(value: &serde_json::Value) -> Option<String> {
+    value["evidence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(value["read_plan"]["items"].as_array().into_iter().flatten())
+        .find_map(|item| item["path"].as_str().map(str::to_string))
+}
+
+fn performance_queries(
+    workspace: &EvalWorkspace,
+    options: &PerformanceOptions,
+) -> Result<Vec<serde_json::Value>, String> {
+    let project = workspace.project_arg()?;
+    let (_, families) = workspace.families()?;
+    let mut cases: Vec<(&str, String)> = vec![
+        (
+            "fuzzy_retrieval",
+            "How are FastAPI routes implemented?".into(),
+        ),
+        ("correct_abstention", "flask".into()),
+    ];
+    if options.synthetic {
+        cases.push(("exact_path", "app.py".into()));
+    }
+    if let Some(family) = families.first() {
+        cases.push(("exact_family", family.clone()));
+        let (value, _) = workspace.capture_query_json("find", family, "compact", "full", false)?;
+        if let Some(member) = value["members"]
+            .as_array()
+            .and_then(|members| members.first())
+            .and_then(|member| member["code_unit_id"].as_str())
+        {
+            cases.push(("exact_member", member.to_string()));
+        }
+        if !options.synthetic {
+            if let Some(path) = performance_exact_path(&value) {
+                cases.push(("exact_path", path.to_string()));
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    for required in ["exact_path", "exact_family", "exact_member"] {
+        if !cases.iter().any(|(category, _)| *category == required) {
+            rows.push(serde_json::json!({"category": required, "surface": "cli_cold", "state": "NOT_MEASURED", "reason": "no valid indexed family/member/path locus was available", "response_bytes": null, "latency_ms": null, "machine_samples": []}));
+        }
+    }
+    for (category, target) in cases {
+        let args = vec![
+            "find".into(),
+            target,
+            "--project".into(),
+            project.clone(),
+            "--mode".into(),
+            "compact".into(),
+            "--verbosity".into(),
+            "standard".into(),
+            "--json".into(),
+        ];
+        let (mut last, mut bytes, mut timings) = (serde_json::Value::Null, 0, Vec::new());
+        let mut first = None;
+        for _ in 0..options.repetitions {
+            let (value, resources, length) =
+                performance_timed_command(workspace, &args, None, options)?;
+            performance_accept_query_sample(&mut first, &value, length)?;
+            last = value;
+            bytes = length;
+            timings.push(resources);
+        }
+        rows.push(performance_query_row(
+            category, "cli_cold", &last, bytes, timings,
+        ));
+    }
+    let target = if options.synthetic {
+        "app.py".to_string()
+    } else {
+        "How are FastAPI routes implemented?".to_string()
+    };
+    for (operation, target) in [
+        ("find_analogues", target),
+        (
+            "show_family",
+            families
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "family:missing".into()),
+        ),
+        ("inspect_readiness", String::new()),
+    ] {
+        let mut arguments = serde_json::json!({"operation": operation, "mode": "compact"});
+        if !target.is_empty() {
+            arguments["target"] = serde_json::json!(target);
+        }
+        let request = format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}),
+            serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repogrammar_context","arguments": arguments}})
+        );
+        let args = vec!["serve".into(), "--project".into(), project.clone()];
+        let (mut last, mut bytes, mut timings) = (serde_json::Value::Null, 0, Vec::new());
+        let mut first = None;
+        for _ in 0..options.repetitions {
+            let (value, resources, length) =
+                performance_timed_command(workspace, &args, Some(request.as_bytes()), options)?;
+            performance_accept_query_sample(&mut first, &value, length)?;
+            last = value;
+            bytes = length;
+            timings.push(resources);
+        }
+        rows.push(performance_query_row(
+            operation,
+            "mcp_cold_wire",
+            &last,
+            bytes,
+            timings,
+        ));
+    }
+    Ok(rows)
+}
+
+fn performance_eval_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let options = performance_options(root, args)?;
+    if !matches!(env::consts::OS, "macos" | "linux") {
+        return Err("performance-eval native resources support macOS/Linux only".into());
+    }
+    fs::create_dir_all(&options.out)
+        .map_err(|_| "could not create performance output directory")?;
+    let harness_path = env::current_exe().map_err(|_| "harness path unavailable")?;
+    let harness_hash =
+        performance_hash_bytes(&fs::read(&harness_path).map_err(|_| "harness unreadable")?);
+    let harness_commit = resolve_git_commit(root, "HEAD").ok();
+    let binary_hash =
+        performance_hash_bytes(&fs::read(&options.binary).map_err(|_| "binary unreadable")?);
+    let worker_hash =
+        performance_hash_bytes(&fs::read(&options.worker).map_err(|_| "worker unreadable")?);
+    let observer_path = root.join("src/experiments/performance/observe_worker.py");
+    let observer_hash =
+        performance_hash_bytes(&fs::read(&observer_path).map_err(|_| "observer unreadable")?);
+    let mut indexing = Vec::new();
+    let mut queries = Vec::new();
+    let mut fixture_hash = None;
+    let mut source_inventory = None;
+    for repetition in 0..options.repetitions {
+        let native = EvalWorkspace::new(&options.binary, &options.fixture)?;
+        let observed = EvalWorkspace::new(&options.binary, &options.fixture)?;
+        if options.synthetic {
+            performance_prepare_synthetic(&native.project, options.python_files)?;
+            performance_prepare_synthetic(&observed.project, options.python_files)?;
+        }
+        let version = fixture_version_hash(&native.project)?;
+        if version != fixture_version_hash(&observed.project)? {
+            return Err("source changed while preparing the paired workspaces".into());
+        }
+        if fixture_hash
+            .as_ref()
+            .is_some_and(|previous| *previous != version)
+        {
+            return Err("fixture changed between repetitions".into());
+        }
+        fixture_hash = Some(version);
+        source_inventory = Some(performance_source_inventory(&native.project)?);
+        let scenarios = [
+            "fresh_init",
+            "repeated_full_resync",
+            "zero_delta_sync",
+            "python_body_edit",
+            "python_interface_preserving_edit",
+            "python_interface_change",
+            "python_add",
+            "python_remove",
+            "project_config_change",
+            "rust_one_file_edit",
+            "tsjs_one_file_edit",
+        ];
+        let mut previous_generation = None;
+        for scenario in scenarios {
+            if !options.synthetic
+                && !matches!(
+                    scenario,
+                    "fresh_init" | "repeated_full_resync" | "zero_delta_sync"
+                )
+            {
+                continue;
+            }
+            performance_patch(&native.project, scenario)?;
+            performance_patch(&observed.project, scenario)?;
+            let operation = if scenario == "fresh_init" {
+                "init"
+            } else if scenario.contains("resync") {
+                "resync"
+            } else {
+                "sync"
+            };
+            let mut native_args = vec![
+                operation.into(),
+                "--project".into(),
+                native.project_arg()?,
+                "--json".into(),
+                "--progress".into(),
+                "never".into(),
+            ];
+            let mut observed_args = vec![
+                operation.into(),
+                "--project".into(),
+                observed.project_arg()?,
+                "--json".into(),
+                "--progress".into(),
+                "never".into(),
+            ];
+            if operation == "init" {
+                native_args.extend(["--yes".into(), "--no-autosync".into()]);
+                observed_args.extend(["--yes".into(), "--no-autosync".into()]);
+            }
+            let (value, resources, _) =
+                performance_timed_command(&native, &native_args, None, &options)?;
+            let value = performance_index_outcome(&value);
+            if value["status"] != "complete" {
+                return Err(format!("scenario {scenario} did not complete"));
+            }
+            let worker = performance_observe_command(root, &observed, &observed_args, &options)?;
+            let fingerprint = performance_owned_fingerprint(&native)?;
+            let observed_fingerprint = performance_owned_fingerprint(&observed)?;
+            if fingerprint != observed_fingerprint {
+                return Err(format!(
+                    "observer altered owned facts/IR/shape in {scenario}"
+                ));
+            }
+            let generation = value["active_generation"].as_str().map(str::to_string);
+            let activations = u64::from(generation.is_some() && generation != previous_generation);
+            previous_generation = generation;
+            indexing.push(serde_json::json!({"scenario_id": scenario, "repetition": repetition + 1,
+                "portable_counters": performance_index_counters(value), "python_frontend": worker,
+                "generation_activations": activations, "owned_fact_ir_shape_sha256": fingerprint,
+                "observer_fact_ir_shape_equal": true, "machine_resources": resources,
+                "complete_canonical_analysis": performance_not_measured("this limited fingerprint omits files/units/family detail; full canonical validation is a separate Phase 3 gate"),
+            }));
+        }
+        if repetition == 0 {
+            queries = performance_queries(&native, &options)?;
+        }
+    }
+    let phase_gaps = [
+        "filesystem_discovery",
+        "git_ignore",
+        "source_hashing",
+        "source_bytes_read",
+        "request_serialization",
+        "worker_spawn_wait",
+        "host_response_validation",
+        "semantic_support_derivation",
+        "family_construction",
+        "sqlite_rows_written",
+        "sqlite_persistence",
+        "generation_validation_activation",
+    ];
+    let missing: serde_json::Map<String, serde_json::Value> = phase_gaps.into_iter().map(|key| (key.to_string(), performance_not_measured("not exposed by current public product counters; observer cannot identify this host phase"))).collect();
+    let unavailable = serde_json::json!({
+        "autosync_idle_60s": performance_not_measured("separate live watcher benchmark; this harness never starts a daemon"),
+        "autosync_ignored_burst": performance_not_measured("separate live watcher benchmark"),
+        "autosync_same_size_same_mtime": performance_not_measured("separate live watcher benchmark"),
+        "autosync_supported_burst": performance_not_measured("separate live watcher benchmark"),
+        "warm_mcp": performance_not_measured("cold process measurements do not identify warm serving latency"),
+        "agent_adoption": performance_not_measured("requires separate isolated controlled agent sessions"),
+        "non_synthetic_mutations": if options.synthetic { serde_json::Value::Null } else { performance_not_measured("scripted mutations apply only to the committed synthetic template; real corpus source left byte-identical") },
+    });
+    if binary_hash
+        != performance_hash_bytes(&fs::read(&options.binary).map_err(|_| "binary unreadable")?)
+        || worker_hash
+            != performance_hash_bytes(&fs::read(&options.worker).map_err(|_| "worker unreadable")?)
+        || observer_hash
+            != performance_hash_bytes(&fs::read(&observer_path).map_err(|_| "observer unreadable")?)
+        || harness_hash
+            != performance_hash_bytes(&fs::read(&harness_path).map_err(|_| "harness unreadable")?)
+    {
+        return Err("measurement binary/worker/observer/harness changed during the run".into());
+    }
+    let report = serde_json::json!({"schema_version": "performance-results.v1", "condition": options.condition,
+        "python_project_session_requested": options.python_project_session,
+        "harness_commit": harness_commit,
+        "harness_commit_scope": "checkout HEAD at entry; executable and observer hashes identify the actual producer and may include uncommitted instrumentation",
+        "harness_sha256": harness_hash,
+        "binary_sha256": binary_hash, "worker_sha256": worker_hash, "observer_sha256": observer_hash,
+        "fixture_sha256": fixture_hash, "source_inventory": source_inventory, "synthetic": options.synthetic,
+        "synthetic_python_modules": if options.synthetic { Some(options.python_files) } else { None },
+        "platform": {"os": env::consts::OS, "arch": env::consts::ARCH},
+        "repetitions": options.repetitions, "timeout_seconds": options.timeout.as_secs(),
+        "indexing_rows": indexing, "query_rows": queries, "unmeasured_host_phases": missing,
+        "unavailable_scenarios": unavailable,
+        "correctness_scope": "observer equivalence checks owned semantic facts, IR and aggregate shape only; full sync-equivalence/product-eval remain independent required gates",
+        "resource_caveat": "within-machine comparison only; native RSS is a rusage maximum, not simultaneous process-tree resident bytes; instrumentation excluded from native measurements",
+    });
+    let path = options.out.join("performance-results.json");
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&report)
+                .map_err(|_| "performance report serialization failed")?
+        ),
+    )
+    .map_err(|_| "performance report write failed")?;
+    Ok(format!(
+        "performance-eval: {} indexing rows, {} query rows\nreport: {}\n",
+        report["indexing_rows"].as_array().map_or(0, Vec::len),
+        report["query_rows"].as_array().map_or(0, Vec::len),
+        path.display()
+    ))
+}
+
+fn check_geo_assets(root: &Path) -> Result<(), String> {
+    let bytes = read_evidence_bytes(
+        &root.join("docs/promotion"),
+        "geo-query-corpus.json",
+        256 * 1024,
+    )?;
+    let corpus: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "GEO corpus JSON is malformed".to_string())?;
+    if corpus["schema_version"].as_u64() != Some(1) {
+        return Err("GEO corpus schema version is unsupported".into());
+    }
+    let version = geo_text(&corpus, "repository_version")?;
+    if !is_bounded_version(version) || has_prerelease(version) {
+        return Err("GEO corpus must identify a bounded stable release".into());
+    }
+    geo_text(&corpus, "baseline_date")?;
+    geo_source_path(root, geo_text(&corpus, "protocol_ref")?)?;
+    let release = read_evidence_json(
+        &root.join("docs/release"),
+        &format!("stable-v{version}-release.summary.json"),
+    )?;
+    if release["version"].as_str() != Some(version)
+        || release["verdict"].as_str() != Some("GITHUB_RELEASE_READY")
+        || release["release"]["immutable"].as_bool() != Some(true)
+        || release["release"]["draft"].as_bool() != Some(false)
+        || release["release"]["prerelease"].as_bool() != Some(false)
+    {
+        return Err("GEO current version lacks recorded immutable GitHub publication".into());
+    }
+    let github_marker = format!("Current GitHub stable: `{version}`.");
+    for path in ["docs/limitations.md", "docs/promotion/launch-kit.md"] {
+        let text = fs::read_to_string(root.join(path))
+            .map_err(|_| format!("GEO current publication document is unavailable: {path}"))?;
+        let markers: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("Current GitHub stable:"))
+            .collect();
+        if markers != [github_marker.as_str()] {
+            return Err(format!("GEO current GitHub publication drift: {path}"));
+        }
+    }
+    let npm_version = release["npm"]["dist_tags_after"]["latest"]
+        .as_str()
+        .ok_or_else(|| "GEO release record lacks historical npm stable version".to_string())?;
+    let launch = fs::read_to_string(root.join("docs/promotion/launch-kit.md"))
+        .map_err(|_| "GEO launch kit is unavailable".to_string())?;
+    let npm_marker = format!("Current npm stable at last verification: `{npm_version}`.");
+    if launch
+        .lines()
+        .filter(|line| line.starts_with("Current npm stable at last verification:"))
+        .collect::<Vec<_>>()
+        != [npm_marker.as_str()]
+    {
+        return Err("GEO current npm publication drift".into());
+    }
+    let readme = fs::read_to_string(root.join("README.md"))
+        .map_err(|_| "GEO README is unavailable".to_string())?;
+    let download_prefix = format!("releases/download/v{version}/");
+    let current_intro = format!("The current GitHub stable release is **{version}**");
+    if !readme.contains(&current_intro)
+        || readme.lines().any(|line| {
+            line.starts_with("The current GitHub stable release is ")
+                && !line.starts_with(&current_intro)
+        })
+        || !readme.contains(&format!("bash install.sh --version v{version}"))
+        || readme.lines().any(|line| {
+            line.contains("github.com/SioYooo/RepoGrammar/releases/download/")
+                && !line.contains(&download_prefix)
+        })
+    {
+        return Err("GEO README installation pin differs from recorded publication".into());
+    }
+    let queries = corpus["queries"]
+        .as_array()
+        .filter(|rows| (20..=30).contains(&rows.len()))
+        .ok_or_else(|| "GEO corpus must contain 20 to 30 queries".to_string())?;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut texts = std::collections::BTreeSet::new();
+    let mut brands = std::collections::BTreeSet::new();
+    for row in queries {
+        if !ids.insert(geo_text(row, "query_id")?)
+            || !texts.insert(
+                geo_text(row, "query")?
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase(),
+            )
+        {
+            return Err("GEO corpus has duplicate query IDs or query text".into());
+        }
+        brands.insert(
+            row["branded"]
+                .as_bool()
+                .ok_or_else(|| "GEO branded field must be boolean".to_string())?,
+        );
+        geo_text(row, "intent")?;
+        geo_text(row, "target_concept")?;
+        let source = &row["expected_canonical_source"];
+        let path = geo_text(source, "path")?;
+        geo_source_path(root, path)?;
+        let anchor = source["anchor"].as_str().unwrap_or("");
+        let suffix = if anchor.is_empty() {
+            String::new()
+        } else {
+            format!("#{anchor}")
+        };
+        if source["url"].as_str()
+            != Some(
+                format!("https://github.com/SioYooo/RepoGrammar/blob/main/{path}{suffix}").as_str(),
+            )
+        {
+            return Err("GEO canonical URL does not match its repository source".into());
+        }
+        let observations = row["observations"]
+            .as_array()
+            .filter(|rows| rows.len() == 3)
+            .ok_or_else(|| "GEO query requires three named engine observations".to_string())?;
+        let mut engines = std::collections::BTreeSet::new();
+        for observation in observations {
+            let engine = geo_text(observation, "engine")?;
+            if !matches!(engine, "chatgpt_search" | "google_search" | "bing_search")
+                || !engines.insert(engine)
+            {
+                return Err("GEO engine is unknown or duplicated".into());
+            }
+            geo_text(observation, "date")?;
+            match geo_text(observation, "status")? {
+                "NOT_MEASURED" | "UNKNOWN" => {
+                    geo_text(observation, "unknown_reason")?;
+                    for field in ["mention", "citation", "cited_url", "rank", "evidence_ref"] {
+                        if observation.get(field) != Some(&serde_json::Value::Null) {
+                            return Err(
+                                "GEO unmeasured observation must retain null results".into()
+                            );
+                        }
+                    }
+                }
+                "OBSERVED" => {
+                    geo_source_path(root, geo_text(observation, "evidence_ref")?)?;
+                    if observation["mention"].as_bool().is_none()
+                        || observation["citation"].as_bool().is_none()
+                        || (observation["citation"] == true
+                            && !geo_text(observation, "cited_url")?.starts_with("https://"))
+                        || (observation["citation"] == false && !observation["cited_url"].is_null())
+                        || (!observation["rank"].is_null()
+                            && observation["rank"].as_u64().is_none_or(|rank| rank == 0))
+                    {
+                        return Err("GEO observed result lacks typed outcomes or evidence".into());
+                    }
+                }
+                _ => return Err("GEO observation status is unsupported".into()),
+            }
+        }
+    }
+    if brands.len() != 2 {
+        return Err("GEO corpus requires branded and unbranded queries".into());
+    }
+    Ok(())
+}
+
+fn geo_text<'a>(value: &'a serde_json::Value, field: &str) -> Result<&'a str, String> {
+    value[field]
+        .as_str()
+        .filter(|text| !text.trim().is_empty() && text.len() <= 2048)
+        .ok_or_else(|| format!("GEO field is missing or invalid: {field}"))
+}
+
+fn geo_source_path(root: &Path, relative: &str) -> Result<(), String> {
+    if relative.contains('\\')
+        || relative.chars().any(char::is_control)
+        || !Path::new(relative)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("GEO source path must be repository-relative".into());
+    }
+    let canonical_root = fs::canonicalize(root).map_err(|_| "GEO repository is unavailable")?;
+    let source =
+        fs::canonicalize(root.join(relative)).map_err(|_| "GEO canonical source is unavailable")?;
+    if !source.starts_with(canonical_root) || !source.is_file() {
+        return Err("GEO canonical source escapes the repository or is not a file".into());
+    }
+    Ok(())
+}
+
 fn run_check(root: &Path) -> CommandResult {
     match check_repository(root) {
         Ok(violations) if violations.is_empty() => CommandResult::ok("repository guard passed\n"),
@@ -7730,6 +8934,147 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn performance_native_resources_parse_platform_units_and_refuse_partial_metrics() {
+        let mac = performance_native_resources(
+            "  1.25 real 0.75 user 0.20 sys\n 4096 maximum resident set size\n",
+            "macos",
+        );
+        assert_eq!(mac["state"], "MEASURED");
+        assert_eq!(mac["peak_rss_bytes"], 4096);
+        assert_eq!(mac["user_cpu_seconds"], 0.75);
+        let linux = performance_native_resources(
+            "User time (seconds): 0.75\nSystem time (seconds): 0.20\nElapsed (wall clock) time (h:mm:ss or m:ss): 1:02.50\nMaximum resident set size (kbytes): 4\n",
+            "linux",
+        );
+        assert_eq!(linux["state"], "MEASURED");
+        assert_eq!(linux["peak_rss_bytes"], 4096);
+        assert_eq!(linux["native_wall_seconds"], 62.5);
+        let partial = performance_native_resources(
+            "0.00 real 0.00 user 0.00 sys\ntime: sysctl kern.clockrate: Operation not permitted\n",
+            "macos",
+        );
+        assert_eq!(partial["state"], "NOT_MEASURED");
+        assert!(partial["user_cpu_seconds"].is_null());
+        assert!(partial["peak_rss_bytes"].is_null());
+        let invalid = performance_native_resources(
+            "NaN real 0.00 user 0.00 sys\n1 maximum resident set size\n",
+            "macos",
+        );
+        assert_eq!(invalid["state"], "NOT_MEASURED");
+    }
+
+    #[test]
+    fn performance_observer_aggregation_counts_amplification_and_rejects_bad_rows() {
+        let event = serde_json::json!({
+            "schema_version": "python-observer.v1",
+            "counters": {"worker_spawns": 1, "input_bytes": 400, "module_context_source_bytes": 100},
+            "requests_by_mode": {"parse_document": 1},
+            "diagnostic_inclusive_function_ns": {"ast_parse": 1000},
+            "diagnostic_worker_ns": 2000,
+        });
+        let pair = format!("{event}\n{event}\n");
+        let result = performance_aggregate_observer(pair.as_bytes()).unwrap();
+        assert_eq!(result["counters"]["worker_spawns"], 2);
+        assert_eq!(result["counters"]["module_context_source_bytes"], 200);
+        assert_eq!(
+            result["diagnostic_inclusive_function_ns"]["ast_parse"],
+            2000
+        );
+        assert!(performance_aggregate_observer(b"not-json\n").is_err());
+        assert!(
+            performance_aggregate_observer(b"{\"schema_version\":\"python-observer.v2\"}\n")
+                .is_err()
+        );
+        let mut forbidden = event.clone();
+        forbidden["counters"]["private-source-text"] = serde_json::json!(1);
+        assert!(performance_aggregate_observer(forbidden.to_string().as_bytes()).is_err());
+        let empty = performance_aggregate_observer(b"").unwrap();
+        assert_eq!(empty["counters"]["worker_spawns"], 0);
+    }
+
+    #[test]
+    fn performance_query_row_keeps_only_measurement_fields() {
+        let value = serde_json::json!({"status": "unknown", "source": "SENSITIVE_SOURCE", "target": "private.py", "unknowns": [{"reason": "private symbol"}], "read_plan": {"items": [{"path": "private.py"}, {"path": "other_private.py"}]}, "query_route": {"selected_family_id": null, "candidate_family_ids": ["private handle"]}});
+        let row = performance_query_row(
+            "abstention",
+            "cli_cold",
+            &value,
+            9,
+            vec![serde_json::json!({"harness_wall_ms": 12.0})],
+        );
+        assert_eq!(row["estimated_tokens"], 3);
+        assert_eq!(row["read_plan_items"], 2);
+        assert_eq!(row["candidate_family_count"], 1);
+        assert_eq!(row["unknown_count"], 1);
+        assert_eq!(row["latency_ms"]["p50"], 12);
+        let text = row.to_string();
+        for forbidden in [
+            "SENSITIVE_SOURCE",
+            "private.py",
+            "private symbol",
+            "private handle",
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn performance_query_samples_reject_first_bad_last_good_and_use_read_plan_locus() {
+        let good = serde_json::json!({"status": "ok", "evidence": [], "read_plan": {"items": [{"path": "app.py"}]}});
+        assert_eq!(performance_exact_path(&good), Some("app.py".into()));
+        let unknown = serde_json::json!({"status": "unknown", "read_plan": {"items": []}});
+        assert_eq!(performance_exact_path(&unknown), None);
+        let mut first = None;
+        performance_accept_query_sample(&mut first, &unknown, 40).unwrap();
+        assert!(performance_accept_query_sample(&mut first, &good, 90).is_err());
+        let mut first = None;
+        performance_accept_query_sample(&mut first, &good, 90).unwrap();
+        performance_accept_query_sample(&mut first, &good, 90).unwrap();
+        assert!(performance_accept_query_sample(&mut first, &good, 91).is_err());
+    }
+
+    #[test]
+    fn performance_cli_rejects_unbounded_runs_before_binary_resolution() {
+        let root = TempRoot::new("performance-options");
+        for arguments in [
+            vec!["--out", "out", "--repetitions", "0"],
+            vec!["--out", "out", "--python-files", "257"],
+            vec!["--out", "out", "--timeout-seconds", "3601"],
+        ] {
+            let args = arguments
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            assert!(performance_options(root.path(), &args)
+                .err()
+                .unwrap()
+                .contains("bounds"));
+        }
+        let arguments = ["--out", "out", "--python-project-session", "invalid"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(performance_options(root.path(), &arguments)
+            .err()
+            .unwrap()
+            .contains("selection must be on/off"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn performance_capture_bounds_direct_and_inherited_pipe_lifetimes() {
+        for script in ["sleep 20", "sleep 20 & exit 0"] {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", script]);
+            let started = std::time::Instant::now();
+            assert!(
+                performance_capture(command, None, std::time::Duration::from_millis(100)).is_err()
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(4));
+        }
+    }
+
+    #[test]
     fn release_channel_is_typed_from_a_bounded_manifest_version() {
         assert_eq!(
             release_channel("0.2.0-preview.0"),
@@ -8182,6 +9527,152 @@ mod tests {
             preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", "", &too_many),
             Err("published version count is outside the supported bound")
         );
+    }
+
+    fn write_geo_fixture(root: &Path) -> serde_json::Value {
+        write_file(
+            root.join("README.md"),
+            b"The current GitHub stable release is **0.5.0**, published through GitHub only.\nbash install.sh --version v0.5.0\ncurl https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh\n",
+        );
+        write_file(
+            root.join("docs/limitations.md"),
+            b"Current GitHub stable: `0.5.0`.\n",
+        );
+        write_file(
+            root.join("docs/promotion/launch-kit.md"),
+            b"Current GitHub stable: `0.5.0`.\nCurrent npm stable at last verification: `0.4.3`.\n",
+        );
+        write_file(root.join("docs/promotion/geo-research.md"), b"Protocol\n");
+        // Historical publication evidence is deliberately outside current-marker checks.
+        write_file(
+            root.join("docs/release/historical.md"),
+            b"Current GitHub stable: `0.4.0`.\n",
+        );
+        write_file(
+            root.join("docs/release/stable-v0.5.0-release.summary.json"),
+            serde_json::json!({
+                "version": "0.5.0", "verdict": "GITHUB_RELEASE_READY",
+                "release": {"immutable": true, "draft": false, "prerelease": false},
+                "npm": {"dist_tags_after": {"latest": "0.4.3"}}
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        let queries: Vec<_> = (0..20)
+            .map(|index| {
+                serde_json::json!({
+                    "query_id": format!("geo-{index}"), "query": format!("query {index}"),
+                    "intent": "problem_discovery", "branded": index < 10,
+                    "target_concept": "repository patterns",
+                    "expected_canonical_source": {
+                        "path": "README.md", "anchor": null,
+                        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md"
+                    },
+                    "observations": (["chatgpt_search", "google_search", "bing_search"].map(|engine|
+                        serde_json::json!({
+                            "engine": engine, "date": "2026-09-30", "status": "NOT_MEASURED",
+                            "mention": null, "citation": null, "cited_url": null, "rank": null,
+                            "evidence_ref": null, "unknown_reason": "No engine response captured"
+                        })
+                    ))
+                })
+            })
+            .collect();
+        let corpus = serde_json::json!({
+            "schema_version": 1, "repository_version": "0.5.0",
+            "baseline_date": "2026-09-30", "protocol_ref": "docs/promotion/geo-research.md",
+            "queries": queries
+        });
+        write_geo_corpus(root, &corpus);
+        corpus
+    }
+
+    fn write_geo_corpus(root: &Path, corpus: &serde_json::Value) {
+        write_file(
+            root.join("docs/promotion/geo-query-corpus.json"),
+            corpus.to_string().as_bytes(),
+        );
+    }
+
+    #[test]
+    fn geo_assets_accept_unmeasured_baseline_without_rewriting_history() {
+        let root = TempRoot::new("geo-baseline");
+        write_geo_fixture(root.path());
+        let result = run(["check-geo"], root.path());
+        assert_eq!(result.status, 0, "{}", result.stderr);
+        assert!(result.stdout.contains("search visibility is not inferred"));
+        assert!(
+            fs::read_to_string(root.path().join("docs/release/historical.md"))
+                .unwrap()
+                .contains("0.4.0")
+        );
+    }
+
+    #[test]
+    fn geo_assets_reject_stale_current_publication_and_install_pins() {
+        let root = TempRoot::new("geo-publication-drift");
+        for path in [
+            "docs/limitations.md",
+            "docs/promotion/launch-kit.md",
+            "README.md",
+        ] {
+            write_geo_fixture(root.path());
+            let text = fs::read_to_string(root.path().join(path)).unwrap();
+            write_file(
+                root.path().join(path),
+                text.replace("0.5.0", "0.4.3").as_bytes(),
+            );
+            assert!(
+                check_geo_assets(root.path()).is_err(),
+                "accepted stale {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn geo_assets_reject_fabricated_unmeasured_results_and_uncaptured_observations() {
+        let root = TempRoot::new("geo-observation-evidence");
+        for field in ["mention", "citation", "cited_url", "rank", "evidence_ref"] {
+            let mut corpus = write_geo_fixture(root.path());
+            corpus["queries"][0]["observations"][0][field] = serde_json::json!(false);
+            write_geo_corpus(root.path(), &corpus);
+            assert!(
+                check_geo_assets(root.path()).is_err(),
+                "accepted invented {field}"
+            );
+        }
+        let mut corpus = write_geo_fixture(root.path());
+        corpus["queries"][0]["observations"][0]["status"] = serde_json::json!("OBSERVED");
+        write_geo_corpus(root.path(), &corpus);
+        assert!(check_geo_assets(root.path()).is_err());
+    }
+
+    #[test]
+    fn geo_assets_reject_duplicates_missing_sources_and_traversal() {
+        let root = TempRoot::new("geo-query-integrity");
+        let mut corpus = write_geo_fixture(root.path());
+        corpus["queries"][1]["query"] = serde_json::json!("  QUERY   0 ");
+        write_geo_corpus(root.path(), &corpus);
+        assert!(check_geo_assets(root.path()).is_err());
+        for path in ["../README.md", "/README.md", "missing.md"] {
+            let mut corpus = write_geo_fixture(root.path());
+            corpus["queries"][0]["expected_canonical_source"]["path"] = serde_json::json!(path);
+            write_geo_corpus(root.path(), &corpus);
+            assert!(check_geo_assets(root.path()).is_err(), "accepted {path}");
+        }
+    }
+
+    #[test]
+    fn geo_assets_reject_malformed_and_oversized_corpus() {
+        let root = TempRoot::new("geo-bounded-corpus");
+        write_geo_fixture(root.path());
+        for bytes in [b"{".to_vec(), vec![b' '; 256 * 1024 + 1]] {
+            write_file(
+                root.path().join("docs/promotion/geo-query-corpus.json"),
+                &bytes,
+            );
+            assert!(check_geo_assets(root.path()).is_err());
+        }
     }
 
     #[test]

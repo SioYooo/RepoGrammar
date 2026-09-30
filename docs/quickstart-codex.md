@@ -24,13 +24,16 @@ configures Codex. `init` starts repo-local autosync by default. Add
 
 ## Verify The Global Codex Pre-flight
 
-Agent wiring refreshes a managed instruction block only when the existing Codex
-integration is safely owned **and** an explicit instruction-file override is
-configured for that install path. First identify the actual global guide used
-by your Codex installation or local policy. RepoGrammar does not discover or
-guess that path. If you have verified that the common candidate below is your
-active guide, inspect or refresh it explicitly without reconfiguring MCP or
-touching repository state:
+Current source builds use absolute `CODEX_HOME`, defaulting to
+`$HOME/.codex` only when it is unset, and prefer an existing nonempty `AGENTS.override.md` over
+`AGENTS.md`. `install --dry-run` shows the selected path; confirmed install
+writes a short conditional guide or refreshes its safely owned section.
+Use `--no-instructions` to register MCP without that write. An empty/relative
+explicit `REPOGRAMMAR_INSTRUCTION_FILE_CODEX` override stays deferred.
+Published 0.5.0 artifacts retain their shipped override-only wiring.
+
+Inspect the actual selected path. These examples apply to the default base
+file only when no override shadows it:
 
 ```text
 repogrammar instructions status --file "$HOME/.codex/AGENTS.md" --json
@@ -39,7 +42,8 @@ repogrammar instructions sync --file "$HOME/.codex/AGENTS.md" --yes
 ```
 
 Use the actual explicit path when `CODEX_HOME` or local policy places the guide
-elsewhere. Sync creates or appends the exact managed block when it is absent,
+elsewhere. Explicit-file sync creates the full v3 repository gate when absent, keeps a
+current short v4 global profile unchanged,
 refreshes only an exact known legacy block, preserves unrelated instructions,
 and refuses foreign or malformed marker content. It does not create
 `.repogrammar/`, run setup, or mirror `CLAUDE.md`.

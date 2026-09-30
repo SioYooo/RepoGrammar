@@ -566,6 +566,20 @@ and `python3` on non-Windows platforms so Conda and other Windows Python
 installations are not shadowed by the Microsoft Store `python3.exe` app
 execution alias. `REPOGRAMMAR_PYTHON_WORKER` may still override only the worker
 script path.
+Before loading that script, one shared process bootstrap enforces the published
+Python 3.10+ requirement for private document/config/interface requests. It
+checks the selected interpreter, removes the extra current-directory import
+entry introduced by `-c`, and restores worker argv and its directory before
+dispatch. Unsupported runtimes yield typed
+`PythonFrontendInterpreterUnsupported`; index/sync/config preflight stop with
+source-free interpreter-selection recovery. The interface probe returns
+`Unverified`, so sync cannot assume a stable interface and a full rebuild still
+must pass admission. Existing transaction boundaries preserve the active
+generation after failure. No additional per-request process, dependency, or
+repository-code execution is introduced.
+Admission applies to executed private frontend requests only. Unchanged-delta
+sync paths that request no worker remain no-ops; changing the interpreter alone
+does not add a new cache/freshness invalidation rule in this slice.
 Default parser-mode indexing now passes discovered repo-relative `.py`
 inventory and sanitized root source roots from the three project-config parse
 methods into private parse-document requests, so
@@ -615,8 +629,8 @@ frontend free text that can quote source or absolute host paths.
 When a run degrades at least one Python file, it also reports the interpreter
 that bounds Python syntax coverage. The Python worker is a checked-in script
 executed by the host interpreter, so the frontend can only parse grammar that
-interpreter already knows: a host implementing Python 3.9 rejects `match`,
-`except*`, and PEP 695 generics as ordinary syntax errors, and every file using
+interpreter already knows: for example, an admitted Python 3.10 host rejects
+`except*` and PEP 695 generics as ordinary syntax errors, and every file using
 them degrades. The reported boundary is the Python language version that
 interpreter implements, read from `sys.version_info`, which every conforming
 implementation supplies; the warning therefore never asserts that the host is
@@ -626,9 +640,9 @@ a different interpreter would be worse than none. That executable is
 host-supplied and `REPOGRAMMAR_PYTHON_EXECUTABLE` can redirect it, so the probe
 bounds its read and its wait, discards a non-zero exit, and accepts only an
 exact numeric `major.minor.patch` triple; anything else is reported as
-`UNKNOWN` rather than guessed. This reports a boundary and defines no minimum
-version: selecting a supported-version floor is a product decision and no input
-is refused on version grounds.
+`UNKNOWN` rather than guessed. This diagnostic does not decide admission;
+the shared frontend bootstrap independently enforces the published Python
+3.10+ floor before any private worker request.
 
 Tree-sitter provides tolerant syntax and candidate generation. It is not
 responsible for complete symbol, type, overload, alias, or module-resolution
@@ -1555,6 +1569,19 @@ below reuses the frontend parse worker and never runs when a semantic worker is
 configured, because the semantic-worker fallback fires first in preflight.
 
 ### Python interface-hash gate
+
+The [ADR-0055 private project-session transport](../decisions/ADR-0055-bounded-python-project-session.md)
+is selected by default in current source builds when
+at least two Python documents are planned for this generation. The owned
+session starts after context construction and finishes before the parse-phase
+write checkpoint. Missing EOS, unsuccessful exit, trailing output, timeout or
+protocol/hash mismatch fails the generation. A one-document incremental edit
+retains the existing request path; interface probes and configuration requests
+remain separately bounded calls. The qualified change affects transport, not
+invalidation narrowing. Internal `REPOGRAMMAR_PYTHON_PROJECT_SESSION=0` retains
+the legacy transport for controlled comparisons; published 0.5.0 assets remain
+unchanged. The original encoded per-file context-omission regime
+and conservative `python_context_budget` gate below remain unchanged.
 
 Python is the only language whose parser consumes other files' text: each
 module's parse depends on a per-module *interface projection* of every other

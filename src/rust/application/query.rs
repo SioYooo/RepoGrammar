@@ -4468,11 +4468,23 @@ fn add_local_context_fallback(
     let files = index_store
         .list_active_indexed_files()
         .map_err(index_store_error)?;
-    let units = index_store
-        .list_active_code_units()
+    // The existing resolver can use only a matching path or an admitted
+    // unit:{indexed_path}# identity. Keep this a conservative prefilter: a
+    // possible locus still runs the full resolver and all its checks.
+    let units = files
+        .files
+        .iter()
+        .any(|file| {
+            target_path_match(target, &file.path).is_some()
+                || target.contains(&format!("unit:{}#", file.path))
+        })
+        .then(|| index_store.list_active_code_units())
+        .transpose()
         .map_err(index_store_error)?;
     if files.generation_id != unknown_report.active_generation
-        || units.generation_id != unknown_report.active_generation
+        || units
+            .as_ref()
+            .is_some_and(|units| units.generation_id != unknown_report.active_generation)
     {
         let recovery = classify_query_evidence_recovery(
             RecoveryFreshness::Stale,
@@ -4490,6 +4502,9 @@ fn add_local_context_fallback(
             term_retrieval: None,
         }));
     }
+    let Some(units) = units else {
+        return Ok(FamilyLookupReport::Unknown(unknown_report));
+    };
     match resolve_local_context(target, constraints, &files.files, &units.units)? {
         LocalContextResolution::Resolved(report) => {
             let recovery = classify_query_evidence_recovery(
@@ -12724,6 +12739,87 @@ mod tests {
             panic!("embedded repo-relative path must find the family");
         };
         assert_eq!(report.family_id, "family:typescript:express_route:express");
+    }
+
+    #[test]
+    fn local_context_skips_unit_inventory_only_when_no_locus_can_resolve() {
+        let store = FakeStore::new(Vec::new())
+            .with_files(vec![indexed_file("src/routes/a.ts")])
+            .with_units(vec![indexed_unit("src/routes/a.ts")]);
+        let families = FakeFamilyStore::empty();
+        let target = "How do we qualify an unsupported dynamic framework?";
+        let expected = lookup_family(&families, Some(target), FamilyLookupMode::FuzzyQuery)
+            .expect("original abstention");
+        let actual = lookup_family_with_local_context(
+            &store,
+            &families,
+            Some(target),
+            FamilyLookupMode::FuzzyQuery,
+        )
+        .expect("unchanged abstention");
+        assert_eq!(actual, expected);
+        assert_eq!(store.indexed_file_reads(), 1);
+        assert_eq!(store.code_unit_reads(), 0);
+    }
+
+    #[test]
+    fn local_context_prefilter_preserves_extensionless_and_embedded_unit_loci() {
+        let id = "unit:Gemfile#project_config:0-10";
+        for target in [
+            "Gemfile",
+            id,
+            "inspect unit:Gemfile#project_config:0-10 before editing",
+        ] {
+            let store = FakeStore::new(Vec::new())
+                .with_files(vec![indexed_file("Gemfile")])
+                .with_units(vec![IndexedCodeUnitRecord {
+                    id: id.to_string(),
+                    ..indexed_unit("Gemfile")
+                }]);
+            let actual = lookup_family_with_local_context(
+                &store,
+                &FakeFamilyStore::empty(),
+                Some(target),
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("resolve extensionless locus");
+            let FamilyLookupReport::PartialContext(report) = actual else {
+                panic!("a valid locus must not be filtered out: {target}");
+            };
+            assert_eq!(report.resolved_target.path, "Gemfile");
+            assert_eq!(store.code_unit_reads(), 1);
+        }
+        for (target, expected_reads) in [
+            ("inspect unit:Gemfile#lookalike:0-10", 1),
+            // The existing bare-path tokenizer does not admit this locator.
+            ("Gemfile:1", 0),
+        ] {
+            let store = FakeStore::new(Vec::new())
+                .with_files(vec![indexed_file("Gemfile")])
+                .with_units(vec![IndexedCodeUnitRecord {
+                    id: id.to_string(),
+                    ..indexed_unit("Gemfile")
+                }]);
+            assert!(matches!(
+                resolve_local_context(
+                    target,
+                    &parse_target(target, None, None),
+                    &store.files,
+                    &store.units
+                )
+                .expect("original resolver"),
+                LocalContextResolution::Unresolved
+            ));
+            let actual = lookup_family_with_local_context(
+                &store,
+                &FakeFamilyStore::empty(),
+                Some(target),
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("original abstention preserved");
+            assert!(matches!(actual, FamilyLookupReport::Unknown(_)));
+            assert_eq!(store.code_unit_reads(), expected_reads);
+        }
     }
 
     #[test]

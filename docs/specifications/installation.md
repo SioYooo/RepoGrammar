@@ -39,7 +39,8 @@ The resulting ownership states are intentionally distinct:
 
 - `Unmanaged`: neither native entry nor receipt exists; setup may configure it;
 - `OwnedCurrent`: native entry and receipt match each other and the current
-  managed authority; setup skips it;
+  managed authority; native MCP is skipped, while missing or older owned
+  instruction guidance may be reconciled without native remove/add;
 - `OwnedOutdated`: native entry and receipt match each other but name an
   obsolete authority; setup delegates safe refresh to the install service;
 - `Foreign`: a native entry exists without an owned receipt; preserve and
@@ -667,10 +668,13 @@ RepoGrammar must use this exact marker fence:
 <!-- END REPOGRAMMAR MANAGED SECTION -->
 ```
 
-The current managed content version is `3`; exact version `2` content remains a
-known outdated body eligible for automatic refresh, alongside the earlier v1
-and unversioned bodies. The block and MCP initialize guidance share one
-authoritative pre-flight contract. After mandatory
+The full repository block and MCP initialize guidance retain content version
+`3`. Install/setup use a separate short conditional global profile, content
+version `4`, under ADR-0054. Exact v3, v2, v1, and unversioned bodies remain
+recognized for reversible refresh/removal. Explicit `instructions sync` keeps a
+current global v4 section unchanged; a new explicit-file sync still writes the
+full repository v3 contract. The following precision/evidence rules describe
+the full repository/MCP contract. After mandatory
 repository authority and instruction documents have been read, the gate applies
 when `.repogrammar/` exists and an implementation, fix, refactor, test, or
 diagnosis requires a repository-local contract or convention, repeated
@@ -718,8 +722,8 @@ including the disconnect transaction inside product `uninstall`, reverses only
 RepoGrammar's own managed write. If a file has a malformed or
 incomplete managed section, the installer must stop and direct the user to a
 manual repair workflow. A complete marker pair alone is not proof of ownership:
-only the exact current content or an exact previously shipped body, including
-v2, is recognized. A modified or unknown body inside the reserved markers is
+only exact full v3/global v4 content or an exact previously shipped body,
+including v2, is recognized. A modified or unknown body inside the reserved markers is
 `foreign`; it is preserved and refused for automatic refresh or removal. The
 managed block treats returned family ids as follow-up handles rather than proof,
 permits only the one-candidate `UNKNOWN` inspection above, avoids
@@ -732,8 +736,8 @@ operation:
 - it creates the file with the managed section when the file is absent;
 - it appends the managed section, preserving prior content, when the file exists
   without markers;
-- it replaces the section in place only when the body is an exact known older
-  RepoGrammar content version;
+- it replaces the section in place only when the body is an exact recognized
+  RepoGrammar content profile/version;
 - it reports an unchanged result when the section is already byte-equivalent;
 - it refuses to modify a file with malformed, partial, duplicated, modified, or
   foreign marker content;
@@ -746,8 +750,10 @@ operation:
   only the matching operation-owned temporary file. Unlinking the original
   pathname changes the live handle's link count, while retaining the handle
   prevents ordinary inode reuse until the cleanup decision is complete;
-- `disconnect`, product-uninstall agent cleanup, and rollback reverse exactly
-  the recorded `instruction_action`:
+- install failures restore exact pre-write guide/receipt snapshots, including
+  recognized legacy sections;
+- `disconnect` and product-uninstall agent cleanup reverse exactly the recorded
+  `instruction_action`:
   they remove the managed section and preserve unrelated user content; when
   RepoGrammar created the file (`instruction_action: "created"`) and stripping
   the section leaves it empty, they also delete the file so no empty artifact is
@@ -761,14 +767,41 @@ concurrent-mutation scenario is unsupported; callers must not run competing
 instruction writers, and a release must not claim stronger confinement without
 the native evidence required by ADR-0023.
 
-Because real Codex/Claude global instruction-file locations are not yet verified,
-live instruction writing is deferred by default. The installer resolves a
-target's instruction-file path only from the explicit environment override
-`REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` (for example
-`REPOGRAMMAR_INSTRUCTION_FILE_CODEX`) and only when it resolves to an absolute
-path. When no path is resolved, the receipt records `instruction_action:
-"deferred"` and no file is written. RepoGrammar never guesses an instruction-file
-path.
+Current source builds resolve verified Codex/Claude global instruction paths
+by default, after the reviewed install/setup plan is confirmed. Published 0.5.0
+artifacts retain their shipped override-only behavior; this change is unreleased.
+An absolute `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>` override wins; a present
+empty or relative override stays deferred and never falls through to a default.
+Codex uses absolute `CODEX_HOME`, defaulting to absolute `HOME/.codex` only
+when unset, and selects
+an existing nonempty `AGENTS.override.md` before `AGENTS.md`. Invalid shadow
+files are refused instead of writing an ineffective base guide. Claude Code
+uses absolute `CLAUDE_CONFIG_DIR`, defaulting to absolute `HOME/.claude/CLAUDE.md`
+only when unset.
+Invalid profile paths stay deferred. Other targets, including opencode, remain
+explicit-override-only for instructions; their MCP writers are unchanged.
+
+`--no-instructions` on install/setup skips new or refresh instruction writes.
+Previously receipted instruction paths and original actions remain owned so
+later disconnect/product uninstall can reverse them. An owned integration with
+a different newly resolved path fails before mutation with
+`InstructionRelocationRequired`; explicitly disconnect it before reinstalling
+for the new profile. Never replace the old receipt with null/new-path authority
+while its original section remains. Same-path refresh retains the original
+`created` action, so removal can still delete an otherwise empty created file.
+Owned-current integrations may backfill or refresh only the instruction and
+receipt, without native MCP remove/add; their exact receipt, backup, and guide
+snapshots are restored on failure. Setup treats that work as pre-existing
+reconciliation, never a newly created integration eligible for outer rollback.
+
+The global profile applies only when MCP and a repo-local index are available
+and an implementation/debugging task needs conventions, analogues, repeated
+implementations or framework roles. It prefers precise targets, compact mode
+and the read plan; UNKNOWN/FALLBACK/stale/insufficient evidence leads to normal
+repository tools, never stronger claims. Documentation-only work and exact
+lookups without convention/analogue requirements are skipped. It authorizes no
+index writes. Successful wiring proves reversible configuration, not actual
+agent adoption, correctness gains or token savings.
 
 Users may inspect or refresh instruction guidance independently from native MCP
 registration with:
@@ -887,9 +920,10 @@ noninteractive live writes, and a dependency-light text wizard:
   that no longer matches the current authority (for example after the install
   data directory changed), install re-points that entry at the authority by
   removing and re-adding the native entry and rewriting the receipt, instead of
-  skipping it. A managed entry already pointing at the authority stays untouched.
+  skipping it. A managed native entry already pointing at the authority stays untouched;
+  same-path instruction-only reconciliation may still run.
   Install execution reports absent integrations created by the run under
-  `configured_targets` and obsolete pre-existing integrations refreshed by the
+  `configured_targets` and pre-existing native or instruction integrations refreshed by the
   run under `reconfigured_targets`; only `configured_targets` is eligible for
   an outer setup rollback. Before refreshing an outdated target, install
   captures its native entry, receipt, receipt backup, and managed-instruction
@@ -990,8 +1024,8 @@ noninteractive live writes, and a dependency-light text wizard:
   temporary directories, and receipt behavior; any real native-CLI integration
   test must be explicitly ignored or feature-gated outside default CI.
 
-By default the installer does not edit instruction files: live instruction
-writing stays deferred unless an explicit `REPOGRAMMAR_INSTRUCTION_FILE_<TARGET>`
-override resolves to an absolute path. The installer still does not repair
-malformed native agent config, upload telemetry, run paired experiments, or
-touch `.repogrammar/`.
+Current source install/setup can write the short conditional global profile for
+verified Codex/Claude locations; `--no-instructions` opts out while retaining
+prior receipted ownership. Other targets require an absolute explicit override.
+This does not repair malformed native config, upload telemetry, run paired
+experiments, or touch `.repogrammar/`.

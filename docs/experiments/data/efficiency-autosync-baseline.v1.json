@@ -1,0 +1,204 @@
+{
+  "assets_unchanged": true,
+  "binary_sha256": "a670814ce44dc163b93bf9b1fbca77b0d97f9f710b17d3200e7076df60176fa0",
+  "burst_files": 20,
+  "condition": "baseline",
+  "harness_sha256": "99b64414d5e467241fb6bff13bf18cd43404530cc90364228ac80cfe73120506",
+  "idle_seconds": 60,
+  "linux_validation": {
+    "reason": "this run is not native Linux",
+    "state": "NOT_RUN"
+  },
+  "platform": {
+    "arch": "arm64",
+    "os": "darwin"
+  },
+  "python_project_session_enabled": false,
+  "rows": [
+    {
+      "active_generation_changed": false,
+      "battery_effect": {
+        "reason": "CPU observations do not measure battery use",
+        "state": "NOT_MEASURED"
+      },
+      "cleanup_verified": true,
+      "configuration": {
+        "debounce_ms": 750,
+        "poll_ms": 1000
+      },
+      "correctness_pass": true,
+      "daemon_work": {
+        "copied_forward_files": 0,
+        "native_events": true,
+        "polling_fallback": false,
+        "reparsed_files": 0,
+        "sync_wall_ms": 0,
+        "syncs": 0
+      },
+      "generation_activations": 0,
+      "native_exit_code": -15,
+      "observation_wall_seconds": 60.080414875003044,
+      "resource_scope": "foreground daemon startup + 1-second settling + named observation + owned shutdown; initialization and driver CPU excluded",
+      "resources": {
+        "peak_rss_bytes": 11649024,
+        "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+        "state": "MEASURED",
+        "system_cpu_seconds": 0.34,
+        "user_cpu_seconds": 0.45,
+        "wall_seconds": 61.49
+      },
+      "retained_generation_count": 1,
+      "scenario_id": "idle_60s",
+      "startup_wall_seconds": 0.33066425001015887,
+      "state": "PASS",
+      "watcher_registration_count": {
+        "reason": "notify backend registration count is not exposed",
+        "state": "NOT_MEASURED"
+      },
+      "worker_spawns": {
+        "reason": "native uninstrumented daemon does not expose subprocess counters",
+        "state": "NOT_MEASURED"
+      }
+    },
+    {
+      "active_generation_changed": false,
+      "battery_effect": {
+        "reason": "CPU observations do not measure battery use",
+        "state": "NOT_MEASURED"
+      },
+      "cleanup_verified": true,
+      "configuration": {
+        "debounce_ms": 750,
+        "poll_ms": 1000
+      },
+      "correctness_pass": true,
+      "daemon_work": {
+        "copied_forward_files": 0,
+        "native_events": true,
+        "polling_fallback": false,
+        "reparsed_files": 0,
+        "sync_wall_ms": 446,
+        "syncs": 2
+      },
+      "generation_activations": 0,
+      "native_exit_code": -15,
+      "observation_wall_seconds": 3.010127791989362,
+      "resource_scope": "foreground daemon startup + 1-second settling + named observation + owned shutdown; initialization and driver CPU excluded",
+      "resources": {
+        "peak_rss_bytes": 12369920,
+        "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+        "state": "MEASURED",
+        "system_cpu_seconds": 0.41,
+        "user_cpu_seconds": 0.57,
+        "wall_seconds": 4.41
+      },
+      "retained_generation_count": 1,
+      "scenario_id": "ignored_burst",
+      "startup_wall_seconds": 0.32573337497888133,
+      "state": "PASS",
+      "watcher_registration_count": {
+        "reason": "notify backend registration count is not exposed",
+        "state": "NOT_MEASURED"
+      },
+      "worker_spawns": {
+        "reason": "native uninstrumented daemon does not expose subprocess counters",
+        "state": "NOT_MEASURED"
+      }
+    },
+    {
+      "active_generation_changed": true,
+      "battery_effect": {
+        "reason": "CPU observations do not measure battery use",
+        "state": "NOT_MEASURED"
+      },
+      "cleanup_verified": true,
+      "configuration": {
+        "debounce_ms": 750,
+        "poll_ms": 1000
+      },
+      "correctness_pass": true,
+      "daemon_work": {
+        "copied_forward_files": 0,
+        "native_events": true,
+        "polling_fallback": false,
+        "reparsed_files": 1,
+        "sync_wall_ms": 157,
+        "syncs": 1
+      },
+      "generation_activations": 1,
+      "native_exit_code": -15,
+      "observation_wall_seconds": 4.1884921670134645,
+      "resource_scope": "foreground daemon startup + 1-second settling + named observation + owned shutdown; initialization and driver CPU excluded",
+      "resources": {
+        "peak_rss_bytes": 42041344,
+        "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+        "state": "MEASURED",
+        "system_cpu_seconds": 0.21,
+        "user_cpu_seconds": 0.35,
+        "wall_seconds": 5.6
+      },
+      "retained_generation_count": 2,
+      "same_mtime_preserved": true,
+      "same_size_preserved": true,
+      "scenario_id": "same_size_same_mtime",
+      "startup_wall_seconds": 0.3298661249864381,
+      "state": "PASS",
+      "watcher_registration_count": {
+        "reason": "notify backend registration count is not exposed",
+        "state": "NOT_MEASURED"
+      },
+      "worker_spawns": {
+        "reason": "native uninstrumented daemon does not expose subprocess counters",
+        "state": "NOT_MEASURED"
+      }
+    },
+    {
+      "active_generation_changed": true,
+      "battery_effect": {
+        "reason": "CPU observations do not measure battery use",
+        "state": "NOT_MEASURED"
+      },
+      "cleanup_verified": true,
+      "configuration": {
+        "debounce_ms": 750,
+        "poll_ms": 1000
+      },
+      "correctness_pass": true,
+      "daemon_work": {
+        "copied_forward_files": 0,
+        "native_events": true,
+        "polling_fallback": false,
+        "reparsed_files": 21,
+        "sync_wall_ms": 1453,
+        "syncs": 2
+      },
+      "generation_activations": 1,
+      "native_exit_code": -15,
+      "observation_wall_seconds": 5.289250375004485,
+      "resource_scope": "foreground daemon startup + 1-second settling + named observation + owned shutdown; initialization and driver CPU excluded",
+      "resources": {
+        "peak_rss_bytes": 41975808,
+        "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+        "state": "MEASURED",
+        "system_cpu_seconds": 0.54,
+        "user_cpu_seconds": 1.37,
+        "wall_seconds": 6.7
+      },
+      "retained_generation_count": 2,
+      "scenario_id": "supported_burst",
+      "startup_wall_seconds": 0.3285429169773124,
+      "state": "PASS",
+      "watcher_registration_count": {
+        "reason": "notify backend registration count is not exposed",
+        "state": "NOT_MEASURED"
+      },
+      "worker_spawns": {
+        "reason": "native uninstrumented daemon does not expose subprocess counters",
+        "state": "NOT_MEASURED"
+      }
+    }
+  ],
+  "schema_version": "autosync-performance.v1",
+  "state": "PASS",
+  "worker_sha256": "45d30ac49aa3b50a8cd8b01e59a1576aee4dd0ae71c9df2f0de99f670130bd03"
+}

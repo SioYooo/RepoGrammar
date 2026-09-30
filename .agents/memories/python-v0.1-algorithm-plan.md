@@ -1,7 +1,7 @@
 # Python v0.1 Algorithm Plan
 
 - Status: Active memory
-- Last updated: 2026-06-25
+- Last updated: 2026-09-30
 - Scope: Durable non-normative summary of the Python-first v0.1 algorithm plan
 - Evidence: `docs/decisions/ADR-0011-python-first-v0-1.md`,
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`,
@@ -59,6 +59,17 @@ absolute paths. The target source body is still required reading before edits.
 Dynamic imports, monkey patching, unresolved decorators, ambiguous pytest
 fixtures, runtime dependency injection, missing dependencies, stale evidence,
 conflicting analyzer facts, and insufficient support remain typed `UNKNOWN`.
+
+## Efficiency checkpoint
+
+The 2026-09-30 transport qualification under ADR-0055 does not close any
+Python provider or strict language-completion gate. The important learned trap
+is that bootstrap runs after Python startup: ambient `PYTHONPATH` can execute
+`sitecustomize` first. The canonical adapter now uses isolated stdlib startup.
+Session/legacy comparisons using the same modified worker are insufficient;
+frozen old-worker full-record equivalence and within-machine resource evidence
+are recorded in `docs/experiments/efficiency-sprint.md`. One-file incremental
+parsing remains a separate control; do not infer savings from adoption wiring.
 
 ## Revalidation Conditions
 

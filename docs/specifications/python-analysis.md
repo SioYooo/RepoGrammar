@@ -1,7 +1,7 @@
 # Python Analysis Specification
 
 - Status: Active v0.1 target specification
-- Last updated: 2026-07-17
+- Last updated: 2026-09-30
 - Scope: Python-first v0.1 analysis algorithms and claim discipline
 - Supersedes: `docs/plans/python-dogfooding-plan.md` for v0.1 scope
 
@@ -78,6 +78,41 @@ RepoGrammar should not run every analyzer over every file. The cascade is:
 
 The current implementation covers a bounded static CPython `ast` slice only:
 
+- A private project-session transport is qualified under
+  [ADR-0055](../decisions/ADR-0055-bounded-python-project-session.md).
+  Current source builds select it by default when the generation parses
+  at least two Python documents; internal `REPOGRAMMAR_PYTHON_PROJECT_SESSION=0`
+  retains the legacy transport for controlled comparisons. It transfers context
+  once, retains compact
+  symbol/`__all__`/ordered reexport/conftest projections and discards detailed
+  ASTs/source arrays. Original context-omission decisions, document results,
+  interface hashes, UNKNOWN and source-free limits remain unchanged.
+  Frozen-baseline canonical/resource gates passed; published 0.5.0 assets
+  retain their shipped transport. A single-file incremental edit retains the existing transport. This closes no
+  provider or language-completion gate.
+
+- Private document/config/interface requests, version probes and project
+  sessions use isolated stdlib startup (`-I -S`) before bootstrap. Ambient
+  `PYTHONPATH`/`PYTHONHOME`, user-site packages, `.pth`, `sitecustomize` and
+  `usercustomize` cannot inject project startup code. The configured interpreter
+  and RepoGrammar-owned worker directory remain trusted execution inputs.
+
+- Every private frontend request admits the selected host's language version
+  before loading the worker: Python major 3, minor at least 10, as required by
+  the public installation contract. The document, project-config, and interface
+  modes share one bounded process bootstrap, not a separate version probe or
+  cache. Unsupported runtimes return typed
+  `PythonFrontendInterpreterUnsupported`; indexing stops with source-free
+  guidance to configure `REPOGRAMMAR_PYTHON_EXECUTABLE` with Python 3.10 or newer
+  within 3.x and retry. Interface admission failure remains `Unverified`, forcing a full
+  rebuild that must itself pass admission. Existing generation activation and
+  rollback semantics remain unchanged. This qualifies a host prerequisite,
+  not a semantic provider or ADR-0020 completion gate. Grammar remains bounded
+  by the admitted host; Python 3.10 without `tomllib` still abstains from
+  TOML-dependent facts. See the [qualification record](../experiments/python-runtime-qualification.md).
+  Admission runs only when a private frontend request executes. An unchanged
+  index delta that needs no worker stays a no-op; this slice does not add
+  interpreter-change invalidation or requalify stored facts through a probe.
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
 - an exact private parse-document host/worker tuple of

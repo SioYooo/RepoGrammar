@@ -112,16 +112,19 @@ machine-level agent integration rather than repository-local index state.
 reconciling an internally consistent owned integration from an obsolete managed
 executable to the current authority; setup delegates that refresh and rolls
 back only targets it newly created.
-The install application also owns the exact versioned, marker-fenced agent
-pre-flight text. Optional instruction-file writes and the read-only MCP
-initialize response consume that same constant so contract-evidence routing
-cannot drift between machine integration and runtime guidance.
+The install application owns exact versioned, marker-fenced instruction
+profiles. The full repository gate and MCP initialize guidance share the
+existing v3 contract; install/setup use a shorter conditional global v4 profile
+under ADR-0054. Both preserve evidence/abstention boundaries. Known profile
+paths, opt-out, instruction-only backfill and receipt preservation remain in
+the install authority; native MCP is not rewritten for instruction-only work.
 
 ## Composition root
 
 `src/rust/bin/repogrammar.rs` is the product composition root. It currently
-wires the CLI boundary, repository-lifecycle surface, transitional TS/JS discovery,
-syntax-only parser adapter, filesystem source reader, SQLite generation store
+wires the CLI boundary, repository-lifecycle surface, multi-language discovery
+and bounded parser adapters including the current CPython frontend, filesystem
+source reader, SQLite generation store
 for `index` and `sync`, optional semantic-worker ingestion when an explicit
 worker executable and optional argv vector are configured, FamilyStore-backed
 query reads, repository-local storage maintenance (`prune`, `compact`, and
@@ -129,13 +132,37 @@ query reads, repository-local storage maintenance (`prune`, `compact`, and
 through the same query layer. Auto-sync start is a bounded process handshake at
 this boundary: the child acquires the daemon lock and records a startup nonce,
 while the parent verifies the expected PID/nonce and child liveness before it
-returns a running result. Python v0.1 analysis, full family mining,
-TypeScript compiler analysis, broad installer writes, and stable production
-family-evidence claims remain later boundaries.
+returns a running result. The current Python frontend and bounded exact-anchor
+family induction are implemented. Python type-provider execution, general
+Python semantics, and broad TypeScript Program/TypeChecker analysis remain
+later boundaries; current family claims retain their documented exact-anchor
+and typed-UNKNOWN limits.
 `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
 coupled to product runtime logic.
 
+The query application loads local-context units only when the existing path
+matcher or an admitted unit-path prefix can resolve a locus. Impossible targets
+retain the original UNKNOWN and directory fallback. All generation, integrity,
+foreign-key and source-hash freshness checks remain authoritative; no final
+readiness verdict is cached by this optimization.
+
 ## External dependency boundaries
+
+The Python parser adapter owns same-process admission of the published Python
+3.10+ host requirement before loading its private worker. Only the typed
+`PythonFrontendInterpreterUnsupported` crosses the port; the indexing
+application uses one source-free recovery formatter across full, incremental,
+and project-config parsing. Admission failure cannot activate a replacement
+generation; interface extraction remains `Unverified`, preserving conservative
+sync fallback. This does not add a semantic provider or execute analyzed sources.
+
+Under ADR-0055, current source builds use one owned Python frontend session
+when at least two Python documents are planned. The parser port exposes only
+owned parse results and `finish`; the adapter owns isolated stdlib startup,
+bounded frames, compact project projections and deterministic worker shutdown.
+The indexing application requires EOS/success/EOF before checkpoint/activation.
+One-file incremental parsing remains on the existing request path. This
+changes transport cost, not family/support semantics or the public MCP schema.
 
 Tree-sitter belongs only in parsing and language adapters and is treated as
 syntax-first, not semantics-only. Language-native
