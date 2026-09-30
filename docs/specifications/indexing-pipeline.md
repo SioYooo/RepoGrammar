@@ -1,5 +1,13 @@
 # Indexing Pipeline Specification
 
+An explicit diagnostic host profile may observe existing boundaries without
+changing this pipeline. Normal product paths leave it disabled. The isolated
+repository-guard harness requires all fourteen active owned analysis tables
+to match off/on and the public CLI, and retains the ordinary UNKNOWN, EOS,
+validation, activation and rollback contracts. See
+[`host-stage-attribution.md`](../experiments/host-stage-attribution.md) for scope;
+its diagnostic wall/counters are not semantic support or runtime equivalence.
+
 The intended pipeline is:
 
 ```text

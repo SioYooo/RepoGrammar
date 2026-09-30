@@ -20,6 +20,7 @@ use crate::ports::family_store::{
     IndexedFamilyRecord, IndexedFamilySearchSummaryRecord, IndexedFamilySummaryRecord,
     IndexedVariationSlotRecord, StoreError, WriteSessionStats, FAMILY_SEARCH_PATH_COMPONENT_CAP,
 };
+use crate::ports::host_profile::{HostPhase, HostProfile};
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, ActiveCodeUnits, ActiveDependencyRecords, ActiveIndexedFiles,
     ActiveIrGraph, ActiveRepoShapeStats, ActiveSemanticFacts, DependencyStore,
@@ -72,6 +73,7 @@ pub(crate) struct WriteInstrumentation {
 
 #[derive(Debug, Clone)]
 pub struct SqliteIndexStore {
+    profile: Option<HostProfile>,
     state_dir: PathBuf,
     #[cfg(test)]
     write_instrumentation: std::sync::Arc<WriteInstrumentation>,
@@ -80,10 +82,16 @@ pub struct SqliteIndexStore {
 impl SqliteIndexStore {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         Self {
+            profile: None,
             state_dir: state_dir.into(),
             #[cfg(test)]
             write_instrumentation: std::sync::Arc::new(WriteInstrumentation::default()),
         }
+    }
+
+    pub fn with_host_profile(mut self, profile: HostProfile) -> Self {
+        self.profile = Some(profile);
+        self
     }
 
     /// A shared handle to this store's test-only write instrumentation.
@@ -698,6 +706,10 @@ fn canonical_database_path(state_dir: &Path) -> Result<PathBuf, IndexStoreError>
 
 impl IndexStore for SqliteIndexStore {
     fn prepare_next_generation(&self) -> Result<GenerationHandle, IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_layout()?;
         // A full rebuild against a pre-current schema cannot upgrade in place
         // (CREATE TABLE IF NOT EXISTS never adds columns), so recreate the
@@ -857,6 +869,10 @@ impl IndexStore for SqliteIndexStore {
     }
 
     fn validate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
+        let _span = self.profile.as_ref().map(|p| p.span(HostPhase::Validation));
+        if let Some(p) = &self.profile {
+            p.work(HostPhase::Validation, 1, 0);
+        }
         let connection = self.open_existing_generation(&generation.generation_id)?;
         let inspection = inspect_connection(&connection, Some(generation.generation_id.as_str()))?;
         if inspection.schema_version != Some(STORAGE_SCHEMA_VERSION) {
@@ -953,6 +969,10 @@ impl IndexStore for SqliteIndexStore {
     }
 
     fn activate_generation(&self, generation: &GenerationHandle) -> Result<(), IndexStoreError> {
+        let _span = self.profile.as_ref().map(|p| p.span(HostPhase::Activation));
+        if let Some(p) = &self.profile {
+            p.work(HostPhase::Activation, 1, 0);
+        }
         // Validate exactly once per activation. The sync pipeline validates the
         // generation immediately before activating it under the held index lock,
         // leaving it `validated`; re-running the whole-database integrity check
@@ -1575,6 +1595,7 @@ pub(crate) enum InjectedWriteFault {
 /// both committed batches and the current open batch, so the checks are at least
 /// as strong as the previous per-record SELECTs against the committed database.
 pub struct SqliteGenerationWriteSession {
+    profile: Option<HostProfile>,
     connection: Connection,
     generation: GenerationHandle,
     sealed: bool,
@@ -1595,6 +1616,10 @@ impl SqliteGenerationWriteSession {
         store: &SqliteIndexStore,
         generation: &GenerationHandle,
     ) -> Result<Self, IndexStoreError> {
+        let _span = store
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         let connection = store.open_existing_generation(&generation.generation_id)?;
         // Require a building generation with a grammatical, record-agnostic
         // message (one session backs every record kind for the whole build).
@@ -1617,6 +1642,7 @@ impl SqliteGenerationWriteSession {
             .connection_opens
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(Self {
+            profile: store.profile.clone(),
             connection,
             generation: generation.clone(),
             sealed: false,
@@ -2505,11 +2531,18 @@ impl SqliteGenerationWriteSession {
 }
 
 impl GenerationWriteSession for SqliteGenerationWriteSession {
+    fn host_profile(&self) -> Option<&HostProfile> {
+        self.profile.as_ref()
+    }
     fn generation(&self) -> &GenerationHandle {
         &self.generation
     }
 
     fn record_indexed_file(&mut self, file: &IndexedFileRecord) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_indexed_file(file)
     }
@@ -2520,16 +2553,28 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
     }
 
     fn record_code_unit(&mut self, unit: &IndexedCodeUnitRecord) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_code_unit(unit)
     }
 
     fn record_ir_node(&mut self, node: &IndexedIrNodeRecord) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_ir_node(node)
     }
 
     fn record_ir_edge(&mut self, edge: &IndexedIrEdgeRecord) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_ir_edge(edge)
     }
@@ -2538,6 +2583,10 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         &mut self,
         fact: &IndexedSemanticFactRecord,
     ) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_semantic_fact(fact)
     }
@@ -2546,11 +2595,19 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         &mut self,
         dependency: &IndexedDependencyRecord,
     ) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_dependency(dependency)
     }
 
     fn record_family(&mut self, family: &IndexedFamilyRecord) -> Result<(), StoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed().map_err(family_store_error)?;
         self.write_family(family).map_err(family_store_error)
     }
@@ -2559,6 +2616,10 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         &mut self,
         member: &IndexedFamilyMemberRecord,
     ) -> Result<(), StoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed().map_err(family_store_error)?;
         self.write_family_member(member).map_err(family_store_error)
     }
@@ -2567,6 +2628,10 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         &mut self,
         slot: &IndexedVariationSlotRecord,
     ) -> Result<(), StoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed().map_err(family_store_error)?;
         self.write_variation_slot(slot).map_err(family_store_error)
     }
@@ -2575,6 +2640,10 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         &mut self,
         evidence: &IndexedFamilyEvidenceRecord,
     ) -> Result<(), StoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed().map_err(family_store_error)?;
         self.write_family_evidence(evidence)
             .map_err(family_store_error)
@@ -2584,6 +2653,10 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         &mut self,
         record: &IndexedFamilyConstraintProfileRecord,
     ) -> Result<(), StoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed().map_err(family_store_error)?;
         self.write_family_constraint_profile(record)
             .map_err(family_store_error)
@@ -2594,11 +2667,19 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
         path: &str,
         interface_hash: &str,
     ) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.write_python_module_interface(path, interface_hash)
     }
 
     fn checkpoint(&mut self) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.ensure_not_sealed()?;
         self.commit_batch()?;
         self.checkpoints = self.checkpoints.saturating_add(1);
@@ -2612,6 +2693,10 @@ impl GenerationWriteSession for SqliteGenerationWriteSession {
     }
 
     fn finish(&mut self) -> Result<(), IndexStoreError> {
+        let _span = self
+            .profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Persistence));
         self.seal(true)
     }
 

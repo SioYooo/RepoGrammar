@@ -62,6 +62,7 @@ use crate::ports::file_discovery::{
     FileDiscoveryRequest, DEFAULT_MAX_FILE_BYTES,
 };
 use crate::ports::framework_roles::{FrameworkRoleDetector, FrameworkRoleError};
+use crate::ports::host_profile::{HostPhase, HostProfile};
 use crate::ports::index_store::{
     ActiveClaimInputSnapshot, GenerationEngineStampStore, IndexStorageLayout, IndexStore,
     IndexStoreError, IndexedCodeUnitRecord, IndexedDependencyRecord, IndexedFileRecord,
@@ -88,6 +89,37 @@ use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreErro
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+/// Explicit diagnostic entrypoint. Normal product callers do not construct a profile.
+pub fn index_repository_with_host_profile(
+    request: IndexingRequest,
+    discovery: &impl FileDiscovery,
+    source_store: &impl SourceStore,
+    parser: &impl SourceParser,
+    framework_and_rust: (
+        &dyn FrameworkRoleDetector,
+        Option<&dyn RustSemanticProvider>,
+    ),
+    store: &(impl IndexStore + FamilyStore + FamilyConstraintProfileStore + GenerationWriteStore),
+    profile: &HostProfile,
+) -> Result<IndexingOutcome, RepoGrammarError> {
+    let _span = profile.span(HostPhase::Other);
+    index_repository_with_optional_semantic_worker(
+        request,
+        discovery,
+        source_store,
+        parser,
+        IndexingPipelineOptions {
+            framework_roles: Some(framework_and_rust.0),
+            rust_provider: framework_and_rust.1,
+            semantic_worker: None,
+            family_store: Some(store),
+            profile: Some(profile),
+        },
+        store,
+        &mut |_| {},
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingRequest {
@@ -322,6 +354,7 @@ pub fn index_repository_with_discovery_parser_and_store(
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: None,
             rust_provider: None,
             semantic_worker: None,
@@ -347,6 +380,7 @@ pub fn index_repository_with_discovery_parser_frameworks_and_store(
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: None,
             semantic_worker: None,
@@ -375,6 +409,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_and_store(
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: None,
             semantic_worker: None,
@@ -400,6 +435,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store(
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: None,
             semantic_worker: None,
@@ -425,6 +461,7 @@ pub fn index_repository_with_discovery_parser_frameworks_families_and_store_with
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: None,
             semantic_worker: None,
@@ -451,6 +488,7 @@ pub fn index_repository_with_discovery_parser_frameworks_rust_provider_families_
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: Some(rust_provider),
             semantic_worker: None,
@@ -476,6 +514,7 @@ pub fn index_repository_with_discovery_parser_semantic_worker_and_store(
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: None,
             rust_provider: None,
             semantic_worker: Some(semantic_worker),
@@ -502,6 +541,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_and_sto
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: None,
             semantic_worker: Some(semantic_worker),
@@ -549,6 +589,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_familie
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: None,
             semantic_worker: Some(semantic_worker),
@@ -579,6 +620,7 @@ pub fn index_repository_with_discovery_parser_frameworks_semantic_worker_rust_pr
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: Some(rust_provider),
             semantic_worker: Some(semantic_worker),
@@ -610,6 +652,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_rust_provider_families_a
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: Some(rust_provider),
             semantic_worker: None,
@@ -645,6 +688,7 @@ pub fn sync_repository_with_discovery_parser_frameworks_semantic_worker_rust_pro
         source_store,
         parser,
         IndexingPipelineOptions {
+            profile: None,
             framework_roles: Some(framework_roles),
             rust_provider: Some(rust_provider),
             semantic_worker: Some(semantic_worker),
@@ -752,7 +796,10 @@ where
         "building parser project context",
         WorkUnits::Unknown,
     );
-    let parser_context = parser_project_context(&request, &report, source_store, parser)?;
+    let parser_context = {
+        let _span = options.profile.map(|p| p.span(HostPhase::Context));
+        parser_project_context(&request, &report, source_store, parser)?
+    };
     let mut python_session = begin_python_project_session(parser, &parser_context, &report.files)?;
     for (index, file) in report.files.iter().enumerate() {
         if discovered_file_is_inventory_only(file) {
@@ -866,6 +913,7 @@ where
     // Phase boundary: the file, code-unit, and IR write phase is complete.
     crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
 
+    let semantic_span = options.profile.map(|p| p.span(HostPhase::Normalization));
     sort_semantic_facts(&mut parser_semantic_facts);
     let parser_fact_count = record_semantic_facts(session.as_mut(), 0, &parser_semantic_facts)?;
     sort_semantic_facts(&mut framework_role_facts);
@@ -874,6 +922,7 @@ where
     let mut derived_support_facts: Vec<Vec<SemanticFact>> = Vec::new();
     let mut local_support_fact_count = parser_fact_count + framework_fact_count;
     for derive in DERIVED_SUPPORT_DERIVERS {
+        let _span = options.profile.map(|p| p.span(HostPhase::Normalization));
         let mut facts = derive(
             &indexed_code_units,
             &parser_semantic_facts,
@@ -970,8 +1019,10 @@ where
     }
 
     // Phase boundary: the semantic-fact write phase is complete.
+    drop(semantic_span);
     crate::application::storage::checkpoint_index_write_session(session.as_mut())?;
     if let Some(family_store) = options.family_store {
+        let _span = options.profile.map(|p| p.span(HostPhase::Family));
         emit_progress(
             progress,
             ProgressStage::CandidateDiscovery,
@@ -1018,6 +1069,14 @@ where
     // Commit and seal the write session so validation and activation observe the
     // fully committed generation on their own connections.
     crate::application::storage::finish_index_write_session(session.as_mut())?;
+    if let Some(p) = options.profile {
+        let stats = session.stats();
+        p.write_stats(
+            stats.rows_written as u64,
+            stats.transactions as u64,
+            stats.checkpoints as u64,
+        );
+    }
     emit_progress(
         progress,
         ProgressStage::PersistenceValidation,
@@ -2247,6 +2306,7 @@ fn known_work_units(completed: usize, total: usize) -> WorkUnits {
 
 #[derive(Clone, Copy)]
 struct IndexingPipelineOptions<'a> {
+    profile: Option<&'a HostProfile>,
     framework_roles: Option<&'a dyn FrameworkRoleDetector>,
     rust_provider: Option<&'a dyn RustSemanticProvider>,
     semantic_worker: Option<&'a dyn SemanticWorker>,
@@ -2863,6 +2923,10 @@ fn record_parse_report(
     framework_roles: Option<&dyn FrameworkRoleDetector>,
     warnings: &mut Vec<String>,
 ) -> Result<ParseStorageOutcome, RepoGrammarError> {
+    let host_profile = session.host_profile().cloned();
+    let _span = host_profile
+        .as_ref()
+        .map(|p| p.span(HostPhase::Normalization));
     // An error diagnostic means the frontend could not build a complete unit set
     // for this file, so the units it did return are a floor rather than the whole
     // file. Downstream family analysis must not read the resulting absence of a
@@ -2872,6 +2936,17 @@ fn record_parse_report(
     // path stay out of both warnings: both are frontend free text and can quote
     // source or absolute host paths. One token per file is enough, because the
     // text carries no per-diagnostic detail to distinguish repeats.
+    if let Some(p) = &host_profile {
+        p.work(
+            HostPhase::Normalization,
+            (parse_report.units.len()
+                + parse_report.ir_nodes.len()
+                + parse_report.ir_edges.len()
+                + parse_report.semantic_facts.len()
+                + dependencies.len()) as u64,
+            0,
+        );
+    }
     let mut reported_degraded = false;
     for diagnostic in &parse_report.diagnostics {
         match diagnostic.severity {
@@ -2991,7 +3066,12 @@ fn record_family_claims(
     code_units: &[IndexedCodeUnitRecord],
     framework_role_facts: &[SemanticFact],
 ) -> Result<(usize, BTreeSet<String>), RepoGrammarError> {
+    let host_profile = session.host_profile().cloned();
+    let _span = host_profile.as_ref().map(|p| p.span(HostPhase::Family));
     let report = build_family_claims(code_units, framework_role_facts);
+    if let Some(p) = &host_profile {
+        p.work(HostPhase::Family, report.claims.len() as u64, 0);
+    }
     let mut family_ids = BTreeSet::new();
     for claim in &report.claims {
         let records = family_storage_records(claim);
@@ -3052,7 +3132,17 @@ fn record_rust_provider_facts(
         return Ok(Vec::new());
     }
     let provider_request = rust_cargo_metadata_provider_request(candidates)?;
-    let output = match rust_provider.analyze_project(project_root, provider_request.clone()) {
+    let provider_profile = session.host_profile().cloned();
+    let provider_result = {
+        let _span = provider_profile
+            .as_ref()
+            .map(|p| p.span(HostPhase::Analyzer));
+        if let Some(p) = &provider_profile {
+            p.work(HostPhase::Analyzer, 1, 0);
+        }
+        rust_provider.analyze_project(project_root, provider_request.clone())
+    };
+    let output = match provider_result {
         Ok(output) => output,
         Err(error) => {
             warnings.push(format!(
@@ -5786,6 +5876,13 @@ fn record_semantic_facts(
     fact_id_offset: usize,
     facts: &[SemanticFact],
 ) -> Result<usize, RepoGrammarError> {
+    let host_profile = session.host_profile().cloned();
+    let _span = host_profile
+        .as_ref()
+        .map(|p| p.span(HostPhase::Normalization));
+    if let Some(p) = &host_profile {
+        p.work(HostPhase::Normalization, facts.len() as u64, 0);
+    }
     for (index, fact) in facts.iter().enumerate() {
         crate::application::storage::record_semantic_fact(
             session,
@@ -6476,6 +6573,63 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+
+    #[test]
+    fn host_profile_failure_preserves_the_previous_active_generation_and_closes_spans() {
+        use crate::adapters::filesystem::discovery::ProfiledFileDiscovery;
+        use crate::adapters::filesystem::source_store::ProfiledSourceStore;
+        struct TimeoutParser;
+        impl SourceParser for TimeoutParser {
+            fn parse(&self, _: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
+                Err(ParseError::Timeout)
+            }
+        }
+        let workspace = TempWorkspace::new("host-profile-rollback");
+        fs::write(workspace.path().join("app.ts"), "export function f() {}\n").expect("source");
+        let state = workspace.path().join(".repogrammar");
+        create_index_state(&state);
+        let store = SqliteIndexStore::new(&state);
+        let request = IndexingRequest::new(workspace.path().to_string_lossy().into_owned());
+        index_repository_with_discovery_parser_frameworks_families_and_store(
+            request.clone(),
+            &FilesystemFileDiscovery,
+            &FilesystemSourceStore,
+            &RepoGrammarSourceParser::default(),
+            &SyntaxFrameworkRoleDetector,
+            &store,
+        )
+        .expect("initial index");
+        let before = store
+            .list_active_indexed_files()
+            .expect("active generation");
+        let profile = HostProfile::default();
+        let profiled_store = SqliteIndexStore::new(&state).with_host_profile(profile.clone());
+        assert!(index_repository_with_host_profile(
+            request,
+            &ProfiledFileDiscovery(profile.clone()),
+            &ProfiledSourceStore(profile.clone()),
+            &TimeoutParser,
+            (&SyntaxFrameworkRoleDetector, None),
+            &profiled_store,
+            &profile
+        )
+        .is_err());
+        assert_eq!(
+            store
+                .list_active_indexed_files()
+                .expect("preserved generation"),
+            before
+        );
+        assert!(profile.snapshot_write_stats().is_none());
+        assert_eq!(
+            profile
+                .snapshot()
+                .iter()
+                .map(|r| r.wall)
+                .sum::<std::time::Duration>(),
+            profile.root_wall()
+        );
+    }
 
     struct RejectingSourceStore {
         calls: AtomicUsize,
@@ -11013,6 +11167,7 @@ mod tests {
             source_store,
             parser,
             IndexingPipelineOptions {
+                profile: None,
                 framework_roles: Some(detector),
                 rust_provider: None,
                 semantic_worker: None,
@@ -17427,6 +17582,7 @@ mod tests {
             &FilesystemSourceStore,
             &SyntaxCodeUnitParser,
             IndexingPipelineOptions {
+                profile: None,
                 framework_roles: Some(&detector),
                 rust_provider: None,
                 semantic_worker: None,

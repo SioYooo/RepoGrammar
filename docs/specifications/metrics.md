@@ -7,6 +7,15 @@ Every reported metric must be classified as one of:
 - `ESTIMATED`
 - `CAUSAL_EXPERIMENT`
 
+The opt-in host-stage harness reports diagnostic machine-dependent wall time
+and native total resources as MEASURED, with exclusive nested span accounting.
+Direct hash/read/dispatch/write-session counters carry their explicit scope;
+they are not semantic-facts DTOs, all SQLite writes or unique source bytes.
+Unavailable per-phase CPU and undefined counters stay NOT_MEASURED/null.
+Instrumentation off/on differences measure collector overhead, not product
+improvement or savings. Reports are local research artifacts, not anonymous
+telemetry. See [host attribution](../experiments/host-stage-attribution.md).
+
 ## Context compression
 
 `context_compression_ratio` may be derived from returned context and eligible

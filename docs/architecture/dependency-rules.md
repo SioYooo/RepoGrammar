@@ -1,5 +1,12 @@
 # Dependency Rules
 
+Diagnostic host profiles carry only owned numeric counters and std monotonic
+durations across ports. Adapters/application may observe existing boundaries;
+core analysis and normal product runtime must not depend on governance reports.
+The isolated repo-guard composition reuses existing policies and compares its
+complete owned analysis with the public CLI; it never creates a second support,
+freshness or UNKNOWN classifier.
+
 ## Allowed dependencies
 
 - `core` may depend only on Rust standard library and explicitly accepted domain

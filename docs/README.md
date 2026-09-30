@@ -191,6 +191,8 @@ context lives under `.agents/memories/`.
   historical; real adoption effects are not measured.
 - Frozen 110-query retrieval baseline and exact 17-miss classification:
   [retrieval-miss-audit](experiments/retrieval-miss-audit.md).
+- Qualified full-resync host wall/counter attribution and remaining CPU gap:
+  [host-stage-attribution](experiments/host-stage-attribution.md).
 
 ## Task reading guide
 

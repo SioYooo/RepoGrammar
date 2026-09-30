@@ -1879,6 +1879,19 @@ git diff --check origin/main...HEAD
 cmp -s AGENTS.md CLAUDE.md
 ```
 
+## Host-stage diagnostic qualification
+
+Run `cargo test --lib host_profile` and `cargo test --bin repo-guard host_stage`.
+The former includes previous-active-generation preservation on parser timeout;
+the latter refuses external projects, invalid modes and unbounded requests.
+`repo-guard host-stage-eval` qualifies frozen synthetic/self/FastAPI inputs with
+native totals and complete off/on/public-CLI analysis parity. It requires the
+same qualified parent Python PATH as performance-eval; macOS native resource
+access may require the documented sandbox exception. Treat failed/incomplete
+runs as missing data and retain evidence, never zero or improvement.
+No CI absolute timing threshold is introduced; see
+[`host-stage-attribution.md`](../experiments/host-stage-attribution.md).
+
 ## Release readiness smoke matrix
 
 Current-source adoption measurement uses a separate offline adapter:

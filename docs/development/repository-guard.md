@@ -290,6 +290,42 @@ guardrail expectations are documented in `docs/development/testing.md`.
 
 ## performance-eval
 
+`host-stage-eval` accepts the same bounded options and frozen fixtures, but
+performs full-resync attribution only. It uses fresh same-source workspaces for
+the same linked application pipeline with diagnostics off/on, alternates arm
+order, and independently checks public CLI analysis parity. Each successful
+pair compares all fourteen active owned SQLite tables through the existing
+read-only snapshot oracle, including WAL-visible state. Producer hashes are
+pinned before runs and rechecked each repetition. It never copies a live main
+database as a substitute for a SQLite snapshot.
+
+```text
+cargo run --release --bin repo-guard -- host-stage-eval --bin target/release/repogrammar --worker src/workers/python/worker.py --python-files 16 --repetitions 3 --out <outside-repo-output>
+```
+
+Output `host-stage-results.json` uses `host-stage-eval.v1`, nesting the fixed
+`host-resync-phases.v1` wall/counter projection. Ten exclusive phases sum to
+the root span; separately reported unassigned time accounts for construction
+outside it. Each counter has an explicit `work_scope`; undefined counts/bytes
+are null. Write rows/transactions/checkpoints come from the actual session's
+stats, not a semantic-facts DTO or all SQLite internal/cascade writes.
+Phase CPU remains NOT_MEASURED; native total wall/user/system/RSS uses the
+existing platform tool and caveats. On timing includes instrumentation overhead;
+off/on differences do not represent product optimization or memory savings.
+
+The collector is explicitly passed, single-thread, depth-bounded to16 and
+disabled on normal product paths. Parser/session wrappers delegate unchanged;
+EOS/freshness/validation/activation/rollback gates remain authoritative.
+`host-stage-run` is an internal worker restricted to owned temporary eval
+projects, with the parent's temporary-root selection explicitly propagated.
+Never invoke it on a real index. The optional TypeScript worker is absent.
+The default Rust Cargo-metadata adapter matches the CLI; Cargo is deliberately
+not on the isolated tool PATH, so its unavailability remains typed UNKNOWN.
+This is not qualification of provider execution or repository builds.
+Failures retain workspaces and `host-stage-failure.json`; incomplete timings
+are missing data, not zero or COMPLETE. Raw retained workspaces may contain
+source and stay outside git. See [host attribution](../experiments/host-stage-attribution.md).
+
 `performance-eval` writes `performance-results.json` (`performance-results.v1`)
 from isolated copies of a committed synthetic template or an explicitly supplied
 local source snapshot. It never downloads a corpus, changes a real index, starts

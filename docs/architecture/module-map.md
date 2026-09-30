@@ -29,6 +29,7 @@ This map links `src/` paths to responsibilities and canonical documentation.
 | `src/rust/interfaces/mcp/` | Transport-neutral MCP tool boundary | `docs/specifications/mcp-api.md` |
 | `src/rust/bin/repogrammar.rs` | Product composition root, including the per-target `NativeAgentConfigurator` dispatch that routes Codex/Claude Code to their native CLIs and opencode to the file-based writer | `README.md`, CLI documentation |
 | `src/rust/bin/repo_guard.rs` | Repository governance CLI | `docs/development/repository-guard.md` |
+| `src/rust/ports/host_profile.rs`, `src/rust/adapters/parsing/profiled.rs` | Explicit, bounded, single-thread diagnostic wall/counter collection and unchanged parser/session delegation; normal product paths remain disabled | `docs/development/repository-guard.md`, `docs/specifications/metrics.md`, `docs/experiments/host-stage-attribution.md` |
 | `src/rust/config/` | Repository configuration boundary type shared by the composition root | `docs/architecture/overview.md` |
 | `src/rust/error/` | Shared typed error vocabulary for application and interface boundaries | `docs/architecture/overview.md`, `docs/architecture/dependency-rules.md` |
 | `src/install/` | End-user and source-checkout installer wrapper scripts that acquire and validate binaries, delegate product-receipt creation and product uninstall to the Rust authority, and avoid duplicating agent or deletion ownership logic | `README.md`, `docs/specifications/installation.md`, `docs/development/testing.md` |

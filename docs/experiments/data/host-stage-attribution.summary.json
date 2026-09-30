@@ -1,0 +1,374 @@
+{
+  "schema_version": "host-stage-attribution-summary.v1",
+  "status": "QUALIFIED_WALL_AND_COUNTERS",
+  "date": "2026-09-30",
+  "starting_commit": "d981d57c6e662b52f62e3e915af7382c5c8ed8f7",
+  "phase_cpu": "NOT_MEASURED",
+  "phase_cpu_reason": "No qualified safe stage CPU collector; native total CPU remains separate.",
+  "optimization": "NONE",
+  "corpora": {
+    "synthetic_n16": {
+      "artifact_sha256": "d8c343bfc0764c3a6bd258fbec8dde43e63780bbda48000378a2e82c2f4dbbb0",
+      "fixture_sha256": "e9ba0484e9b1625ba54a2b40652b28d86f181904ef3f25647c899ab5d7990527",
+      "binary_sha256": "e8d40826614e5587b751aa2c4b2c3ee37fe870cf146eee0c6e1a03f8100f2fc4",
+      "harness_sha256": "7d31ac0906b74f30eda1cac2b5dc917932fd710f8f1e7ec412c726bb49e87e70",
+      "worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+      "comparer_sha256": "2616b3cc44de866c6348577406dbded23e33319623a86b26e79d01b1cf3e6fc3",
+      "python": {
+        "sha256": "b502cb4c5b46b8d4192ec6bcb600ce8922f1afc396fcf646e8765c6eba74a0bf",
+        "version": "Python 3.14.6"
+      },
+      "platform": "macos",
+      "architecture": "aarch64",
+      "repetitions": 3,
+      "profiled_wall_seconds_median": 0.22,
+      "off_wall_seconds_median": 0.21,
+      "profiled_user_cpu_seconds_median": 0.16,
+      "profiled_system_cpu_seconds_median": 0.04,
+      "off_user_cpu_seconds_median": 0.15,
+      "off_system_cpu_seconds_median": 0.03,
+      "profiled_peak_rss_bytes_median": 41533440,
+      "off_peak_rss_bytes_median": 41353216,
+      "phase_wall_ms_medians": {
+        "discovery": 12.260582,
+        "hashing_fingerprinting": 0.037834,
+        "frontend_context_preparation": 1.749205,
+        "analyzer_execution": 175.503081,
+        "fact_normalization": 1.017088,
+        "family_construction": 2.48475,
+        "sqlite_persistence": 17.350621,
+        "integrity_foreign_key_validation": 3.396542,
+        "generation_activation": 0.479459,
+        "other": 0.985415
+      },
+      "profiled_pipeline_wall_ms_median": 217.445625,
+      "work_counters": [
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "discovery",
+          "work_items": 22,
+          "work_scope": "visited_directory_entries"
+        },
+        {
+          "bytes": 12222,
+          "calls": 62,
+          "phase": "hashing_fingerprinting",
+          "work_items": 62,
+          "work_scope": "sha256_invocations"
+        },
+        {
+          "bytes": 8096,
+          "calls": 42,
+          "phase": "frontend_context_preparation",
+          "work_items": 41,
+          "work_scope": "bounded_source_reads"
+        },
+        {
+          "bytes": null,
+          "calls": 24,
+          "phase": "analyzer_execution",
+          "work_items": 24,
+          "work_scope": "parser_provider_session_operations"
+        },
+        {
+          "bytes": null,
+          "calls": 59,
+          "phase": "fact_normalization",
+          "work_items": 756,
+          "work_scope": "normalization_record_visits"
+        },
+        {
+          "bytes": null,
+          "calls": 2,
+          "phase": "family_construction",
+          "work_items": 1,
+          "work_scope": "constructed_claims"
+        },
+        {
+          "bytes": null,
+          "calls": 677,
+          "phase": "sqlite_persistence",
+          "work_items": 1754,
+          "work_scope": "write_session_logical_rows"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "integrity_foreign_key_validation",
+          "work_items": 1,
+          "work_scope": "generation_validation_calls"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "generation_activation",
+          "work_items": 1,
+          "work_scope": "activation_calls"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "other",
+          "work_items": null,
+          "work_scope": null
+        }
+      ],
+      "write_session_stats": {
+        "checkpoints": 3,
+        "rows_written": 1754,
+        "transactions": 3
+      },
+      "files_discovered": 21,
+      "files_parsed": 21,
+      "python_project_sessions": 1,
+      "canonical_pairs": {
+        "off_on": 3,
+        "public_on": 3,
+        "owned_tables_per_comparison": 14
+      }
+    },
+    "self_frozen": {
+      "artifact_sha256": "4ac7a3e3deb134b4d5b4d2ecf40b1bac19772f086fe218fb8479e05c14d00124",
+      "fixture_sha256": "d523cc8cd24e3455bcca2e0e42f89b59ae2108116c391d9598abbec64df5a709",
+      "binary_sha256": "e8d40826614e5587b751aa2c4b2c3ee37fe870cf146eee0c6e1a03f8100f2fc4",
+      "harness_sha256": "7d31ac0906b74f30eda1cac2b5dc917932fd710f8f1e7ec412c726bb49e87e70",
+      "worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+      "comparer_sha256": "2616b3cc44de866c6348577406dbded23e33319623a86b26e79d01b1cf3e6fc3",
+      "python": {
+        "sha256": "b502cb4c5b46b8d4192ec6bcb600ce8922f1afc396fcf646e8765c6eba74a0bf",
+        "version": "Python 3.14.6"
+      },
+      "platform": "macos",
+      "architecture": "aarch64",
+      "repetitions": 3,
+      "profiled_wall_seconds_median": 7.13,
+      "off_wall_seconds_median": 7.44,
+      "profiled_user_cpu_seconds_median": 6.2,
+      "profiled_system_cpu_seconds_median": 0.73,
+      "off_user_cpu_seconds_median": 6.49,
+      "off_system_cpu_seconds_median": 0.74,
+      "profiled_peak_rss_bytes_median": 340852736,
+      "off_peak_rss_bytes_median": 319635456,
+      "phase_wall_ms_medians": {
+        "discovery": 52.48097,
+        "hashing_fingerprinting": 6.564565,
+        "frontend_context_preparation": 46.835676,
+        "analyzer_execution": 1485.898115,
+        "fact_normalization": 365.318626,
+        "family_construction": 2296.819376,
+        "sqlite_persistence": 2307.795618,
+        "integrity_foreign_key_validation": 559.589875,
+        "generation_activation": 0.472958,
+        "other": 21.940899
+      },
+      "profiled_pipeline_wall_ms_median": 7122.240667,
+      "work_counters": [
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "discovery",
+          "work_items": 1469,
+          "work_scope": "visited_directory_entries"
+        },
+        {
+          "bytes": 20088741,
+          "calls": 1477,
+          "phase": "hashing_fingerprinting",
+          "work_items": 1477,
+          "work_scope": "sha256_invocations"
+        },
+        {
+          "bytes": 10317616,
+          "calls": 844,
+          "phase": "frontend_context_preparation",
+          "work_items": 843,
+          "work_scope": "bounded_source_reads"
+        },
+        {
+          "bytes": null,
+          "calls": 637,
+          "phase": "analyzer_execution",
+          "work_items": 637,
+          "work_scope": "parser_provider_session_operations"
+        },
+        {
+          "bytes": null,
+          "calls": 673,
+          "phase": "fact_normalization",
+          "work_items": 187985,
+          "work_scope": "normalization_record_visits"
+        },
+        {
+          "bytes": null,
+          "calls": 2,
+          "phase": "family_construction",
+          "work_items": 497,
+          "work_scope": "constructed_claims"
+        },
+        {
+          "bytes": null,
+          "calls": 172610,
+          "phase": "sqlite_persistence",
+          "work_items": 327358,
+          "work_scope": "write_session_logical_rows"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "integrity_foreign_key_validation",
+          "work_items": 1,
+          "work_scope": "generation_validation_calls"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "generation_activation",
+          "work_items": 1,
+          "work_scope": "activation_calls"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "other",
+          "work_items": null,
+          "work_scope": null
+        }
+      ],
+      "write_session_stats": {
+        "checkpoints": 3,
+        "rows_written": 327358,
+        "transactions": 165
+      },
+      "files_discovered": 634,
+      "files_parsed": 634,
+      "python_project_sessions": 1,
+      "canonical_pairs": {
+        "off_on": 3,
+        "public_on": 3,
+        "owned_tables_per_comparison": 14
+      }
+    },
+    "fastapi_backend": {
+      "artifact_sha256": "fb804ec1f498c296209f923d5d7c8c19f024ad9a77ac4253a78d401f37edee65",
+      "fixture_sha256": "a2de03cc076a4ba95fd52a705dcd26e8930df512f9a3b693e6fc05849c71b2c9",
+      "binary_sha256": "e8d40826614e5587b751aa2c4b2c3ee37fe870cf146eee0c6e1a03f8100f2fc4",
+      "harness_sha256": "7d31ac0906b74f30eda1cac2b5dc917932fd710f8f1e7ec412c726bb49e87e70",
+      "worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+      "comparer_sha256": "2616b3cc44de866c6348577406dbded23e33319623a86b26e79d01b1cf3e6fc3",
+      "python": {
+        "sha256": "b502cb4c5b46b8d4192ec6bcb600ce8922f1afc396fcf646e8765c6eba74a0bf",
+        "version": "Python 3.14.6"
+      },
+      "platform": "macos",
+      "architecture": "aarch64",
+      "repetitions": 3,
+      "profiled_wall_seconds_median": 0.38,
+      "off_wall_seconds_median": 0.37,
+      "profiled_user_cpu_seconds_median": 0.3,
+      "profiled_system_cpu_seconds_median": 0.06,
+      "off_user_cpu_seconds_median": 0.29,
+      "off_system_cpu_seconds_median": 0.05,
+      "profiled_peak_rss_bytes_median": 42598400,
+      "off_peak_rss_bytes_median": 42434560,
+      "phase_wall_ms_medians": {
+        "discovery": 12.30071,
+        "hashing_fingerprinting": 0.144497,
+        "frontend_context_preparation": 5.31367,
+        "analyzer_execution": 260.486288,
+        "fact_normalization": 5.748247,
+        "family_construction": 5.254581,
+        "sqlite_persistence": 69.455718,
+        "integrity_foreign_key_validation": 14.122083,
+        "generation_activation": 0.479417,
+        "other": 1.665417
+      },
+      "profiled_pipeline_wall_ms_median": 376.681083,
+      "work_counters": [
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "discovery",
+          "work_items": 78,
+          "work_scope": "visited_directory_entries"
+        },
+        {
+          "bytes": 272973,
+          "calls": 136,
+          "phase": "hashing_fingerprinting",
+          "work_items": 136,
+          "work_scope": "sha256_invocations"
+        },
+        {
+          "bytes": 182385,
+          "calls": 92,
+          "phase": "frontend_context_preparation",
+          "work_items": 91,
+          "work_scope": "bounded_source_reads"
+        },
+        {
+          "bytes": null,
+          "calls": 48,
+          "phase": "analyzer_execution",
+          "work_items": 48,
+          "work_scope": "parser_provider_session_operations"
+        },
+        {
+          "bytes": null,
+          "calls": 83,
+          "phase": "fact_normalization",
+          "work_items": 4809,
+          "work_scope": "normalization_record_visits"
+        },
+        {
+          "bytes": null,
+          "calls": 2,
+          "phase": "family_construction",
+          "work_items": 8,
+          "work_scope": "constructed_claims"
+        },
+        {
+          "bytes": null,
+          "calls": 3085,
+          "phase": "sqlite_persistence",
+          "work_items": 9847,
+          "work_scope": "write_session_logical_rows"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "integrity_foreign_key_validation",
+          "work_items": 1,
+          "work_scope": "generation_validation_calls"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "generation_activation",
+          "work_items": 1,
+          "work_scope": "activation_calls"
+        },
+        {
+          "bytes": null,
+          "calls": 1,
+          "phase": "other",
+          "work_items": null,
+          "work_scope": null
+        }
+      ],
+      "write_session_stats": {
+        "checkpoints": 3,
+        "rows_written": 9847,
+        "transactions": 7
+      },
+      "files_discovered": 45,
+      "files_parsed": 45,
+      "python_project_sessions": 1,
+      "canonical_pairs": {
+        "off_on": 3,
+        "public_on": 3,
+        "owned_tables_per_comparison": 14
+      }
+    }
+  }
+}
