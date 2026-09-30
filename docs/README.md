@@ -189,6 +189,8 @@ context lives under `.agents/memories/`.
 - Current-source B0-B3 adoption protocol and offline payload qualification:
   [agent-adoption-v2](experiments/agent-adoption-v2.md). Historical RQ5 remains
   historical; real adoption effects are not measured.
+- Frozen 110-query retrieval baseline and exact 17-miss classification:
+  [retrieval-miss-audit](experiments/retrieval-miss-audit.md).
 
 ## Task reading guide
 

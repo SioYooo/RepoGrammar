@@ -1,0 +1,574 @@
+{
+  "schema_version": "retrieval-miss-audit.v1",
+  "status": "READ_ONLY_DIAGNOSIS",
+  "head": "d981d57c6e662b52f62e3e915af7382c5c8ed8f7",
+  "artifact_sha256": "817a3f135b9308d295ef49498afcc16be8639885cf4e365d266c6f8d96d74e6a",
+  "provenance": {
+    "head": "d981d57c6e662b52f62e3e915af7382c5c8ed8f7",
+    "files": {
+      "target/release/repogrammar": "c2f66e90dace883c310210bf2f5aba4cb972e172d069697ae07e5d89c83414af",
+      "target/release/repo-guard": "f9512ab91f916e744ea34fe4196148d17a5856996e7102094b28e82279fe5707",
+      "src/workers/python/worker.py": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+      "src/fixtures/evaluation/query-corpus-v1.json": "20c74d6575b8e6677353e28036fc92154d6c29ba46c76d61c2667cdfaf9a5da4"
+    }
+  },
+  "taxonomy_counts": {
+    "coarse_concept_or_variant_ambiguity": 10,
+    "gold_vs_bare_concept_contract": 1,
+    "qualified_phrase_gap": 4,
+    "unrecognized_vocabulary_with_latent_ambiguity": 2
+  },
+  "artifact": "product-eval-results.json (retained local evidence)",
+  "summary": {
+    "matches": 93,
+    "total": 110,
+    "by_intent": {
+      "abstention": {
+        "matches": 36,
+        "total": 36
+      },
+      "context": {
+        "matches": 27,
+        "total": 27
+      },
+      "retrieval": {
+        "matches": 30,
+        "total": 47
+      }
+    },
+    "false_family_selections": 0,
+    "selected_on_abstention_gold": 0
+  },
+  "rows": [
+    {
+      "query_id": "py-nl-db-transactions",
+      "target": "How are database transactions handled?",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 3,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "database + transaction collapse to one DataAccess concept; ORM model and query/transaction method variants tie at 4. Transaction support marker could narrow only with a separately specified role/profile retrieval contract.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-validation-models",
+      "target": "How are validation models implemented?",
+      "expected": {
+        "family_prefix": "family:python:pydantic_model",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:pydantic_model:framework_pydantic_model:vf950ceff8895",
+          "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 5,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "validation + ambiguous model are deduplicated concept signals; model maps to BOTH ValidationModel and DataAccess. Two Pydantic clusters are BaseModel vs BaseSettings, and three SQLAlchemy clusters also score4.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-repository-methods",
+      "target": "How are repository methods structured?",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a",
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model"
+        ],
+        "candidate_family_count": 3,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 7,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "repository is DataAccess; method is a residue hit in both SQLAlchemy method clusters. Both score7, below10; adding sqlalchemy raises both to13 and still ties.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-syn-endpoint",
+      "target": "endpoint",
+      "expected": {
+        "family_prefix": "family:python:fastapi_route",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:fastapi_route:framework_fastapi_route"
+        ],
+        "candidate_family_count": 1,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": null,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "gold_vs_bare_concept_contract",
+      "root_cause": "A single endpoint concept deliberately scores4 and must abstain under the current spec and explicit regression test; corpus outcome=ok conflicts with the accepted bare-concept policy.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-syn-http-handler",
+      "target": "http handler",
+      "expected": {
+        "family_prefix": "family:python:fastapi_route",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:fastapi_route:framework_fastapi_route"
+        ],
+        "candidate_family_count": 1,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": null,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "qualified_phrase_gap",
+      "root_cause": "http is unmatched residue and handler scores one Route concept4. Exact adjacent HTTP handler could be a bounded qualified Route phrase, without changing floor10.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-syn-db-model",
+      "target": "db model",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_model",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:pydantic_model:framework_pydantic_model:vf950ceff8895",
+          "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 5,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "db maps to DataAccess; model maps to DataAccess plus ValidationModel. All five ORM/method/Pydantic families tie4; no role-level ORM disambiguator is modeled.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-syn-orm-model",
+      "target": "orm model",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_model",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:pydantic_model:framework_pydantic_model:vf950ceff8895",
+          "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 5,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "orm maps to DataAccess; model maps to DataAccess plus ValidationModel. All five ORM/method/Pydantic families tie4; no role-level ORM disambiguator is modeled.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-syn-schema-validation",
+      "target": "schema validation",
+      "expected": {
+        "family_prefix": "family:python:pydantic_model",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:pydantic_model:framework_pydantic_model:vf950ceff8895",
+          "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854"
+        ],
+        "candidate_family_count": 2,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "schema and validation deduplicate to one ValidationModel concept4; BaseModel and BaseSettings clusters tie. Prefix gold accepts either despite distinct support contracts.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-rest-endpoints",
+      "target": "Where do we define REST endpoints?",
+      "expected": {
+        "family_prefix": "family:python:fastapi_route",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:fastapi_route:framework_fastapi_route"
+        ],
+        "candidate_family_count": 1,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": null,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "qualified_phrase_gap",
+      "root_cause": "rest and endpoint map to Route but deduplicate to score4. Exact adjacent REST endpoint could reuse qualified-phrase weight10.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-wire-routes",
+      "target": "Show me how HTTP routes are wired up",
+      "expected": {
+        "family_prefix": "family:python:fastapi_route",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:fastapi_route:framework_fastapi_route"
+        ],
+        "candidate_family_count": 1,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": null,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "qualified_phrase_gap",
+      "root_cause": "http is unmatched residue and route scores4. Exact adjacent HTTP route could reuse qualified-phrase weight10.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-writing-tests",
+      "target": "What's the pattern for writing tests here?",
+      "expected": {
+        "family_prefix": "family:python:pytest_test",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:pytest_test:framework_pytest_test"
+        ],
+        "candidate_family_count": 1,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": null,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "qualified_phrase_gap",
+      "root_cause": "writing is unmatched residue; test scores4. Exact adjacent writing test could reuse qualified-phrase weight10.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-db-sessions",
+      "target": "Show me how DB sessions are used",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 3,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "db and session deduplicate to DataAccess4; ORM model and both SQLAlchemy method clusters tie. Session use does not specify query vs transaction.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-talk-to-db",
+      "target": "How do we talk to the database?",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 3,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "database is one DataAccess signal4; ORM model and both SQLAlchemy method clusters tie. Generic data access does not specify the method contract.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-validate-payloads",
+      "target": "How do we validate request payloads?",
+      "expected": {
+        "family_prefix": "family:python:pydantic_model",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [],
+        "candidate_family_count": 0,
+        "hydrated_family_count": 0,
+        "abstention_reason": "no_candidate"
+      },
+      "term_retrieval": {
+        "top_score": null,
+        "margin": null,
+        "abstention_reason": "no_candidate",
+        "hydrated_candidate_count": 0
+      },
+      "category": "unrecognized_vocabulary_with_latent_ambiguity",
+      "root_cause": "validate, request, payloads are unmatched residue; none hits current family projection. Validation families exist and are fresh. Adding validate alias alone still leaves BaseModel vs BaseSettings ambiguity.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-request-schemas",
+      "target": "Where are request schemas validated?",
+      "expected": {
+        "family_prefix": "family:python:pydantic_model",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:pydantic_model:framework_pydantic_model:vf950ceff8895",
+          "family:python:pydantic_model:framework_pydantic_model:v9e3a0ddde854"
+        ],
+        "candidate_family_count": 2,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "schema scores ValidationModel4; request/validated are unmatched residue. BaseModel and BaseSettings clusters tie; needs bounded support/profile disambiguation before any selection.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-repo-pattern",
+      "target": "How is the repository pattern used?",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [
+          "family:python:sqlalchemy_model:framework_sqlalchemy_model",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:vd741755a0d57",
+          "family:python:sqlalchemy_repository_method:framework_sqlalchemy_repository_method:v0a7f92ef094a"
+        ],
+        "candidate_family_count": 3,
+        "hydrated_family_count": 0,
+        "abstention_reason": "below_min_score"
+      },
+      "term_retrieval": {
+        "top_score": 4,
+        "margin": 0,
+        "abstention_reason": "below_min_score",
+        "hydrated_candidate_count": 0
+      },
+      "category": "coarse_concept_or_variant_ambiguity",
+      "root_cause": "repository is DataAccess4; pattern/used are unmatched residues. ORM model and both SQLAlchemy method clusters tie; generic repository pattern does not choose query vs transaction.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    },
+    {
+      "query_id": "py-nl-para-data-access",
+      "target": "Where is the data-access layer?",
+      "expected": {
+        "family_prefix": "family:python:sqlalchemy_repository_method",
+        "outcome": "ok"
+      },
+      "actual": {
+        "outcome": "unknown",
+        "unknown_reason": "InsufficientSupport",
+        "selected_family": null,
+        "candidate_families": [],
+        "candidate_family_count": 0,
+        "hydrated_family_count": 0,
+        "abstention_reason": "no_candidate"
+      },
+      "term_retrieval": {
+        "top_score": null,
+        "margin": null,
+        "abstention_reason": "no_candidate",
+        "hydrated_candidate_count": 0
+      },
+      "category": "unrecognized_vocabulary_with_latent_ambiguity",
+      "root_cause": "data-access splits into data and access, neither a concept nor matching residue; family exists. Mapping the phrase to DataAccess would surface three equal clusters and cannot safely pick one.",
+      "classification_confidence": "HIGH",
+      "expected_family_exists": true,
+      "expected_family_fresh": true
+    }
+  ]
+}
