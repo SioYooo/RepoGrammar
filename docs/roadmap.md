@@ -1,5 +1,14 @@
 # Roadmap
 
+## Next evidence milestone after d981d57
+
+The current [execution handoff](plans/v0.6-adoption-retrieval-release-plan.md)
+prioritizes adoption evidence and truthful public claims, then the classified
+retrieval gap, host-stage attribution and release-candidate qualification.
+Language/framework/provider breadth is outside this milestone. Existing scope
+and historical completion records below remain unchanged; v0.6.0 is not yet
+qualified or published.
+
 ## Bootstrap complete
 
 - Repository governance and mirrored agent contract.
@@ -557,7 +566,7 @@ current public-preview label by itself.
 
 - Existing TS/JS discovery, syntax extraction, framework-role facts, worker
   operation protocol, and fixtures remain transitional substrate.
-- A conservative v0.2 token-saving path exists for Express, Jest/Vitest,
+- A conservative v0.2 family-context path exists for Express, Jest/Vitest,
   Next.js, Fastify, Prisma, and Drizzle under exact-anchor evidence only. It is
   not full TypeScript Program/TypeChecker analysis, does not support React
   family claims, and does not perform broad binding/export propagation beyond

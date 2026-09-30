@@ -193,6 +193,8 @@ context lives under `.agents/memories/`.
   [retrieval-miss-audit](experiments/retrieval-miss-audit.md).
 - Qualified full-resync host wall/counter attribution and remaining CPU gap:
   [host-stage-attribution](experiments/host-stage-attribution.md).
+- One prioritized execution handoff and v0.6.0 go/no-go gates:
+  [adoption/retrieval/release plan](plans/v0.6-adoption-retrieval-release-plan.md).
 
 ## Task reading guide
 
