@@ -62,3 +62,4 @@ Current accepted ADRs:
 - ADR-0050: Bounded Go testing frontend.
 - ADR-0051: Bounded Fortran test-drive frontend.
 - ADR-0052: Readiness-scope admission for bounded-frontend lanes (Proposed).
+- ADR-0054: Default conditional global agent instruction profiles.

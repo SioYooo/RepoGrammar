@@ -1789,6 +1789,22 @@ for command bounds, schema scope and unavailable scenarios.
 
 ## Agent-study pilot harness (RQ5)
 
+The separate conditional-global-profile confirmation uses isolated, offline
+preparation only during the 2026-09-30 sprint:
+
+```text
+cargo test --lib global_instruction
+python3 src/experiments/agent_study/adoption_prepare.py --selftest
+python3 src/experiments/agent_study/selftest.py
+```
+
+Install/setup regressions cover effective Codex/Claude profile paths, override
+shadowing, explicit invalid-path deferral, short/full profile separation,
+marker ownership, exact rollback, instruction-only backfill, opt-out receipt
+retention and relocation refusal. The A0/A1/A2 preparer freezes four tasks and
+twelve cells; no live agent, credential or paid request runs. See
+[the confirmation protocol](../experiments/agent-adoption-confirmation.md).
+
 The Phase 7 RQ5 agent-impact study has a standalone pilot harness under
 `src/experiments/agent_study/` (Python 3 stdlib only, no new dependencies). It
 is automation tooling, not product code, and is exercised independently of the

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Current source install/setup resolve verified Codex/Claude global profile
+  paths and write a short conditional RepoGrammar guide, with `--no-instructions`
+  opt-out. Same-path instruction-only backfill preserves native MCP state and
+  receipts; unsafe profile relocation is refused. Full repository/MCP guidance
+  is unchanged. Agent adoption and token effects remain unmeasured.
+
 ### Fixed
 
 - The private Python frontend now checks the published Python 3.10+ requirement

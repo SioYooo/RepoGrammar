@@ -112,10 +112,12 @@ machine-level agent integration rather than repository-local index state.
 reconciling an internally consistent owned integration from an obsolete managed
 executable to the current authority; setup delegates that refresh and rolls
 back only targets it newly created.
-The install application also owns the exact versioned, marker-fenced agent
-pre-flight text. Optional instruction-file writes and the read-only MCP
-initialize response consume that same constant so contract-evidence routing
-cannot drift between machine integration and runtime guidance.
+The install application owns exact versioned, marker-fenced instruction
+profiles. The full repository gate and MCP initialize guidance share the
+existing v3 contract; install/setup use a shorter conditional global v4 profile
+under ADR-0054. Both preserve evidence/abstention boundaries. Known profile
+paths, opt-out, instruction-only backfill and receipt preservation remain in
+the install authority; native MCP is not rewritten for instruction-only work.
 
 ## Composition root
 

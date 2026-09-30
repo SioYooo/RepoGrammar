@@ -181,7 +181,7 @@ output so terminal users are not flooded with machine progress events.
 ## Repository state commands
 
 `repogrammar setup [--project <path>] [--target
-auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--json]
+auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json]
 [--progress auto|always|never]` is the primary user-facing onboarding
 orchestrator. It composes the existing machine-level installation and
 repository lifecycle boundaries; it does not replace either boundary or invoke
@@ -206,7 +206,8 @@ self-test stages. Human plans and results must label repository initialization
 and repository indexing separately; they must not collapse both into one
 ambiguous repository-index label. Agent inspection distinguishes unmanaged,
 `OwnedCurrent`, `OwnedOutdated`, foreign, and malformed state. Current owned
-state is skipped, obsolete-but-internally-consistent owned state is safely
+native state is skipped; missing/older same-path global guidance is reconciled
+through an instruction-only install transaction. Obsolete-but-consistent native state is safely
 refreshed through the install service, unmanaged state may be configured, and
 foreign, malformed, or receipt/native-drifted state is preserved rather than
 overwritten. Rollback may remove only machine-level writes and receipts newly
@@ -880,7 +881,7 @@ machine-readable output must not include source snippets or absolute paths.
 ## Managed instruction commands
 
 `repogrammar instructions` provides a separate explicit-file lifecycle for the
-short RepoGrammar pre-flight block:
+RepoGrammar pre-flight profiles:
 
 ```text
 repogrammar instructions status --file <path> [--json]
@@ -899,9 +900,11 @@ The content contract is versioned independently from the product version.
 Status reports `missing`, `current`, `outdated`, `foreign`, or `malformed`.
 The deployed unversioned global legacy block reports detected content version
 `0`; the exact later legacy body is classified as logical content version `1`
-even though it had no embedded version marker; current content reports `2`.
-Sync may create or append a missing block and may refresh either
-exact known legacy body. A complete marker pair containing modified or unknown
+even though it had no embedded version marker; the full repository/MCP profile
+is `3` and the short conditional global profile is `4`. Explicit-file sync
+creates the full v3 profile for missing content, preserves a current v4 global
+profile, and may refresh exact known legacy bodies. Detected/expected versions
+reflect the selected current profile, independently of the product version. A complete marker pair containing modified or unknown
 content is `foreign`, not owned. Foreign, partial, duplicated, or malformed
 sections are preserved and refused for sync/remove. Remove strips only an exact recognized
 current or legacy block and preserves unrelated content.
@@ -947,6 +950,7 @@ defined in the installation specification.
 - `--telemetry`
 - `--no-telemetry`
 - `--no-permissions`
+- `--no-instructions` (retain prior instruction ownership; skip new/refresh writes)
 
 Agent-only removal is a separate command:
 
@@ -1003,6 +1007,12 @@ is default-yes. `all` and `auto` resolve to the current first-class live targets
 for safe noninteractive writes. Registry targets without a live writer must fail
 before command-path, receipt, or native config writes and direct the user to
 `--dry-run` or `--print-config`. Project-local writes remain deferred.
+
+Current source install/setup resolve Codex/Claude global guides as defined in
+[installation.md](installation.md#instruction-file-integration); their reviewed
+plans display the actual path or deferral. `--no-instructions` opts out. Setup
+JSON adds `instructions_requested` without implying that a file was changed or
+an agent used the tool. Published 0.5.0 artifacts retain override-only wiring.
 
 `install` places the `repogrammar` command in a user-writable command directory
 when possible, runs a read-only MCP self-test before native configuration,

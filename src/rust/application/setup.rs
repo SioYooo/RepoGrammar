@@ -36,6 +36,7 @@ pub struct SetupRequest {
     pub target: SetupTarget,
     pub dry_run: bool,
     pub autosync: bool,
+    pub write_instructions: bool,
 }
 
 impl SetupRequest {
@@ -45,6 +46,7 @@ impl SetupRequest {
             target: SetupTarget::Auto,
             dry_run: false,
             autosync: true,
+            write_instructions: true,
         }
     }
 }

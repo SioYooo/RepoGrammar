@@ -179,6 +179,9 @@ context lives under `.agents/memories/`.
 - Quality gates: `development/repository-guard.md` and `development/testing.md`.
 - Measured efficiency sprint contract and evidence boundaries:
   [experiments/efficiency-sprint.md](experiments/efficiency-sprint.md).
+- Conditional global instruction wiring and unmeasured A0/A1/A2 confirmation:
+  [ADR-0054](decisions/ADR-0054-default-conditional-agent-instructions.md) and
+  [agent-adoption-confirmation](experiments/agent-adoption-confirmation.md).
 
 ## Task reading guide
 

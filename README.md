@@ -72,6 +72,12 @@ use `--no-autosync` for CI or a one-shot index.
 repogrammar install --target auto --scope global --yes --no-telemetry
 ```
 
+Current source builds also add a short conditional guide for Codex/Claude Code
+at their effective global profile path. Review it with `install --dry-run`;
+`--no-instructions` skips that write. Published 0.5.0 artifacts retain their
+shipped override-only instruction wiring. This is configuration behavior, not
+evidence of agent adoption or token savings.
+
 Restart the coding-agent session after connecting. Choose a specific client with
 `--target codex`, `--target claude-code`, or `--target opencode`.
 
