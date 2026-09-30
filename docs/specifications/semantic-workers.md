@@ -31,6 +31,17 @@ The official v0.1 semantic-frontend target is Python. Python worker and adapter
 work should serve repository-local family evidence for FastAPI, pytest,
 SQLAlchemy, and Pydantic rather than trying to build a full Python analyzer.
 
+The three private frontend modes share one process admission check for the
+published Python 3.10+ host requirement before loading the worker. An
+unsupported major/minor yields typed `PythonFrontendInterpreterUnsupported`
+for document/config parsing and `Unverified` for the interface probe. The same
+process retains the existing timeout and byte caps; no provider, interpreter
+acquisition, network access, or repository-code execution is added. The version
+diagnostic remains separate from admission. This does not change the public
+semantic-worker NDJSON schema; see
+[`python-analysis.md`](python-analysis.md) and the
+[qualification record](../experiments/python-runtime-qualification.md).
+
 The canonical Python algorithm contract is
 `docs/specifications/python-analysis.md`, refined by
 `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`. The worker

@@ -1,0 +1,140 @@
+{
+  "schema": "python-runtime-qualification.v1",
+  "date": "2026-09-30",
+  "verdict": "VERIFIED_RUNTIME_PREREQUISITE",
+  "checkout_base_commit": "27d4a1778d39413532df9b390f76b5bca24012a9",
+  "execution_state": "product_source_hashes_verified_before_atomic_commit; full_gates_run_on_combined_sprint_checkout",
+  "source_sha256": {
+    "src/rust/adapters/parsing/python.rs": "b501cdffa26afcbabd211b64578e75ce085e8be295b1ffd6b3c6c9f7c05095de",
+    "src/rust/ports/parser.rs": "8d973fd617e6e3b9601d47b7b75e1109997e392d31af4f5a28214b2810bf58b7",
+    "src/rust/application/indexing.rs": "b2e320a3090d4b0c905ac9453c41c1244e632c56865da3f277e9f0cdf18f56a2",
+    "src/rust/integration_tests/python_runtime_qualification.rs": "b8e78483b36a9a7fb375981d201d1f412d4a8745c6501e95fe950a54b12c1950",
+    "src/workers/python/worker.py": "45d30ac49aa3b50a8cd8b01e59a1576aee4dd0ae71c9df2f0de99f670130bd03",
+    "src/fixtures/evaluation/query-corpus-v1.json": "20c74d6575b8e6677353e28036fc92154d6c29ba46c76d61c2667cdfaf9a5da4",
+    "Cargo.toml": "0cef73acdb4560253934587d61749d07d94413ec1e401120175ff2167ce02d6f",
+    "Cargo.lock": "96ba00bbf14f4eae21969a57d36637c0cf4646a401ed87b0818cc382e6a85749"
+  },
+  "binary_sha256": "b2df1c00069fb40bdce69f8b23c9ffd31efe703ff3c91e88da57d6df997be945",
+  "binary_kind": "local_debug_source_build_not_published_release",
+  "runtime_policy": {
+    "major": 3,
+    "minimum_minor": 10,
+    "additional_process_per_request": false,
+    "qualification_cache": false
+  },
+  "pre_change": {
+    "gate": "independent_regression_with_new_error_vocabulary_and_unchanged_launcher",
+    "passed": 4,
+    "failed": 3,
+    "observed_failures": [
+      "unsupported_runtime_dispatched_worker",
+      "unsupported_runtime_activated_replacement_generation",
+      "large_request_broken_pipe_masked_runtime_failure"
+    ]
+  },
+  "post_change": {
+    "independent_tests": 10,
+    "passed": 10,
+    "failed": 0,
+    "actual_runtime_versions": {
+      "3.9.6": "rejected",
+      "3.14.6": "admitted"
+    },
+    "controlled_version_tuples": [
+      "2.7",
+      "3.9",
+      "3.10",
+      "4.0"
+    ],
+    "controlled_tuples_are_not_physical_interpreter_qualification": true
+  },
+  "validation": {
+    "format": "PASS",
+    "clippy": "PASS",
+    "rust_tests": {
+      "lib_passed": 2234,
+      "product_binary_passed": 183,
+      "doctests_passed": 1,
+      "failed": 0,
+      "existing_ignored_benchmarks": 2,
+      "supported_interpreter_selected": true,
+      "native_events_executed_outside_sandbox": true,
+      "repository_infrastructure_suite": "PASS; independent workstream records its count"
+    },
+    "python_worker": "PASS",
+    "typescript_worker": "PASS",
+    "npm_wrapper": "PASS",
+    "npm_pack_dry_run": "PASS",
+    "installer_contract": "PASS",
+    "repo_guard": "PASS",
+    "diff_check": "PASS",
+    "mirrored_guides": "PASS"
+  },
+  "sync_equivalence": {
+    "schema": "sync-equivalence.v1",
+    "scenario_count": 14,
+    "all_passed": true,
+    "raw_artifact_sha256": "61a45085a9cb4302ef578ffe4668888c6c90e4ea51a7917af4205b7d915e22d6"
+  },
+  "query_evaluation": {
+    "schema": "product-eval-results.v3",
+    "condition": "python_runtime_admission",
+    "repetitions": 1,
+    "queries": 110,
+    "matches": 93,
+    "mismatches": 17,
+    "false_family_selections": 0,
+    "selected_on_abstention_gold": 0,
+    "by_intent": {
+      "abstention": {
+        "matches": 36,
+        "total": 36
+      },
+      "context": {
+        "matches": 27,
+        "total": 27
+      },
+      "retrieval": {
+        "matches": 30,
+        "total": 47
+      }
+    },
+    "raw_artifact_sha256": "f965d7d61bcc469f3e081cefbb56264f0a2a8e925e72f42c119d090f0d17bc2b",
+    "scope": "development_fixture_diagnostic_not_new_retrieval_or_GEO_effect_claim"
+  },
+  "failed_gate_attempts": [
+    {
+      "class": "test_fixture_selected_unsupported_runtime",
+      "resolution": "three_existing_test_constructors_honor_configured_default_without_assertion_changes"
+    },
+    {
+      "class": "sandbox_native_file_events_unavailable",
+      "resolution": "unchanged_test_failed_twice_in_sandbox_and_passed_outside"
+    },
+    {
+      "class": "isolated_evaluation_harness_selected_unsupported_parent_PATH_runtime",
+      "resolution": "qualified_parent_PATH_explicitly_selected_without_harness_or_gold_changes"
+    }
+  ],
+  "limits": {
+    "request_bytes": 1048576,
+    "captured_response_bytes": 2097152,
+    "default_timeout_seconds": 30
+  },
+  "completion_state": {
+    "python_gates_passed": 5,
+    "python_total_gates": 9,
+    "top20_complete_count": 0,
+    "type_provider_integrated": false,
+    "production_library_contract_packs": 0
+  },
+  "remaining_obligations": [
+    "dialect_and_packaging_profile_qualification",
+    "adapter_specific_provider_acquisition_and_isolation_decision",
+    "provider_product_path_state_matrix",
+    "unchanged_delta_sync_does_not_readmit_runtime"
+  ],
+  "raw_logs_and_workspaces": "retained_untracked_outside_checkout",
+  "paid_agent_runs": false,
+  "remote_mutations": false
+}

@@ -1,7 +1,7 @@
 # Python Analysis Specification
 
 - Status: Active v0.1 target specification
-- Last updated: 2026-07-17
+- Last updated: 2026-09-30
 - Scope: Python-first v0.1 analysis algorithms and claim discipline
 - Supersedes: `docs/plans/python-dogfooding-plan.md` for v0.1 scope
 
@@ -78,6 +78,22 @@ RepoGrammar should not run every analyzer over every file. The cascade is:
 
 The current implementation covers a bounded static CPython `ast` slice only:
 
+- Every private frontend request admits the selected host's language version
+  before loading the worker: Python major 3, minor at least 10, as required by
+  the public installation contract. The document, project-config, and interface
+  modes share one bounded process bootstrap, not a separate version probe or
+  cache. Unsupported runtimes return typed
+  `PythonFrontendInterpreterUnsupported`; indexing stops with source-free
+  guidance to configure `REPOGRAMMAR_PYTHON_EXECUTABLE` with Python 3.10 or newer
+  within 3.x and retry. Interface admission failure remains `Unverified`, forcing a full
+  rebuild that must itself pass admission. Existing generation activation and
+  rollback semantics remain unchanged. This qualifies a host prerequisite,
+  not a semantic provider or ADR-0020 completion gate. Grammar remains bounded
+  by the admitted host; Python 3.10 without `tomllib` still abstains from
+  TOML-dependent facts. See the [qualification record](../experiments/python-runtime-qualification.md).
+  Admission runs only when a private frontend request executes. An unchanged
+  index delta that needs no worker stays a no-op; this slice does not add
+  interpreter-change invalidation or requalify stored facts through a probe.
 - `.py` file discovery with Python virtualenv/cache/dependency directory skips;
 - CPython `ast` parse-document worker output for code-unit extraction;
 - an exact private parse-document host/worker tuple of

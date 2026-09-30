@@ -203,6 +203,13 @@ not run during default indexing because it executes user code.
 The current implemented Python slice uses a checked-in CPython `ast` worker for
 structural code-unit extraction only. It does not run Pyrefly, Pyright, mypy,
 `ty`, RightTyper, or repository code.
+Its existing Python 3.10+ interpreter requirement is admitted once inside each
+private request process, before loading the worker. The parser port exposes only
+the source-free `PythonFrontendInterpreterUnsupported` error; application code
+routes all document/config failures through one recovery formatter, while the
+interface probe remains `Unverified`. Bootstrap helpers must not import from
+the extra current-directory entry that `-c` introduces. No interpreter probe
+cache, third-party provider, runtime acquisition, or dependency is added.
 The Rust ports layer now defines a RepoGrammar-owned future Python provider
 boundary for candidate-scoped provider requests, provenance assumptions, cache
 key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is

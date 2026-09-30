@@ -563,6 +563,15 @@ that same decision and is not a separate claim about whether the parser ran;
 `parser_attempted_files` is the field that reports the work done this round, and
 the two are allowed to differ in both directions.
 
+When an indexing operation needs the private Python frontend, its configured
+interpreter must be Python 3.10+ within 3.x. An unsupported interpreter stops
+with source-free `PythonFrontendInterpreterUnsupported` recovery guidance to
+select `REPOGRAMMAR_PYTHON_EXECUTABLE`; the previous active generation is
+preserved. Interface extraction remains unverified on admission failure, so a
+required rebuild must also pass admission. This check applies when a frontend
+request executes, not to an unchanged no-op sync. See the
+[frontend contract](indexing-pipeline.md) for the shared process and bounds.
+
 Deriving `indexing` from discovery instead is forbidden, because discovery can
 only say what a run intended to parse. An admitted file that does not decode, or
 one whose frontend recognizes no declaration, yields a generation holding

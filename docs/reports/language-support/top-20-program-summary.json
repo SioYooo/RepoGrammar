@@ -58,6 +58,8 @@
       ],
       "evidence_paths": [
         "docs/reports/language-support/python-completion-review.md",
+        "docs/experiments/python-runtime-qualification.md",
+        "src/rust/integration_tests/python_runtime_qualification.rs",
         "src/rust/adapters/parsing/python.rs",
         "src/rust/ports/python_provider.rs",
         "src/workers/python/worker.py"

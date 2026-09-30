@@ -1,7 +1,7 @@
 # Python v0.1 Implementation Plan
 
 - Status: Active planning artifact
-- Last updated: 2026-08-01
+- Last updated: 2026-09-30
 - Scope: Python-first v0.1 implementation coordination
 - Canonical algorithm spec: `docs/specifications/python-analysis.md`
 - Provider cascade decision: `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`
@@ -18,7 +18,7 @@ does not attempt full Python semantic analysis.
 
 The 2026-08-01 Top-20 campaign added bounded PyPI manifest inventory and the
 shared dependency/contract-registry substrate, but Python still passes only
-4/9 of the strict language-completion gates. No production reviewed contract
+5/9 of the strict language-completion gates. No production reviewed contract
 pack or authoritative Python type/provider integration exists. The next
 highest-EV Python milestone is one isolated provider-backed, package-qualified,
 exact-version reviewed-contract family vertical with source-free output and
@@ -71,6 +71,13 @@ Validation gate: Python can be represented as the v0.1 target in domain types,
 but unimplemented analysis remains fallback or typed `UNKNOWN`.
 
 ### Phase P2: Python Discovery and Authoritative Frontend
+
+The shared private frontend launcher now admits the existing Python 3.10+ host
+requirement in the same process before worker dispatch. Unsupported interpreters
+produce a sanitized typed failure; interface probes remain `Unverified`. This
+closes only a runtime prerequisite, not dialect/profile qualification or gate 1.
+See the [runtime qualification](../experiments/python-runtime-qualification.md)
+for the preregistered reproduction, negative cases, and evidence.
 
 Goal: discover `.py` files, package roots, `__init__.py`, safe project config,
 deterministic repo-local module names, and CPython `ast`/`symtable`/`tomllib`
