@@ -13,6 +13,10 @@ It runs locally and exposes a pattern-first CLI and one read-only MCP tool.
 There are no LLM calls, API keys, embeddings, or cloud services in the analysis
 path. Python 3.10+ is required for the bundled Python analyzer.
 
+The current GitHub stable release is **0.5.0**, published through GitHub only.
+The older npm release is a separate channel; see the
+[publication evidence](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md#current-publication-truth).
+
 ![RepoGrammar indexing a temporary fixture repository](https://raw.githubusercontent.com/SioYooo/RepoGrammar/main/docs/assets/index-progress.gif)
 
 *Recorded from a real CLI run on a fixture repository; playback is slowed for readability.*
@@ -147,9 +151,41 @@ repository → local index → pattern families → examples + bounded read plan
   handle unavailable watchers.
 - **Agent integration:** connect Codex, Claude Code, or opencode through MCP.
 
-Text search finds strings; symbol graphs connect declarations and references.
-RepoGrammar adds evidence about repeated implementation patterns. Use them
-together. Static alignment is not proof of runtime equivalence.
+### How does it differ from other code tools?
+
+| Tool or mechanism | What it contributes | Where RepoGrammar fits |
+| --- | --- | --- |
+| grep / text search | Exact strings and source locations | Qualifies repeated implementation-family context and the source reads still required |
+| Semantic search / RAG | Retrieves material relevant to a query; a generation layer may use it | Provides a bounded local evidence contract, without embeddings or generation in its analysis path |
+| CodeGraph / symbol graphs | Declarations, references, and call paths | Complements graph navigation with family selection, provenance, and abstention |
+| Static analyzers | Checks under a tool's specified semantic model | Reports bounded convention evidence and static alignment; it is not a sound whole-program analyzer |
+
+These are mechanism comparisons, not benchmark or superiority claims. Static
+alignment is not proof of runtime equivalence. The
+[FastAPI/pytest fixture walkthrough](https://github.com/SioYooo/RepoGrammar/blob/main/docs/examples/python-fastapi-pytest.md)
+shows a read plan, optional source spans, and negative cases you can reproduce.
+
+### What do UNKNOWN and a bounded read plan mean?
+
+`UNKNOWN` means the requested claim lacks sufficient qualifying evidence. Its
+typed reason and recovery action tell the agent what remains unresolved; it
+does not mean the repository is incorrect. `PARTIAL_CONTEXT` can provide local
+metadata without selecting a proven family. A bounded read plan names a limited
+set of source locations and remaining reading obligations. Read the required
+source before editing; the plan does not replace that obligation. See the
+[MCP contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md)
+and [UNKNOWN policy](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/unknowns.md).
+
+### Does repository code leave my machine?
+
+RepoGrammar's analysis runs locally and makes no LLM, embedding, or cloud calls.
+MCP responses contain metadata by default; source spans require explicit opt-in.
+The coding agent receiving that response has its own data-handling policy and
+may send metadata or requested source to its provider. Local analysis is not a
+privacy guarantee for the entire agent session. Anonymous telemetry is off by
+default and excludes source and paths; explicit upload is separate. See the
+[telemetry contract](https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/telemetry.md)
+for local diagnostics and consent boundaries.
 
 ## Scope and limitations
 
@@ -166,6 +202,11 @@ abstention. Read [known limitations](https://github.com/SioYooo/RepoGrammar/blob
 
 Public binary targets are macOS arm64/x86_64 and glibc Linux arm64/x86_64.
 Windows and musl Linux are not supported installation targets.
+
+Use ordinary source inspection when a repository has few repeated patterns,
+your framework is outside the bounded scope, or an answer remains `UNKNOWN`.
+Use runtime tests or a suitable semantic analyzer when the question requires
+behavioral correctness, security assurance, or whole-program proof.
 
 ## Development
 

@@ -7,7 +7,7 @@
 - Completion state: **Incomplete — `structural_substrate` under ADR-0020**
 - Counted in Top-20 denominator: **yes**
 - Counted as Top-20 complete: **no**
-- Last reviewed: 2026-08-01
+- Last reviewed: 2026-09-30 (runtime-prerequisite update; no completion promotion)
 
 This review applies ADR-0020's stricter language-completion contract. It does
 not revoke the narrower public Python v0.1 family claims in the product
@@ -18,7 +18,7 @@ gate. The current implementation is substantial, reusable evidence; it is not a
 ## Scope and dialect boundary
 
 The implemented source scope is exact lowercase `.py` files interpreted by the
-available Python 3 worker. Root `pyproject.toml`, `setup.cfg`, and `setup.py`
+available Python 3.10+ worker. Root `pyproject.toml`, `setup.cfg`, and `setup.py`
 are the bounded project-configuration inputs. The Python language version the
 host interpreter implements is provenance-significant because AST shapes differ
 by Python release; this review does not claim one universal
@@ -35,6 +35,14 @@ Pydantic. Django, Flask, unittest, click/typer, Celery, and marshmallow are
 separate bounded preview slices and do not widen this completion decision.
 
 ## Current implementation evidence
+
+The 2026-09-30 [runtime qualification](../../experiments/python-runtime-qualification.md)
+enforces the existing public host floor in the shared private frontend launcher,
+before worker dispatch, without a provider or new dependency. Document/config
+requests fail with `PythonFrontendInterpreterUnsupported`; interface extraction
+remains `Unverified`. This is a prerequisite inside gate 1, not closure of
+dialect selection or packaging profiles. The strict count remains **5/9**;
+Python remains `structural_substrate` and Top-20 remains **0/20**.
 
 ### Discovery, frontend, owned IR, and project model
 
@@ -240,13 +248,13 @@ prerequisite chain:
   execution of target Python code.
 - PyPI inventory does not prove a dependency is installed, selected, imported,
   compatible, or behaviorally understood.
-- The frontend cannot parse Python grammar newer than the host interpreter,
+- The frontend cannot parse Python grammar newer than the admitted host interpreter,
   because the worker is a script that interpreter executes. On an older host,
-  valid modern syntax such as `match`, `except*`, and PEP 695 generics is a
-  plain syntax error and those files degrade to zero code units. The run now
-  reports the bounding version, but no minimum version is defined or enforced,
-  and Python coverage on a given machine is therefore not a fixed property of
-  the release.
+  valid newer syntax such as `except*` on Python 3.10 or PEP 695 generics on
+  Python 3.11 is a plain syntax error and those files degrade to zero code units.
+  The run reports the bounding version; the shared launcher now enforces the
+  existing Python 3.10+ floor, but coverage above that floor remains host-specific.
+  Python 3.10 without `tomllib` still abstains from TOML-dependent config facts.
 - Test-only injected semantic facts are not Pyrefly/Pyright support.
 - Framework exact anchors are bounded source-visible evidence, not universal
   framework coverage.

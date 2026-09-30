@@ -1,0 +1,1208 @@
+{
+  "schema_version": 1,
+  "baseline_date": "2026-09-30",
+  "repository_version": "0.5.0",
+  "protocol_ref": "docs/promotion/geo-research.md",
+  "queries": [
+    {
+      "query_id": "geo-001",
+      "query": "how can a coding agent learn repository conventions before editing code",
+      "intent": "problem_discovery",
+      "branded": false,
+      "target_concept": "repository-local conventions",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "how-it-works",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#how-it-works"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-002",
+      "query": "how can an AI coding agent know which existing implementation to copy",
+      "intent": "problem_discovery",
+      "branded": false,
+      "target_concept": "compatible examples and unresolved evidence",
+      "expected_canonical_source": {
+        "path": "docs/specifications/product.md",
+        "anchor": "product-goal",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/product.md#product-goal"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-003",
+      "query": "how to find representative route and fixture implementations in a large Python repository",
+      "intent": "problem_discovery",
+      "branded": false,
+      "target_concept": "Python family examples",
+      "expected_canonical_source": {
+        "path": "docs/examples/python-fastapi-pytest.md",
+        "anchor": "source-free-repogrammar-query",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/examples/python-fastapi-pytest.md#source-free-repogrammar-query"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-004",
+      "query": "tool that finds repeated implementation patterns in a codebase",
+      "intent": "category_discovery",
+      "branded": false,
+      "target_concept": "implementation-family index",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "how-it-works",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#how-it-works"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-005",
+      "query": "local code-pattern context tool for coding agents",
+      "intent": "category_discovery",
+      "branded": false,
+      "target_concept": "local CLI and MCP family context",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "how-it-works",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#how-it-works"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-006",
+      "query": "what is RepoGrammar and who is it for",
+      "intent": "category_discovery",
+      "branded": true,
+      "target_concept": "product identity and intended users",
+      "expected_canonical_source": {
+        "path": "docs/specifications/product.md",
+        "anchor": "intended-users",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/product.md#intended-users"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-007",
+      "query": "RepoGrammar versus grep for repository conventions",
+      "intent": "alternatives_comparison",
+      "branded": true,
+      "target_concept": "text locations versus family evidence",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "how-does-it-differ-from-other-code-tools",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#how-does-it-differ-from-other-code-tools"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-008",
+      "query": "what is the difference between code RAG and implementation-family evidence",
+      "intent": "alternatives_comparison",
+      "branded": false,
+      "target_concept": "retrieval versus evidence contracts",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "how-does-it-differ-from-other-code-tools",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#how-does-it-differ-from-other-code-tools"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-009",
+      "query": "how does RepoGrammar complement CodeGraph",
+      "intent": "alternatives_comparison",
+      "branded": true,
+      "target_concept": "graph navigation and pattern-family context",
+      "expected_canonical_source": {
+        "path": "docs/promotion/launch-kit.md",
+        "anchor": "why-it-is-not-grep-rag-codegraph-or-a-generic-static-analyzer",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md#why-it-is-not-grep-rag-codegraph-or-a-generic-static-analyzer"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-010",
+      "query": "is RepoGrammar a sound static analyzer",
+      "intent": "alternatives_comparison",
+      "branded": true,
+      "target_concept": "bounded static evidence and non-goals",
+      "expected_canonical_source": {
+        "path": "docs/specifications/product.md",
+        "anchor": "non-goals",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/product.md#non-goals"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-011",
+      "query": "how do I install RepoGrammar on macOS or Linux",
+      "intent": "implementation_howto",
+      "branded": true,
+      "target_concept": "public pinned installer and platform scope",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "quick-start",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#quick-start"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-012",
+      "query": "RepoGrammar init sync resync status doctor differences",
+      "intent": "implementation_howto",
+      "branded": true,
+      "target_concept": "repository lifecycle and recovery",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "when-should-i-index-again",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#when-should-i-index-again"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-013",
+      "query": "how to inspect a bounded source read plan before changing a FastAPI route",
+      "intent": "implementation_howto",
+      "branded": false,
+      "target_concept": "source-reading obligations",
+      "expected_canonical_source": {
+        "path": "docs/examples/python-fastapi-pytest.md",
+        "anchor": "how-an-agent-should-use-the-result",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/examples/python-fastapi-pytest.md#how-an-agent-should-use-the-result"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-014",
+      "query": "local alternative to sending source code to an embedding service",
+      "intent": "privacy_local_first",
+      "branded": false,
+      "target_concept": "local analysis without embeddings",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "does-repository-code-leave-my-machine",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#does-repository-code-leave-my-machine"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-015",
+      "query": "does RepoGrammar send repository code to an LLM or cloud",
+      "intent": "privacy_local_first",
+      "branded": true,
+      "target_concept": "analysis versus receiving-agent privacy",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "does-repository-code-leave-my-machine",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#does-repository-code-leave-my-machine"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-016",
+      "query": "coding agent local context tool with opt-in source spans",
+      "intent": "privacy_local_first",
+      "branded": false,
+      "target_concept": "source-free default and bounded opt-in",
+      "expected_canonical_source": {
+        "path": "docs/examples/python-fastapi-pytest.md",
+        "anchor": "optional-source-spans",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/examples/python-fastapi-pytest.md#optional-source-spans"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-017",
+      "query": "how to give Codex repository-specific implementation examples",
+      "intent": "coding_agent_integration",
+      "branded": false,
+      "target_concept": "Codex MCP integration",
+      "expected_canonical_source": {
+        "path": "docs/quickstart-codex.md",
+        "anchor": "use-repogrammar-in-codex",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-codex.md#use-repogrammar-in-codex"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-018",
+      "query": "how to connect RepoGrammar to Claude Code",
+      "intent": "coding_agent_integration",
+      "branded": true,
+      "target_concept": "Claude Code wiring and scope",
+      "expected_canonical_source": {
+        "path": "docs/quickstart-claude.md",
+        "anchor": "review-and-apply-claude-code-wiring",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart-claude.md#review-and-apply-claude-code-wiring"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-019",
+      "query": "read-only MCP tool for repository implementation conventions",
+      "intent": "coding_agent_integration",
+      "branded": false,
+      "target_concept": "read-only MCP and family context",
+      "expected_canonical_source": {
+        "path": "docs/specifications/mcp-api.md",
+        "anchor": "default-tool-surface",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/mcp-api.md#default-tool-surface"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-020",
+      "query": "how to find compatible pytest fixture conventions without copying a lookalike",
+      "intent": "repository_conventions",
+      "branded": false,
+      "target_concept": "pytest compatibility and negative controls",
+      "expected_canonical_source": {
+        "path": "docs/examples/python-fastapi-pytest.md",
+        "anchor": "negative-cases-to-preserve",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/examples/python-fastapi-pytest.md#negative-cases-to-preserve"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-021",
+      "query": "what should a coding agent do when repository pattern evidence is stale or ambiguous",
+      "intent": "repository_conventions",
+      "branded": false,
+      "target_concept": "typed abstention and recovery",
+      "expected_canonical_source": {
+        "path": "docs/specifications/unknowns.md",
+        "anchor": "recovery-actions",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/specifications/unknowns.md#recovery-actions"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-022",
+      "query": "what does typed UNKNOWN mean in RepoGrammar",
+      "intent": "evidence_limitations",
+      "branded": true,
+      "target_concept": "unresolved claim versus product defect",
+      "expected_canonical_source": {
+        "path": "README.md",
+        "anchor": "what-do-unknown-and-a-bounded-read-plan-mean",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md#what-do-unknown-and-a-bounded-read-plan-mean"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-023",
+      "query": "which Python frameworks and other languages does RepoGrammar actually support",
+      "intent": "evidence_limitations",
+      "branded": true,
+      "target_concept": "bounded official focus and incomplete language gates",
+      "expected_canonical_source": {
+        "path": "docs/limitations.md",
+        "anchor": "language-and-framework-scope",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md#language-and-framework-scope"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    },
+    {
+      "query_id": "geo-024",
+      "query": "can a static implementation pattern prove runtime equivalence or token savings",
+      "intent": "evidence_limitations",
+      "branded": false,
+      "target_concept": "static alignment and measurement boundaries",
+      "expected_canonical_source": {
+        "path": "docs/limitations.md",
+        "anchor": "static-alignment-is-not-runtime-conformance",
+        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/docs/limitations.md#static-alignment-is-not-runtime-conformance"
+      },
+      "observations": [
+        {
+          "engine": "chatgpt_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "google_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        },
+        {
+          "engine": "bing_search",
+          "date": "2026-09-30",
+          "status": "NOT_MEASURED",
+          "mention": null,
+          "citation": null,
+          "cited_url": null,
+          "rank": null,
+          "evidence_ref": null,
+          "notes": "Frozen query; official-guidance research is not an engine visibility observation.",
+          "unknown_reason": "No engine-specific result capture collected in this sprint."
+        }
+      ]
+    }
+  ]
+}

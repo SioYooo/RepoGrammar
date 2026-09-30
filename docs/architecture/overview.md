@@ -120,8 +120,9 @@ cannot drift between machine integration and runtime guidance.
 ## Composition root
 
 `src/rust/bin/repogrammar.rs` is the product composition root. It currently
-wires the CLI boundary, repository-lifecycle surface, transitional TS/JS discovery,
-syntax-only parser adapter, filesystem source reader, SQLite generation store
+wires the CLI boundary, repository-lifecycle surface, multi-language discovery
+and bounded parser adapters including the current CPython frontend, filesystem
+source reader, SQLite generation store
 for `index` and `sync`, optional semantic-worker ingestion when an explicit
 worker executable and optional argv vector are configured, FamilyStore-backed
 query reads, repository-local storage maintenance (`prune`, `compact`, and
@@ -129,13 +130,23 @@ query reads, repository-local storage maintenance (`prune`, `compact`, and
 through the same query layer. Auto-sync start is a bounded process handshake at
 this boundary: the child acquires the daemon lock and records a startup nonce,
 while the parent verifies the expected PID/nonce and child liveness before it
-returns a running result. Python v0.1 analysis, full family mining,
-TypeScript compiler analysis, broad installer writes, and stable production
-family-evidence claims remain later boundaries.
+returns a running result. The current Python frontend and bounded exact-anchor
+family induction are implemented. Python type-provider execution, general
+Python semantics, and broad TypeScript Program/TypeChecker analysis remain
+later boundaries; current family claims retain their documented exact-anchor
+and typed-UNKNOWN limits.
 `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
 coupled to product runtime logic.
 
 ## External dependency boundaries
+
+The Python parser adapter owns same-process admission of the published Python
+3.10+ host requirement before loading its private worker. Only the typed
+`PythonFrontendInterpreterUnsupported` crosses the port; the indexing
+application uses one source-free recovery formatter across full, incremental,
+and project-config parsing. Admission failure cannot activate a replacement
+generation; interface extraction remains `Unverified`, preserving conservative
+sync fallback. This does not add a semantic provider or execute analyzed sources.
 
 Tree-sitter belongs only in parsing and language adapters and is treated as
 syntax-first, not semantics-only. Language-native

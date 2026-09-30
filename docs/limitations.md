@@ -1,26 +1,28 @@
 # Limitations
 
-RepoGrammar's current source identity and latest independently verified public
-stable are `0.4.3`.
-The matching immutable GitHub Release, npm package, provenance, dist-tags, and
-public product smokes are recorded independently in the stable checklist;
-manifest identity alone is never publication proof. The MCP API and bounded
+Current GitHub stable: `0.5.0`.
+
+The immutable GitHub-only release is recorded in the
+[v0.5.0 checklist](release/stable-v0.5.0-release-checklist.md) and its
+[summary](release/stable-v0.5.0-release.summary.json). npm publication is a
+separate historical channel; manifest identity alone is never publication
+proof. The MCP API and bounded
 analyzers remain experimental. RepoGrammar is designed to be
 conservative and local-first, not a sound general static analyzer or a
 production-readiness claim.
 
 ## Release Availability
 
-- The exact immutable `v0.4.3` GitHub Release and independently verified npm
-  `@sioyooo/repogrammar@0.4.3` package are the current public authority after
-  the complete candidate, approval, and finalizer gates passed.
-- The npm wrapper is available only after that exact immutable npm version is
-  approved from staged publication; source manifests do not prove availability.
-- Source-checkout dogfood remains the explicit contributor path; public users
-  should use the pinned release installer or npm launcher.
-- The completed `0.4.3` rollout and finalizer evidence are tracked in
-  `release/stable-v0.4.3-release-checklist.md`. The verified `0.4.2` and earlier
-  records remain historical evidence.
+- `v0.5.0` has ten verified GitHub assets for macOS and glibc Linux. Use the
+  pinned installer in the [README](../README.md); npm `0.5.0` was not published.
+- The independently verified npm `@sioyooo/repogrammar@0.4.3` package remains
+  historical publication evidence in the
+  [v0.4.3 checklist](release/stable-v0.4.3-release-checklist.md). A bounded
+  read-only [registry metadata check](https://registry.npmjs.org/@sioyooo%2Frepogrammar)
+  on 2026-09-30 confirmed `latest=0.4.3`, `preview=0.2.0-preview.0`, and no
+  `0.5.0` version; this is availability metadata, not a new integrity smoke.
+- Source-checkout dogfood remains the contributor path. Public installation
+  and uninstall cover macOS and glibc Linux, not Windows or musl Linux.
 
 ## Language And Framework Scope
 
@@ -28,8 +30,10 @@ production-readiness claim.
   implementation families.
 - Python claims are source-backed framework-family claims, not full Python
   semantic analysis.
-- JS/TS support is a conservative v0.2 exact-anchor preview for Express,
-  Jest/Vitest, Next.js, Fastify, Prisma, and Drizzle.
+- JS/TS has a conservative v0.2 exact-anchor preview. Its precise framework
+  anchors and compiler-worker restrictions are in the
+  [product specification](specifications/product.md); the installed release
+  bundles the Python worker, not the optional source-checkout TypeScript worker.
 - React, full JS/TS semantic analysis, dynamic wrappers, broad re-export
   analysis, executable config semantics, and general runtime behavior are not
   supported.
@@ -38,14 +42,28 @@ production-readiness claim.
   does not claim rustc-level or general Rust semantic analysis.
 - Java/Spring support is structural preview only and does not execute classpath,
   build, DI, proxy, or generated repository semantics.
-- Go is discovered-only and unsupported. `.go` source remains source-free
-  inventory and is never read or parsed. Root/nested `go.mod` and `go.work`
-  enter a bounded non-executing project-config lane: configuration units,
-  declaration-only `go_modules` dependencies, and dependency-inventory-scoped
-  UNKNOWNs may be stored, but no module graph, resolved version, Go-source
-  semantics, framework role, family, or readiness claim is produced. Static
-  config updates are incremental; this auxiliary inventory does not imply Go
-  language support.
+- Later accepted ADRs admit narrow source frontends for Go, PHP, Swift, Ruby,
+  Fortran, SQL, R, and MATLAB. They are not inventory-only anymore. These
+  slices can produce exact declaration/call-shape families within their
+  declared subsets; they do not establish general language semantics or
+  formal Top-20 completion:
+
+  | Bounded slice | Scope authority |
+  | --- | --- |
+  | Go `testing` test functions | [ADR-0050](decisions/ADR-0050-bounded-go-testing-frontend.md) |
+  | PHP PHPUnit test methods | [ADR-0047](decisions/ADR-0047-bounded-php-phpunit-frontend.md) |
+  | Swift XCTest test methods | [ADR-0048](decisions/ADR-0048-bounded-swift-xctest-frontend.md) |
+  | Ruby Minitest test methods | [ADR-0049](decisions/ADR-0049-bounded-ruby-minitest-frontend.md) |
+  | Fortran test-drive test subroutines | [ADR-0051](decisions/ADR-0051-bounded-fortran-testdrive-frontend.md) |
+  | SQL dialect-invariant table definitions | [ADR-0040](decisions/ADR-0040-dialect-invariant-sql-ddl-frontend.md) |
+  | R testthat declarations | [ADR-0042](decisions/ADR-0042-bounded-r-testthat-frontend.md) |
+  | MATLAB `matlab.unittest` class tests | [ADR-0046](decisions/ADR-0046-bounded-matlab-unittest-frontend.md) |
+
+  Refused syntax, identity ambiguity, dynamic behavior, and residual semantics
+  remain typed `UNKNOWN` under the relevant lane contract. Bounded manifest
+  and lock records are auxiliary dependency evidence, not library-behavior
+  proof. No arbitrary package-manager, compiler, or target application execution
+  is authorized by these frontends.
 - Ada is unsupported. Only default `.ads`/`.adb` source names are inventoried;
   alternative GPR naming is unresolved, and GPR bytes are never read. Under
   ADR-0045 a bounded frontend parses `.adb` bodies against a declared subset and
@@ -58,25 +76,13 @@ production-readiness claim.
   produce auxiliary `alire` dependency rows, while conditional/pinned/lock
   semantics remain typed UNKNOWN. This does not imply Ada, library, or
   readiness support.
-- Fortran is discovered-only and unsupported. Only the frozen lowercase,
-  non-preprocessed fixed/free-form suffix set is inventoried. A bounded
-  `fpm.toml` subset may produce auxiliary `fpm` dependency rows; preprocessing,
-  dotted/inline/target dependency shapes, compiler semantics, families, and
-  readiness remain unresolved.
-- SQL is discovered-only and unsupported. Exact `.sql` paths are source-free
-  generic/migration/schema/catalog inventory, not statements or dialect proof.
-  Dialect remains UNKNOWN; no SQL bytes are decoded, no database or migration
-  tool is contacted, and no code unit, semantic UNKNOWN, dependency, family,
-  provider, support, or readiness exists.
-- R is discovered-only and unsupported. Exact `.R` and `.r` source is never
-  decoded.
-  Bounded `DESCRIPTION`/`NAMESPACE` parsing cannot prove CRAN versus
-  Bioconductor, so ambiguous declarations remain typed inventory UNKNOWN and
-  produce no dependency row. Exact `renv.lock` admits only explicit CRAN or
-  Bioconductor package/version records with unknown scope/directness. Custom,
-  remote, URL, and local-path sources are omitted without retaining values.
-  No R/renv/profile/package/native/project code executes and no R family,
-  provider, support, or readiness exists.
+
+The strict [Top-20 audit](reports/language-support/top-20-final-program-audit.md)
+and [program summary](reports/language-support/top-20-program-summary.json)
+remain **0/20 complete**. The narrower official Python family path does not
+grandfather Python through that gate. Production reviewed library-contract
+packs remain zero. None of the preview or frontend records is a claim of full
+language support.
 
 ## UNKNOWN Is Expected
 
@@ -368,7 +374,7 @@ These are intentional current behaviors or tracked deferrals, not defects:
   parse-document response is a future optimization. Adds/removes that only touch
   an isolated path also remain future work.
 - **Token-saving readiness caps at partial.** The `token_saving_readiness`
-  signal reports at most `partial` in `0.4.3`; a dedicated `ready`
+  signal reports at most `partial`; a dedicated `ready`
   band is deferred.
 - **Release checksums provide integrity, not authenticity.** Installers verify a
   `.sha256` fetched from the same release endpoint as the artifact. Signing and

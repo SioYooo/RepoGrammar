@@ -23,7 +23,8 @@ development, and governance documentation.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
-- `promotion/`: public-preview launch copy and promotion guardrails.
+- `promotion/`: canonical launch copy, claim guardrails, discovery research,
+  and a reproducible search-measurement protocol.
 - `demo/`: recording and live-demo runbooks; `demo/demo-runbook.md` is the
   canonical under-three-minute demo script and evidence checklist.
 - `../algorithms/paper/`: metadata-only archive of algorithm and supply-chain
@@ -39,6 +40,10 @@ context lives under `.agents/memories/`.
 - Connect [Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or [opencode](quickstart-opencode.md).
 - [CLI reference](specifications/cli.md): when to initialize, sync, or rebuild.
 - [Limitations](limitations.md): supported scope and evidence boundaries.
+- [Product explanation and fixture walkthrough](examples/python-fastapi-pytest.md):
+  source-free read plans, opt-in spans, and negative controls.
+- [Current publication and launch claims](promotion/launch-kit.md#current-publication-truth):
+  separates the GitHub release from historical npm publication.
 - [Autosync efficiency evidence](reports/autosync-efficiency.md) and [recorded progress demo](demo/index-progress.summary.json).
 
 ## Canonical source by topic
@@ -70,21 +75,24 @@ context lives under `.agents/memories/`.
   Go's N1 preflight, source-free `.go` discovery, and bounded static
   `go.mod`/`go.work` dependency-inventory contract are
   `decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`; Go
-  remains `discovered_only` and unsupported, and no Go command or semantic
-  worker is authorized.
+  has since gained the bounded `testing` frontend under
+  `decisions/ADR-0050-bounded-go-testing-frontend.md`; Go commands and semantic
+  workers remain unauthorized, and strict completion remains open.
   PHP's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`; PHP is
-  `discovered_only` and unsupported, and no parser/worker dependency or
-  semantic runtime behavior is authorized.
+  `decisions/ADR-0024-php-sandboxed-frontend-phpunit-preflight.md`;
+  `decisions/ADR-0047-bounded-php-phpunit-frontend.md` later admits a bounded
+  PHPUnit frontend, without a parser/worker dependency or semantic runtime.
   Swift's N1 preflight plus discovery-only implementation record are
-  `decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md`; Swift is
-  `discovered_only` and unsupported, and no parser/worker dependency or
-  semantic runtime behavior is authorized. The exact pause checkpoint and
+  `decisions/ADR-0025-swift-syntax-sourcekit-xctest-preflight.md`;
+  `decisions/ADR-0048-bounded-swift-xctest-frontend.md` later admits a bounded
+  XCTest frontend without a parser/worker dependency or semantic runtime.
+  The earlier qualification pause checkpoint and
   paste-ready stage-3 resume goal are in
   `plans/swift-n1-qualification-handoff.md`.
   Ruby's N1 preflight, discovery record, and bounded exact-`Gemfile.lock`
   dependency inventory contract are
-  `decisions/ADR-0022-ruby-prism-minitest-preflight.md`.
+  `decisions/ADR-0022-ruby-prism-minitest-preflight.md`; its first-family closure
+  is refined by `decisions/ADR-0049-bounded-ruby-minitest-frontend.md`.
   Java's structural preview remains incomplete, while ADR-0030 now also owns
   the bounded exact-root/nested-`pom.xml` direct dependency-inventory contract;
   it is not a Maven effective model, javac/JDT provider, classpath/JAR resolver,
@@ -100,11 +108,18 @@ context lives under `.agents/memories/`.
 - v0.2 public-preview readiness: `reports/public-preview-growth-readiness.md`,
   `reports/public-preview-install-proof-matrix.md`, and
   `experiments/v0.2-real-repo-dogfood.md`.
-- Public-preview growth readiness:
-  `reports/public-preview-growth-readiness.md`, `quickstart.md`,
+- Historical public-preview growth readiness:
+  `reports/public-preview-growth-readiness.md`; current onboarding and claims:
+  `quickstart.md`,
   `quickstart-codex.md`, `quickstart-claude.md`, `quickstart-opencode.md`,
   `limitations.md`,
   `examples/python-fastapi-pytest.md`, and `promotion/launch-kit.md`.
+- Search/answer-engine discovery research and measurement protocol:
+  [promotion/geo-research.md](promotion/geo-research.md), with the frozen
+  [query corpus](promotion/geo-query-corpus.json). Engine observations are
+  `NOT_MEASURED` until supported by retained captures; these are not visibility
+  results. The separate [site proposal](promotion/geo-site-proposal.md) requests
+  a deployment decision and authorizes no site or crawler-policy change.
 - Demo script and Developer Tools evidence:
   `demo/demo-runbook.md`, `quickstart-codex.md`, and
   `promotion/launch-kit.md`.
@@ -150,8 +165,8 @@ context lives under `.agents/memories/`.
   one no-follow handle-relative authority for discovery, source reads, and
   autosync fingerprinting; it adds no dependency or runtime fix by itself.
 - MCP tool intent: `specifications/mcp-api.md`.
-- Deterministic query normalization and family retrieval substrate (not yet
-  routed into the production lookup path): `specifications/query-resolution.md`.
+- Deterministic query normalization and family retrieval in the production
+  lookup path: `specifications/query-resolution.md`.
 - Metrics taxonomy: `specifications/metrics.md`.
 - Telemetry policy: `specifications/telemetry.md`.
 - Language-native semantic workers: `specifications/semantic-workers.md`.

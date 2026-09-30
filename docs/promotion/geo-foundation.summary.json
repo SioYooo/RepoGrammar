@@ -1,0 +1,76 @@
+{
+  "schema": "geo-foundation.v1",
+  "date": "2026-09-30",
+  "verdict": "LOCAL_FOUNDATION_VALIDATED_VISIBILITY_NOT_MEASURED",
+  "checkout_base_commit": "27d4a1778d39413532df9b390f76b5bca24012a9",
+  "public_publication": {
+    "github_stable": "0.5.0",
+    "npm_stable": "0.4.3",
+    "npm_preview": "0.2.0-preview.0",
+    "npm_0_5_0_published": false,
+    "npm_metadata_checked_on": "2026-09-30",
+    "npm_registry_url": "https://registry.npmjs.org/@sioyooo%2Frepogrammar"
+  },
+  "corpus": {
+    "schema_version": 1,
+    "query_count": 24,
+    "branded_count": 10,
+    "unbranded_count": 14,
+    "engine_observation_count": 72,
+    "status": "NOT_MEASURED",
+    "sha256": "d9d11f8f27bd60da1f9e45b8a45943a15cc5970e1e9286d966facb02ed573051"
+  },
+  "external_metrics": {
+    "indexed_canonical_urls": null,
+    "mentions": null,
+    "citations": null,
+    "correct_description_rate": null,
+    "unsupported_claim_rate": null,
+    "version_staleness_rate": null,
+    "canonical_citation_rate": null,
+    "referral_traffic": null
+  },
+  "official_guidance_sources": 7,
+  "source_access_date": "2026-09-30",
+  "website": {
+    "infrastructure_found_in_checkout": false,
+    "deployed_by_sprint": false,
+    "crawler_files_added": false,
+    "framework_or_dependency_added": false,
+    "proposal_only": true
+  },
+  "validation": {
+    "check_geo": "PASS",
+    "geo_unit_tests": {
+      "passed": 5,
+      "failed": 0
+    },
+    "independent_adversarial_mutations": {
+      "passed": 15,
+      "failed": 0
+    },
+    "canonical_paths_and_anchors": "PASS",
+    "markdown_relative_links": "PASS",
+    "format": "PASS",
+    "clippy": "PASS",
+    "full_repository_rust_gate": "PASS",
+    "repository_infrastructure_tests": {
+      "passed": 110,
+      "failed": 0
+    },
+    "repo_guard": "PASS",
+    "diff_check": "PASS",
+    "mirrored_guides": "PASS"
+  },
+  "guard_source_sha256": "a54fcf9405fd5892c8f703f339a19cd40518e69394a457a00a8709f51742412f",
+  "initial_guard_compile_and_lint_failure": "fixed macro expression grouping and simplified boolean; no lint suppression or assertion weakening",
+  "remote_mutations": false,
+  "external_posts_submitted": false,
+  "new_release_published": false,
+  "claim_boundaries": [
+    "local preparation is not deployed discovery infrastructure",
+    "corpus is a measurement plan, not observed visibility",
+    "capture references require human evidence review",
+    "no causal GEO or token-savings claim"
+  ]
+}

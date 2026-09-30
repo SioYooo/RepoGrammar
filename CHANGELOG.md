@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- The private Python frontend now checks the published Python 3.10+ requirement
+  before worker dispatch in each existing request process. Unsupported runtimes
+  yield a typed, source-free recovery error; interface probes remain unverified.
+  This does not add a Python semantic provider or promote language completion.
+
 ## 0.5.0 — 2026-09-09 GitHub binary release
 
 ### Changed

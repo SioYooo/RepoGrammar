@@ -811,6 +811,9 @@ where
             Err(ParseError::PythonFrontendContractMismatch) => {
                 return Err(python_frontend_contract_mismatch_error());
             }
+            Err(ParseError::PythonFrontendInterpreterUnsupported) => {
+                return Err(python_frontend_interpreter_unsupported_error());
+            }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
                     "parser failed for {}: internal parser error",
@@ -1590,6 +1593,9 @@ where
             }
             Err(ParseError::PythonFrontendContractMismatch) => {
                 return Err(python_frontend_contract_mismatch_error());
+            }
+            Err(ParseError::PythonFrontendInterpreterUnsupported) => {
+                return Err(python_frontend_interpreter_unsupported_error());
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -2719,6 +2725,9 @@ fn python_source_roots_from_project_config(
             }
             Err(ParseError::PythonFrontendContractMismatch) => {
                 return Err(python_frontend_contract_mismatch_error());
+            }
+            Err(ParseError::PythonFrontendInterpreterUnsupported) => {
+                return Err(python_frontend_interpreter_unsupported_error());
             }
             Err(ParseError::Internal(_)) => {
                 return Err(RepoGrammarError::InvalidInput(format!(
@@ -6344,6 +6353,13 @@ fn source_store_error(error: SourceStoreError) -> RepoGrammarError {
 fn python_frontend_contract_mismatch_error() -> RepoGrammarError {
     RepoGrammarError::InvalidInput(
         "PythonFrontendContractMismatch: rebuild or reinstall RepoGrammar so the product binary and bundled Python worker come from the same release"
+            .to_string(),
+    )
+}
+
+fn python_frontend_interpreter_unsupported_error() -> RepoGrammarError {
+    RepoGrammarError::InvalidInput(
+        "PythonFrontendInterpreterUnsupported: configure REPOGRAMMAR_PYTHON_EXECUTABLE with Python 3.10 or newer within 3.x, then retry indexing"
             .to_string(),
     )
 }

@@ -1772,7 +1772,24 @@ and writes the committed `docs/experiments/data/agent-study-regrade.v1.json`.
 
 ## Required local gate
 
+The isolated evaluation harness selects its `python3` tool from the parent
+`PATH`, then pins that tool in its cleared child environment. Ensure that
+`python3` on that PATH also meets the 3.10+ requirement; the product parser's
+`REPOGRAMMAR_PYTHON_EXECUTABLE` override does not change this harness tool
+selection. Keep the parent PATH selection explicit in recorded local commands.
+
 Use the full gate before committing implementation changes:
+
+Private Python frontend tests require a supported interpreter: Python 3.10 or
+newer within 3.x. When the platform's `python3` is older, select the qualified
+interpreter with `REPOGRAMMAR_PYTHON_EXECUTABLE=/absolute/path/to/python3` for
+Cargo commands. Existing timeout, missing-worker, and contract-drift fixtures
+honor that selection so they exercise their intended failure, rather than
+failing earlier at runtime admission. Run the standalone worker tests with the
+selected interpreter directly; the environment variable controls the Rust
+frontend, not the shell's `python3` command. Grammar and `tomllib` availability
+remain host-specific as described in
+[`python-analysis.md`](../specifications/python-analysis.md).
 
 ```text
 cargo fmt --all -- --check

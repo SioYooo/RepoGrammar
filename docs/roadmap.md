@@ -325,6 +325,15 @@ The active execution authority is
 - N3 (3): SQL, R, MATLAB; and
 - N4 (2): Assembly, Scratch.
 
+### Current source-frontend status and historical preflights
+
+Later accepted bounded frontends under ADR-0040 and ADR-0042 through ADR-0051
+supersede the inventory-only source status in the earlier records below.
+The current [program summary](reports/language-support/top-20-program-summary.json)
+and [limitations](limitations.md) record their narrow family slices; strict
+completion remains 0/20. The earlier external-provider acquisition/isolation
+preflights remain constraints and are not runtime admission or support claims.
+
 Go's N1 preflight is accepted in
 `docs/decisions/ADR-0021-go-standard-library-semantic-worker-preflight.md`, and
 its discovery/config module now inventories bounded `.go`, root/nested
@@ -463,6 +472,8 @@ ADR-0039 and `docs/reports/language-support/scratch-completion-review.md` requir
 a binary-document port and maintained ZIP/deflate qualification before product
 discovery may change.
 
+### Consolidated qualification checkpoints
+
 The 2026-08-01 five-round checkpoint is audited as
 `PARTIAL_AUDITED_PROGRESS`: strict completion remains `0/20`, TypeScript extra
 is incomplete, 17 of 20 dependency-ecosystem tokens have bounded consumers,
@@ -492,6 +503,13 @@ current public-preview label by itself.
 ## Python path
 
 - Python is the v0.1 implementation target.
+- Private frontend requests enforce the published Python 3.10+ host floor in
+  one process before worker loading. Unsupported interpreters stop indexing
+  with source-free `PythonFrontendInterpreterUnsupported` recovery; interface
+  probes remain `Unverified`. The
+  [runtime qualification](experiments/python-runtime-qualification.md) closes
+  a prerequisite only: Python stays 5/9 and `structural_substrate`, with
+  Pyrefly/Pyright absent and Top-20 still 0/20.
 - Use the method stack in `docs/specifications/python-analysis.md` and
   `docs/decisions/ADR-0012-python-selective-analysis-cascade.md`.
 - The first CPython structural slice is implemented, including

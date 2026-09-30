@@ -1,5 +1,18 @@
 # Project State
 
+## Python host requirement admitted — 2026-09-30
+
+The shared private frontend launcher enforces the existing public Python 3.10+
+requirement before worker dispatch, in the same bounded process. Document/config
+failures carry `PythonFrontendInterpreterUnsupported` and source-free recovery;
+interface failures stay `Unverified`. All application parser paths route through
+one error formatter and existing indexing transactions preserve the active
+generation on failure. See `docs/experiments/python-runtime-qualification.md`.
+This is a runtime prerequisite, not provider integration or dialect/profile
+closure: Python stays 5/9, `structural_substrate`, and Top-20 stays 0/20. Avoid
+adding a per-request version probe/cache; host grammar and `tomllib` availability
+above the floor still vary.
+
 ## Five bounded test-framework frontends, audited and corrected — 2026-09-05
 
 ADR-0047 through ADR-0051 land bounded hand-written frontends for PHP/PHPUnit,
@@ -180,9 +193,10 @@ integration remains `NO_GO`/`not_started`. The initial evidence matrix is
 later consolidated checkpoint is
 `docs/reports/language-support/top-20-final-program-audit.md`.
 
-## Build Week stable-release line
+## Historical Build Week stable-release checkpoint
 
-The current release source identity is `0.4.0`. The earlier annotated
+At this checkpoint the release source identity was `0.4.0`; current publication
+is recorded by the v0.5.0 checklist and summary. The earlier annotated
 `v0.3.2` candidate is bound to `26ce59e`; its 11-asset GitHub draft is retained
 as private audit evidence, and its release run was cancelled before the
 protected npm staging job executed. It must not be moved, reused, or published
