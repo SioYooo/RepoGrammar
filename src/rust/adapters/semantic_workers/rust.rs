@@ -1,7 +1,8 @@
 //! Rust semantic-provider adapters.
 //!
 //! The implemented slice is a conservative Cargo metadata provider. It is an
-//! explicit adapter boundary: default indexing does not call it, and it never
+//! explicit adapter boundary: library callers choose it, while the public CLI
+//! supplies it by default. Unavailable Cargo remains typed UNKNOWN. It never
 //! executes build scripts or procedural macros.
 
 use crate::core::model::{

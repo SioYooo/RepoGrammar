@@ -186,6 +186,15 @@ context lives under `.agents/memories/`.
 - Conditional global instruction wiring and unmeasured A0/A1/A2 confirmation:
   [ADR-0054](decisions/ADR-0054-default-conditional-agent-instructions.md) and
   [agent-adoption-confirmation](experiments/agent-adoption-confirmation.md).
+- Current-source B0-B3 adoption protocol and offline payload qualification:
+  [agent-adoption-v2](experiments/agent-adoption-v2.md). Historical RQ5 remains
+  historical; real adoption effects are not measured.
+- Frozen 110-query retrieval baseline and exact 17-miss classification:
+  [retrieval-miss-audit](experiments/retrieval-miss-audit.md).
+- Qualified full-resync host wall/counter attribution and remaining CPU gap:
+  [host-stage-attribution](experiments/host-stage-attribution.md).
+- One prioritized execution handoff and v0.6.0 go/no-go gates:
+  [adoption/retrieval/release plan](plans/v0.6-adoption-retrieval-release-plan.md).
 
 ## Task reading guide
 

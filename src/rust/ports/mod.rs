@@ -3,6 +3,7 @@
 pub mod family_store;
 pub mod file_discovery;
 pub mod framework_roles;
+pub mod host_profile;
 pub mod index_store;
 pub mod parser;
 pub mod python_provider;

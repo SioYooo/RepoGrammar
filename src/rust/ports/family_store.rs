@@ -304,6 +304,9 @@ pub struct WriteSessionStats {
 /// results. It is object-safe (`&mut self`, concrete record types) so build
 /// pipelines thread `&mut dyn GenerationWriteSession` uniformly.
 pub trait GenerationWriteSession {
+    fn host_profile(&self) -> Option<&crate::ports::host_profile::HostProfile> {
+        None
+    }
     /// The `building` generation this session writes into.
     fn generation(&self) -> &GenerationHandle;
 

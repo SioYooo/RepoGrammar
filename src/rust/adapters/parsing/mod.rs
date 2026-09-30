@@ -21,6 +21,7 @@ pub mod go;
 pub mod java;
 pub mod matlab;
 pub mod php;
+pub mod profiled;
 pub mod python;
 pub mod r;
 pub mod ruby;

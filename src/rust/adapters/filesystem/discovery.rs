@@ -29,6 +29,7 @@ use crate::ports::file_discovery::{
     DiscoveredFile, DiscoveredLanguage, FileDiscovery, FileDiscoveryError, FileDiscoveryReport,
     FileDiscoveryRequest, GitIgnoreStatus, SkippedPath, SkippedReason,
 };
+use crate::ports::host_profile::{HostPhase, HostProfile};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
@@ -71,6 +72,17 @@ const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
 #[derive(Debug, Default)]
 pub struct FilesystemFileDiscovery;
 
+pub struct ProfiledFileDiscovery(pub HostProfile);
+impl FileDiscovery for ProfiledFileDiscovery {
+    fn discover(
+        &self,
+        request: FileDiscoveryRequest,
+    ) -> Result<FileDiscoveryReport, FileDiscoveryError> {
+        let _span = self.0.span(HostPhase::Discovery);
+        discover_files_profiled(request, DiscoveryLimits::default(), Some(self.0.clone()))
+    }
+}
+
 impl FileDiscovery for FilesystemFileDiscovery {
     fn discover(
         &self,
@@ -102,6 +114,14 @@ fn discover_files_with_limits(
     request: FileDiscoveryRequest,
     limits: DiscoveryLimits,
 ) -> Result<FileDiscoveryReport, FileDiscoveryError> {
+    discover_files_profiled(request, limits, None)
+}
+
+fn discover_files_profiled(
+    request: FileDiscoveryRequest,
+    limits: DiscoveryLimits,
+    profile: Option<HostProfile>,
+) -> Result<FileDiscoveryReport, FileDiscoveryError> {
     if request.repository_root.trim().is_empty() {
         return Err(FileDiscoveryError::InvalidRoot(
             "repository root must not be empty".to_string(),
@@ -119,6 +139,7 @@ fn discover_files_with_limits(
         .map_err(|_| FileDiscoveryError::InvalidRoot("repository root is not readable".into()))?;
 
     let mut state = DiscoveryState {
+        profile,
         root,
         canonical_root,
         max_file_bytes: request.max_file_bytes,
@@ -133,6 +154,7 @@ fn discover_files_with_limits(
 }
 
 struct DiscoveryState {
+    profile: Option<HostProfile>,
     root: PathBuf,
     canonical_root: PathBuf,
     max_file_bytes: u64,
@@ -153,6 +175,9 @@ impl DiscoveryState {
             .map_err(|_| FileDiscoveryError::Unavailable("failed to read directory".into()))?;
         let mut entries = Vec::new();
         for entry in read_dir {
+            if let Some(profile) = &self.profile {
+                profile.work(HostPhase::Discovery, 1, 0);
+            }
             self.budget.record_visited_entry()?;
             entries.push(entry.map_err(|_| {
                 FileDiscoveryError::Unavailable("failed to read directory entry".into())
@@ -296,8 +321,13 @@ impl DiscoveryState {
         let actual_size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         self.budget.record_accepted_file(actual_size_bytes)?;
 
+        let hash_span = self.profile.as_ref().map(|p| p.span(HostPhase::Hashing));
+        if let Some(profile) = &self.profile {
+            profile.work(HostPhase::Hashing, 1, actual_size_bytes);
+        }
         let content_hash = ContentHash::new(format!("sha256:{}", sha256_hex(&bytes)))
             .expect("sha256_hex returns strict sha256:<64 hex chars> payload");
+        drop(hash_span);
         self.files.push(DiscoveredFile {
             path: relative_path,
             language,

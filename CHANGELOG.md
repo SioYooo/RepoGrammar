@@ -4,6 +4,12 @@
 
 ### Added
 
+- Added opt-in repository-guard full-resync host-stage diagnostics, with
+  exclusive wall timing, scoped operation/write-session counters, bounded
+  isolated controls and complete owned-table parity. Normal product profiling
+  remains disabled. Per-phase CPU is unmeasured; no speed or memory saving is
+  claimed by instrumentation.
+
 - Current source indexing uses a bounded, isolated Python project session for
   two or more planned Python parses. Context is sent once and detailed ASTs are
   ephemeral; canonical output, UNKNOWN and freshness contracts are unchanged.

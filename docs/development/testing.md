@@ -1879,7 +1879,52 @@ git diff --check origin/main...HEAD
 cmp -s AGENTS.md CLAUDE.md
 ```
 
+## Host-stage diagnostic qualification
+
+Run `cargo test --lib host_profile` and `cargo test --bin repo-guard host_stage`.
+The former includes previous-active-generation preservation on parser timeout;
+the latter refuses external projects, invalid modes and unbounded requests.
+`repo-guard host-stage-eval` qualifies frozen synthetic/self/FastAPI inputs with
+native totals and complete off/on/public-CLI analysis parity. It requires the
+same qualified parent Python PATH as performance-eval; macOS native resource
+access may require the documented sandbox exception. Treat failed/incomplete
+runs as missing data and retain evidence, never zero or improvement.
+No CI absolute timing threshold is introduced; see
+[`host-stage-attribution.md`](../experiments/host-stage-attribution.md).
+
 ## Release readiness smoke matrix
+
+Current-source adoption measurement uses a separate offline adapter:
+`python3 src/experiments/agent_study/adoption_v2.test.py`. It must cover the
+actual MCP pregolden, current plan/identity/omission shapes, failed and parallel
+reads, malformed/duplicate messages, missing usage and source-free derived
+output. Keep historical RQ5 parser/ledgers unchanged. This selftest is not
+agent adoption or structural sandbox-denial evidence; live-run gates are in
+[`agent-adoption-v2.md`](../experiments/agent-adoption-v2.md).
+
+The offline v2 runner and separate task oracles use Python stdlib only:
+
+```text
+python3 src/experiments/agent_study/oracles_v2.test.py
+python3 src/experiments/agent_study/runner_v2.test.py
+python3 src/experiments/agent_study/runner_v2.py --out <new-outside-repo-dir> --instruction-file <reviewed-global-v4> --expected-guide-sha256 <sha256> --product-bin <pinned-binary>
+```
+
+The CLI executes local malicious control subprocesses on macOS under
+`sandbox-exec`, never an agent/model. An enclosing sandbox can reject nested
+sandbox creation; retain that failure and use a specifically authorized native
+run. Unsupported hosts or failed positive/negative controls return nonzero
+`CONTROL_ISOLATION_BLOCKED`; the portable unit tests do not substitute for
+native enforcement. The CLI checks actual permission-denial errors rather than
+counting missing files/refused network ports as isolation proof. It tests source
+read/write/shell/SQLite access as positive controls, plus index read/search/glob,
+shell/SQLite, symlink/hardlink/rename, product read/exec, hidden oracle/other
+profile and network denial. Pre-existing aliases/special files are refused.
+
+References/mutants and deterministic arm/prompt/source identities qualify only
+DEVELOPMENT_BURNED fixtures. Live host/global discovery, hidden-tool/credential
+isolation, controlled MCP IPC and held-out effects remain separate gates. See
+[the qualification scope](../experiments/agent-adoption-v2-qualification.md).
 
 Before cutting a stable or preview tag or opening release-readiness changes,
 contributors should run the normal local gate plus a source-checkout smoke

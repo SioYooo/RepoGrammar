@@ -4,9 +4,18 @@ use super::bounded_read::{read_file_bounded, BoundedReadError};
 use crate::adapters::filesystem::discovery::sha256_hex;
 use crate::core::model::ContentHash;
 use crate::core::policy::paths::{repo_relative_path_buf, RepoRelativePathError};
+use crate::ports::host_profile::{HostPhase, HostProfile};
 use crate::ports::source_store::{SourceReadRequest, SourceStore, SourceStoreError, SourceText};
 use std::fs;
 use std::path::PathBuf;
+
+pub struct ProfiledSourceStore(pub HostProfile);
+impl SourceStore for ProfiledSourceStore {
+    fn read_source(&self, request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+        let _span = self.0.span(HostPhase::Context);
+        read_repository_source_profiled(request, Some(&self.0))
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct FilesystemSourceStore;
@@ -18,6 +27,12 @@ impl SourceStore for FilesystemSourceStore {
 }
 
 fn read_repository_source(request: SourceReadRequest) -> Result<SourceText, SourceStoreError> {
+    read_repository_source_profiled(request, None)
+}
+fn read_repository_source_profiled(
+    request: SourceReadRequest,
+    profile: Option<&HostProfile>,
+) -> Result<SourceText, SourceStoreError> {
     if request.repository_root.trim().is_empty() {
         return Err(SourceStoreError::InvalidRequest(
             "repository root must not be empty".to_string(),
@@ -84,8 +99,14 @@ fn read_repository_source(request: SourceReadRequest) -> Result<SourceText, Sour
             )));
         }
     };
+    if let Some(p) = profile {
+        p.work(HostPhase::Context, 1, bytes.len() as u64);
+        p.work(HostPhase::Hashing, 1, bytes.len() as u64);
+    }
+    let hash_span = profile.map(|p| p.span(HostPhase::Hashing));
     let content_hash = ContentHash::new(format!("sha256:{}", sha256_hex(&bytes)))
         .expect("sha256_hex returns strict sha256:<64 hex chars> payload");
+    drop(hash_span);
     if content_hash != request.expected_content_hash {
         return Err(SourceStoreError::HashMismatch(format!(
             "source content changed after discovery: {}",

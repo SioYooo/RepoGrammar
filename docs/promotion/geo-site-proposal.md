@@ -21,14 +21,15 @@ factory or rewrite specifications into another authority.
 
 Choose the actual HTTPS origin before implementation; none is invented here.
 
-| Proposed path | Content authority |
-| --- | --- |
-| `/` | README product description, install entrypoint, release and scope boundary |
-| `/docs/quickstart/` | Existing quickstart and lifecycle commands |
-| `/docs/agents/codex/`, `/docs/agents/claude-code/` | Existing agent guides |
-| `/docs/evidence/` | Existing fixture walkthrough and links to immutable specification evidence |
-| `/docs/limitations/` | Existing limitations and language-audit links |
-| `/docs/releases/` | Current publication projection with explicitly dated historical release links |
+| Intent / path | Title | Description and source |
+| --- | --- | --- |
+| Identity `/` | RepoGrammar: implementation-family context for coding agents | Local evidence, bounded reads and UNKNOWN; README identity/how-it-works sections |
+| Lifecycle `/docs/quickstart/` | Install and initialize RepoGrammar | GitHub binary install, init/sync/resync/status/doctor distinctions; quickstart and CLI specification |
+| Codex `/docs/agents/codex/` | Use RepoGrammar with Codex | Exact wiring, source/public distinction and conditional use; Codex quickstart |
+| Claude `/docs/agents/claude-code/` | Use RepoGrammar with Claude Code | Exact wiring, read plan and fallback; Claude quickstart |
+| Evidence `/docs/evidence/` | A source-backed FastAPI and pytest walkthrough | Reproducible fixture, positive and negative cases; existing example |
+| Limitations `/docs/limitations/` | RepoGrammar evidence and language limits | Bounded scope, UNKNOWN, static alignment and when to use other tools; limitations |
+| Publication `/docs/releases/` | RepoGrammar publication channels | Current GitHub versus separately dated npm channel; launch-kit publication projection and immutable release records |
 
 Use stable paths, one canonical page per topic, and source/edit links to the
 exact reviewed Git commit. Render existing Markdown through one explicit map;
@@ -101,3 +102,69 @@ independent search/training crawler policies, and authorize the required
 repository settings and deployment. Until then, retain GitHub-native material
 and collect a truthful query baseline. This proposal itself grants none of
 those permissions.
+
+## Implementation handoff after d981d57
+
+This is the implementation-ready design for a future static publication, not
+authorization to configure Pages, DNS, owner accounts or indexing submissions.
+The origin, deployment owner and independent GPTBot policy remain decisions.
+Keep one rendered canonical page per intent and retain source documents as
+authority. No website framework or dependency is needed for this preparation.
+
+Descriptions above are proposed metadata, not new independent product prose.
+Critical answers, commands and limitations must render as static HTML. Do not
+split these into query-variant landing pages. Do not export the full README to
+both `/` and `/docs/quickstart/`: map identity sections to `/` and lifecycle
+content to quickstart. Every page has one absolute self-canonical URL under
+the approved origin, one h1, unique title/description, accessible navigation,
+source/edit links pinned to the publication commit and truthful OpenGraph text.
+Link to the original specifications rather than duplicating them. GitHub copies
+cannot be assigned custom canonical metadata by this repository.
+
+Build a single explicit page/source map under `src/` using the approved static
+Markdown renderer. Record all content dependencies per page, including shared
+release/scope projections. Use rendered-content hashes to distinguish content
+changes from rebuilds; `lastmod` is the last actual content change timestamp
+from reviewed history, never the CI build time. If that provenance is unknown,
+omit optional lastmod rather than invent it. The sitemap includes only served
+canonical 200 URLs. Do not add `priority` or `changefreq` as a ranking tactic.
+
+Render `robots.txt` at the controlled origin root only. The owner chooses
+GPTBot training access independently from intended OAI-SearchBot search
+access; permitting the crawler is not indexing/citation proof. Account for
+host/CDN blocks and actual bot IP access as well as robot rules. Optional
+`SoftwareSourceCode` describes the real repository, maintainer and MIT license;
+`TechArticle` applies only to actual technical pages with truthful author/source
+and modification dates. No ratings, fabricated usage or special AI schema.
+Optional llms.txt may index those same canonical pages for a demonstrated
+consumer; Google ignores it for ranking/visibility.
+
+Before publishing, run deterministic page-map uniqueness/internal-link tests,
+HTML title/description/canonical and content-with-JavaScript-disabled checks,
+schema/robots/sitemap validation, historical-version controls and
+source/public-install consistency. Mutant tests must reject duplicate canonical
+URLs, future/fabricated lastmod, stale current npm/GitHub assertions, unintended
+noindex and bot-policy conflation. After separate owner approval, verify HTTP
+status/content/redirects and metadata signed out; local build PASS is not live
+accessibility PASS.
+
+Google Search Console: the owner selects Domain verification through approved
+DNS or a URL-prefix property through a retained verification HTML file/tag.
+Bing Webmaster Tools: owner verifies the same origin by approved DNS/XML/meta
+verification or authorized Search Console import. Retain verification tokens
+as deployment secrets/config, never in research results. Check effective
+generative-search inclusion, including inherited settings; no account change
+or submission is performed here. Sitemap receipt, index report and actual
+retrieval are separate evidence. Optional IndexNow requires host/key ownership
+and only truthful changed URLs; it does not guarantee indexing.
+
+Execute the existing 24-query/72-cell [baseline protocol](geo-research.md#future-comparison-protocol)
+**before publication** when permitted access exists, then at the three declared
+timepoints. Freeze the corpus hash and capture settings. Do not replace its
+GitHub expected URLs with site URLs until a versioned URL-map revision is
+publicly served; preserve the old baseline. Canonical-claim accuracy is the
+fraction of reviewed mentioned answers whose product/version/platform/privacy/
+measurement statements are all supported by frozen authorities. Report its
+numerator, reviewed denominator and specific unsupported/stale statements.
+Absent captures remain NOT_MEASURED, never zero. Index counts require verified
+dashboard exports; ranking, citation lift and causal GEO effects are unproved.

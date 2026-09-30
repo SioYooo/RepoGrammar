@@ -137,8 +137,11 @@ family induction are implemented. Python type-provider execution, general
 Python semantics, and broad TypeScript Program/TypeChecker analysis remain
 later boundaries; current family claims retain their documented exact-anchor
 and typed-UNKNOWN limits.
-`src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
-coupled to product runtime logic.
+`src/rust/bin/repo_guard.rs` is a separate governance/qualification tool.
+Product runtime must not depend on its checks or report schemas. The isolated
+host-stage harness may compose existing owned application/adapter APIs for
+diagnostics, with independent public-CLI canonical parity; it must not duplicate
+family, support or freshness decisions. Normal runtime never starts the profiler.
 
 The query application loads local-context units only when the existing path
 matcher or an admitted unit-path prefix can resolve a locus. Impossible targets

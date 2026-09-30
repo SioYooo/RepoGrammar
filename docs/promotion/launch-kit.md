@@ -254,17 +254,16 @@ Use:
 - “estimated potential read displacement”; and
 - “local product MCP self-test passed” only when that exact fact was verified.
 
-One exception is authorized: the 52% token reduction seen in a single recorded
-demo run may be reported when it is attributed to that one run and carries its
-limits, as `../reports/public-preview-growth-readiness.md` records. It is an
-observation, not a measurement: one demo session, no saved run artifact, no
-committed controlled pair. The drafts below omit that number.
+Historical growth-readiness records preserve the single-demo 52% observation
+and its original limits: no saved run artifact or committed controlled pair.
+Current launch drafts omit it. Future public copy should omit the percentage
+until a new comparable controlled pair supports the intended claim; historical
+permission to describe one observation is not measured product evidence.
 
 Do not claim:
 
 - measured token savings, or any percentage reduction stated as measured,
-  benchmarked, typical, or expected rather than as the single-run observation
-  above;
+  benchmarked, typical, or expected; historical observations remain historical;
 - hallucination prevention;
 - proven conformance or runtime equivalence;
 - sound/complete static analysis;
@@ -380,6 +379,25 @@ https://github.com/SioYooo/RepoGrammar
 8. A FastAPI fixture walkthrough with negative controls
 
 ## Launch checklist
+
+### External surfaces requiring owner review
+
+No external account or publication was inspected or modified in this preparation.
+The repository's older release checklists name Devpost/video work as pending,
+but provide no current public entry/video URL. Their present state is UNKNOWN.
+
+| Surface | Human follow-up before current promotion |
+| --- | --- |
+| Devpost entry, if one exists | Supply/review its public URL; remove unscoped token percentages and obsolete current-install wording; use the publication table and current limitations |
+| Demo video/title/description, if published | Review actual recording/version/installation flow; explicit task steering is not spontaneous adoption; the unsaved historical 52% observation is not a controlled result |
+| Previously published community/social posts, if any | Inventory URLs and dates; distinguish historical npm 0.4.x from current GitHub 0.5.0, and current source behavior from released binaries |
+| Owned repository metadata/release descriptions | Review separately against immutable release evidence; this preparation grants no edit/publish authority |
+
+Do not assume these surfaces contain a stale claim merely because older copy
+exists locally. Record actual observed text/URL/date before requesting a concrete
+correction. Preserve historical posts as historical; do not silently relabel them
+as a new-version launch. The [site proposal](geo-site-proposal.md) specifies future
+owned-site controls; it does not establish an existing deployment.
 
 ```text
 Public demo video: <PENDING HUMAN VIDEO WORK>

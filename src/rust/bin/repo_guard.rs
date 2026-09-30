@@ -215,6 +215,20 @@ where
 {
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
     match args.as_slice() {
+        [command, rest @ ..] if command == "host-stage-eval" => {
+            match host_stage_eval_command(root, rest) {
+                Ok(report) => CommandResult::ok(report),
+                Err(error) => {
+                    CommandResult::err(format!("host stage evaluation failed: {error}\n"))
+                }
+            }
+        }
+        [command, project, mode] if command == "host-stage-run" => {
+            match host_stage_run(project, mode) {
+                Ok(report) => CommandResult::ok(report),
+                Err(error) => CommandResult::err(format!("host stage run failed: {error}\n")),
+            }
+        }
         [command, rest @ ..] if command == "performance-eval" => {
             match performance_eval_command(root, rest) {
                 Ok(report) => CommandResult::ok(report),
@@ -372,7 +386,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | check-geo | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard host-stage-eval <performance-eval options> | check | check-geo | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -6901,6 +6915,278 @@ fn run_payload_measure(
 }
 
 // Report-only isolated performance harness. Native runs never load the observer.
+fn host_stage_run(project: &str, mode: &str) -> Result<String, String> {
+    use repogrammar::adapters::filesystem::discovery::ProfiledFileDiscovery;
+    use repogrammar::adapters::filesystem::source_store::ProfiledSourceStore;
+    use repogrammar::adapters::frameworks::SyntaxFrameworkRoleDetector;
+    use repogrammar::adapters::parsing::profiled::ProfiledParser;
+    use repogrammar::adapters::parsing::RepoGrammarSourceParser;
+    use repogrammar::adapters::persistence::sqlite::SqliteIndexStore;
+    use repogrammar::adapters::semantic_workers::rust::CargoMetadataRustProvider;
+    use repogrammar::application::indexing::{index_repository_with_host_profile, IndexingRequest};
+    use repogrammar::ports::host_profile::{HostPhase, HostProfile};
+    let project = fs::canonicalize(project).map_err(|_| "host project unavailable")?;
+    let temporary = fs::canonicalize(env::temp_dir()).map_err(|_| "temporary root unavailable")?;
+    if !project.starts_with(temporary)
+        || !project
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|p| p.to_str())
+            .is_some_and(|p| p.starts_with("repogrammar-product-eval-"))
+        || project.file_name().and_then(|p| p.to_str()) != Some("project")
+    {
+        return Err("host worker requires an isolated temporary eval project".into());
+    }
+    let profile = match mode {
+        "on" => HostProfile::default(),
+        "off" => HostProfile::disabled(),
+        _ => return Err("host mode must be on/off".into()),
+    };
+    let started = std::time::Instant::now();
+    let rust_provider =
+        CargoMetadataRustProvider::new("cargo").with_provider_version(env!("CARGO_PKG_VERSION"));
+    let outcome = index_repository_with_host_profile(
+        IndexingRequest::new(project.to_string_lossy().into_owned()),
+        &ProfiledFileDiscovery(profile.clone()),
+        &ProfiledSourceStore(profile.clone()),
+        &ProfiledParser {
+            parser: RepoGrammarSourceParser::default(),
+            profile: profile.clone(),
+        },
+        (&SyntaxFrameworkRoleDetector, Some(&rust_provider)),
+        &SqliteIndexStore::new(project.join(".repogrammar")).with_host_profile(profile.clone()),
+        &profile,
+    )
+    .map_err(|_| "profiled indexing failed; no successful measurement")?;
+    let total_ns = started.elapsed().as_nanos();
+    let measurements = profile.snapshot();
+    let phases: Vec<_> = HostPhase::ALL.into_iter().zip(measurements).map(|(phase, m)| serde_json::json!({
+        "phase": phase.as_str(), "exclusive_wall_ns": m.wall.as_nanos(), "calls": m.calls,
+        "work_items": phase.work_scope().map(|_| m.work_items), "work_scope": phase.work_scope(),
+        "bytes": if matches!(phase, HostPhase::Hashing | HostPhase::Context) { Some(m.bytes) } else { None },
+        "cpu": performance_not_measured("no qualified safe per-phase host/worker CPU collector on this platform")
+    })).collect();
+    let attributed: u128 = measurements.iter().map(|m| m.wall.as_nanos()).sum();
+    if mode == "on" && attributed != profile.root_wall().as_nanos() {
+        return Err("overlapping or missing host span accounting".into());
+    }
+    let unassigned = total_ns
+        .checked_sub(attributed)
+        .ok_or("invalid host span accounting")?;
+    serde_json::to_string(&serde_json::json!({"schema_version": "host-resync-phases.v1",
+        "total_wall_ns": total_ns, "unassigned_wall_ns": if mode == "on" { Some(unassigned) } else { None }, "phases": if mode == "on" { Some(phases) } else { None },
+        "write_session_stats": profile.snapshot_write_stats().map(|[rows, transactions, checkpoints]|
+            serde_json::json!({"rows_written": rows, "transactions": transactions, "checkpoints": checkpoints})),
+        "files_discovered": outcome.discovered_files, "files_parsed": outcome.parser_attempted_files,
+        "status": "COMPLETE", "phase_cpu_status": "NOT_MEASURED", "profile_mode": mode,
+        "python_project_sessions": profile.python_sessions()})).map_err(|_| "host serialization failed".into())
+}
+
+fn host_stage_eval_command(root: &Path, args: &[String]) -> Result<String, String> {
+    let options = performance_options(root, args)?;
+    if !matches!(env::consts::OS, "macos" | "linux") {
+        return Err("host resources require macOS/Linux".into());
+    }
+    let executable = env::current_exe().map_err(|_| "host harness unavailable")?;
+    let comparer = root.join("src/experiments/performance/compare_generations.py");
+    let paths = [&options.binary, &executable, &options.worker, &comparer];
+    let hash_inputs = || -> Result<Vec<String>, String> {
+        paths
+            .iter()
+            .map(|p| {
+                fs::read(p)
+                    .map(|b| performance_hash_bytes(&b))
+                    .map_err(|_| "host producer unreadable".into())
+            })
+            .collect()
+    };
+    let before = hash_inputs()?;
+    fs::create_dir_all(&options.out).map_err(|_| "host output unavailable")?;
+    let mut rows = Vec::new();
+    let mut fixture_hash = None;
+    let mut python_identity = None;
+    for repetition in 1..=options.repetitions {
+        let public = EvalWorkspace::new(&options.binary, &options.fixture)?;
+        let mut off = EvalWorkspace::new(&options.binary, &options.fixture)?;
+        let mut on = EvalWorkspace::new(&options.binary, &options.fixture)?;
+        let result = (|| -> Result<serde_json::Value, String> {
+            let python_hash = performance_hash_bytes(
+                &fs::read(&public.python).map_err(|_| "Python identity unavailable")?,
+            );
+            if python_hash
+                != performance_hash_bytes(
+                    &fs::read(&off.python).map_err(|_| "Python identity unavailable")?,
+                )
+                || python_hash
+                    != performance_hash_bytes(
+                        &fs::read(&on.python).map_err(|_| "Python identity unavailable")?,
+                    )
+            {
+                return Err("Python runtime mismatch between arms".into());
+            }
+            let mut version_command = Command::new(&public.python);
+            version_command
+                .args(["-I", "-S", "--version"])
+                .env_clear()
+                .current_dir(&public.home);
+            let version_output = performance_capture(version_command, None, options.timeout)?;
+            let version =
+                String::from_utf8(version_output.stdout).map_err(|_| "Python version malformed")?;
+            let version = version.trim();
+            if !version_output.status.success()
+                || !version.starts_with("Python ")
+                || !version[7..].chars().all(|c| c.is_ascii_digit() || c == '.')
+            {
+                return Err("Python version unqualified".into());
+            }
+            let identity = serde_json::json!({"sha256": python_hash, "version": version});
+            if python_identity.as_ref().is_some_and(|old| old != &identity) {
+                return Err("Python identity drift".into());
+            }
+            python_identity = Some(identity);
+            for workspace in [&public, &off, &on] {
+                if options.synthetic {
+                    performance_prepare_synthetic(&workspace.project, options.python_files)?;
+                }
+            }
+            let version = fixture_version_hash(&public.project)?;
+            if version != fixture_version_hash(&off.project)?
+                || version != fixture_version_hash(&on.project)?
+                || fixture_hash.as_ref().is_some_and(|old| old != &version)
+            {
+                return Err("host fixture drift".into());
+            }
+            fixture_hash = Some(version);
+            for workspace in [&public, &off, &on] {
+                workspace.init()?;
+            }
+            let args = vec![
+                "resync".into(),
+                "--project".into(),
+                public.project_arg()?,
+                "--json".into(),
+                "--progress".into(),
+                "never".into(),
+            ];
+            let (_, public_resources, _) =
+                performance_timed_command(&public, &args, None, &options)?;
+            off.binary = executable.clone();
+            on.binary = executable.clone();
+            let order = if repetition % 2 == 1 {
+                ["off", "on"]
+            } else {
+                ["on", "off"]
+            };
+            let mut baseline_resources = serde_json::Value::Null;
+            let mut profile = serde_json::Value::Null;
+            let mut resources = serde_json::Value::Null;
+            for mode in order {
+                let workspace = if mode == "on" { &on } else { &off };
+                let args = vec![
+                    "host-stage-run".into(),
+                    workspace.project_arg()?,
+                    mode.into(),
+                ];
+                let (value, native, _) =
+                    performance_timed_command(workspace, &args, None, &options)?;
+                if mode == "on" {
+                    profile = value;
+                    resources = native;
+                } else {
+                    baseline_resources = native;
+                }
+            }
+            let mut equivalence = Vec::new();
+            for (label, workspace) in [("off", &off), ("public", &public)] {
+                let comparison = on.root.join(format!("canonical-{label}.json"));
+                let mut compare = Command::new(&on.python);
+                compare
+                    .arg(&comparer)
+                    .arg(workspace.project.join(".repogrammar/repogrammar.sqlite"))
+                    .arg(on.project.join(".repogrammar/repogrammar.sqlite"))
+                    .arg("--out")
+                    .arg(&comparison)
+                    .env_clear()
+                    .env("PATH", &on.tools)
+                    .current_dir(&on.root);
+                let output = performance_capture(compare, None, options.timeout)?;
+                if !output.status.success() {
+                    return Err("profiled/off/public complete canonical generation mismatch".into());
+                }
+                let compared: serde_json::Value = serde_json::from_slice(
+                    &fs::read(comparison).map_err(|_| "host comparison unavailable")?,
+                )
+                .map_err(|_| "host comparison malformed")?;
+                if compared["equal"] != true {
+                    return Err("host canonical comparison failed".into());
+                }
+                equivalence.push(serde_json::json!({"against": label, "result": compared}));
+            }
+            if before != hash_inputs()? {
+                return Err("host producer drift".into());
+            }
+            if python_hash
+                != performance_hash_bytes(
+                    &fs::read(&public.python).map_err(|_| "Python identity unavailable")?,
+                )
+            {
+                return Err("Python executable drift".into());
+            }
+            Ok(
+                serde_json::json!({"repetition": repetition, "order": order, "profile": profile,
+                "machine_resources": resources, "baseline_machine_resources": baseline_resources,
+                "public_cli_machine_resources": public_resources, "complete_canonical_analysis": equivalence}),
+            )
+        })();
+        match result {
+            Ok(row) => rows.push(row),
+            Err(error) => {
+                for workspace in [&public, &off, &on] {
+                    workspace.cleanup.set(false);
+                }
+                let evidence: Vec<_> = [&public, &off, &on]
+                    .iter()
+                    .filter_map(|w| {
+                        w.root
+                            .file_name()
+                            .and_then(|p| p.to_str())
+                            .map(str::to_owned)
+                    })
+                    .collect();
+                let failure = serde_json::json!({"schema_version": "host-stage-eval.v1", "status": "FAILED",
+                    "failed_repetition": repetition, "reason": error, "completed_rows": rows,
+                    "producer_hashes": before, "retained_evidence_basenames": evidence,
+                    "missing_measurements": "failed/incomplete measurements are not zero"});
+                fs::write(
+                    options.out.join("host-stage-failure.json"),
+                    serde_json::to_string_pretty(&failure)
+                        .map_err(|_| "host failure serialization failed")?,
+                )
+                .map_err(|_| "host failure evidence write failed")?;
+                return Err(error);
+            }
+        }
+    }
+    let report = serde_json::json!({"schema_version": "host-stage-eval.v1", "status": "COMPLETE", "fixture_sha256": fixture_hash,
+        "binary_sha256": before[0], "harness_sha256": before[1], "worker_sha256": before[2], "comparer_sha256": before[3],
+        "harness_commit": resolve_git_commit(root, "HEAD").ok(),
+        "producer_scope": "executable hashes identify producers, including uncommitted instrumentation; HEAD is metadata",
+        "platform": env::consts::OS, "architecture": env::consts::ARCH, "rows": rows,
+        "python": python_identity, "condition": options.condition, "repetitions": options.repetitions,
+        "timeout_seconds": options.timeout.as_secs(), "python_project_session_requested": options.python_project_session,
+        "rust_metadata_provider": "default adapter supplied; Cargo unavailable in isolated tool PATH",
+        "scope": "Same linked default app/adapter on/off in fresh identical source workspaces; alternating order. Public CLI is independent full-canonical parity. Optional TypeScript worker absent; default Rust metadata unavailability retained as UNKNOWN. Instrumented wall includes overhead; phase CPU NOT_MEASURED. No optimization/savings claim."});
+    fs::write(
+        options.out.join("host-stage-results.json"),
+        serde_json::to_string_pretty(&report).map_err(|_| "host report serialization failed")?,
+    )
+    .map_err(|_| "host report write failed")?;
+    Ok(format!(
+        "host-stage-eval: {} complete canonical pairs plus public parity\n",
+        options.repetitions
+    ))
+}
+
 const PERFORMANCE_FIXTURE: &str = "src/fixtures/evaluation/performance";
 const PERFORMANCE_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 const PERFORMANCE_OBSERVER_COUNTERS: &[&str] = &[
@@ -7229,6 +7515,13 @@ fn performance_timed_command(
             native.env(key, value);
         }
     }
+    native.env(
+        "TMPDIR",
+        workspace
+            .root
+            .parent()
+            .ok_or("eval temporary parent missing")?,
+    );
     native.env("REPOGRAMMAR_PYTHON_WORKER", &options.worker);
     if let Some(enabled) = options.python_project_session {
         native.env(
@@ -8932,6 +9225,29 @@ fn check_diff_paths(paths: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn host_stage_admission_refuses_external_projects_and_invalid_modes_without_writes() {
+        assert!(host_stage_run("/", "on").is_err());
+        let root = unique_product_eval_root();
+        let project = root.join("project");
+        fs::create_dir_all(&project).expect("create isolated host project");
+        let error = host_stage_run(project.to_str().expect("project path"), "invalid")
+            .expect_err("invalid mode");
+        assert!(error.contains("on/off"));
+        assert!(!project.join(".repogrammar").exists());
+        fs::remove_dir_all(root).expect("remove own empty workspace");
+    }
+
+    #[test]
+    fn host_stage_bounds_fail_before_producer_or_fixture_resolution() {
+        let result = run(
+            ["host-stage-eval", "--out", "unused", "--repetitions", "10"],
+            Path::new("missing-root"),
+        );
+        assert_eq!(result.status, 1);
+        assert!(result.stderr.contains("bounds:"));
+    }
 
     #[test]
     fn performance_native_resources_parse_platform_units_and_refuse_partial_metrics() {
