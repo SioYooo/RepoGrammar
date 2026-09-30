@@ -1,6 +1,6 @@
 # Agent adoption v2: availability, global discovery and explicit steering
 
-Status: PREPARATION / NOT_MEASURED. Verified 2026-09-30 against
+Status: OFFLINE_TOOL_BOUNDARY_AND_ORACLES_QUALIFIED / effects NOT_MEASURED. Verified 2026-09-30 against
 `main@d981d57c6e662b52f62e3e915af7382c5c8ed8f7`.
 No agent/model request, credential access or external spend is authorized here.
 This new protocol does not amend the historical [RQ5 design](agent-study-design.md),
@@ -162,3 +162,31 @@ qualified adapter; Claude-only parsing cannot silently stand in for it.
 Current adoption, over-trigger, source reduction, task correctness, token/cost
 effects and B3 efficacy remain **NOT_MEASURED**. Execution is blocked on the
 freeze/isolation/oracle gates and explicit human budget/auth authorization.
+
+## Offline runner qualification
+
+The separate [qualification record](agent-adoption-v2-qualification.md) and
+[closed summary](data/agent-adoption-v2-qualification.summary.json) qualify
+`runner_v2.py` for a **macOS tool-process** filesystem/environment/network
+boundary and eight development task oracles. They do not qualify an installed
+agent host. The runner has no live-execution switch, agent invocation or
+credential path. It refuses existing/repository-local output, pins the reviewed
+v4 guide hash, clears the environment, and freezes a deterministic 160-cell
+B0-B3 order before running adversarial controls. Source/reference/mutant bundles
+and exact prompts stay outside git. Only B2 gets the actual Claude global path;
+the probe checks path readability, not native CLI discovery.
+
+The eight newly authored tasks are DEVELOPMENT_BURNED after qualification.
+Four are bounded framework recipes, two are ineligible, one is UNKNOWN and one
+has distinct old/current source seeds. Eight references pass and 24 mutants
+fail; static AST recipes do not prove runtime framework behavior or auth.
+The lexical/exact-AST historical screen is diagnostic, not semantic independence.
+The 160 cells have empty `.repogrammar/` markers, not prepared product indexes
+or configured MCP hosts. A sentinel SQLite index is used only in OS controls.
+The product binary hash is a denied-access probe identity, not a release gate.
+
+Live execution remains `CONTROL_ISOLATION_BLOCKED` until pinned native CLI,
+actual global discovery, controlled harness-owned MCP IPC, native-host hidden
+tool/credential denial and a separate held-out task/oracle/index freeze pass.
+Budget/auth authorization is still required. A Linux implementation/native
+qualification is separate; macOS control success must not become a Linux claim.
