@@ -19,6 +19,7 @@ The prior npm `latest=0.4.3` is preserved.
 
 ```text
 cargo run --quiet --bin repo-guard -- check
+cargo run --quiet --bin repo-guard -- check-geo
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from AGENTS.md
 cargo run --quiet --bin repo-guard -- sync-agent-guides --from CLAUDE.md
 cargo run --quiet --bin repo-guard -- check-diff --base <git-revision> --head <git-revision>
@@ -104,6 +105,36 @@ oversized, non-UTF-8, malformed, foreign, or unresolvable pointers fail closed:
 the candidate directory remains inside the normal repository scan. The check
 does not traverse a recognized linked checkout, so cost is bounded per active
 agent worktree rather than by the size of each checkout.
+
+## check-geo
+
+`check-geo` validates the repository-native discovery assets without making any
+network requests or changing product behavior. It is a separate explicit check,
+not a search-ranking or indexing oracle. The corpus is bounded to 256 KiB and
+20–30 unique queries, includes branded and unbranded questions, and names
+ChatGPT Search, Google Search, and Bing Search separately. Each expected
+canonical URL must agree with an existing, repository-contained source path.
+
+`NOT_MEASURED` and `UNKNOWN` observations require a reason and null mention,
+citation, cited URL, rank, and evidence fields. An `OBSERVED` row requires typed
+outcomes and an existing evidence reference. The guard checks the shape and
+reference; a reviewer must still verify that the evidence captures the named
+engine, query, date, and result. A passed check does not prove that a URL is
+indexed, cited, visible, or causally improved.
+
+The corpus's pinned publication version is checked against the immutable
+GitHub release summary. Explicit current-version markers in `limitations.md`
+and the launch kit, the launch kit's dated npm record, and README installer
+pins must agree with that evidence. Historical release files, recorded demo
+transcripts, and dated experiment reports are not mechanically scanned or
+rewritten. This is a local consistency check; it does not discover newer remote
+releases or refresh the npm registry. Refresh the release evidence and baseline
+together when a later public release is verified.
+
+Unit tests reject stale current markers/install pins, fabricated unmeasured
+results, observations without captures, duplicate queries, missing or escaping
+canonical paths, malformed JSON, and oversized input. Existing release-byte
+read helpers are reused; no GEO runtime dependency or telemetry is added.
 
 ## sync-agent-guides
 

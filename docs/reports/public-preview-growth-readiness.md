@@ -1,5 +1,12 @@
 # Public-preview growth readiness
 
+Historical snapshot of the 2026-07-16 preview candidate. Its publication and
+authentication blockers describe that date, not the current release. For the
+current publication state, read the [launch kit](../promotion/launch-kit.md#current-publication-truth)
+and [v0.5.0 GitHub-only evidence](../release/stable-v0.5.0-release-checklist.md).
+The experiment and single-run observation boundaries below remain historical
+evidence; later publication does not turn them into measured savings.
+
 - Evidence date: 2026-07-16
 - Candidate version: `0.2.0-preview.0`
 - Product posture: long-lived developer tool

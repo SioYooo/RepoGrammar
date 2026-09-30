@@ -233,6 +233,10 @@ where
             }
         }
         [command] if command == "check" => run_check(root),
+        [command] if command == "check-geo" => match check_geo_assets(root) {
+            Ok(()) => CommandResult::ok("GEO assets passed; search visibility is not inferred\n"),
+            Err(error) => CommandResult::err(format!("GEO assets failed: {error}\n")),
+        },
         [command, flag, source] if command == "sync-agent-guides" && flag == "--from" => {
             match sync_agent_guides(root, source) {
                 Ok(()) => CommandResult::ok("agent guides synchronized\n"),
@@ -360,7 +364,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard check | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard check | check-geo | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -6888,6 +6892,192 @@ fn run_payload_measure(
     Ok(payload_measure_report(&summary, &summary_file))
 }
 
+fn check_geo_assets(root: &Path) -> Result<(), String> {
+    let bytes = read_evidence_bytes(
+        &root.join("docs/promotion"),
+        "geo-query-corpus.json",
+        256 * 1024,
+    )?;
+    let corpus: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "GEO corpus JSON is malformed".to_string())?;
+    if corpus["schema_version"].as_u64() != Some(1) {
+        return Err("GEO corpus schema version is unsupported".into());
+    }
+    let version = geo_text(&corpus, "repository_version")?;
+    if !is_bounded_version(version) || has_prerelease(version) {
+        return Err("GEO corpus must identify a bounded stable release".into());
+    }
+    geo_text(&corpus, "baseline_date")?;
+    geo_source_path(root, geo_text(&corpus, "protocol_ref")?)?;
+    let release = read_evidence_json(
+        &root.join("docs/release"),
+        &format!("stable-v{version}-release.summary.json"),
+    )?;
+    if release["version"].as_str() != Some(version)
+        || release["verdict"].as_str() != Some("GITHUB_RELEASE_READY")
+        || release["release"]["immutable"].as_bool() != Some(true)
+        || release["release"]["draft"].as_bool() != Some(false)
+        || release["release"]["prerelease"].as_bool() != Some(false)
+    {
+        return Err("GEO current version lacks recorded immutable GitHub publication".into());
+    }
+    let github_marker = format!("Current GitHub stable: `{version}`.");
+    for path in ["docs/limitations.md", "docs/promotion/launch-kit.md"] {
+        let text = fs::read_to_string(root.join(path))
+            .map_err(|_| format!("GEO current publication document is unavailable: {path}"))?;
+        let markers: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("Current GitHub stable:"))
+            .collect();
+        if markers != [github_marker.as_str()] {
+            return Err(format!("GEO current GitHub publication drift: {path}"));
+        }
+    }
+    let npm_version = release["npm"]["dist_tags_after"]["latest"]
+        .as_str()
+        .ok_or_else(|| "GEO release record lacks historical npm stable version".to_string())?;
+    let launch = fs::read_to_string(root.join("docs/promotion/launch-kit.md"))
+        .map_err(|_| "GEO launch kit is unavailable".to_string())?;
+    let npm_marker = format!("Current npm stable at last verification: `{npm_version}`.");
+    if launch
+        .lines()
+        .filter(|line| line.starts_with("Current npm stable at last verification:"))
+        .collect::<Vec<_>>()
+        != [npm_marker.as_str()]
+    {
+        return Err("GEO current npm publication drift".into());
+    }
+    let readme = fs::read_to_string(root.join("README.md"))
+        .map_err(|_| "GEO README is unavailable".to_string())?;
+    let download_prefix = format!("releases/download/v{version}/");
+    let current_intro = format!("The current GitHub stable release is **{version}**");
+    if !readme.contains(&current_intro)
+        || readme.lines().any(|line| {
+            line.starts_with("The current GitHub stable release is ")
+                && !line.starts_with(&current_intro)
+        })
+        || !readme.contains(&format!("bash install.sh --version v{version}"))
+        || readme.lines().any(|line| {
+            line.contains("github.com/SioYooo/RepoGrammar/releases/download/")
+                && !line.contains(&download_prefix)
+        })
+    {
+        return Err("GEO README installation pin differs from recorded publication".into());
+    }
+    let queries = corpus["queries"]
+        .as_array()
+        .filter(|rows| (20..=30).contains(&rows.len()))
+        .ok_or_else(|| "GEO corpus must contain 20 to 30 queries".to_string())?;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut texts = std::collections::BTreeSet::new();
+    let mut brands = std::collections::BTreeSet::new();
+    for row in queries {
+        if !ids.insert(geo_text(row, "query_id")?)
+            || !texts.insert(
+                geo_text(row, "query")?
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase(),
+            )
+        {
+            return Err("GEO corpus has duplicate query IDs or query text".into());
+        }
+        brands.insert(
+            row["branded"]
+                .as_bool()
+                .ok_or_else(|| "GEO branded field must be boolean".to_string())?,
+        );
+        geo_text(row, "intent")?;
+        geo_text(row, "target_concept")?;
+        let source = &row["expected_canonical_source"];
+        let path = geo_text(source, "path")?;
+        geo_source_path(root, path)?;
+        let anchor = source["anchor"].as_str().unwrap_or("");
+        let suffix = if anchor.is_empty() {
+            String::new()
+        } else {
+            format!("#{anchor}")
+        };
+        if source["url"].as_str()
+            != Some(
+                format!("https://github.com/SioYooo/RepoGrammar/blob/main/{path}{suffix}").as_str(),
+            )
+        {
+            return Err("GEO canonical URL does not match its repository source".into());
+        }
+        let observations = row["observations"]
+            .as_array()
+            .filter(|rows| rows.len() == 3)
+            .ok_or_else(|| "GEO query requires three named engine observations".to_string())?;
+        let mut engines = std::collections::BTreeSet::new();
+        for observation in observations {
+            let engine = geo_text(observation, "engine")?;
+            if !matches!(engine, "chatgpt_search" | "google_search" | "bing_search")
+                || !engines.insert(engine)
+            {
+                return Err("GEO engine is unknown or duplicated".into());
+            }
+            geo_text(observation, "date")?;
+            match geo_text(observation, "status")? {
+                "NOT_MEASURED" | "UNKNOWN" => {
+                    geo_text(observation, "unknown_reason")?;
+                    for field in ["mention", "citation", "cited_url", "rank", "evidence_ref"] {
+                        if observation.get(field) != Some(&serde_json::Value::Null) {
+                            return Err(
+                                "GEO unmeasured observation must retain null results".into()
+                            );
+                        }
+                    }
+                }
+                "OBSERVED" => {
+                    geo_source_path(root, geo_text(observation, "evidence_ref")?)?;
+                    if observation["mention"].as_bool().is_none()
+                        || observation["citation"].as_bool().is_none()
+                        || (observation["citation"] == true
+                            && !geo_text(observation, "cited_url")?.starts_with("https://"))
+                        || (observation["citation"] == false && !observation["cited_url"].is_null())
+                        || (!observation["rank"].is_null()
+                            && observation["rank"].as_u64().is_none_or(|rank| rank == 0))
+                    {
+                        return Err("GEO observed result lacks typed outcomes or evidence".into());
+                    }
+                }
+                _ => return Err("GEO observation status is unsupported".into()),
+            }
+        }
+    }
+    if brands.len() != 2 {
+        return Err("GEO corpus requires branded and unbranded queries".into());
+    }
+    Ok(())
+}
+
+fn geo_text<'a>(value: &'a serde_json::Value, field: &str) -> Result<&'a str, String> {
+    value[field]
+        .as_str()
+        .filter(|text| !text.trim().is_empty() && text.len() <= 2048)
+        .ok_or_else(|| format!("GEO field is missing or invalid: {field}"))
+}
+
+fn geo_source_path(root: &Path, relative: &str) -> Result<(), String> {
+    if relative.contains('\\')
+        || relative.chars().any(char::is_control)
+        || !Path::new(relative)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("GEO source path must be repository-relative".into());
+    }
+    let canonical_root = fs::canonicalize(root).map_err(|_| "GEO repository is unavailable")?;
+    let source =
+        fs::canonicalize(root.join(relative)).map_err(|_| "GEO canonical source is unavailable")?;
+    if !source.starts_with(canonical_root) || !source.is_file() {
+        return Err("GEO canonical source escapes the repository or is not a file".into());
+    }
+    Ok(())
+}
+
 fn run_check(root: &Path) -> CommandResult {
     match check_repository(root) {
         Ok(violations) if violations.is_empty() => CommandResult::ok("repository guard passed\n"),
@@ -8182,6 +8372,152 @@ mod tests {
             preview_dist_tag_action("0.2.0-preview.0", "0.2.0-preview.0", "", &too_many),
             Err("published version count is outside the supported bound")
         );
+    }
+
+    fn write_geo_fixture(root: &Path) -> serde_json::Value {
+        write_file(
+            root.join("README.md"),
+            b"The current GitHub stable release is **0.5.0**, published through GitHub only.\nbash install.sh --version v0.5.0\ncurl https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh\n",
+        );
+        write_file(
+            root.join("docs/limitations.md"),
+            b"Current GitHub stable: `0.5.0`.\n",
+        );
+        write_file(
+            root.join("docs/promotion/launch-kit.md"),
+            b"Current GitHub stable: `0.5.0`.\nCurrent npm stable at last verification: `0.4.3`.\n",
+        );
+        write_file(root.join("docs/promotion/geo-research.md"), b"Protocol\n");
+        // Historical publication evidence is deliberately outside current-marker checks.
+        write_file(
+            root.join("docs/release/historical.md"),
+            b"Current GitHub stable: `0.4.0`.\n",
+        );
+        write_file(
+            root.join("docs/release/stable-v0.5.0-release.summary.json"),
+            serde_json::json!({
+                "version": "0.5.0", "verdict": "GITHUB_RELEASE_READY",
+                "release": {"immutable": true, "draft": false, "prerelease": false},
+                "npm": {"dist_tags_after": {"latest": "0.4.3"}}
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        let queries: Vec<_> = (0..20)
+            .map(|index| {
+                serde_json::json!({
+                    "query_id": format!("geo-{index}"), "query": format!("query {index}"),
+                    "intent": "problem_discovery", "branded": index < 10,
+                    "target_concept": "repository patterns",
+                    "expected_canonical_source": {
+                        "path": "README.md", "anchor": null,
+                        "url": "https://github.com/SioYooo/RepoGrammar/blob/main/README.md"
+                    },
+                    "observations": (["chatgpt_search", "google_search", "bing_search"].map(|engine|
+                        serde_json::json!({
+                            "engine": engine, "date": "2026-09-30", "status": "NOT_MEASURED",
+                            "mention": null, "citation": null, "cited_url": null, "rank": null,
+                            "evidence_ref": null, "unknown_reason": "No engine response captured"
+                        })
+                    ))
+                })
+            })
+            .collect();
+        let corpus = serde_json::json!({
+            "schema_version": 1, "repository_version": "0.5.0",
+            "baseline_date": "2026-09-30", "protocol_ref": "docs/promotion/geo-research.md",
+            "queries": queries
+        });
+        write_geo_corpus(root, &corpus);
+        corpus
+    }
+
+    fn write_geo_corpus(root: &Path, corpus: &serde_json::Value) {
+        write_file(
+            root.join("docs/promotion/geo-query-corpus.json"),
+            corpus.to_string().as_bytes(),
+        );
+    }
+
+    #[test]
+    fn geo_assets_accept_unmeasured_baseline_without_rewriting_history() {
+        let root = TempRoot::new("geo-baseline");
+        write_geo_fixture(root.path());
+        let result = run(["check-geo"], root.path());
+        assert_eq!(result.status, 0, "{}", result.stderr);
+        assert!(result.stdout.contains("search visibility is not inferred"));
+        assert!(
+            fs::read_to_string(root.path().join("docs/release/historical.md"))
+                .unwrap()
+                .contains("0.4.0")
+        );
+    }
+
+    #[test]
+    fn geo_assets_reject_stale_current_publication_and_install_pins() {
+        let root = TempRoot::new("geo-publication-drift");
+        for path in [
+            "docs/limitations.md",
+            "docs/promotion/launch-kit.md",
+            "README.md",
+        ] {
+            write_geo_fixture(root.path());
+            let text = fs::read_to_string(root.path().join(path)).unwrap();
+            write_file(
+                root.path().join(path),
+                text.replace("0.5.0", "0.4.3").as_bytes(),
+            );
+            assert!(
+                check_geo_assets(root.path()).is_err(),
+                "accepted stale {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn geo_assets_reject_fabricated_unmeasured_results_and_uncaptured_observations() {
+        let root = TempRoot::new("geo-observation-evidence");
+        for field in ["mention", "citation", "cited_url", "rank", "evidence_ref"] {
+            let mut corpus = write_geo_fixture(root.path());
+            corpus["queries"][0]["observations"][0][field] = serde_json::json!(false);
+            write_geo_corpus(root.path(), &corpus);
+            assert!(
+                check_geo_assets(root.path()).is_err(),
+                "accepted invented {field}"
+            );
+        }
+        let mut corpus = write_geo_fixture(root.path());
+        corpus["queries"][0]["observations"][0]["status"] = serde_json::json!("OBSERVED");
+        write_geo_corpus(root.path(), &corpus);
+        assert!(check_geo_assets(root.path()).is_err());
+    }
+
+    #[test]
+    fn geo_assets_reject_duplicates_missing_sources_and_traversal() {
+        let root = TempRoot::new("geo-query-integrity");
+        let mut corpus = write_geo_fixture(root.path());
+        corpus["queries"][1]["query"] = serde_json::json!("  QUERY   0 ");
+        write_geo_corpus(root.path(), &corpus);
+        assert!(check_geo_assets(root.path()).is_err());
+        for path in ["../README.md", "/README.md", "missing.md"] {
+            let mut corpus = write_geo_fixture(root.path());
+            corpus["queries"][0]["expected_canonical_source"]["path"] = serde_json::json!(path);
+            write_geo_corpus(root.path(), &corpus);
+            assert!(check_geo_assets(root.path()).is_err(), "accepted {path}");
+        }
+    }
+
+    #[test]
+    fn geo_assets_reject_malformed_and_oversized_corpus() {
+        let root = TempRoot::new("geo-bounded-corpus");
+        write_geo_fixture(root.path());
+        for bytes in [b"{".to_vec(), vec![b' '; 256 * 1024 + 1]] {
+            write_file(
+                root.path().join("docs/promotion/geo-query-corpus.json"),
+                &bytes,
+            );
+            assert!(check_geo_assets(root.path()).is_err());
+        }
     }
 
     #[test]
