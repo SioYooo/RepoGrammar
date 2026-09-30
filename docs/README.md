@@ -181,6 +181,8 @@ context lives under `.agents/memories/`.
   [experiments/efficiency-sprint.md](experiments/efficiency-sprint.md).
 - Query serving cost and unchanged payload evidence:
   [experiments/query-serving-efficiency.md](experiments/query-serving-efficiency.md).
+- Current incremental closure and conservative follow-up obligations:
+  [experiments/incremental-invalidation-audit.md](experiments/incremental-invalidation-audit.md).
 - Conditional global instruction wiring and unmeasured A0/A1/A2 confirmation:
   [ADR-0054](decisions/ADR-0054-default-conditional-agent-instructions.md) and
   [agent-adoption-confirmation](experiments/agent-adoption-confirmation.md).
