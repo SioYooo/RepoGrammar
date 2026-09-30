@@ -140,6 +140,12 @@ and typed-UNKNOWN limits.
 `src/rust/bin/repo_guard.rs` is a separate governance tool and must not be
 coupled to product runtime logic.
 
+The query application loads local-context units only when the existing path
+matcher or an admitted unit-path prefix can resolve a locus. Impossible targets
+retain the original UNKNOWN and directory fallback. All generation, integrity,
+foreign-key and source-hash freshness checks remain authoritative; no final
+readiness verdict is cached by this optimization.
+
 ## External dependency boundaries
 
 The Python parser adapter owns same-process admission of the published Python

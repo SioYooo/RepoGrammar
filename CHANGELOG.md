@@ -18,6 +18,9 @@
 
 ### Fixed
 
+- Unsupported fuzzy queries with no possible indexed path/member locus skip
+  the complete unit inventory. UNKNOWN/recovery, payloads and freshness checks
+  remain unchanged.
 - The private Python frontend now checks the published Python 3.10+ requirement
   before worker dispatch in each existing request process. Unsupported runtimes
   yield a typed, source-free recovery error; interface probes remain unverified.
