@@ -4618,3 +4618,138 @@ extract_extra_field = subprocess.run(
 )
 assert extract_extra_field.returncode == 2
 assert extract_extra_field.stdout == ""
+
+
+def project_session_input(files, *, use_context=True):
+    context = {
+        "module_paths": sorted(files), "source_roots": [],
+        "module_files": [{"path": path, "text": text} for path, text in sorted(files.items())],
+        "conftest_files": [{"path": path, "text": text} for path, text in sorted(files.items()) if path.endswith("conftest.py")],
+    }
+    context_json = json.dumps(context, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(context_json.encode()).hexdigest()
+    identity = {"protocol_version": 1, "contract_revision": 2, "project_session_revision": 1, "session_id": "index:" + digest, "context_hash": "sha256:" + digest}
+    frames = [{**identity, "request_id": 0, "message_type": "start"}, context]
+    for index, (path, text) in enumerate(sorted(files.items()), 1):
+        content_hash = "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+        frames.extend([
+            {**identity, "request_id": index, "message_type": "parse", "content_hash": content_hash, "use_context": use_context},
+            {"protocol_version": 1, "contract_revision": 2, "mode": "parse_document", "path": path, "text": text, "content_hash": content_hash, "repository_revision": "UNKNOWN"},
+        ])
+    frames.append({**identity, "request_id": len(files) + 1, "message_type": "finish"})
+    return frames, context
+
+
+def run_project_session(frames):
+    result = subprocess.run([sys.executable, str(WORKER), "--project-session"],
+        input="".join((frame if isinstance(frame, str) else json.dumps(frame, separators=(",", ":"), sort_keys=True, ensure_ascii=False)) + "\n" for frame in frames),
+        text=True, capture_output=True, timeout=30, check=False)
+    assert result.stderr == ""
+    return result, [json.loads(line) for line in result.stdout.splitlines()]
+
+
+session_files = {
+    "pkg/services.py": "class Service: pass\n__all__ = ['Service']\n",
+    "pkg/__init__.py": "from .services import Service as Exported\n",
+    "tests/conftest.py": "import pytest\n@pytest.fixture(name='client')\ndef helper(): return object()\n",
+    "tests/test_api.py": "from pkg import Exported\nfrom pkg.services import *\ndef test_api(client, tmp_path, unknown): return Exported()\n",
+    "broken.py": "def broken(:\n",
+    "dynamic.py": "import importlib\nresult = importlib.import_module(name)\n",
+}
+for use_context in [True, False]:
+    session_frames, session_context = project_session_input(session_files, use_context=use_context)
+    result, messages = run_project_session(session_frames)
+    assert result.returncode == 0
+    assert messages[0]["message_type"] == "ready"
+    assert messages[-1]["message_type"] == "end_of_stream"
+    for index in range(len(session_files)):
+        payload = session_frames[2 + 2 * index + 1]
+        old = run_worker_exact({**payload, **(session_context if use_context else {})})
+        assert messages[2 + 2 * index] == old[0]
+        assert_no_fact_source_payloads(messages[2 + 2 * index]["facts"])
+
+# Reject stale/foreign identities, malformed/hash-invalid requests and unsafe
+# paths. This is worker-side rejection, independent of Rust response checks.
+for mutate in [
+    lambda frames: frames[0].update(project_session_revision=99),
+    lambda frames: frames[0].update(contract_revision=99),
+    lambda frames: frames[0].update(protocol_version=True),
+    lambda frames: frames[0].update(project_session_revision=True),
+    lambda frames: frames[0].update(unexpected="private-source"),
+    lambda frames: frames[0].update(request_id=True),
+    lambda frames: frames[0].update(context_hash="sha256:" + "0" * 64),
+    lambda frames: frames[1]["module_files"].append({"path": "../escape.py", "text": "private-source"}),
+    lambda frames: frames[2].update(request_id=2),
+    lambda frames: frames[2].update(context_hash="sha256:" + "0" * 64),
+    lambda frames: frames[2].update(session_id="foreign-session"),
+    lambda frames: frames[2].update(use_context="yes"),
+    lambda frames: frames[3].update(content_hash="sha256:" + "0" * 64),
+    lambda frames: frames[3].update(path="../private.py"),
+    lambda frames: frames[3].update(text="private-source"),
+    lambda frames: frames[3].update(contract_revision=99),
+    lambda frames: frames[3].update(unexpected="private-source"),
+    lambda frames: frames[-1].update(request_id=1),
+    lambda frames: frames[3].update(text="x" * (1_048_576 + 1)),
+]:
+    frames, _ = project_session_input({"a.py": "def visible(): return 1\n"})
+    mutate(frames)
+    result, messages = run_project_session(frames)
+    assert result.returncode == 2
+    assert messages[-1] == {"protocol_version": 1, "project_session_revision": 1, "message_type": "error", "error_code": "PYTHON_PROJECT_SESSION_FAILURE"}
+    assert "private-source" not in result.stdout
+    assert "../private.py" not in result.stdout
+
+for corrupt in ["malformed", "duplicate"]:
+    frames, _ = project_session_input({"a.py": "pass\n"})
+    header_json = json.dumps(frames[0], separators=(",", ":"))
+    frames[0] = "{" if corrupt == "malformed" else header_json[:-1] + ',"request_id":0}'
+    result, messages = run_project_session(frames)
+    assert result.returncode == 2
+    assert messages[-1]["message_type"] == "error"
+
+# A project session must consume exactly one context AST per module, retain no
+# detailed AST, and avoid the old N*(N+2) ast.parse amplification. The process
+# count and stored-value equality are independently tested at the Rust boundary.
+for file_count in [8, 16]:
+    files = {f"module_{index}.py": "def item(): return 1\n" for index in range(file_count)}
+    frames, _ = project_session_input(files)
+    with tempfile.TemporaryDirectory() as root:
+        counter_path = Path(root) / "counters.json"
+        observer = f"""import ast, gc, json, runpy, weakref
+api = runpy.run_path({str(WORKER)!r}, run_name='fixture_worker')
+original = ast.parse
+trees = []
+def parse(*args, **kwargs):
+    tree = original(*args, **kwargs)
+    trees.append(weakref.ref(tree))
+    return tree
+ast.parse = parse
+before_document = []
+original_result = api['document_result']
+def checked_result(*args, **kwargs):
+    gc.collect()
+    retained = sum(tree() is not None for tree in trees)
+    before_document.append(retained)
+    assert retained == 0, 'context/previous-file AST retained within live session'
+    return original_result(*args, **kwargs)
+api['project_session'].__globals__['document_result'] = checked_result
+status = api['project_session']()
+gc.collect()
+with open({str(counter_path)!r}, 'w') as output:
+    json.dump({{'ast_parses': len(trees), 'retained_asts': sum(tree() is not None for tree in trees), 'before_document': before_document}}, output)
+raise SystemExit(status)
+"""
+        result = subprocess.run([sys.executable, "-c", observer], input="".join(json.dumps(frame, separators=(",", ":"), sort_keys=True, ensure_ascii=False) + "\n" for frame in frames), text=True, capture_output=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        counts = json.loads(counter_path.read_text())
+        assert counts == {"ast_parses": 3 * file_count, "retained_asts": 0, "before_document": [0] * file_count}, counts
+
+# Parsing supplied source must not execute it, including a repository import
+# shadow or top-level side effect; the new mode never opens repository paths.
+with tempfile.TemporaryDirectory() as root:
+    marker = Path(root) / "executed"
+    source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('bad')\n"
+    frames, _ = project_session_input({"side_effect.py": source})
+    result, _ = run_project_session(frames)
+    assert result.returncode == 0
+    assert not marker.exists()

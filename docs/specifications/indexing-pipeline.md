@@ -1570,6 +1570,19 @@ configured, because the semantic-worker fallback fires first in preflight.
 
 ### Python interface-hash gate
 
+The [ADR-0055 private project-session transport](../decisions/ADR-0055-bounded-python-project-session.md)
+is selected by default in current source builds when
+at least two Python documents are planned for this generation. The owned
+session starts after context construction and finishes before the parse-phase
+write checkpoint. Missing EOS, unsuccessful exit, trailing output, timeout or
+protocol/hash mismatch fails the generation. A one-document incremental edit
+retains the existing request path; interface probes and configuration requests
+remain separately bounded calls. The qualified change affects transport, not
+invalidation narrowing. Internal `REPOGRAMMAR_PYTHON_PROJECT_SESSION=0` retains
+the legacy transport for controlled comparisons; published 0.5.0 assets remain
+unchanged. The original encoded per-file context-omission regime
+and conservative `python_context_budget` gate below remain unchanged.
+
 Python is the only language whose parser consumes other files' text: each
 module's parse depends on a per-module *interface projection* of every other
 module — its top-level symbol surface, its literal `__all__` (or a non-literal

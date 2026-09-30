@@ -146,6 +146,16 @@ pub trait SourceParser {
             .map(SourceParseOutput::from_report)
     }
 
+    /// Optional, explicitly owned generation-local frontend session. Callers
+    /// finish it before activating any returned analysis; dropping a failed
+    /// session must terminate its worker rather than reuse partial state.
+    fn begin_project_session(
+        &self,
+        _context: &ParserProjectContext,
+    ) -> Result<Option<Box<dyn ParserProjectSession>>, ParseError> {
+        Ok(None)
+    }
+
     /// Compute the file-local Python interface hash for `text` at `path`. The
     /// default is the conservative-safe answer for any parser that does not
     /// analyze Python (`Unverified` forces a full rebuild); only the Python
@@ -179,4 +189,9 @@ pub trait SourceParser {
     fn python_frontend_version(&self) -> Option<String> {
         None
     }
+}
+
+pub trait ParserProjectSession {
+    fn parse(&mut self, document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError>;
+    fn finish(&mut self) -> Result<(), ParseError>;
 }

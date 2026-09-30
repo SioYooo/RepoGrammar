@@ -1833,6 +1833,21 @@ and writes the committed `docs/experiments/data/agent-study-regrade.v1.json`.
 
 ## Required local gate
 
+Qualified Python project-session coverage runs with the normal default source
+build. `cargo test --lib python_project_session_tests` covers all 34 v0_1
+release files, complete stored snapshots, N8/N16 process counts, context
+omission/newline boundaries, stale hashes, malformed/oversized output,
+runtime admission, timeout/crash/EOS and activation rollback. The old arm uses
+an explicit legacy parser so changing the rollout default cannot invalidate
+the comparison. Worker weakrefs must be dead before each target parse while
+the session is still alive, not merely after shutdown.
+
+`cargo test --lib private_frontend_startup_never_imports_ambient_project_sitecustomize`
+proves the old startup executes a synthetic `PYTHONPATH` hook, then confirms
+shared isolated startup protects document/config/interface/version/session
+paths. No test mutates the host environment or real user profile. Frozen
+old-worker comparisons remain independent of same-worker unit tests.
+
 The isolated evaluation harness selects its `python3` tool from the parent
 `PATH`, then pins that tool in its cleared child environment. Ensure that
 `python3` on that PATH also meets the 3.10+ requirement; the product parser's

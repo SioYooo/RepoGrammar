@@ -150,6 +150,14 @@ and project-config parsing. Admission failure cannot activate a replacement
 generation; interface extraction remains `Unverified`, preserving conservative
 sync fallback. This does not add a semantic provider or execute analyzed sources.
 
+Under ADR-0055, current source builds use one owned Python frontend session
+when at least two Python documents are planned. The parser port exposes only
+owned parse results and `finish`; the adapter owns isolated stdlib startup,
+bounded frames, compact project projections and deterministic worker shutdown.
+The indexing application requires EOS/success/EOF before checkpoint/activation.
+One-file incremental parsing remains on the existing request path. This
+changes transport cost, not family/support semantics or the public MCP schema.
+
 Tree-sitter belongs only in parsing and language adapters and is treated as
 syntax-first, not semantics-only. Language-native
 compiler, type-checker, or LSP types belong only in semantic-worker adapters and

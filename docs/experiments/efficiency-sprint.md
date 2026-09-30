@@ -1,7 +1,7 @@
 # Measured efficiency sprint
 
 - Date: 2026-09-30
-- Status: fixed baseline measured; production optimization under qualification
+- Status: canonical/resource qualification passed; final integration gates apply
 - Consolidated checkpoint: `42cd665cd1d4ad44ce0a7d0541ba55b778400a44`
 - Scope: indexing/process/context cost, bounded memory, query work and conditional adoption
 
@@ -148,3 +148,54 @@ inventory history and historical release evidence. Remote cleanup happens only
 after validated main is synchronized and each branch is contained or has an
 explicit reviewed replacement. Existing unrelated detached worktrees remain
 intact.
+
+## Qualified current-source result
+
+Current source builds enable the ADR-0055 transport for at least two planned
+Python parses. One-file work remains on the existing path; internal value `0`
+selects legacy transport for controlled rollback. Published 0.5.0 binaries are
+unchanged. All fourteen active owned tables matched the frozen old binary and
+worker on self and pinned FastAPI backend, including family members/evidence,
+interfaces, dependencies and constraint profiles. Eleven paired body snapshots
+also matched. See [complete comparisons](data/full-generation-comparisons.v1.json),
+[all indexing samples](data/python-session-ab.v1.json) and
+[paired body measurements](data/incremental-body-pair.v1.json).
+
+| Full resync | Old wall / CPU seconds | Candidate wall / CPU seconds | Old / candidate Python workers | Old / candidate frontend input bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Self | 22.42 / 21.41, one baseline sample | 7.50 / 7.32, medians of three | 176 / 1 | 106,308,055 / 1,290,023 |
+| Pinned FastAPI backend | 3.18 / 2.95, medians of three | 0.43 / 0.39, medians of three | 46 / 3, including two config calls | 4,397,534 / 223,242 |
+
+Self candidate full-resync maximum native RSS was 336,166,912 bytes versus
+baseline 336,150,528; this is comparable, not a memory-saving claim. Detailed
+AST retention is independently tested during the live session. Self module
+context transferred once (539,660 bytes) and AST calls fell 32,912 to 537.
+FastAPI module context fell 44 copies to one, and AST calls fell 2,068 to 133.
+Frontend output increased slightly due to control framing; public payloads
+did not shrink. No universal asymptotic or cross-machine guarantee is inferred
+outside the admitted context/operation bounds.
+
+The proper alternating body experiment found equal 0.49-second wall medians,
+zero median paired CPU delta and equal complete analysis after every pair.
+Earlier unpaired timing differences remain visible. No one-file speedup is
+claimed. Zero-delta work still makes no worker call and no activation.
+
+All 14 sync-equivalence scenarios passed. Product-eval retained 93/110 matches,
+17 existing retrieval misses, 36/36 correct abstentions and zero false-family
+or abstention-gold selections. Old/new payload-measure summaries were byte
+identical. The [query lane](query-serving-efficiency.md) reduces unit hydration
+for impossible loci while preserving all payload and freshness contracts.
+
+Default autosync on macOS passed idle, ignored burst, same-size/same-mtime and
+supported burst in both arms. Idle CPU was 0.79/0.95 seconds including startup
+and shutdown; no idle optimization or battery claim follows. Supported burst
+sync time was 1,453/685 ms with the same 21 reparses. Both ignored bursts still
+caused two zero-delta syncs and zero activations. The
+[autosync samples](data/efficiency-autosync-ab.v1.json) preserve resource-window
+caveats; Linux resource/watcher-registration measurements remain unrun.
+
+An inherited startup-hook execution gap was closed with shared `-I -S` flags
+before bootstrap. A live old-startup sentinel proves the negative can fail;
+document/config/interface/version/session paths all reject ambient project
+startup. This does not sandbox a malicious configured interpreter or modified
+trusted worker asset. No semantic provider or language completion gate closes.

@@ -171,6 +171,13 @@ the xUnit runtime, or user data providers, and it must preserve open-world
 UNKNOWNs for partial, inherited, generic, conditional, external, or ambiguous
 member sets.
 
+The optional owned `ParserProjectSession` boundary under ADR-0055 exposes
+`parse` and `finish`, never CPython ASTs, process handles or foreign types to
+the application/core. The indexing application owns its generation lifetime;
+the Python adapter owns `-I -S` startup, bounded transport and child shutdown.
+Detailed AST/source state is ephemeral and returned facts remain owned.
+Timeout, crash or incomplete EOS cannot activate partially trusted analysis.
+
 Tree-sitter 0.27 returns node-kind text borrowed from the parsed tree. Private
 adapter records may borrow that text only while translating it; emitted
 RepoGrammar-owned UNKNOWN facts copy the kind into owned assumptions. A parser

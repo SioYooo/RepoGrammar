@@ -4,6 +4,12 @@
 
 ### Added
 
+- Current source indexing uses a bounded, isolated Python project session for
+  two or more planned Python parses. Context is sent once and detailed ASTs are
+  ephemeral; canonical output, UNKNOWN and freshness contracts are unchanged.
+  One-file incremental transport remains unchanged. Published 0.5.0 artifacts
+  retain their shipped implementation.
+
 - Current source install/setup resolve verified Codex/Claude global profile
   paths and write a short conditional RepoGrammar guide, with `--no-instructions`
   opt-out. Same-path instruction-only backfill preserves native MCP state and

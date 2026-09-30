@@ -25,6 +25,17 @@ exact-version reviewed-contract family vertical with source-free output and
 blocking `UNKNOWN` preservation; see
 `docs/reports/language-support/python-completion-review.md`.
 
+## Measured transport checkpoint
+
+The 2026-09-30 efficiency sprint qualified the bounded Python project-session
+transport under ADR-0055. Current source defaults to a session for at least two
+planned Python parses, with isolated startup and failure-before-activation.
+One-file incremental work remains legacy. Frozen old/new complete records,
+paired body checks and sync-equivalence guard the change. This does not close
+provider, reviewed-contract or language-completion gates; the completion state
+and Python-first scope remain unchanged. See
+`docs/experiments/efficiency-sprint.md` and the canonical Python analysis spec.
+
 ## Current Reality
 
 The current codebase still contains a TypeScript/JavaScript-oriented bootstrap:

@@ -43,7 +43,7 @@ fn worker(workspace: &TempWorkspace, body: &str) -> PathBuf {
 // Execute the real bootstrap under a controlled version tuple. The wrapper
 // handles the former direct-script launch too, so removing admission makes the
 // rejection and non-dispatch assertions fail rather than skipping the test.
-fn versioned_executable(workspace: &TempWorkspace, major: u32, minor: u32) -> String {
+pub(super) fn versioned_executable(workspace: &TempWorkspace, major: u32, minor: u32) -> String {
     let path = workspace.path().join(format!("python-{major}-{minor}"));
     let launches = workspace.path().join(format!("launches-{major}-{minor}"));
     let body = format!(
@@ -52,6 +52,8 @@ with open({}, 'a') as trace: trace.write('launch\n')
 version = collections.namedtuple('version_info', 'major minor micro releaselevel serial')
 sys.version_info = version({major}, {minor}, 0, 'final', 0)
 arguments = sys.argv[1:]
+while arguments and arguments[0] in ('-I', '-S'):
+    arguments.pop(0)
 if arguments[0] == '-c':
     sys.argv = ['-c'] + arguments[2:]
     exec(compile(arguments[1], '<fixture-bootstrap>', 'exec'))
@@ -65,7 +67,7 @@ else:
     fs::write(
         &path,
         format!(
-            "#!/bin/sh\nexec {} -c {} \"$@\"\n",
+            "#!/bin/sh\nexec {} -I -S -c {} \"$@\"\n",
             shell_quote(&executable),
             shell_quote(&body)
         ),
@@ -82,6 +84,83 @@ fn marker_worker(workspace: &TempWorkspace) -> (PathBuf, PathBuf) {
         serde_json::to_string(&marker.to_string_lossy()).expect("marker path")
     );
     (worker(workspace, &body), marker)
+}
+
+#[test]
+fn private_frontend_startup_never_imports_ambient_project_sitecustomize() {
+    let workspace = TempWorkspace::new("python-startup-isolation");
+    let repository = workspace.path().join("repository");
+    fs::create_dir(&repository).expect("repository");
+    let sentinel = workspace.path().join("project-startup-executed");
+    fs::write(
+        repository.join("sitecustomize.py"),
+        format!(
+            "from pathlib import Path\nPath({}).write_text('executed')\n",
+            serde_json::to_string(&sentinel.to_string_lossy()).expect("sentinel path")
+        ),
+    )
+    .expect("startup hook fixture");
+    let executable = workspace.path().join("python-with-project-path");
+    fs::write(
+        &executable,
+        format!(
+            "#!/bin/sh\nexport PYTHONPATH={}\nexec {} \"$@\"\n",
+            shell_quote(&repository.to_string_lossy()),
+            shell_quote(&PythonAstParser::default().executable)
+        ),
+    )
+    .expect("environment-only wrapper");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let control = Command::new(&executable)
+        .args(["-c", "pass"])
+        .output()
+        .expect("old startup control");
+    assert!(control.status.success());
+    assert!(
+        sentinel.exists(),
+        "fixture must execute under the old startup"
+    );
+    fs::remove_file(&sentinel).unwrap();
+    let parser = PythonAstParser::with_worker(
+        executable.to_string_lossy(),
+        source_checkout_python_worker_script(),
+    );
+    parser
+        .parse(source(
+            "app.py",
+            Language::Python,
+            "def visible(): return 1\n",
+        ))
+        .expect("isolated document parse");
+    parser
+        .parse(source(
+            "setup.cfg",
+            Language::PythonConfig,
+            "[metadata]\nname = demo\n",
+        ))
+        .expect("isolated config parse");
+    assert!(matches!(
+        parser.extract_python_interface("app.py", "def visible(): return 1\n"),
+        PythonInterfaceProbe::Computed(_)
+    ));
+    assert!(parser.python_frontend_version().is_some());
+    let mut session = super::project_session::PythonProjectSession::start(
+        &parser,
+        &ParserProjectContext::default(),
+    )
+    .expect("isolated project session");
+    session
+        .parse(source(
+            "app.py",
+            Language::Python,
+            "def visible(): return 1\n",
+        ))
+        .expect("isolated session parse");
+    session.finish().expect("isolated session shutdown");
+    assert!(
+        !sentinel.exists(),
+        "no private launch may run the project hook"
+    );
 }
 
 #[test]

@@ -78,6 +78,25 @@ RepoGrammar should not run every analyzer over every file. The cascade is:
 
 The current implementation covers a bounded static CPython `ast` slice only:
 
+- A private project-session transport is qualified under
+  [ADR-0055](../decisions/ADR-0055-bounded-python-project-session.md).
+  Current source builds select it by default when the generation parses
+  at least two Python documents; internal `REPOGRAMMAR_PYTHON_PROJECT_SESSION=0`
+  retains the legacy transport for controlled comparisons. It transfers context
+  once, retains compact
+  symbol/`__all__`/ordered reexport/conftest projections and discards detailed
+  ASTs/source arrays. Original context-omission decisions, document results,
+  interface hashes, UNKNOWN and source-free limits remain unchanged.
+  Frozen-baseline canonical/resource gates passed; published 0.5.0 assets
+  retain their shipped transport. A single-file incremental edit retains the existing transport. This closes no
+  provider or language-completion gate.
+
+- Private document/config/interface requests, version probes and project
+  sessions use isolated stdlib startup (`-I -S`) before bootstrap. Ambient
+  `PYTHONPATH`/`PYTHONHOME`, user-site packages, `.pth`, `sitecustomize` and
+  `usercustomize` cannot inject project startup code. The configured interpreter
+  and RepoGrammar-owned worker directory remain trusted execution inputs.
+
 - Every private frontend request admits the selected host's language version
   before loading the worker: Python major 3, minor at least 10, as required by
   the public installation contract. The document, project-config, and interface

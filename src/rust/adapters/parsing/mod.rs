@@ -4,8 +4,8 @@ use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, IrEdge, IrEdgeLabel, IrNode, IrNodeId,
 };
 use crate::ports::parser::{
-    ParseError, ParseReport, ParserProjectContext, PythonInterfaceProbe, SourceDocument,
-    SourceParseOutput, SourceParser,
+    ParseError, ParseReport, ParserProjectContext, ParserProjectSession, PythonInterfaceProbe,
+    SourceDocument, SourceParseOutput, SourceParser,
 };
 use std::collections::BTreeSet;
 
@@ -318,6 +318,13 @@ impl SourceParser for RepoGrammarSourceParser {
         // probes discovered `.py` modules, so every other language keeps the
         // conservative `Unverified` default.
         self.python.extract_python_interface(path, text)
+    }
+
+    fn begin_project_session(
+        &self,
+        context: &ParserProjectContext,
+    ) -> Result<Option<Box<dyn ParserProjectSession>>, ParseError> {
+        self.python.begin_project_session(context)
     }
 }
 

@@ -726,3 +726,33 @@ It still does not bundle a TypeScript compiler dependency, run package scripts,
 run Pyrefly/Pyright, expose raw semantic facts through query/MCP commands, or
 treat stored semantic facts as pattern-family evidence without the family
 builder's compatibility and support checks.
+
+### Bounded Python project-session qualification
+
+[ADR-0055](../decisions/ADR-0055-bounded-python-project-session.md) defines the
+qualified private transport selected by default in current source builds for
+generations that parse at least two Python documents. Internal
+`REPOGRAMMAR_PYTHON_PROJECT_SESSION=0` retains legacy transport;
+single-document incremental work always retains the existing request path.
+Private CPython startup uses the shared `-I -S` flags before bootstrap,
+including document/config/interface requests, version probes and sessions.
+This prevents ambient Python paths and site startup hooks from executing
+project code; the interpreter and RepoGrammar-owned worker assets are trusted.
+
+The exact control tuple is `protocol_version=1`, `contract_revision=2`,
+`project_session_revision=1`. Independently bounded 4 KiB control headers carry
+session/context identity and request ids; document/context data retain the
+1 MiB cap and result data retain the 2 MiB cap, including newlines. The
+30-second initialization/operation/shutdown deadlines, runtime admission,
+source-free validation and generation rollback remain intact. At most 100,000
+document requests and 512 MiB target source are admitted.
+
+Project source transfers once. The worker retains compact module symbol,
+literal `__all__`, ordered package reexport and conftest fixture-count projections;
+source arrays and detailed ASTs are discarded. Every parse verifies its content
+hash. Original encoded per-file context omission is preserved exactly.
+Finish must yield matching EOS, successful child exit and clean EOF before
+activation. Private session errors abort the generation, never become structural
+support. This adds no provider, public semantic schema or language support;
+default activation passed the ADR's canonical and native resource gates.
+Published 0.5.0 assets retain their immutable shipped transport.

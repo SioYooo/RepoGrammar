@@ -34,7 +34,7 @@ use crate::core::model::{
 };
 use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
-    PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
+    ParserProjectSession, PythonInterfaceProbe, SourceDocument, SourceParseOutput, SourceParser,
 };
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -45,6 +45,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+mod project_session;
 
 /// Origin engine stamped on facts produced by the CPython `ast` frontend. Used
 /// to gate which UNKNOWN facts are trusted to affect Python family membership.
@@ -78,6 +80,9 @@ const PYTHON_FRONTEND_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const PYTHON_FRONTEND_UNSUPPORTED_RUNTIME_EXIT: i32 = 78;
 const PYTHON_FRONTEND_UNSUPPORTED_RUNTIME_MARKER: &[u8] =
     b"repogrammar-python-runtime-unsupported\n";
+// Interpreter startup precedes our bootstrap: reject ambient Python paths,
+// sitecustomize/usercustomize and .pth startup code before any private mode.
+const PYTHON_FRONTEND_ISOLATION_ARGS: &[&str] = &["-I", "-S"];
 // Admit the configured interpreter before loading the worker, in that same
 // process. Removing -c's empty import entry avoids importing a repository-local
 // runpy.py; restore the direct-script argv/import directory before dispatch.
@@ -96,6 +101,10 @@ runpy.run_path(sys.argv[0], run_name='__main__')
 #[cfg(test)]
 #[path = "../../integration_tests/python_runtime_qualification.rs"]
 mod python_runtime_qualification_tests;
+
+#[cfg(test)]
+#[path = "../../integration_tests/python_project_session.rs"]
+mod python_project_session_tests;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonAstParser {
@@ -153,25 +162,32 @@ impl PythonAstParser {
             return Err(ParseError::UnsupportedLanguage);
         }
         let output = self.parse_document(&document, context)?;
-        let ParsedPythonDocument {
-            mut report,
-            interface_hash,
-        } = parse_worker_response(&document, &output.response)?;
-        if output.context_omitted {
-            report.diagnostics.push(ParseDiagnostic {
-                path: document.path.to_string(),
-                range: None,
-                severity: ParseDiagnosticSeverity::Warning,
-                message: "python parse context omitted because request exceeded size limit"
-                    .to_string(),
-            });
-        }
-        Ok(SourceParseOutput {
-            report,
-            python_interface_hash: Some(interface_hash),
-            dependencies: Vec::new(),
-        })
+        python_document_output(&document, &output.response, output.context_omitted)
     }
+}
+
+fn python_document_output(
+    document: &SourceDocument<'_>,
+    response: &str,
+    context_omitted: bool,
+) -> Result<SourceParseOutput, ParseError> {
+    let ParsedPythonDocument {
+        mut report,
+        interface_hash,
+    } = parse_worker_response(document, response)?;
+    if context_omitted {
+        report.diagnostics.push(ParseDiagnostic {
+            path: document.path.to_string(),
+            range: None,
+            severity: ParseDiagnosticSeverity::Warning,
+            message: "python parse context omitted because request exceeded size limit".to_string(),
+        });
+    }
+    Ok(SourceParseOutput {
+        report,
+        python_interface_hash: Some(interface_hash),
+        dependencies: Vec::new(),
+    })
 }
 
 impl SourceParser for PythonAstParser {
@@ -203,6 +219,31 @@ impl SourceParser for PythonAstParser {
 
     fn python_frontend_version(&self) -> Option<String> {
         self.probe_interpreter_version()
+    }
+
+    fn begin_project_session(
+        &self,
+        context: &ParserProjectContext,
+    ) -> Result<Option<Box<dyn ParserProjectSession>>, ParseError> {
+        if !project_session_selected(
+            std::env::var_os("REPOGRAMMAR_PYTHON_PROJECT_SESSION").as_deref(),
+        )? {
+            return Ok(None);
+        }
+        Ok(Some(Box::new(
+            project_session::PythonProjectSession::start(self, context)?,
+        )))
+    }
+}
+
+fn project_session_selected(selection: Option<&std::ffi::OsStr>) -> Result<bool, ParseError> {
+    match selection {
+        None => Ok(true),
+        Some(value) if value == "1" => Ok(true),
+        Some(value) if value == "0" => Ok(false),
+        Some(_) => Err(ParseError::Internal(
+            "python project-session selection must be 0 or 1".into(),
+        )),
     }
 }
 
@@ -362,6 +403,7 @@ impl PythonAstParser {
     fn probe_interpreter_version(&self) -> Option<String> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
+            .args(PYTHON_FRONTEND_ISOLATION_ARGS)
             .arg("-c")
             .arg("import sys;print('%d.%d.%d' % sys.version_info[:3])")
             .stdin(Stdio::null())
@@ -418,6 +460,7 @@ impl PythonAstParser {
     ) -> Result<String, ParseError> {
         let deadline = Instant::now() + self.timeout;
         let mut child = Command::new(&self.executable)
+            .args(PYTHON_FRONTEND_ISOLATION_ARGS)
             .arg("-c")
             .arg(PYTHON_FRONTEND_BOOTSTRAP)
             .arg(&self.worker_script)
@@ -585,38 +628,35 @@ fn parse_document_payload(
         let object = payload
             .as_object_mut()
             .expect("parse document payload must be an object");
-        object.insert(
-            "module_paths".to_string(),
-            json!(context.python_module_paths),
-        );
-        object.insert(
-            "source_roots".to_string(),
-            json!(context.python_source_roots),
-        );
-        object.insert(
-            "module_files".to_string(),
-            json!(context
+        let Value::Object(fields) = python_project_context_payload(context) else {
+            unreachable!("project context payload is an object");
+        };
+        object.extend(fields);
+    }
+    payload
+}
+
+fn python_project_context_payload(context: &ParserProjectContext) -> Value {
+    json!({
+        "module_paths": context.python_module_paths,
+        "source_roots": context.python_source_roots,
+        "module_files": context
                 .python_module_files
                 .iter()
                 .map(|file| json!({
                     "path": &file.path,
                     "text": &file.text,
                 }))
-                .collect::<Vec<_>>()),
-        );
-        object.insert(
-            "conftest_files".to_string(),
-            json!(context
+                .collect::<Vec<_>>(),
+        "conftest_files": context
                 .python_conftest_files
                 .iter()
                 .map(|file| json!({
                     "path": &file.path,
                     "text": &file.text,
                 }))
-                .collect::<Vec<_>>()),
-        );
-    }
-    payload
+                .collect::<Vec<_>>()
+    })
 }
 
 /// Validate an `extract_interface` worker response into a probe result. Treats

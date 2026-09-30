@@ -62,4 +62,6 @@ Current accepted ADRs:
 - ADR-0050: Bounded Go testing frontend.
 - ADR-0051: Bounded Fortran test-drive frontend.
 - ADR-0052: Readiness-scope admission for bounded-frontend lanes (Proposed).
+- ADR-0053: Autosync native event wakeup and bounded reconciliation.
 - ADR-0054: Default conditional global agent instruction profiles.
+- ADR-0055: Qualified bounded Python project-session transport.
