@@ -11,7 +11,7 @@ pub(super) fn macro_unknown_fact(
     unit: &CodeUnit,
     start_byte: usize,
     end_byte: usize,
-    kind: &'static str,
+    kind: &str,
 ) -> Result<SemanticFact, ParseError> {
     unknown::fact(
         document,

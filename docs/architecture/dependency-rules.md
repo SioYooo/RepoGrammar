@@ -171,6 +171,19 @@ the xUnit runtime, or user data providers, and it must preserve open-world
 UNKNOWNs for partial, inherited, generic, conditional, external, or ambiguous
 member sets.
 
+Tree-sitter 0.27 returns node-kind text borrowed from the parsed tree. Private
+adapter records may borrow that text only while translating it; emitted
+RepoGrammar-owned UNKNOWN facts copy the kind into owned assumptions. A parser
+borrow must never become a storage/core lifetime or require an artificial
+`'static` promise. The borrowed-kind regression and existing parser fixtures
+qualify this compatibility boundary without changing semantic support.
+
+The separately reviewed release-action maintenance update pins
+`softprops/action-gh-release` 3.0.3 to
+`efb35369e0ad2afab669f228072c1b0d510eae64`. The installer workflow contract
+must require that exact commit; its privilege, immutable-release and Node 24
+requirements remain intact. This is not a new release or a performance claim.
+
 Tree-sitter is not a complete semantic analyzer. It can generate syntax
 features, changed ranges, code-unit candidates, decorator/call shapes, and
 structural fingerprints, but compiler-native semantic facts take precedence over
