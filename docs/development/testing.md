@@ -1881,6 +1881,14 @@ cmp -s AGENTS.md CLAUDE.md
 
 ## Release readiness smoke matrix
 
+Current-source adoption measurement uses a separate offline adapter:
+`python3 src/experiments/agent_study/adoption_v2.test.py`. It must cover the
+actual MCP pregolden, current plan/identity/omission shapes, failed and parallel
+reads, malformed/duplicate messages, missing usage and source-free derived
+output. Keep historical RQ5 parser/ledgers unchanged. This selftest is not
+agent adoption or structural sandbox-denial evidence; live-run gates are in
+[`agent-adoption-v2.md`](../experiments/agent-adoption-v2.md).
+
 Before cutting a stable or preview tag or opening release-readiness changes,
 contributors should run the normal local gate plus a source-checkout smoke
 matrix that exercises installation boundaries without live machine writes.

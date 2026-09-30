@@ -186,6 +186,9 @@ context lives under `.agents/memories/`.
 - Conditional global instruction wiring and unmeasured A0/A1/A2 confirmation:
   [ADR-0054](decisions/ADR-0054-default-conditional-agent-instructions.md) and
   [agent-adoption-confirmation](experiments/agent-adoption-confirmation.md).
+- Current-source B0-B3 adoption protocol and offline payload qualification:
+  [agent-adoption-v2](experiments/agent-adoption-v2.md). Historical RQ5 remains
+  historical; real adoption effects are not measured.
 
 ## Task reading guide
 

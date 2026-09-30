@@ -72,6 +72,11 @@ negative results, auth/network/environment failures and exact stop reasons.
 Current outcome: all adoption, over-trigger, correctness, source-work and
 token/cost comparisons are **NOT_MEASURED**. Offline selftests validate only
 preparation/isolation and retained parser machinery.
+For a future current-source run, use the new
+[B0-B3 v2 protocol](agent-adoption-v2.md), which qualifies current MCP shapes,
+separates explicit steering and requires structural HOME/index isolation.
+The preceding v1 preparation and its frozen cells remain unchanged historical
+preparation; its parser reuse sketch is insufficient for current execution.
 The maintainer explicitly selected offline-only validation for this sprint;
 there is no authorization to start paid or authenticated confirmation runs.
 The coordinator prepared all twelve cells using the actual 825-byte v4
