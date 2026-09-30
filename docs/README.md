@@ -131,6 +131,9 @@ context lives under `.agents/memories/`.
   `release/stable-v0.4.3-release-checklist.md`.
 - Stable `0.4.2` publication evidence remains in
   `release/stable-v0.4.2-release-checklist.md`.
+- Historical stable `0.4.0` publication evidence remains in
+  `release/stable-v0.4.0-release-checklist.md`; its completed dual-channel
+  record does not redefine the current GitHub-only `0.5.0` gate.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
 - Zero-friction onboarding authority and execution evidence:
