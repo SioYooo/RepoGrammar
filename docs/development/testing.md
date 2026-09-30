@@ -1742,6 +1742,51 @@ are owned by later lanes, not excluded on principle: S12 is the CLI `stats`
 `status`/`doctor` lifecycle dual-readiness and DB-internals cleanup. The MCP query
 payloads and readiness are fully covered above.
 
+## Unified performance measurement
+
+Run the report-only harness before changing production performance behavior:
+
+```text
+cargo build --bins
+cargo run --quiet --bin repo-guard -- performance-eval --out <temporary-output> --condition baseline --python-files 16
+cargo run --quiet --bin repo-guard -- performance-eval --out <temporary-output-32> --condition baseline --python-files 32
+python3 src/experiments/performance/observe_worker.test.py
+cargo test --bin repo-guard performance_
+```
+
+Use a Python 3.10+ executable on the parent `PATH`; the isolated workspace pins
+that executable, and the production runtime-admission guard still applies.
+Builds/corpus preparation occur outside measurement. Preserve baseline binary
+and worker bytes; use `--bin` and `--worker` to compare the same frozen corpus
+against an optimized candidate. Record their hashes, exact source/tree commit,
+build profile, OS/architecture, repetition count and native-resource access.
+The synthetic template is committed; its expansion algorithm and resulting
+fixture hash are deterministic. Existing realistic-corpus authority is
+`experiments/v0.2-real-repo-dogfood.md`; no runtime network acquisition is added.
+
+Compare portable counters before claiming startup/context amplification:
+worker dispatches, request modes, actual frontend bytes, repeated project
+source bytes, context omissions, reparsed/copied files and generation
+activations. Compare native CPU/wall/RSS only within the same machine and build
+conditions. A context-omitted request is a different evidence regime; do not
+generalize a below-cap `N × S` observation to omitted-context projects. The
+observer's inclusive function times are a separate diagnostic pass, not a
+decomposition of native wall time. Filesystem inventory bytes are not source
+read traffic. Unknown host-phase timings/SQLite row counts stay unmeasured.
+
+Focused regressions cover platform resource units and partial-output refusal,
+counter amplification, malformed observer rows, bounded options, source-free
+query aggregation, real-worker byte/exit equivalence and streaming frame
+retention. Unix capture tests independently exercise direct timeouts and child
+exit with inherited pipes. Real-shaped `read_plan.items` fixtures protect plan
+counts and compact-response path extraction. First-bad/last-good response
+sequences must fail instead of being hidden by the last sample. Full
+`sync-equivalence --all`, worker release
+fixtures, product-eval abstention/false-selection counters and repository gates
+remain independent acceptance criteria. No benchmark timing is a fragile CI
+pass/fail threshold. See [Repository Guard](repository-guard.md#performance-eval)
+for command bounds, schema scope and unavailable scenarios.
+
 ## Agent-study pilot harness (RQ5)
 
 The Phase 7 RQ5 agent-impact study has a standalone pilot harness under
@@ -1936,3 +1981,45 @@ that fixture's daemon, and records playback timing and binary/output hashes in
 `docs/demo/index-progress.summary.json`. Re-record when visible progress or
 init output changes; inspect intermediate and final GIF frames. Playback time
 is not runtime performance evidence.
+
+### Native autosync resource experiment
+
+The separate stdlib-only collector runs foreground auto-sync in four fresh
+isolated Git repositories, never the developer's checkout or agent HOME:
+
+```text
+python3 src/experiments/performance/autosync_eval.test.py
+python3 src/experiments/performance/autosync_eval.py --bin <frozen-product> --worker <frozen-worker> --python <Python-3.10-or-newer> --condition baseline --out <temporary-output>
+```
+
+`autosync-performance.v1` records a sixty-second idle window, ignored-file
+burst, one supported same-size/same-mtime edit, and a supported-file burst.
+Fresh initialization occurs outside native resource measurement. Each row's
+`/usr/bin/time -l` (macOS) or `-v` (Linux) usage includes foreground daemon
+startup, a one-second settling interval, its named observation and owned
+shutdown. It is not CPU attribution exclusively to the idle interval. RSS is
+the native child-rusage maximum, not simultaneous process-tree resident memory.
+Do not infer battery savings or absolute cross-machine improvements.
+
+The collector verifies ready-lock PID membership in its own newly created
+process group before product stop, checks exact lock identity, waits for final
+indexed content hashes/generation activation, and verifies daemon exit and
+lock removal. Emergency cancellation signals only the unreaped owned process
+group; unexpected lock/state is retained for review. State observation uses one
+read-only SQLite transaction over this disposable experiment index only.
+Generation activations come from distinct successful daemon-log generations,
+so inactive-generation retention cannot hide work. Reparses/copy-forward counts
+come from the existing source-free daemon summary. Unexposed worker-spawn and
+watcher-registration counters remain `NOT_MEASURED`; non-Linux runs mark native
+Linux qualification `NOT_RUN`. No source text or raw diagnostics enter the
+summary, and no fixture, output or generated state is committed.
+
+Offline tests falsify malformed/partial native resource reporting, resource
+units, monotonic deadlines, foreign/dead/malformed lock ownership, bounded
+reads, readonly state snapshots and real daemon-summary parsing. Mac resource
+access may require the same explicit sandbox exception as performance-eval.
+`--scenario` can select a row; shortened `--idle-seconds` is a harness smoke,
+not the required sixty-second idle observation. Linux native watcher behavior
+still requires an actual Linux run.
+Use `--project-session` explicitly for the opt-in candidate arm; the hermetic
+collector does not inherit unrelated frontend environment switches.

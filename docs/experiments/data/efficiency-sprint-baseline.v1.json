@@ -1,0 +1,4045 @@
+{
+  "corpora": [
+    {
+      "binary_sha256": "a670814ce44dc163b93bf9b1fbca77b0d97f9f710b17d3200e7076df60176fa0",
+      "condition": "baseline_n16_fixed",
+      "correctness_scope": "observer equivalence checks owned semantic facts, IR and aggregate shape only; full sync-equivalence/product-eval remain independent required gates",
+      "fixture_sha256": "e9ba0484e9b1625ba54a2b40652b28d86f181904ef3f25647c899ab5d7990527",
+      "harness_commit": "42cd665cd1d4ad44ce0a7d0541ba55b778400a44",
+      "harness_commit_scope": "checkout HEAD at entry; executable and observer hashes identify the actual producer and may include uncommitted instrumentation",
+      "harness_sha256": "158ecf6af5abedbffe18b950e7865ad182d58b53977909681a4e709e589d28e5",
+      "indexing_scenarios": [
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "8e5a45d8c7989ab6ac3005d3245487d498516cff583ba921e568f3fa0549cc87",
+          "portable_counters": {
+            "added_files": null,
+            "copied_forward_files": null,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": null,
+            "indexed_units": 75,
+            "modified_files": null,
+            "parser_attempted_files": 21,
+            "removed_files": null,
+            "reparsed_files": null,
+            "semantic_facts": 329,
+            "stored_files": 21,
+            "sync_mode": null,
+            "unchanged_files": null
+          },
+          "python_counters": {
+            "ast_parse_calls": 378,
+            "conftest_context_records": 18,
+            "conftest_context_source_bytes": 1224,
+            "input_bytes": 104735,
+            "input_frames": 20,
+            "malformed_frames": 0,
+            "module_context_records": 324,
+            "module_context_source_bytes": 68508,
+            "output_bytes": 145594,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 20
+          },
+          "requests_by_mode": {
+            "parse_document": 18,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6886874,
+                "ast_parse": 8422258,
+                "build_module_index": 666874,
+                "build_module_symbol_index": 9039084,
+                "conftest_fixture_index": 470874,
+                "interface_hash": 696669
+              },
+              "diagnostic_worker_load_ns": 503617916,
+              "diagnostic_worker_ns": 525300833,
+              "machine_resources": {
+                "harness_wall_ms": 1157.4220420000001,
+                "native_wall_seconds": 1.15,
+                "peak_rss_bytes": 42074112,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.78
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6954252,
+                "ast_parse": 8384208,
+                "build_module_index": 679460,
+                "build_module_symbol_index": 8995792,
+                "conftest_fixture_index": 473085,
+                "interface_hash": 695583
+              },
+              "diagnostic_worker_load_ns": 500524956,
+              "diagnostic_worker_ns": 522232873,
+              "machine_resources": {
+                "harness_wall_ms": 1103.04425,
+                "native_wall_seconds": 1.1,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.77
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6960124,
+                "ast_parse": 8468450,
+                "build_module_index": 677627,
+                "build_module_symbol_index": 9107126,
+                "conftest_fixture_index": 470248,
+                "interface_hash": 685043
+              },
+              "diagnostic_worker_load_ns": 499526621,
+              "diagnostic_worker_ns": 521305624,
+              "machine_resources": {
+                "harness_wall_ms": 1074.8302919999999,
+                "native_wall_seconds": 1.07,
+                "peak_rss_bytes": 42024960,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.77
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "fresh_init"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "8e5a45d8c7989ab6ac3005d3245487d498516cff583ba921e568f3fa0549cc87",
+          "portable_counters": {
+            "added_files": null,
+            "copied_forward_files": null,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": null,
+            "indexed_units": 75,
+            "modified_files": null,
+            "parser_attempted_files": 21,
+            "removed_files": null,
+            "reparsed_files": null,
+            "semantic_facts": 329,
+            "stored_files": 21,
+            "sync_mode": null,
+            "unchanged_files": null
+          },
+          "python_counters": {
+            "ast_parse_calls": 378,
+            "conftest_context_records": 18,
+            "conftest_context_source_bytes": 1224,
+            "input_bytes": 104735,
+            "input_frames": 20,
+            "malformed_frames": 0,
+            "module_context_records": 324,
+            "module_context_source_bytes": 68508,
+            "output_bytes": 145594,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 20
+          },
+          "requests_by_mode": {
+            "parse_document": 18,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6917084,
+                "ast_parse": 8422950,
+                "build_module_index": 684540,
+                "build_module_symbol_index": 9049164,
+                "conftest_fixture_index": 465043,
+                "interface_hash": 694165
+              },
+              "diagnostic_worker_load_ns": 498764709,
+              "diagnostic_worker_ns": 520481794,
+              "machine_resources": {
+                "harness_wall_ms": 1014.18325,
+                "native_wall_seconds": 1.01,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.76
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6955210,
+                "ast_parse": 8433460,
+                "build_module_index": 682543,
+                "build_module_symbol_index": 9054168,
+                "conftest_fixture_index": 466917,
+                "interface_hash": 698086
+              },
+              "diagnostic_worker_load_ns": 498633998,
+              "diagnostic_worker_ns": 520378955,
+              "machine_resources": {
+                "harness_wall_ms": 1017.265584,
+                "native_wall_seconds": 1.01,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.76
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7017208,
+                "ast_parse": 8369278,
+                "build_module_index": 681834,
+                "build_module_symbol_index": 8981622,
+                "conftest_fixture_index": 472043,
+                "interface_hash": 695585
+              },
+              "diagnostic_worker_load_ns": 497269748,
+              "diagnostic_worker_ns": 519021997,
+              "machine_resources": {
+                "harness_wall_ms": 1001.790666,
+                "native_wall_seconds": 0.99,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.76
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "repeated_full_resync"
+        },
+        {
+          "generation_activations": 0,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "8e5a45d8c7989ab6ac3005d3245487d498516cff583ba921e568f3fa0549cc87",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 0,
+            "indexed_units": 75,
+            "modified_files": 0,
+            "parser_attempted_files": 0,
+            "removed_files": 0,
+            "reparsed_files": 0,
+            "semantic_facts": 329,
+            "stored_files": 21,
+            "sync_mode": "incremental",
+            "unchanged_files": 21
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 0,
+            "input_frames": 0,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 0,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 0
+          },
+          "requests_by_mode": {},
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 35.929708,
+                "native_wall_seconds": 0.03,
+                "peak_rss_bytes": 12730368,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.01,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.01
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 36.388,
+                "native_wall_seconds": 0.03,
+                "peak_rss_bytes": 12615680,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.01,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.01
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 36.37025,
+                "native_wall_seconds": 0.03,
+                "peak_rss_bytes": 12746752,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.01,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.01
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "zero_delta_sync"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "93e8584e5c34bef2dd111d2f7132133f1ca45705a9b192f990741d07716d79c3",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 20,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "stored_files": 21,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "python_counters": {
+            "ast_parse_calls": 22,
+            "conftest_context_records": 1,
+            "conftest_context_source_bytes": 68,
+            "input_bytes": 6477,
+            "input_frames": 3,
+            "malformed_frames": 0,
+            "module_context_records": 18,
+            "module_context_source_bytes": 3807,
+            "output_bytes": 8650,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 3
+          },
+          "requests_by_mode": {
+            "extract_interface": 1,
+            "parse_document": 1,
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 398250,
+                "ast_parse": 522041,
+                "build_module_index": 37125,
+                "build_module_symbol_index": 499500,
+                "conftest_fixture_index": 25250,
+                "interface_hash": 121917
+              },
+              "diagnostic_worker_load_ns": 75849583,
+              "diagnostic_worker_ns": 77334417,
+              "machine_resources": {
+                "harness_wall_ms": 208.25233300000002,
+                "native_wall_seconds": 0.2,
+                "peak_rss_bytes": 41926656,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 396625,
+                "ast_parse": 517081,
+                "build_module_index": 45250,
+                "build_module_symbol_index": 497708,
+                "conftest_fixture_index": 25292,
+                "interface_hash": 117501
+              },
+              "diagnostic_worker_load_ns": 74936500,
+              "diagnostic_worker_ns": 76400915,
+              "machine_resources": {
+                "harness_wall_ms": 200.368292,
+                "native_wall_seconds": 0.19,
+                "peak_rss_bytes": 41926656,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 403250,
+                "ast_parse": 547957,
+                "build_module_index": 42625,
+                "build_module_symbol_index": 525417,
+                "conftest_fixture_index": 26250,
+                "interface_hash": 119416
+              },
+              "diagnostic_worker_load_ns": 74388708,
+              "diagnostic_worker_ns": 75908375,
+              "machine_resources": {
+                "harness_wall_ms": 200.760917,
+                "native_wall_seconds": 0.19,
+                "peak_rss_bytes": 41910272,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_body_edit"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "41a15a67ea04f82b457ee9c332775ee485290e12703b6b5a194adcb100148c20",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 20,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "stored_files": 21,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "python_counters": {
+            "ast_parse_calls": 22,
+            "conftest_context_records": 1,
+            "conftest_context_source_bytes": 68,
+            "input_bytes": 6579,
+            "input_frames": 3,
+            "malformed_frames": 0,
+            "module_context_records": 18,
+            "module_context_source_bytes": 3839,
+            "output_bytes": 8650,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 3
+          },
+          "requests_by_mode": {
+            "extract_interface": 1,
+            "parse_document": 1,
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 434000,
+                "ast_parse": 567129,
+                "build_module_index": 38708,
+                "build_module_symbol_index": 522292,
+                "conftest_fixture_index": 27000,
+                "interface_hash": 148167
+              },
+              "diagnostic_worker_load_ns": 74971833,
+              "diagnostic_worker_ns": 76544833,
+              "machine_resources": {
+                "harness_wall_ms": 210.748209,
+                "native_wall_seconds": 0.2,
+                "peak_rss_bytes": 41943040,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 400334,
+                "ast_parse": 517086,
+                "build_module_index": 37708,
+                "build_module_symbol_index": 494500,
+                "conftest_fixture_index": 25792,
+                "interface_hash": 115792
+              },
+              "diagnostic_worker_load_ns": 74659541,
+              "diagnostic_worker_ns": 76124291,
+              "machine_resources": {
+                "harness_wall_ms": 210.65504199999998,
+                "native_wall_seconds": 0.2,
+                "peak_rss_bytes": 41664512,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 400916,
+                "ast_parse": 513790,
+                "build_module_index": 36500,
+                "build_module_symbol_index": 493708,
+                "conftest_fixture_index": 26209,
+                "interface_hash": 114459
+              },
+              "diagnostic_worker_load_ns": 76112667,
+              "diagnostic_worker_ns": 77587500,
+              "machine_resources": {
+                "harness_wall_ms": 212.36587500000002,
+                "native_wall_seconds": 0.21,
+                "peak_rss_bytes": 41959424,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.15
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_interface_preserving_edit"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "41af87ffef0a7d6f26e48964e729e00556c60a340e71616c1355bf7e5834853a",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 21,
+            "fallback_reason": "python_interface_changed",
+            "families_recomputed": 1,
+            "indexed_units": 76,
+            "modified_files": 1,
+            "parser_attempted_files": 21,
+            "removed_files": 0,
+            "reparsed_files": 21,
+            "semantic_facts": 330,
+            "stored_files": 21,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 20
+          },
+          "python_counters": {
+            "ast_parse_calls": 379,
+            "conftest_context_records": 18,
+            "conftest_context_source_bytes": 1224,
+            "input_bytes": 106703,
+            "input_frames": 21,
+            "malformed_frames": 0,
+            "module_context_records": 324,
+            "module_context_source_bytes": 69876,
+            "output_bytes": 146459,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 21
+          },
+          "requests_by_mode": {
+            "extract_interface": 1,
+            "parse_document": 18,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6976417,
+                "ast_parse": 8505444,
+                "build_module_index": 683125,
+                "build_module_symbol_index": 9089375,
+                "conftest_fixture_index": 462914,
+                "interface_hash": 763291
+              },
+              "diagnostic_worker_load_ns": 523490293,
+              "diagnostic_worker_ns": 545428667,
+              "machine_resources": {
+                "harness_wall_ms": 1093.6919999999998,
+                "native_wall_seconds": 1.09,
+                "peak_rss_bytes": 42024960,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.81
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7038667,
+                "ast_parse": 8539295,
+                "build_module_index": 668039,
+                "build_module_symbol_index": 9102750,
+                "conftest_fixture_index": 471751,
+                "interface_hash": 781418
+              },
+              "diagnostic_worker_load_ns": 521439377,
+              "diagnostic_worker_ns": 543424584,
+              "machine_resources": {
+                "harness_wall_ms": 1102.78175,
+                "native_wall_seconds": 1.09,
+                "peak_rss_bytes": 42024960,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.81
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6933624,
+                "ast_parse": 8548126,
+                "build_module_index": 687959,
+                "build_module_symbol_index": 9129708,
+                "conftest_fixture_index": 463040,
+                "interface_hash": 768333
+              },
+              "diagnostic_worker_load_ns": 522563830,
+              "diagnostic_worker_ns": 544476832,
+              "machine_resources": {
+                "harness_wall_ms": 1091.7450419999998,
+                "native_wall_seconds": 1.09,
+                "peak_rss_bytes": 41992192,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.81
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_interface_change"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "91c381a7f674b3e8772d175e883dc21243b33584d4d029e3f49ff69bcfc5c94b",
+          "portable_counters": {
+            "added_files": 1,
+            "copied_forward_files": 0,
+            "discovered_files": 22,
+            "fallback_reason": "project_context_changed",
+            "families_recomputed": 1,
+            "indexed_units": 78,
+            "modified_files": 0,
+            "parser_attempted_files": 22,
+            "removed_files": 0,
+            "reparsed_files": 22,
+            "semantic_facts": 332,
+            "stored_files": 22,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 21
+          },
+          "python_counters": {
+            "ast_parse_calls": 418,
+            "conftest_context_records": 19,
+            "conftest_context_source_bytes": 1292,
+            "input_bytes": 113236,
+            "input_frames": 21,
+            "malformed_frames": 0,
+            "module_context_records": 361,
+            "module_context_source_bytes": 74252,
+            "output_bytes": 147778,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 21
+          },
+          "requests_by_mode": {
+            "parse_document": 19,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7112498,
+                "ast_parse": 9062924,
+                "build_module_index": 730040,
+                "build_module_symbol_index": 9803585,
+                "conftest_fixture_index": 500124,
+                "interface_hash": 701332
+              },
+              "diagnostic_worker_load_ns": 525263960,
+              "diagnostic_worker_ns": 548213919,
+              "machine_resources": {
+                "harness_wall_ms": 1081.322417,
+                "native_wall_seconds": 1.07,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.82
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7343794,
+                "ast_parse": 9032577,
+                "build_module_index": 723666,
+                "build_module_symbol_index": 9742129,
+                "conftest_fixture_index": 489001,
+                "interface_hash": 734336
+              },
+              "diagnostic_worker_load_ns": 525236750,
+              "diagnostic_worker_ns": 548390873,
+              "machine_resources": {
+                "harness_wall_ms": 1091.553167,
+                "native_wall_seconds": 1.08,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.82
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7070372,
+                "ast_parse": 8909334,
+                "build_module_index": 722250,
+                "build_module_symbol_index": 9630666,
+                "conftest_fixture_index": 492917,
+                "interface_hash": 687837
+              },
+              "diagnostic_worker_load_ns": 523719291,
+              "diagnostic_worker_ns": 546430082,
+              "machine_resources": {
+                "harness_wall_ms": 1100.389958,
+                "native_wall_seconds": 1.09,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.15,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.82
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_add"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "41af87ffef0a7d6f26e48964e729e00556c60a340e71616c1355bf7e5834853a",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 21,
+            "fallback_reason": "project_context_changed",
+            "families_recomputed": 1,
+            "indexed_units": 76,
+            "modified_files": 0,
+            "parser_attempted_files": 21,
+            "removed_files": 1,
+            "reparsed_files": 21,
+            "semantic_facts": 330,
+            "stored_files": 21,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 21
+          },
+          "python_counters": {
+            "ast_parse_calls": 378,
+            "conftest_context_records": 18,
+            "conftest_context_source_bytes": 1224,
+            "input_bytes": 106274,
+            "input_frames": 20,
+            "malformed_frames": 0,
+            "module_context_records": 324,
+            "module_context_source_bytes": 69876,
+            "output_bytes": 146280,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 20
+          },
+          "requests_by_mode": {
+            "parse_document": 18,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7004416,
+                "ast_parse": 8478917,
+                "build_module_index": 673624,
+                "build_module_symbol_index": 9114126,
+                "conftest_fixture_index": 470457,
+                "interface_hash": 690002
+              },
+              "diagnostic_worker_load_ns": 498245166,
+              "diagnostic_worker_ns": 520076249,
+              "machine_resources": {
+                "harness_wall_ms": 1039.666375,
+                "native_wall_seconds": 1.03,
+                "peak_rss_bytes": 41992192,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.79
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7037917,
+                "ast_parse": 8526676,
+                "build_module_index": 678748,
+                "build_module_symbol_index": 9158873,
+                "conftest_fixture_index": 473289,
+                "interface_hash": 693539
+              },
+              "diagnostic_worker_load_ns": 497186796,
+              "diagnostic_worker_ns": 519137461,
+              "machine_resources": {
+                "harness_wall_ms": 1035.1813750000001,
+                "native_wall_seconds": 1.03,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.78
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 6981709,
+                "ast_parse": 8447008,
+                "build_module_index": 675335,
+                "build_module_symbol_index": 9077129,
+                "conftest_fixture_index": 465790,
+                "interface_hash": 683502
+              },
+              "diagnostic_worker_load_ns": 497676002,
+              "diagnostic_worker_ns": 519409459,
+              "machine_resources": {
+                "harness_wall_ms": 1042.002958,
+                "native_wall_seconds": 1.03,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.78
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_remove"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "e1dd339386b1ef33d311d738cf4ddeddbea839915865d74a63db903edd262632",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 21,
+            "fallback_reason": "project_context_changed",
+            "families_recomputed": 1,
+            "indexed_units": 76,
+            "modified_files": 1,
+            "parser_attempted_files": 21,
+            "removed_files": 0,
+            "reparsed_files": 21,
+            "semantic_facts": 330,
+            "stored_files": 21,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 20
+          },
+          "python_counters": {
+            "ast_parse_calls": 378,
+            "conftest_context_records": 18,
+            "conftest_context_source_bytes": 1224,
+            "input_bytes": 106274,
+            "input_frames": 20,
+            "malformed_frames": 0,
+            "module_context_records": 324,
+            "module_context_source_bytes": 69876,
+            "output_bytes": 146280,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 20
+          },
+          "requests_by_mode": {
+            "parse_document": 18,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7084379,
+                "ast_parse": 8441490,
+                "build_module_index": 682791,
+                "build_module_symbol_index": 9047916,
+                "conftest_fixture_index": 472917,
+                "interface_hash": 694998
+              },
+              "diagnostic_worker_load_ns": 497101752,
+              "diagnostic_worker_ns": 518987333,
+              "machine_resources": {
+                "harness_wall_ms": 1048.29575,
+                "native_wall_seconds": 1.04,
+                "peak_rss_bytes": 42074112,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.79
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7019083,
+                "ast_parse": 8409041,
+                "build_module_index": 679710,
+                "build_module_symbol_index": 9041832,
+                "conftest_fixture_index": 458125,
+                "interface_hash": 685253
+              },
+              "diagnostic_worker_load_ns": 500190414,
+              "diagnostic_worker_ns": 522003958,
+              "machine_resources": {
+                "harness_wall_ms": 1048.505625,
+                "native_wall_seconds": 1.04,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.79
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 7044332,
+                "ast_parse": 8534872,
+                "build_module_index": 679583,
+                "build_module_symbol_index": 9178667,
+                "conftest_fixture_index": 469125,
+                "interface_hash": 687751
+              },
+              "diagnostic_worker_load_ns": 498935831,
+              "diagnostic_worker_ns": 520918333,
+              "machine_resources": {
+                "harness_wall_ms": 1065.2435,
+                "native_wall_seconds": 1.06,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.14,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.79
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "project_config_change"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "e1dd339386b1ef33d311d738cf4ddeddbea839915865d74a63db903edd262632",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 20,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 76,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 607,
+            "stored_files": 21,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 336,
+            "input_frames": 1,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 228,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 1
+          },
+          "requests_by_mode": {
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25062583,
+              "diagnostic_worker_ns": 25204250,
+              "machine_resources": {
+                "harness_wall_ms": 137.8245,
+                "native_wall_seconds": 0.13,
+                "peak_rss_bytes": 41926656,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.02,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.09
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25057583,
+              "diagnostic_worker_ns": 25186250,
+              "machine_resources": {
+                "harness_wall_ms": 138.533333,
+                "native_wall_seconds": 0.13,
+                "peak_rss_bytes": 41615360,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.02,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.09
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25387000,
+              "diagnostic_worker_ns": 25518583,
+              "machine_resources": {
+                "harness_wall_ms": 137.967208,
+                "native_wall_seconds": 0.13,
+                "peak_rss_bytes": 41828352,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.02,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.09
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "rust_one_file_edit"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "adfbaa26c9209b698fd08522b1fbb63b50f82baf7b0a05ac31109da9b27832af",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 20,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 76,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 607,
+            "stored_files": 21,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 336,
+            "input_frames": 1,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 228,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 1
+          },
+          "requests_by_mode": {
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 24847583,
+              "diagnostic_worker_ns": 24985375,
+              "machine_resources": {
+                "harness_wall_ms": 138.480666,
+                "native_wall_seconds": 0.13,
+                "peak_rss_bytes": 41992192,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.02,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.09
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25217250,
+              "diagnostic_worker_ns": 25346167,
+              "machine_resources": {
+                "harness_wall_ms": 143.849583,
+                "native_wall_seconds": 0.14,
+                "peak_rss_bytes": 41615360,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.09
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 24963750,
+              "diagnostic_worker_ns": 25094875,
+              "machine_resources": {
+                "harness_wall_ms": 139.881292,
+                "native_wall_seconds": 0.13,
+                "peak_rss_bytes": 41549824,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.02,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.09
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "tsjs_one_file_edit"
+        }
+      ],
+      "observer_sha256": "97f071a3646e21a86c3d423e3c4ecb54769ae7f650446d24d229188f435e5f17",
+      "platform": {
+        "arch": "aarch64",
+        "os": "macos"
+      },
+      "query_rows": [
+        {
+          "candidate_family_count": 1,
+          "category": "fuzzy_retrieval",
+          "estimated_tokens": 2076,
+          "freshness_state": null,
+          "hydrated_family_count": 1,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 48,
+            "p95": 50
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 48.337832999999996,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13598720,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 47.928958,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13680640,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 49.656708,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13680640,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 8303,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 0,
+          "category": "correct_abstention",
+          "estimated_tokens": 274,
+          "freshness_state": null,
+          "hydrated_family_count": 0,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 54,
+            "p95": 54
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 53.373540999999996,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13434880,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 53.755542000000005,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13221888,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 53.721375,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13303808,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": null,
+          "response_bytes": 1093,
+          "selected_family_count": 0,
+          "status": "UNKNOWN",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_path",
+          "estimated_tokens": 1992,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 48,
+            "p95": 50
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 48.396167,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13598720,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 48.408333,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13680640,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 49.965833,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13582336,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 7966,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_family",
+          "estimated_tokens": 1985,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 36,
+            "p95": 38
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 36.367292,
+              "native_wall_seconds": 0.03,
+              "peak_rss_bytes": 13549568,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.0,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            },
+            {
+              "harness_wall_ms": 38.460875,
+              "native_wall_seconds": 0.03,
+              "peak_rss_bytes": 13647872,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.0,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            },
+            {
+              "harness_wall_ms": 36.378665999999996,
+              "native_wall_seconds": 0.03,
+              "peak_rss_bytes": 13680640,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.0,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 7937,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_member",
+          "estimated_tokens": 1992,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 44,
+            "p95": 45
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 44.240125,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13631488,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            },
+            {
+              "harness_wall_ms": 43.926125000000006,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13631488,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            },
+            {
+              "harness_wall_ms": 44.652334,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13746176,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 7966,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "find_analogues",
+          "estimated_tokens": 2930,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 47,
+            "p95": 48
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 46.837167,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13615104,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 48.3945,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13762560,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 47.116042,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13795328,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 11720,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "show_family",
+          "estimated_tokens": 2887,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 36,
+            "p95": 36
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 35.991833,
+              "native_wall_seconds": 0.03,
+              "peak_rss_bytes": 13664256,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.0,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            },
+            {
+              "harness_wall_ms": 35.537082999999996,
+              "native_wall_seconds": 0.03,
+              "peak_rss_bytes": 13631488,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.0,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            },
+            {
+              "harness_wall_ms": 36.328084,
+              "native_wall_seconds": 0.03,
+              "peak_rss_bytes": 13647872,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.0,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.02
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 11547,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": null,
+          "category": "inspect_readiness",
+          "estimated_tokens": 1168,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 51,
+            "p95": 53
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 51.015,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 13991936,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 52.554916999999996,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 14106624,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 49.951375,
+              "native_wall_seconds": 0.04,
+              "peak_rss_bytes": 14123008,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": null,
+          "response_bytes": 4672,
+          "selected_family_count": 0,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": null
+        }
+      ],
+      "raw_report_sha256": "31602605a616d5758f6ec514b5f3ed1dc39c0b629797d83f76078cc6b459c659",
+      "repetitions": 3,
+      "source_inventory": {
+        "conftest_source_bytes": 68,
+        "file_bytes": 4126,
+        "python_files": 18,
+        "python_source_bytes": 3806,
+        "regular_files": 21,
+        "scope": "fixture inventory before init; bytes are not measured filesystem read traffic or admitted parser workload"
+      },
+      "synthetic": true,
+      "synthetic_python_modules": 16,
+      "timeout_seconds": 600,
+      "unavailable_scenarios": {
+        "agent_adoption": {
+          "reason": "requires separate isolated controlled agent sessions",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_idle_60s": {
+          "reason": "separate live watcher benchmark; this harness never starts a daemon",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_ignored_burst": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_same_size_same_mtime": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_supported_burst": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "non_synthetic_mutations": null,
+        "warm_mcp": {
+          "reason": "cold process measurements do not identify warm serving latency",
+          "state": "NOT_MEASURED"
+        }
+      },
+      "unmeasured_host_phases": {
+        "family_construction": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "filesystem_discovery": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "generation_validation_activation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "git_ignore": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "host_response_validation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "request_serialization": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "semantic_support_derivation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "source_bytes_read": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "source_hashing": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "sqlite_persistence": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "sqlite_rows_written": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "worker_spawn_wait": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        }
+      },
+      "worker_sha256": "45d30ac49aa3b50a8cd8b01e59a1576aee4dd0ae71c9df2f0de99f670130bd03"
+    },
+    {
+      "binary_sha256": "a670814ce44dc163b93bf9b1fbca77b0d97f9f710b17d3200e7076df60176fa0",
+      "condition": "baseline_n32_fixed",
+      "correctness_scope": "observer equivalence checks owned semantic facts, IR and aggregate shape only; full sync-equivalence/product-eval remain independent required gates",
+      "fixture_sha256": "fdd6d9137c3c9534705a89b4ea96e1ab57826012b8e57a7cea6708583e8ef1cb",
+      "harness_commit": "42cd665cd1d4ad44ce0a7d0541ba55b778400a44",
+      "harness_commit_scope": "checkout HEAD at entry; executable and observer hashes identify the actual producer and may include uncommitted instrumentation",
+      "harness_sha256": "158ecf6af5abedbffe18b950e7865ad182d58b53977909681a4e709e589d28e5",
+      "indexing_scenarios": [
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "5d9b14fdc7a546fd5fb782476bc795485275e328b5e9017ea3a0b2701e261b0c",
+          "portable_counters": {
+            "added_files": null,
+            "copied_forward_files": null,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": null,
+            "indexed_units": 139,
+            "modified_files": null,
+            "parser_attempted_files": 37,
+            "removed_files": null,
+            "reparsed_files": null,
+            "semantic_facts": 633,
+            "stored_files": 37,
+            "sync_mode": null,
+            "unchanged_files": null
+          },
+          "python_counters": {
+            "ast_parse_calls": 1258,
+            "conftest_context_records": 34,
+            "conftest_context_source_bytes": 2312,
+            "input_bytes": 362335,
+            "input_frames": 36,
+            "malformed_frames": 0,
+            "module_context_records": 1156,
+            "module_context_source_bytes": 252348,
+            "output_bytes": 282730,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 36
+          },
+          "requests_by_mode": {
+            "parse_document": 34,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13394081,
+                "ast_parse": 26173677,
+                "build_module_index": 1621838,
+                "build_module_symbol_index": 29263872,
+                "conftest_fixture_index": 914251,
+                "interface_hash": 1312415
+              },
+              "diagnostic_worker_load_ns": 901730962,
+              "diagnostic_worker_ns": 957082172,
+              "machine_resources": {
+                "harness_wall_ms": 1896.716792,
+                "native_wall_seconds": 1.89,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.4
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13462543,
+                "ast_parse": 26156865,
+                "build_module_index": 1622247,
+                "build_module_symbol_index": 29225332,
+                "conftest_fixture_index": 902497,
+                "interface_hash": 1308250
+              },
+              "diagnostic_worker_load_ns": 897942044,
+              "diagnostic_worker_ns": 953258873,
+              "machine_resources": {
+                "harness_wall_ms": 1906.828875,
+                "native_wall_seconds": 1.9,
+                "peak_rss_bytes": 42041344,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.4
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13454124,
+                "ast_parse": 26299677,
+                "build_module_index": 1603461,
+                "build_module_symbol_index": 29409625,
+                "conftest_fixture_index": 913668,
+                "interface_hash": 1312163
+              },
+              "diagnostic_worker_load_ns": 905312125,
+              "diagnostic_worker_ns": 960797706,
+              "machine_resources": {
+                "harness_wall_ms": 1903.994084,
+                "native_wall_seconds": 1.9,
+                "peak_rss_bytes": 42074112,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.39
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "fresh_init"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "5d9b14fdc7a546fd5fb782476bc795485275e328b5e9017ea3a0b2701e261b0c",
+          "portable_counters": {
+            "added_files": null,
+            "copied_forward_files": null,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": null,
+            "indexed_units": 139,
+            "modified_files": null,
+            "parser_attempted_files": 37,
+            "removed_files": null,
+            "reparsed_files": null,
+            "semantic_facts": 633,
+            "stored_files": 37,
+            "sync_mode": null,
+            "unchanged_files": null
+          },
+          "python_counters": {
+            "ast_parse_calls": 1258,
+            "conftest_context_records": 34,
+            "conftest_context_source_bytes": 2312,
+            "input_bytes": 362335,
+            "input_frames": 36,
+            "malformed_frames": 0,
+            "module_context_records": 1156,
+            "module_context_source_bytes": 252348,
+            "output_bytes": 282730,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 36
+          },
+          "requests_by_mode": {
+            "parse_document": 34,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13462831,
+                "ast_parse": 26238543,
+                "build_module_index": 1631669,
+                "build_module_symbol_index": 29333963,
+                "conftest_fixture_index": 897167,
+                "interface_hash": 1312542
+              },
+              "diagnostic_worker_load_ns": 895799541,
+              "diagnostic_worker_ns": 951267372,
+              "machine_resources": {
+                "harness_wall_ms": 1820.744083,
+                "native_wall_seconds": 1.81,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.24,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.39
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13456501,
+                "ast_parse": 26081196,
+                "build_module_index": 1606289,
+                "build_module_symbol_index": 29151710,
+                "conftest_fixture_index": 901792,
+                "interface_hash": 1310375
+              },
+              "diagnostic_worker_load_ns": 897159290,
+              "diagnostic_worker_ns": 952391754,
+              "machine_resources": {
+                "harness_wall_ms": 1873.5305,
+                "native_wall_seconds": 1.87,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.39
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13415209,
+                "ast_parse": 26308562,
+                "build_module_index": 1605626,
+                "build_module_symbol_index": 29373665,
+                "conftest_fixture_index": 892918,
+                "interface_hash": 1327292
+              },
+              "diagnostic_worker_load_ns": 904391627,
+              "diagnostic_worker_ns": 959858126,
+              "machine_resources": {
+                "harness_wall_ms": 1833.4738750000001,
+                "native_wall_seconds": 1.83,
+                "peak_rss_bytes": 42074112,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.24,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.38
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "repeated_full_resync"
+        },
+        {
+          "generation_activations": 0,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "5d9b14fdc7a546fd5fb782476bc795485275e328b5e9017ea3a0b2701e261b0c",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": 0,
+            "indexed_units": 139,
+            "modified_files": 0,
+            "parser_attempted_files": 0,
+            "removed_files": 0,
+            "reparsed_files": 0,
+            "semantic_facts": 633,
+            "stored_files": 37,
+            "sync_mode": "incremental",
+            "unchanged_files": 37
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 0,
+            "input_frames": 0,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 0,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 0
+          },
+          "requests_by_mode": {},
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 42.41375,
+                "native_wall_seconds": 0.04,
+                "peak_rss_bytes": 13418496,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.01,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.02
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 44.727500000000006,
+                "native_wall_seconds": 0.04,
+                "peak_rss_bytes": 13451264,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.01,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.02
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 45.431332999999995,
+                "native_wall_seconds": 0.04,
+                "peak_rss_bytes": 13516800,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.01,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.02
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "zero_delta_sync"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "83f61bba5448b6254175c6a7aa8dc5a299a8035c35bf71f3805afba4b7c7aa18",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 36,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 139,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 1165,
+            "stored_files": 37,
+            "sync_mode": "incremental",
+            "unchanged_files": 36
+          },
+          "python_counters": {
+            "ast_parse_calls": 38,
+            "conftest_context_records": 1,
+            "conftest_context_source_bytes": 68,
+            "input_bytes": 11325,
+            "input_frames": 3,
+            "malformed_frames": 0,
+            "module_context_records": 34,
+            "module_context_source_bytes": 7423,
+            "output_bytes": 8650,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 3
+          },
+          "requests_by_mode": {
+            "extract_interface": 1,
+            "parse_document": 1,
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 420542,
+                "ast_parse": 844082,
+                "build_module_index": 47292,
+                "build_module_symbol_index": 883542,
+                "conftest_fixture_index": 29958,
+                "interface_hash": 120041
+              },
+              "diagnostic_worker_load_ns": 74202208,
+              "diagnostic_worker_ns": 76147166,
+              "machine_resources": {
+                "harness_wall_ms": 235.570542,
+                "native_wall_seconds": 0.23,
+                "peak_rss_bytes": 41959424,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.17
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 413208,
+                "ast_parse": 827164,
+                "build_module_index": 46709,
+                "build_module_symbol_index": 854792,
+                "conftest_fixture_index": 26250,
+                "interface_hash": 123042
+              },
+              "diagnostic_worker_load_ns": 74761708,
+              "diagnostic_worker_ns": 76674750,
+              "machine_resources": {
+                "harness_wall_ms": 228.03799999999998,
+                "native_wall_seconds": 0.22,
+                "peak_rss_bytes": 41943040,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.16
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 409541,
+                "ast_parse": 849124,
+                "build_module_index": 46459,
+                "build_module_symbol_index": 875875,
+                "conftest_fixture_index": 26708,
+                "interface_hash": 122125
+              },
+              "diagnostic_worker_load_ns": 76816667,
+              "diagnostic_worker_ns": 78747374,
+              "machine_resources": {
+                "harness_wall_ms": 229.309459,
+                "native_wall_seconds": 0.22,
+                "peak_rss_bytes": 41959424,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.16
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_body_edit"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "b964fcbce863bf654b5e098efdf1a960470be6a39897a939c24084c4dfeb43f9",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 36,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 139,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 1165,
+            "stored_files": 37,
+            "sync_mode": "incremental",
+            "unchanged_files": 36
+          },
+          "python_counters": {
+            "ast_parse_calls": 38,
+            "conftest_context_records": 1,
+            "conftest_context_source_bytes": 68,
+            "input_bytes": 11427,
+            "input_frames": 3,
+            "malformed_frames": 0,
+            "module_context_records": 34,
+            "module_context_source_bytes": 7455,
+            "output_bytes": 8650,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 3
+          },
+          "requests_by_mode": {
+            "extract_interface": 1,
+            "parse_document": 1,
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 404542,
+                "ast_parse": 825252,
+                "build_module_index": 46458,
+                "build_module_symbol_index": 853667,
+                "conftest_fixture_index": 25333,
+                "interface_hash": 125000
+              },
+              "diagnostic_worker_load_ns": 74494875,
+              "diagnostic_worker_ns": 76389583,
+              "machine_resources": {
+                "harness_wall_ms": 242.128083,
+                "native_wall_seconds": 0.24,
+                "peak_rss_bytes": 41877504,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.04,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.17
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 404917,
+                "ast_parse": 838498,
+                "build_module_index": 46625,
+                "build_module_symbol_index": 871916,
+                "conftest_fixture_index": 26167,
+                "interface_hash": 120083
+              },
+              "diagnostic_worker_load_ns": 74601334,
+              "diagnostic_worker_ns": 76506542,
+              "machine_resources": {
+                "harness_wall_ms": 243.488125,
+                "native_wall_seconds": 0.23,
+                "peak_rss_bytes": 41975808,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.04,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.17
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 401875,
+                "ast_parse": 833788,
+                "build_module_index": 46750,
+                "build_module_symbol_index": 866583,
+                "conftest_fixture_index": 25708,
+                "interface_hash": 119084
+              },
+              "diagnostic_worker_load_ns": 75777667,
+              "diagnostic_worker_ns": 77673209,
+              "machine_resources": {
+                "harness_wall_ms": 240.58737499999998,
+                "native_wall_seconds": 0.23,
+                "peak_rss_bytes": 41943040,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.04,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.17
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_interface_preserving_edit"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "c890eb3e050510d264afd7ff0a81a564e126eb186f5b4d5738595b2c03c5beff",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 37,
+            "fallback_reason": "python_interface_changed",
+            "families_recomputed": 1,
+            "indexed_units": 140,
+            "modified_files": 1,
+            "parser_attempted_files": 37,
+            "removed_files": 0,
+            "reparsed_files": 37,
+            "semantic_facts": 634,
+            "stored_files": 37,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 36
+          },
+          "python_counters": {
+            "ast_parse_calls": 1259,
+            "conftest_context_records": 34,
+            "conftest_context_source_bytes": 2312,
+            "input_bytes": 365599,
+            "input_frames": 37,
+            "malformed_frames": 0,
+            "module_context_records": 1156,
+            "module_context_source_bytes": 254932,
+            "output_bytes": 283595,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 37
+          },
+          "requests_by_mode": {
+            "extract_interface": 1,
+            "parse_document": 34,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13491037,
+                "ast_parse": 26564149,
+                "build_module_index": 1623958,
+                "build_module_symbol_index": 29637290,
+                "conftest_fixture_index": 901336,
+                "interface_hash": 1424831
+              },
+              "diagnostic_worker_load_ns": 925649915,
+              "diagnostic_worker_ns": 981654250,
+              "machine_resources": {
+                "harness_wall_ms": 1969.656541,
+                "native_wall_seconds": 1.96,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.26,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.47
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13518667,
+                "ast_parse": 26414548,
+                "build_module_index": 1625874,
+                "build_module_symbol_index": 29479998,
+                "conftest_fixture_index": 919210,
+                "interface_hash": 1409541
+              },
+              "diagnostic_worker_load_ns": 921947002,
+              "diagnostic_worker_ns": 977822294,
+              "machine_resources": {
+                "harness_wall_ms": 1912.3130409999999,
+                "native_wall_seconds": 1.9,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.45
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13554793,
+                "ast_parse": 26498731,
+                "build_module_index": 1611791,
+                "build_module_symbol_index": 29601458,
+                "conftest_fixture_index": 911337,
+                "interface_hash": 1390959
+              },
+              "diagnostic_worker_load_ns": 923251252,
+              "diagnostic_worker_ns": 979288211,
+              "machine_resources": {
+                "harness_wall_ms": 1936.2393749999999,
+                "native_wall_seconds": 1.93,
+                "peak_rss_bytes": 42106880,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.26,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.46
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_interface_change"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "6a738b2660913637a2a91c69f8284feae3ca0389862a92aea63d765df8131091",
+          "portable_counters": {
+            "added_files": 1,
+            "copied_forward_files": 0,
+            "discovered_files": 38,
+            "fallback_reason": "project_context_changed",
+            "families_recomputed": 1,
+            "indexed_units": 142,
+            "modified_files": 0,
+            "parser_attempted_files": 38,
+            "removed_files": 0,
+            "reparsed_files": 38,
+            "semantic_facts": 636,
+            "stored_files": 38,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 37
+          },
+          "python_counters": {
+            "ast_parse_calls": 1330,
+            "conftest_context_records": 35,
+            "conftest_context_source_bytes": 2380,
+            "input_bytes": 378084,
+            "input_frames": 37,
+            "malformed_frames": 0,
+            "module_context_records": 1225,
+            "module_context_source_bytes": 263340,
+            "output_bytes": 284914,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 37
+          },
+          "requests_by_mode": {
+            "parse_document": 35,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13592086,
+                "ast_parse": 26992771,
+                "build_module_index": 1669582,
+                "build_module_symbol_index": 30276163,
+                "conftest_fixture_index": 924710,
+                "interface_hash": 1313377
+              },
+              "diagnostic_worker_load_ns": 922404454,
+              "diagnostic_worker_ns": 979277835,
+              "machine_resources": {
+                "harness_wall_ms": 1910.1965,
+                "native_wall_seconds": 1.9,
+                "peak_rss_bytes": 42041344,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.26,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.46
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13700418,
+                "ast_parse": 26980062,
+                "build_module_index": 1696000,
+                "build_module_symbol_index": 30240750,
+                "conftest_fixture_index": 926252,
+                "interface_hash": 1348502
+              },
+              "diagnostic_worker_load_ns": 921560793,
+              "diagnostic_worker_ns": 978610500,
+              "machine_resources": {
+                "harness_wall_ms": 1946.5062500000001,
+                "native_wall_seconds": 1.94,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.26,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.46
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13658461,
+                "ast_parse": 26938747,
+                "build_module_index": 1684706,
+                "build_module_symbol_index": 30181705,
+                "conftest_fixture_index": 925044,
+                "interface_hash": 1338876
+              },
+              "diagnostic_worker_load_ns": 922025208,
+              "diagnostic_worker_ns": 979008246,
+              "machine_resources": {
+                "harness_wall_ms": 1934.089125,
+                "native_wall_seconds": 1.93,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.46
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_add"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "c890eb3e050510d264afd7ff0a81a564e126eb186f5b4d5738595b2c03c5beff",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 37,
+            "fallback_reason": "project_context_changed",
+            "families_recomputed": 1,
+            "indexed_units": 140,
+            "modified_files": 0,
+            "parser_attempted_files": 37,
+            "removed_files": 1,
+            "reparsed_files": 37,
+            "semantic_facts": 634,
+            "stored_files": 37,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 37
+          },
+          "python_counters": {
+            "ast_parse_calls": 1258,
+            "conftest_context_records": 34,
+            "conftest_context_source_bytes": 2312,
+            "input_bytes": 365170,
+            "input_frames": 36,
+            "malformed_frames": 0,
+            "module_context_records": 1156,
+            "module_context_source_bytes": 254932,
+            "output_bytes": 283416,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 36
+          },
+          "requests_by_mode": {
+            "parse_document": 34,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13570793,
+                "ast_parse": 26184899,
+                "build_module_index": 1618085,
+                "build_module_symbol_index": 29264207,
+                "conftest_fixture_index": 896789,
+                "interface_hash": 1310082
+              },
+              "diagnostic_worker_load_ns": 897510665,
+              "diagnostic_worker_ns": 953080753,
+              "machine_resources": {
+                "harness_wall_ms": 1912.964917,
+                "native_wall_seconds": 1.91,
+                "peak_rss_bytes": 42926080,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.45
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13481212,
+                "ast_parse": 26271976,
+                "build_module_index": 1619588,
+                "build_module_symbol_index": 29369377,
+                "conftest_fixture_index": 909086,
+                "interface_hash": 1304128
+              },
+              "diagnostic_worker_load_ns": 896627167,
+              "diagnostic_worker_ns": 952144291,
+              "machine_resources": {
+                "harness_wall_ms": 1885.278208,
+                "native_wall_seconds": 1.88,
+                "peak_rss_bytes": 42057728,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.43
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13630209,
+                "ast_parse": 26381281,
+                "build_module_index": 1604708,
+                "build_module_symbol_index": 29441078,
+                "conftest_fixture_index": 903417,
+                "interface_hash": 1335419
+              },
+              "diagnostic_worker_load_ns": 897800209,
+              "diagnostic_worker_ns": 953573876,
+              "machine_resources": {
+                "harness_wall_ms": 1888.3606670000001,
+                "native_wall_seconds": 1.88,
+                "peak_rss_bytes": 42041344,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.43
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "python_remove"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "3840809313fbf1531c1b669891b45d8ed0fe5665207e170d60b2e81b459b6661",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 37,
+            "fallback_reason": "project_context_changed",
+            "families_recomputed": 1,
+            "indexed_units": 140,
+            "modified_files": 1,
+            "parser_attempted_files": 37,
+            "removed_files": 0,
+            "reparsed_files": 37,
+            "semantic_facts": 634,
+            "stored_files": 37,
+            "sync_mode": "full_rebuild_fallback",
+            "unchanged_files": 36
+          },
+          "python_counters": {
+            "ast_parse_calls": 1258,
+            "conftest_context_records": 34,
+            "conftest_context_source_bytes": 2312,
+            "input_bytes": 365170,
+            "input_frames": 36,
+            "malformed_frames": 0,
+            "module_context_records": 1156,
+            "module_context_source_bytes": 254932,
+            "output_bytes": 283416,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 36
+          },
+          "requests_by_mode": {
+            "parse_document": 34,
+            "parse_project_config": 2
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13347581,
+                "ast_parse": 26276751,
+                "build_module_index": 1613334,
+                "build_module_symbol_index": 29373918,
+                "conftest_fixture_index": 892330,
+                "interface_hash": 1293207
+              },
+              "diagnostic_worker_load_ns": 894246708,
+              "diagnostic_worker_ns": 949539212,
+              "machine_resources": {
+                "harness_wall_ms": 1906.7182919999998,
+                "native_wall_seconds": 1.9,
+                "peak_rss_bytes": 42008576,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.44
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13377962,
+                "ast_parse": 26210633,
+                "build_module_index": 1611373,
+                "build_module_symbol_index": 29304208,
+                "conftest_fixture_index": 891419,
+                "interface_hash": 1318294
+              },
+              "diagnostic_worker_load_ns": 893873751,
+              "diagnostic_worker_ns": 949220248,
+              "machine_resources": {
+                "harness_wall_ms": 1924.155542,
+                "native_wall_seconds": 1.92,
+                "peak_rss_bytes": 42106880,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.25,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.44
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 13537332,
+                "ast_parse": 26420207,
+                "build_module_index": 1635124,
+                "build_module_symbol_index": 29536250,
+                "conftest_fixture_index": 902705,
+                "interface_hash": 1332918
+              },
+              "diagnostic_worker_load_ns": 898085916,
+              "diagnostic_worker_ns": 953785956,
+              "machine_resources": {
+                "harness_wall_ms": 1903.233208,
+                "native_wall_seconds": 1.89,
+                "peak_rss_bytes": 42074112,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.26,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.44
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "project_config_change"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "3840809313fbf1531c1b669891b45d8ed0fe5665207e170d60b2e81b459b6661",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 36,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 140,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 1167,
+            "stored_files": 37,
+            "sync_mode": "incremental",
+            "unchanged_files": 36
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 336,
+            "input_frames": 1,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 228,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 1
+          },
+          "requests_by_mode": {
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25168667,
+              "diagnostic_worker_ns": 25297459,
+              "machine_resources": {
+                "harness_wall_ms": 188.185208,
+                "native_wall_seconds": 0.18,
+                "peak_rss_bytes": 41500672,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25265292,
+              "diagnostic_worker_ns": 25395250,
+              "machine_resources": {
+                "harness_wall_ms": 194.10975,
+                "native_wall_seconds": 0.18,
+                "peak_rss_bytes": 41533440,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25025208,
+              "diagnostic_worker_ns": 25153583,
+              "machine_resources": {
+                "harness_wall_ms": 192.53300000000002,
+                "native_wall_seconds": 0.18,
+                "peak_rss_bytes": 41500672,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "rust_one_file_edit"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "829e9c512f49cd3bd9580f098e9013a1ecb5085f9d92b0452369c8d74b9a4c16",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 36,
+            "discovered_files": 37,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 140,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "removed_files": 0,
+            "reparsed_files": 1,
+            "semantic_facts": 1167,
+            "stored_files": 37,
+            "sync_mode": "incremental",
+            "unchanged_files": 36
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 336,
+            "input_frames": 1,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 228,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 1
+          },
+          "requests_by_mode": {
+            "parse_project_config": 1
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25327042,
+              "diagnostic_worker_ns": 25455250,
+              "machine_resources": {
+                "harness_wall_ms": 201.787375,
+                "native_wall_seconds": 0.19,
+                "peak_rss_bytes": 41484288,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.15
+              },
+              "repetition": 1
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25298292,
+              "diagnostic_worker_ns": 25429667,
+              "machine_resources": {
+                "harness_wall_ms": 204.92970899999997,
+                "native_wall_seconds": 0.2,
+                "peak_rss_bytes": 41861120,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.14
+              },
+              "repetition": 2
+            },
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 25043792,
+              "diagnostic_worker_ns": 25170709,
+              "machine_resources": {
+                "harness_wall_ms": 203.944958,
+                "native_wall_seconds": 0.19,
+                "peak_rss_bytes": 41992192,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 0.15
+              },
+              "repetition": 3
+            }
+          ],
+          "scenario_id": "tsjs_one_file_edit"
+        }
+      ],
+      "observer_sha256": "97f071a3646e21a86c3d423e3c4ecb54769ae7f650446d24d229188f435e5f17",
+      "platform": {
+        "arch": "aarch64",
+        "os": "macos"
+      },
+      "query_rows": [
+        {
+          "candidate_family_count": 1,
+          "category": "fuzzy_retrieval",
+          "estimated_tokens": 2076,
+          "freshness_state": null,
+          "hydrated_family_count": 1,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 75,
+            "p95": 76
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 76.32041600000001,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13664256,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            },
+            {
+              "harness_wall_ms": 75.47833299999999,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13729792,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            },
+            {
+              "harness_wall_ms": 75.49024999999999,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13697024,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 8303,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 0,
+          "category": "correct_abstention",
+          "estimated_tokens": 274,
+          "freshness_state": null,
+          "hydrated_family_count": 0,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 88,
+            "p95": 90
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 89.9635,
+              "native_wall_seconds": 0.08,
+              "peak_rss_bytes": 13352960,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.06
+            },
+            {
+              "harness_wall_ms": 87.81729100000001,
+              "native_wall_seconds": 0.08,
+              "peak_rss_bytes": 13385728,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.06
+            },
+            {
+              "harness_wall_ms": 86.751958,
+              "native_wall_seconds": 0.08,
+              "peak_rss_bytes": 13352960,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.06
+            }
+          ],
+          "read_plan_items": null,
+          "response_bytes": 1093,
+          "selected_family_count": 0,
+          "status": "UNKNOWN",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_path",
+          "estimated_tokens": 1992,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 78,
+            "p95": 78
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 77.77545900000001,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13697024,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            },
+            {
+              "harness_wall_ms": 77.540084,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13762560,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            },
+            {
+              "harness_wall_ms": 78.037625,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13811712,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 7966,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_family",
+          "estimated_tokens": 1985,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 54,
+            "p95": 57
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 54.391166999999996,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13762560,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 53.836084,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13762560,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 56.625791,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13647872,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 7937,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_member",
+          "estimated_tokens": 1992,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 69,
+            "p95": 71
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 67.557042,
+              "native_wall_seconds": 0.06,
+              "peak_rss_bytes": 13795328,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.04
+            },
+            {
+              "harness_wall_ms": 71.029083,
+              "native_wall_seconds": 0.06,
+              "peak_rss_bytes": 13795328,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.04
+            },
+            {
+              "harness_wall_ms": 68.974041,
+              "native_wall_seconds": 0.06,
+              "peak_rss_bytes": 13811712,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.04
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 7966,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "find_analogues",
+          "estimated_tokens": 2930,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 77,
+            "p95": 81
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 77.267875,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13729792,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            },
+            {
+              "harness_wall_ms": 80.668667,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13778944,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            },
+            {
+              "harness_wall_ms": 77.476375,
+              "native_wall_seconds": 0.07,
+              "peak_rss_bytes": 13844480,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.05
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 11720,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "show_family",
+          "estimated_tokens": 2887,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 56,
+            "p95": 57
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 55.418292,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13746176,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 55.65025,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13811712,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            },
+            {
+              "harness_wall_ms": 57.402625,
+              "native_wall_seconds": 0.05,
+              "peak_rss_bytes": 13778944,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.03
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 11547,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": null,
+          "category": "inspect_readiness",
+          "estimated_tokens": 1168,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 84,
+            "p95": 85
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 84.390083,
+              "native_wall_seconds": 0.08,
+              "peak_rss_bytes": 14778368,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.06
+            },
+            {
+              "harness_wall_ms": 84.123417,
+              "native_wall_seconds": 0.08,
+              "peak_rss_bytes": 14680064,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.06
+            },
+            {
+              "harness_wall_ms": 84.543334,
+              "native_wall_seconds": 0.08,
+              "peak_rss_bytes": 14860288,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.01,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.06
+            }
+          ],
+          "read_plan_items": null,
+          "response_bytes": 4672,
+          "selected_family_count": 0,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": null
+        }
+      ],
+      "raw_report_sha256": "3cf51801e29d8707d7672d5403804671ae856f92996c1388fe24d336d25fe60c",
+      "repetitions": 3,
+      "source_inventory": {
+        "conftest_source_bytes": 68,
+        "file_bytes": 7742,
+        "python_files": 34,
+        "python_source_bytes": 7422,
+        "regular_files": 37,
+        "scope": "fixture inventory before init; bytes are not measured filesystem read traffic or admitted parser workload"
+      },
+      "synthetic": true,
+      "synthetic_python_modules": 32,
+      "timeout_seconds": 600,
+      "unavailable_scenarios": {
+        "agent_adoption": {
+          "reason": "requires separate isolated controlled agent sessions",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_idle_60s": {
+          "reason": "separate live watcher benchmark; this harness never starts a daemon",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_ignored_burst": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_same_size_same_mtime": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_supported_burst": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "non_synthetic_mutations": null,
+        "warm_mcp": {
+          "reason": "cold process measurements do not identify warm serving latency",
+          "state": "NOT_MEASURED"
+        }
+      },
+      "unmeasured_host_phases": {
+        "family_construction": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "filesystem_discovery": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "generation_validation_activation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "git_ignore": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "host_response_validation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "request_serialization": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "semantic_support_derivation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "source_bytes_read": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "source_hashing": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "sqlite_persistence": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "sqlite_rows_written": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "worker_spawn_wait": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        }
+      },
+      "worker_sha256": "45d30ac49aa3b50a8cd8b01e59a1576aee4dd0ae71c9df2f0de99f670130bd03"
+    },
+    {
+      "binary_sha256": "a670814ce44dc163b93bf9b1fbca77b0d97f9f710b17d3200e7076df60176fa0",
+      "condition": "baseline_self",
+      "correctness_scope": "observer equivalence checks owned semantic facts, IR and aggregate shape only; full sync-equivalence/product-eval remain independent required gates",
+      "fixture_sha256": "d523cc8cd24e3455bcca2e0e42f89b59ae2108116c391d9598abbec64df5a709",
+      "harness_commit": "42cd665cd1d4ad44ce0a7d0541ba55b778400a44",
+      "harness_commit_scope": "checkout HEAD at entry; executable and observer hashes identify the actual producer and may include uncommitted instrumentation",
+      "harness_sha256": "158ecf6af5abedbffe18b950e7865ad182d58b53977909681a4e709e589d28e5",
+      "indexing_scenarios": [
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "612d0da0a0b39ee19d16caca73cd0c1f9f10c8e0da5d46483004a24213de5024",
+          "portable_counters": {
+            "added_files": null,
+            "copied_forward_files": null,
+            "discovered_files": 634,
+            "fallback_reason": null,
+            "families_recomputed": null,
+            "indexed_units": 29987,
+            "modified_files": null,
+            "parser_attempted_files": 634,
+            "removed_files": null,
+            "reparsed_files": null,
+            "semantic_facts": 47107,
+            "stored_files": 634,
+            "sync_mode": null,
+            "unchanged_files": null
+          },
+          "python_counters": {
+            "ast_parse_calls": 32912,
+            "conftest_context_records": 1584,
+            "conftest_context_source_bytes": 226336,
+            "input_bytes": 106308055,
+            "input_frames": 176,
+            "malformed_frames": 0,
+            "module_context_records": 30976,
+            "module_context_source_bytes": 94980160,
+            "output_bytes": 4512879,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 176
+          },
+          "requests_by_mode": {
+            "parse_document": 176
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 401424753,
+                "ast_parse": 6043791465,
+                "build_module_index": 42729958,
+                "build_module_symbol_index": 6520457258,
+                "conftest_fixture_index": 48982827,
+                "interface_hash": 38942703
+              },
+              "diagnostic_worker_load_ns": 4361777170,
+              "diagnostic_worker_ns": 12055007586,
+              "machine_resources": {
+                "harness_wall_ms": 22035.814584,
+                "native_wall_seconds": 22.03,
+                "peak_rss_bytes": 331759616,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 2.03,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 18.97
+              },
+              "repetition": 1
+            }
+          ],
+          "scenario_id": "fresh_init"
+        },
+        {
+          "generation_activations": 1,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "612d0da0a0b39ee19d16caca73cd0c1f9f10c8e0da5d46483004a24213de5024",
+          "portable_counters": {
+            "added_files": null,
+            "copied_forward_files": null,
+            "discovered_files": 634,
+            "fallback_reason": null,
+            "families_recomputed": null,
+            "indexed_units": 29987,
+            "modified_files": null,
+            "parser_attempted_files": 634,
+            "removed_files": null,
+            "reparsed_files": null,
+            "semantic_facts": 47107,
+            "stored_files": 634,
+            "sync_mode": null,
+            "unchanged_files": null
+          },
+          "python_counters": {
+            "ast_parse_calls": 32912,
+            "conftest_context_records": 1584,
+            "conftest_context_source_bytes": 226336,
+            "input_bytes": 106308055,
+            "input_frames": 176,
+            "malformed_frames": 0,
+            "module_context_records": 30976,
+            "module_context_source_bytes": 94980160,
+            "output_bytes": 4512879,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 176
+          },
+          "requests_by_mode": {
+            "parse_document": 176
+          },
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {
+                "analyze_source": 408338713,
+                "ast_parse": 6149935402,
+                "build_module_index": 42854328,
+                "build_module_symbol_index": 6632715450,
+                "conftest_fixture_index": 49284036,
+                "interface_hash": 40172628
+              },
+              "diagnostic_worker_load_ns": 4399433034,
+              "diagnostic_worker_ns": 12214495376,
+              "machine_resources": {
+                "harness_wall_ms": 22427.449125,
+                "native_wall_seconds": 22.42,
+                "peak_rss_bytes": 336150528,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 2.0,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 19.41
+              },
+              "repetition": 1
+            }
+          ],
+          "scenario_id": "repeated_full_resync"
+        },
+        {
+          "generation_activations": 0,
+          "observer_fact_ir_shape_equal": true,
+          "owned_fact_ir_shape_sha256": "612d0da0a0b39ee19d16caca73cd0c1f9f10c8e0da5d46483004a24213de5024",
+          "portable_counters": {
+            "added_files": 0,
+            "copied_forward_files": 0,
+            "discovered_files": 634,
+            "fallback_reason": null,
+            "families_recomputed": 0,
+            "indexed_units": 29987,
+            "modified_files": 0,
+            "parser_attempted_files": 0,
+            "removed_files": 0,
+            "reparsed_files": 0,
+            "semantic_facts": 47107,
+            "stored_files": 634,
+            "sync_mode": "incremental",
+            "unchanged_files": 634
+          },
+          "python_counters": {
+            "ast_parse_calls": 0,
+            "conftest_context_records": 0,
+            "conftest_context_source_bytes": 0,
+            "input_bytes": 0,
+            "input_frames": 0,
+            "malformed_frames": 0,
+            "module_context_records": 0,
+            "module_context_source_bytes": 0,
+            "output_bytes": 0,
+            "oversized_frames": 0,
+            "parse_requests_without_context": 0,
+            "worker_spawns": 0
+          },
+          "requests_by_mode": {},
+          "samples": [
+            {
+              "diagnostic_inclusive_function_ns": {},
+              "diagnostic_worker_load_ns": 0,
+              "diagnostic_worker_ns": 0,
+              "machine_resources": {
+                "harness_wall_ms": 1867.557125,
+                "native_wall_seconds": 1.86,
+                "peak_rss_bytes": 15630336,
+                "reason": null,
+                "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+                "state": "MEASURED",
+                "system_cpu_seconds": 0.41,
+                "tool": "/usr/bin/time -l",
+                "user_cpu_seconds": 1.43
+              },
+              "repetition": 1
+            }
+          ],
+          "scenario_id": "zero_delta_sync"
+        }
+      ],
+      "observer_sha256": "97f071a3646e21a86c3d423e3c4ecb54769ae7f650446d24d229188f435e5f17",
+      "platform": {
+        "arch": "aarch64",
+        "os": "macos"
+      },
+      "query_rows": [
+        {
+          "candidate_family_count": 1,
+          "category": "fuzzy_retrieval",
+          "estimated_tokens": 3268,
+          "freshness_state": null,
+          "hydrated_family_count": 1,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 1455,
+            "p95": 1455
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 1455.475083,
+              "native_wall_seconds": 1.45,
+              "peak_rss_bytes": 15106048,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.28,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 1.15
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 13070,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 2
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "correct_abstention",
+          "estimated_tokens": 319,
+          "freshness_state": null,
+          "hydrated_family_count": 0,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 2210,
+            "p95": 2210
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 2209.7085829999996,
+              "native_wall_seconds": 2.2,
+              "peak_rss_bytes": 43352064,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.39,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 1.8
+            }
+          ],
+          "read_plan_items": null,
+          "response_bytes": 1276,
+          "selected_family_count": 0,
+          "status": "UNKNOWN",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_family",
+          "estimated_tokens": 1350,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 880,
+            "p95": 880
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 880.0092080000001,
+              "native_wall_seconds": 0.87,
+              "peak_rss_bytes": 13631488,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.17,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.69
+            }
+          ],
+          "read_plan_items": 2,
+          "response_bytes": 5399,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_member",
+          "estimated_tokens": 1357,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 1322,
+            "p95": 1322
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 1322.380041,
+              "native_wall_seconds": 1.32,
+              "peak_rss_bytes": 13844480,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.25,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 1.06
+            }
+          ],
+          "read_plan_items": 2,
+          "response_bytes": 5428,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "exact_path",
+          "estimated_tokens": 1357,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 1450,
+            "p95": 1450
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 1449.7438750000001,
+              "native_wall_seconds": 1.44,
+              "peak_rss_bytes": 13828096,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.28,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 1.15
+            }
+          ],
+          "read_plan_items": 2,
+          "response_bytes": 5428,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "cli_cold",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "find_analogues",
+          "estimated_tokens": 4250,
+          "freshness_state": null,
+          "hydrated_family_count": 1,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 1469,
+            "p95": 1469
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 1469.224042,
+              "native_wall_seconds": 1.46,
+              "peak_rss_bytes": 15024128,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.29,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 1.17
+            }
+          ],
+          "read_plan_items": 3,
+          "response_bytes": 16998,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 2
+        },
+        {
+          "candidate_family_count": 1,
+          "category": "show_family",
+          "estimated_tokens": 2196,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 873,
+            "p95": 873
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 873.30225,
+              "native_wall_seconds": 0.86,
+              "peak_rss_bytes": 13582336,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.17,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 0.68
+            }
+          ],
+          "read_plan_items": 2,
+          "response_bytes": 8783,
+          "selected_family_count": 1,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": 1
+        },
+        {
+          "candidate_family_count": null,
+          "category": "inspect_readiness",
+          "estimated_tokens": 1251,
+          "freshness_state": null,
+          "hydrated_family_count": null,
+          "includes_product_process_startup": true,
+          "latency_ms": {
+            "p50": 2237,
+            "p95": 2237
+          },
+          "machine_samples": [
+            {
+              "harness_wall_ms": 2237.1946669999998,
+              "native_wall_seconds": 2.23,
+              "peak_rss_bytes": 177782784,
+              "reason": null,
+              "rss_scope": "native child rusage maximum; not the simultaneous sum of resident processes",
+              "state": "MEASURED",
+              "system_cpu_seconds": 0.39,
+              "tool": "/usr/bin/time -l",
+              "user_cpu_seconds": 1.83
+            }
+          ],
+          "read_plan_items": null,
+          "response_bytes": 5003,
+          "selected_family_count": 0,
+          "status": "ok",
+          "surface": "mcp_cold_wire",
+          "token_estimator": "ceil(UTF-8 bytes / 4); not host-reported tokens or savings",
+          "token_measurement_kind": "ESTIMATED",
+          "unknown_count": null
+        }
+      ],
+      "raw_report_sha256": "ca46ce00c249ba34c5a6462c60cddb2b03567486410b0eb3e32dc35afe39c5a1",
+      "repetitions": 1,
+      "source_inventory": {
+        "conftest_source_bytes": 1286,
+        "file_bytes": 13408241,
+        "python_files": 176,
+        "python_source_bytes": 539660,
+        "regular_files": 920,
+        "scope": "fixture inventory before init; bytes are not measured filesystem read traffic or admitted parser workload"
+      },
+      "synthetic": false,
+      "synthetic_python_modules": null,
+      "timeout_seconds": 600,
+      "unavailable_scenarios": {
+        "agent_adoption": {
+          "reason": "requires separate isolated controlled agent sessions",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_idle_60s": {
+          "reason": "separate live watcher benchmark; this harness never starts a daemon",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_ignored_burst": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_same_size_same_mtime": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "autosync_supported_burst": {
+          "reason": "separate live watcher benchmark",
+          "state": "NOT_MEASURED"
+        },
+        "non_synthetic_mutations": {
+          "reason": "scripted mutations apply only to the committed synthetic template; real corpus source left byte-identical",
+          "state": "NOT_MEASURED"
+        },
+        "warm_mcp": {
+          "reason": "cold process measurements do not identify warm serving latency",
+          "state": "NOT_MEASURED"
+        }
+      },
+      "unmeasured_host_phases": {
+        "family_construction": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "filesystem_discovery": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "generation_validation_activation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "git_ignore": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "host_response_validation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "request_serialization": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "semantic_support_derivation": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "source_bytes_read": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "source_hashing": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "sqlite_persistence": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "sqlite_rows_written": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        },
+        "worker_spawn_wait": {
+          "reason": "not exposed by current public product counters; observer cannot identify this host phase",
+          "state": "NOT_MEASURED"
+        }
+      },
+      "worker_sha256": "45d30ac49aa3b50a8cd8b01e59a1576aee4dd0ae71c9df2f0de99f670130bd03"
+    }
+  ],
+  "resource_scope": "Within-machine macOS/aarch64 release observations. RSS is native child rusage maximum, not simultaneous process-tree sum. Observer timings overlap and include overhead. Limited fact/IR shape parity is not full canonical equivalence.",
+  "schema_version": "efficiency-sprint-baseline.v1",
+  "verified_date": "2026-09-30"
+}

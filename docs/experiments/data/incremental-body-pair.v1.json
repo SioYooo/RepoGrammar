@@ -1,0 +1,740 @@
+{
+  "expanded_source_sha256": "f5819af4d5e056bd4f38f6be2301f456ff3f36b3fd2f3cce78312d1b9ffbedcd",
+  "filesystem_bytes_read": {
+    "reason": "native runner has no filesystem observer",
+    "state": "NOT_MEASURED"
+  },
+  "measured_pairs": 9,
+  "pins": {
+    "baseline": {
+      "binary_sha256": "a670814ce44dc163b93bf9b1fbca77b0d97f9f710b17d3200e7076df60176fa0",
+      "worker_sha256": "45d30ac49aa3b50a8cd8b01e59a1576aee4dd0ae71c9df2f0de99f670130bd03"
+    },
+    "candidate": {
+      "binary_sha256": "13fe6233260f6e4e8e0cf3ee38d83a884c6e4a36f5165cd17a429379dd804f3b",
+      "worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc"
+    },
+    "fixture_sha256": "643b59ca3a9f1d2df11bc7f4ebeec84f5f7c35c920a55daf9cfab6e2644de6e1",
+    "harness_sha256": "11ba0f7c43ce969038bbe3ffa0db26d2e737b266215967575dba91019b9f70cc",
+    "python_sha256": "b502cb4c5b46b8d4192ec6bcb600ce8922f1afc396fcf646e8765c6eba74a0bf"
+  },
+  "resource_scope": "direct product binary under native time; initialization, edits and comparisons outside timing",
+  "samples": [
+    {
+      "active_analysis_sha256": "7de124457e99097fc83b506046542fa263418b8849fdd24ddbb79dbf404e5da7",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.38,
+            "peak_rss_bytes": 42008576,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.12,
+            "user_cpu_seconds": 0.26,
+            "wall_seconds": 0.44
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.38,
+            "peak_rss_bytes": 41353216,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.12,
+            "user_cpu_seconds": 0.26,
+            "wall_seconds": 0.43
+          }
+        }
+      },
+      "changed_file_sha256": "4380241a4f587cf737065dd84cb2557d7b7eb2e674d4d388d3b39d77f5e181fd",
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair": 0,
+      "warmup": true
+    },
+    {
+      "active_analysis_sha256": "41e566bc8ffbec4687a2e951a7ae9fc9f374c4b29a6c7f671a3a01ed67ea8e5b",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.4,
+            "peak_rss_bytes": 41762816,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.27,
+            "wall_seconds": 0.45
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.39,
+            "peak_rss_bytes": 41353216,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.12,
+            "user_cpu_seconds": 0.27,
+            "wall_seconds": 0.45
+          }
+        }
+      },
+      "changed_file_sha256": "450d66482cc9a404fc78adb175919272d47019e64b76baa9fecdd841bd3ae9ab",
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair": 1,
+      "warmup": true
+    },
+    {
+      "active_analysis_sha256": "7de124457e99097fc83b506046542fa263418b8849fdd24ddbb79dbf404e5da7",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.41000000000000003,
+            "peak_rss_bytes": 42336256,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.28,
+            "wall_seconds": 0.46
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.39,
+            "peak_rss_bytes": 41320448,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.12,
+            "user_cpu_seconds": 0.27,
+            "wall_seconds": 0.46
+          }
+        }
+      },
+      "changed_file_sha256": "4380241a4f587cf737065dd84cb2557d7b7eb2e674d4d388d3b39d77f5e181fd",
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair": 2,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "41e566bc8ffbec4687a2e951a7ae9fc9f374c4b29a6c7f671a3a01ed67ea8e5b",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.41000000000000003,
+            "peak_rss_bytes": 41926656,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.28,
+            "wall_seconds": 0.49
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.41000000000000003,
+            "peak_rss_bytes": 41418752,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.28,
+            "wall_seconds": 0.47
+          }
+        }
+      },
+      "changed_file_sha256": "450d66482cc9a404fc78adb175919272d47019e64b76baa9fecdd841bd3ae9ab",
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair": 3,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "7de124457e99097fc83b506046542fa263418b8849fdd24ddbb79dbf404e5da7",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.41000000000000003,
+            "peak_rss_bytes": 41910272,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.28,
+            "wall_seconds": 0.47
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.4,
+            "peak_rss_bytes": 41369600,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.12,
+            "user_cpu_seconds": 0.28,
+            "wall_seconds": 0.45
+          }
+        }
+      },
+      "changed_file_sha256": "4380241a4f587cf737065dd84cb2557d7b7eb2e674d4d388d3b39d77f5e181fd",
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair": 4,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "41e566bc8ffbec4687a2e951a7ae9fc9f374c4b29a6c7f671a3a01ed67ea8e5b",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.42,
+            "peak_rss_bytes": 41893888,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.29,
+            "wall_seconds": 0.48
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.44,
+            "peak_rss_bytes": 42237952,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.14,
+            "user_cpu_seconds": 0.3,
+            "wall_seconds": 0.51
+          }
+        }
+      },
+      "changed_file_sha256": "450d66482cc9a404fc78adb175919272d47019e64b76baa9fecdd841bd3ae9ab",
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair": 5,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "7de124457e99097fc83b506046542fa263418b8849fdd24ddbb79dbf404e5da7",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.42,
+            "peak_rss_bytes": 41992192,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.29,
+            "wall_seconds": 0.49
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.42,
+            "peak_rss_bytes": 41385984,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.29,
+            "wall_seconds": 0.48
+          }
+        }
+      },
+      "changed_file_sha256": "4380241a4f587cf737065dd84cb2557d7b7eb2e674d4d388d3b39d77f5e181fd",
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair": 6,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "41e566bc8ffbec4687a2e951a7ae9fc9f374c4b29a6c7f671a3a01ed67ea8e5b",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.44,
+            "peak_rss_bytes": 41893888,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.14,
+            "user_cpu_seconds": 0.3,
+            "wall_seconds": 0.5
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.43,
+            "peak_rss_bytes": 41320448,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.3,
+            "wall_seconds": 0.49
+          }
+        }
+      },
+      "changed_file_sha256": "450d66482cc9a404fc78adb175919272d47019e64b76baa9fecdd841bd3ae9ab",
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair": 7,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "7de124457e99097fc83b506046542fa263418b8849fdd24ddbb79dbf404e5da7",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.43,
+            "peak_rss_bytes": 42008576,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.3,
+            "wall_seconds": 0.48
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.43,
+            "peak_rss_bytes": 41336832,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.3,
+            "wall_seconds": 0.49
+          }
+        }
+      },
+      "changed_file_sha256": "4380241a4f587cf737065dd84cb2557d7b7eb2e674d4d388d3b39d77f5e181fd",
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair": 8,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "41e566bc8ffbec4687a2e951a7ae9fc9f374c4b29a6c7f671a3a01ed67ea8e5b",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.45,
+            "peak_rss_bytes": 41910272,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.14,
+            "user_cpu_seconds": 0.31,
+            "wall_seconds": 0.52
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.43,
+            "peak_rss_bytes": 41418752,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.13,
+            "user_cpu_seconds": 0.3,
+            "wall_seconds": 0.49
+          }
+        }
+      },
+      "changed_file_sha256": "450d66482cc9a404fc78adb175919272d47019e64b76baa9fecdd841bd3ae9ab",
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair": 9,
+      "warmup": false
+    },
+    {
+      "active_analysis_sha256": "7de124457e99097fc83b506046542fa263418b8849fdd24ddbb79dbf404e5da7",
+      "arms": {
+        "baseline": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.45,
+            "peak_rss_bytes": 41877504,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.14,
+            "user_cpu_seconds": 0.31,
+            "wall_seconds": 0.5
+          }
+        },
+        "candidate": {
+          "counters": {
+            "copied_forward_files": 20,
+            "dirty_records_cleared": 0,
+            "discovered_files": 21,
+            "fallback_reason": null,
+            "families_recomputed": 1,
+            "indexed_units": 75,
+            "modified_files": 1,
+            "parser_attempted_files": 1,
+            "reparsed_files": 1,
+            "semantic_facts": 605,
+            "sync_mode": "incremental",
+            "unchanged_files": 20
+          },
+          "resources": {
+            "cpu_seconds": 0.45,
+            "peak_rss_bytes": 41271296,
+            "rss_scope": "native child rusage maximum, not simultaneous process-tree RSS sum",
+            "state": "MEASURED",
+            "system_cpu_seconds": 0.14,
+            "user_cpu_seconds": 0.31,
+            "wall_seconds": 0.52
+          }
+        }
+      },
+      "changed_file_sha256": "4380241a4f587cf737065dd84cb2557d7b7eb2e674d4d388d3b39d77f5e181fd",
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair": 10,
+      "warmup": false
+    }
+  ],
+  "schema_version": "incremental-pair-results.v1",
+  "source_inventory": {
+    "files": 21,
+    "python_files": 18,
+    "python_source_bytes": 3806,
+    "source_bytes": 4126
+  },
+  "state": "MEASURED",
+  "summary": {
+    "cpu_seconds": {
+      "baseline_median": 0.42,
+      "candidate_median": 0.43,
+      "paired_delta_median": 0.0,
+      "paired_ratio_median": 1.0
+    },
+    "peak_rss_bytes": {
+      "baseline_median": 41910272,
+      "candidate_median": 41369600,
+      "paired_delta_median": -573440,
+      "paired_ratio_median": 0.986312084473993
+    },
+    "wall_seconds": {
+      "baseline_median": 0.49,
+      "candidate_median": 0.49,
+      "paired_delta_median": -0.010000000000000009,
+      "paired_ratio_median": 0.98
+    }
+  },
+  "synthetic_modules": 16,
+  "warmup_pairs": 2,
+  "worker_spawns": {
+    "reason": "native runner has no worker observer",
+    "state": "NOT_MEASURED"
+  }
+}

@@ -177,6 +177,8 @@ context lives under `.agents/memories/`.
 - MVP language scope: `decisions/ADR-0011-python-first-v0-1.md`
   (supersedes `decisions/ADR-0005-ts-js-first-mvp.md`).
 - Quality gates: `development/repository-guard.md` and `development/testing.md`.
+- Measured efficiency sprint contract and evidence boundaries:
+  [experiments/efficiency-sprint.md](experiments/efficiency-sprint.md).
 
 ## Task reading guide
 
