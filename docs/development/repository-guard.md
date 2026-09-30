@@ -182,6 +182,13 @@ child environment. This avoids adding a shell wrapper to the timed path. The
 report records the requested state; actual worker counters must establish
 whether the selected binary supports it. It is not a public product option.
 
+The raw incremental `semantic_facts` DTO currently includes an allocator
+high-water offset and is not an actual fact/write/work count. Preserve it as a
+reported diagnostic; use complete stored-row counts/hashes for equivalence,
+and do not rank optimizations from that field. Other unobservable host phases
+remain `NOT_MEASURED`. See the
+[invalidation audit](../experiments/incremental-invalidation-audit.md).
+
 ## product-eval
 
 `product-eval` is the deterministic product-core evaluation harness. It is

@@ -48,7 +48,8 @@ high-water offset (`next_fact_offset`), rather than a fresh row total. The N16
 body DTO reports 605 versus full indexing's 329. Preserve these raw observations
 as reported counters, not actual fact totals or measured SQLite rows written;
 do not rank optimizations from them. Complete stored-row fingerprints are the
-independent correctness evidence. Interface/config changes currently consider all modules
+independent correctness evidence. Interface/config changes currently consider
+all modules
 dependent rather than traversing a persisted reverse-import closure. This is
 conservative behavior, not evidence that every module's facts actually changed.
 Self zero-delta sync performs no frontend work but still takes about two seconds
@@ -56,8 +57,10 @@ on this machine; discovery/hash/validation costs remain independently unmeasured
 
 ## Ranked follow-up obligations
 
-The highest measured opportunity after transport is a Python interface change:
-one changed file still reparses every admitted file. A bounded reverse repo-local
+The largest observed reparse amplification in this synthetic audit is a Python
+interface change: one changed file still reparses every admitted file. This
+does not establish its runtime dominance over copy-forward or family work.
+A bounded reverse repo-local
 import closure is the next candidate; it needs persisted import/reexport
 dependencies and conservative handling of ambiguous imports, stars, missing
 roots and context-budget transitions. Preregister and test it before narrowing.
