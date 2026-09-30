@@ -42,8 +42,13 @@ The current closure is:
    is the number of returned family claims, not a dirty-bucket count. Thus the
    fixture's `1` does not prove that one affected bucket was selectively rebuilt.
 
-Reported semantic-fact totals include copied/derived work; they are not measured
-SQLite rows written. Interface/config changes currently consider all modules
+The incremental `semantic_facts` DTO is unsuitable as an actual fact/work
+count: its implementation combines the copied-record count with an allocator
+high-water offset (`next_fact_offset`), rather than a fresh row total. The N16
+body DTO reports 605 versus full indexing's 329. Preserve these raw observations
+as reported counters, not actual fact totals or measured SQLite rows written;
+do not rank optimizations from them. Complete stored-row fingerprints are the
+independent correctness evidence. Interface/config changes currently consider all modules
 dependent rather than traversing a persisted reverse-import closure. This is
 conservative behavior, not evidence that every module's facts actually changed.
 Self zero-delta sync performs no frontend work but still takes about two seconds
