@@ -2,7 +2,9 @@
 
 Status: OFFLINE_TOOL_BOUNDARY_AND_ORACLES_QUALIFIED / effects NOT_MEASURED. Verified 2026-09-30 against
 `main@d981d57c6e662b52f62e3e915af7382c5c8ed8f7`.
-No agent/model request, credential access or external spend is authorized here.
+No real-model request, credential access or external spend is authorized here.
+The separately scoped native-host controls use a local scripted protocol fixture,
+never a remote model or an authenticated profile.
 This new protocol does not amend the historical [RQ5 design](agent-study-design.md),
 [pilot](agent-study-pilot.md), ledger or regrade. Its historical 0/4 MCP adoption
 is mechanics-only evidence, with real-profile/hooks contamination explicitly
@@ -190,3 +192,22 @@ actual global discovery, controlled harness-owned MCP IPC, native-host hidden
 tool/credential denial and a separate held-out task/oracle/index freeze pass.
 Budget/auth authorization is still required. A Linux implementation/native
 qualification is separate; macOS control success must not become a Linux claim.
+
+## Native-host follow-up
+
+The [2026-10-01 native-host record](agent-adoption-native-host-qualification.md)
+starts the actual pinned Claude CLI against a deny-default macOS boundary and
+`SCRIPTED_LOOPBACK` provider, with a nonsecret dummy key. It has no real-model
+or credential mode. Builtin plugins/agents are explicitly disabled and checked
+in the native init manifest; global memory discovery stays enabled. The harness
+owns the product MCP process outside the sandbox and relays only bounded,
+read-only MCP frames through one exact Unix socket.
+
+Five bounded local rounds reached `CONTROL_ISOLATION_BLOCKED`. B0/B1 acquisition
+denial, positive routes and named SecurityServer capability denial pass. Native
+MCP initialize/tool-list succeeds, but the B1 tool call fails after transport
+closure. B2/B3 are NOT_RUN; actual global discovery remains NOT_MEASURED. The
+subsequent stdin/cleanup/inventory fixes pass local regressions but require a
+fresh native producer qualification. A native CLI's terminal success is not
+qualification success, and the fixture's synthetic usage/cost/tool choices must
+never enter real adoption/effect denominators.
