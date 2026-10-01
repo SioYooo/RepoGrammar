@@ -1,0 +1,210 @@
+{
+  "actual_global_file_discovery": "NOT_MEASURED",
+  "adoption": "NOT_MEASURED",
+  "candidate_followup": {
+    "bridge_sha256": "75bce279204fb4e4525c9c88970ac18f16dec6608c717bf012907f834342b84c",
+    "bridge_test_count": 17,
+    "bridge_tests": "PASS",
+    "fixes": [
+      "BOUNDED_NONBLOCKING_DUPLEX_STDIO",
+      "OWNED_GROUP_TERM_KILL",
+      "TYPED_PROTECTED_INVENTORY"
+    ],
+    "native_helper_test_count": 7,
+    "native_helper_tests": "PASS",
+    "native_requalification": "NOT_RUN",
+    "runner_sha256": "ac0b1ad278a7cd30537696db4ccee9471576de5240f8c7a25cdb02f169662873",
+    "service_probe_sha256": "501864808b4e89c96fc6dba8b59a18bdff170d70e2282d19335bfc5a113dbced",
+    "status": "LOCALTESTED_ONLY"
+  },
+  "completed_local_rounds": 5,
+  "cost_usd": null,
+  "native_campaign": {
+    "freeze": {
+      "arms": [
+        "B0",
+        "B1",
+        "B2",
+        "B3"
+      ],
+      "base_prompt_sha256": "c2d322c05129628ddc4b4f68a8bcddee6de64d88e3b34c93c490e0cf1379a031",
+      "bridge_sha256": "9f8721bbedf6870cfb65ab6c8698e507ab565e59bd942f7dbdad8f2a2525ac84",
+      "cli_sha256": "75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433",
+      "cli_version": "2.1.286",
+      "guide_sha256": "5df98f0677189042c7ae58aa74d6e7ac90bd99324a18edf263f9be8db7b4b256",
+      "index_sha256": "770bdfc8372880249fd6b95d1860216e6a2420bf75e44c0cdfc86a62b08aaf19",
+      "live_execution": "BLOCKED_BUDGET_AUTH_HELD_OUT",
+      "os_probe_sha256": "ecef4bd89cba08d3e01ec008402f3c3591f48917aae3c02323792334d7e3d662",
+      "product_sha256": "e8d40826614e5587b751aa2c4b2c3ee37fe870cf146eee0c6e1a03f8100f2fc4",
+      "provider": "SCRIPTED_LOOPBACK",
+      "schema_version": "agent-native-offline-freeze.v2",
+      "service_probe_sha256": "501864808b4e89c96fc6dba8b59a18bdff170d70e2282d19335bfc5a113dbced",
+      "source_sha256": "29eb1b69710ff6eb29c0f7f7fe62c3fafcfdb1e5ecc4a9bc08cb53162619e675"
+    },
+    "linux_native": "NOT_RUN",
+    "live_adoption": "NOT_MEASURED",
+    "live_execution": "BLOCKED_BUDGET_AUTH_HELD_OUT",
+    "real_credentials": "NOT_ACCESSED",
+    "real_model": "NOT_RUN",
+    "runner_sha256": "667781475d482bed32d3d50e1075214899611ddbc0abb93c32cb0b624019c533",
+    "runs": [
+      {
+        "adoption": "NOT_MEASURED",
+        "arm": "B0",
+        "auth": "DUMMY_FIXTURE_ONLY",
+        "bridge": null,
+        "cost_usd": null,
+        "delivered_prompt_sha256": "c2d322c05129628ddc4b4f68a8bcddee6de64d88e3b34c93c490e0cf1379a031",
+        "discovery": {
+          "exposed_tool_count": 4,
+          "global_discovery": "ABSENT",
+          "tool_inventory": "PASS"
+        },
+        "http_request_count": 2,
+        "initial_index_sha256": "770bdfc8372880249fd6b95d1860216e6a2420bf75e44c0cdfc86a62b08aaf19",
+        "kernel": {
+          "os_controls": "PASS",
+          "passed": 22,
+          "required": 22,
+          "securityserver_capability": "PASS"
+        },
+        "native_controls": {
+          "index_bash": "PASS",
+          "index_glob": "PASS",
+          "index_grep": "PASS",
+          "index_read": "PASS",
+          "index_sqlite": "PASS",
+          "positive_bash": "PASS",
+          "positive_glob": "PASS",
+          "positive_grep": "PASS",
+          "positive_read": "PASS",
+          "positive_sqlite": "PASS",
+          "private_read": "PASS",
+          "product_read": "PASS"
+        },
+        "native_manifest": {
+          "extra_agent_count": 0,
+          "mcp_count": 0,
+          "plugin_count": 0,
+          "skill_count": 0,
+          "status": "PASS"
+        },
+        "protected_integrity": "PASS",
+        "provider": "SCRIPTED_LOOPBACK",
+        "sandbox_sha256": "36d4510da29c358115b29041a91cf612bb11553fbe3e300d541b98ac0fc36fa8",
+        "source_sha256": "29eb1b69710ff6eb29c0f7f7fe62c3fafcfdb1e5ecc4a9bc08cb53162619e675",
+        "status": "PASS",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "transcript_sha256": "fb7c937bfb0643347c8c4470aee72f686552adc1531d0aa2766964ff9d40b7b7",
+        "worktree_inventory_sha256": "dc34d919b5d820ebc74335546f0209df9c264d6622a245363ecb7796133ed095"
+      },
+      {
+        "adoption": "NOT_MEASURED",
+        "arm": "B1",
+        "auth": "DUMMY_FIXTURE_ONLY",
+        "bridge": {
+          "binary_sha256": "e8d40826614e5587b751aa2c4b2c3ee37fe870cf146eee0c6e1a03f8100f2fc4",
+          "bridge_source_sha256": "9f8721bbedf6870cfb65ab6c8698e507ab565e59bd942f7dbdad8f2a2525ac84",
+          "connections": 1,
+          "frames": [
+            {
+              "method": "initialize",
+              "ordinal": 0,
+              "request_sha256": "73cf2d70a8f63a5a31bd0f366276ba28d4531e11df24f3ea62a6ffa07cbd49e1",
+              "result_sha256": "48718859bef6d6e7e5183b74a7c66711e43e748dc771fd0eddb08e17217e0313",
+              "status": "PRODUCT_SUCCESS"
+            },
+            {
+              "method": "notifications/initialized",
+              "ordinal": 1,
+              "request_sha256": "883a6cf5c9ef985204b1312c393b79d87e3efb378272bbbaca6d2cecf13b5bdd",
+              "result_sha256": null,
+              "status": "NOTIFICATION_FORWARDED"
+            },
+            {
+              "method": "tools/list",
+              "ordinal": 2,
+              "request_sha256": "66ae369c40916281f4c858378f9ccf9192658fecb68b2dcd25c5f758def2561c",
+              "result_sha256": "748dfe0b63d3a5e6e652a53b5641db424de0cd6ab436494a3ac1c4d0f4f917e5",
+              "status": "PRODUCT_SUCCESS"
+            }
+          ],
+          "method_counts": {
+            "initialize": 1,
+            "notifications/initialized": 1,
+            "ping": 0,
+            "tools/call": 0,
+            "tools/list": 1
+          },
+          "process_cleanup": "PASS",
+          "product_exit_code": 0,
+          "reason": null,
+          "request_bytes": 426,
+          "requests_sha256": "c6cb704f2dacef2360861d5317f6933f3eefc0cb7d94a122c37cabec8f3cec8e",
+          "result_bytes": 6142,
+          "results_sha256": "b4f05c738e76e4ef1385e419c9056b7da518bcab2eb1308f186f6e45d0cb7917",
+          "schema_version": "agent-adoption-mcp-bridge.v2",
+          "status": "COMPLETE"
+        },
+        "cost_usd": null,
+        "delivered_prompt_sha256": "c2d322c05129628ddc4b4f68a8bcddee6de64d88e3b34c93c490e0cf1379a031",
+        "discovery": {
+          "exposed_tool_count": 5,
+          "global_discovery": "ABSENT",
+          "tool_inventory": "PASS"
+        },
+        "http_request_count": 2,
+        "initial_index_sha256": "770bdfc8372880249fd6b95d1860216e6a2420bf75e44c0cdfc86a62b08aaf19",
+        "kernel": {
+          "os_controls": "PASS",
+          "passed": 22,
+          "required": 22,
+          "securityserver_capability": "PASS"
+        },
+        "native_controls": {
+          "index_bash": "PASS",
+          "index_glob": "PASS",
+          "index_grep": "PASS",
+          "index_read": "PASS",
+          "index_sqlite": "PASS",
+          "mcp": "FAIL",
+          "positive_bash": "PASS",
+          "positive_glob": "PASS",
+          "positive_grep": "PASS",
+          "positive_read": "PASS",
+          "positive_sqlite": "PASS",
+          "private_read": "PASS",
+          "product_read": "PASS"
+        },
+        "native_manifest": {
+          "extra_agent_count": 0,
+          "mcp_count": 1,
+          "plugin_count": 0,
+          "skill_count": 0,
+          "status": "PASS"
+        },
+        "protected_integrity": "PASS",
+        "provider": "SCRIPTED_LOOPBACK",
+        "sandbox_sha256": "d126f3ae1c8c65f4bf7a78e04b31a54cb7292ca2aa5379a46c2606e204b84168",
+        "source_sha256": "29eb1b69710ff6eb29c0f7f7fe62c3fafcfdb1e5ecc4a9bc08cb53162619e675",
+        "status": "CONTROL_ISOLATION_BLOCKED",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "transcript_sha256": "0d8712bd39d5b3ab01c5041407feb76c34c588e71876f3890070bcf4a6665010",
+        "worktree_inventory_sha256": "dc34d919b5d820ebc74335546f0209df9c264d6622a245363ecb7796133ed095"
+      }
+    ],
+    "schema_version": "agent-native-offline-qualification.v2",
+    "scope": "SCRIPTED_CLAUDE_MACOS",
+    "status": "CONTROL_ISOLATION_BLOCKED"
+  },
+  "real_credentials": "NOT_ACCESSED",
+  "real_model": "NOT_RUN",
+  "release": "NO_GO",
+  "schema_version": "agent-native-host-workstream.v1",
+  "start_commit": "c9d4fa3d61258e990192556770a2dd1575fb18c1",
+  "status": "CONTROL_ISOLATION_BLOCKED",
+  "unexecuted_arms": [
+    "B2",
+    "B3"
+  ]
+}

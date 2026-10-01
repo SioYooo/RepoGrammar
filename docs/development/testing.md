@@ -1926,6 +1926,31 @@ DEVELOPMENT_BURNED fixtures. Live host/global discovery, hidden-tool/credential
 isolation, controlled MCP IPC and held-out effects remain separate gates. See
 [the qualification scope](../experiments/agent-adoption-v2-qualification.md).
 
+Native-host follow-up uses a separate scripted provider and bounded MCP bridge:
+
+```text
+python3 src/experiments/agent_study/native_host_v2.test.py
+python3 src/experiments/agent_study/mcp_bridge_v2.test.py --product-binary <pinned-binary>
+python3 src/experiments/agent_study/native_host_v2.py --out <new-outside-repo-dir> --cli <pinned-Claude-2.1.286> --product-bin <pinned-binary> --instruction-file <reviewed-global-v4>
+```
+
+The native CLI command is opt-in macOS validation with local socket/HTTP
+fixtures only. It has no real-model/auth mode. It refuses CLI/guide drift,
+requires OS/native positive and denial controls, empty plugin/agent/skill
+manifests, exact MCP availability and protected-artifact integrity. B2 must
+load its actual global file into native request context. Fixture usage is
+synthetic; committed summaries retain null real cost and NOT_MEASURED effects.
+
+Portable bridge regressions cover copied-client audit authority, the actual
+native initialize envelope, delayed/nonblocking/duplex stdio, newline/traffic/
+frame/deadline bounds, unpaired ids, unknown methods and owned-process cleanup.
+Native helper tests cover leaked-data-as-error, duplicate results, hidden
+registries, explicit TERM/KILL cleanup and file/symlink/special-file integrity.
+No supplied worktree code is executed by the task oracle. Raw HTTP/MCP bodies,
+producer copies, transcripts and SDK binaries remain outside Git. The retained
+[native campaign](../experiments/agent-adoption-native-host-qualification.md)
+is BLOCKED; passing candidate regressions cannot retroactively qualify it.
+
 Before cutting a stable or preview tag or opening release-readiness changes,
 contributors should run the normal local gate plus a source-checkout smoke
 matrix that exercises installation boundaries without live machine writes.
