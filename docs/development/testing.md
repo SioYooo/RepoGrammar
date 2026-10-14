@@ -1277,6 +1277,46 @@ Harness parsing, matching, hashing, metric math, and result-serialization logic
 are covered by unit tests in `src/rust/bin/repo_guard.rs` that do not depend on
 the product binary or the network.
 
+### Qualified-phrase language-capability qualification
+
+The vocabulary-v3 campaign keeps the original 110-query corpus unchanged.
+`src/experiments/language_capability/preregistration.json` freezes the four
+development repairs and a separate prospective public-repository query set.
+`qualification-controls.json` records the metric definitions, exact permitted
+vocabulary-version metadata delta, source-projection deviation and timing order.
+Role-prefix retrieval precision is not exact task correctness or agent success.
+Run the collector with an admitted Python 3.10+ interpreter within 3.x; it pins
+that interpreter for the isolated product workers.
+
+```text
+python3 src/experiments/language_capability/prepare.test.py
+python3 src/experiments/language_capability/capture.test.py
+python3 src/experiments/language_capability/prepare.py --out <new-source-directory>
+python3 src/experiments/language_capability/capture.py --old <frozen-old-product> --candidate <frozen-candidate-product> --sources <source-directory> --out <new-capture-directory>
+<matching-repo-guard> product-eval --corpus <source-directory>/public-corpus.json --bin <frozen-product> --condition <arm> --repetitions 3 --out <new-evaluation-directory>
+```
+
+Preparation downloads the two pinned public snapshots with bounded HTTPS
+requests, verifies their commit/tree/blob identities and records license hashes.
+It materializes every tracked regular file but no symbolic link, records every
+omitted link and never executes repository code or installs dependencies. Keep
+the raw snapshots, databases and captures outside the checkout. This projection
+is not an exact full worktree; the original preregistration remains preserved.
+
+The collector reuses the existing MCP/read-plan validators and complete
+fourteen-table canonical-generation comparison. It retains raw bytes/hashes,
+checks source bounds and freshness, and rejects undeclared response differences;
+it does not replace the existing product-eval grader. Public query gold is
+prospective role-prefix intent on a previously used FastAPI repository and a
+separately pinned Requests repository, not a sealed independent-author benchmark.
+Malformed responses, process failures and unavailable indexes never count as
+correct abstention. Run native resource pairs only after builds and other
+product runs finish, in the fixed old/candidate, candidate/old, old/candidate
+order. Report all samples and native RSS limits rather than asserting a speedup
+from three pairs. The unchanged golden corpus, both products' full
+`sync-equivalence --all` results and ordinary repository gates remain separate
+requirements.
+
 ### Query intent taxonomy
 
 Every corpus query declares a measurement `intent` (a new optional field, so the

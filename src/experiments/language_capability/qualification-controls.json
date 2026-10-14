@@ -1,0 +1,67 @@
+{
+  "schema_version": "qualified-phrase-controls.v1",
+  "preregistration_sha256": "9854a75da31e451b78b6ba5d46905fef98cc905bb07dac1719cf1cdf7f0c2e64",
+  "intended_development_query_changes": [
+    "py-syn-http-handler",
+    "py-nl-para-rest-endpoints",
+    "py-nl-para-wire-routes",
+    "py-nl-para-writing-tests"
+  ],
+  "allowed_unchanged_query_metadata_changes": {
+    "json_paths": [
+      ["query_retrieval", "vocabulary_version"],
+      ["product_readiness", "query_retrieval", "vocabulary_version"],
+      ["readiness", "query_retrieval", "vocabulary_version"]
+    ],
+    "old_value": "query-vocabulary.v2",
+    "candidate_value": "query-vocabulary.v3",
+    "policy": "Retain raw hashes and byte counts. Only an existing exact path changing from the declared old value to the declared candidate value is admissible. Missing keys, other values, other paths, ordering, and all remaining content must match. No recursive wildcard or source/family/UNKNOWN normalization."
+  },
+  "configuration": {
+    "python_project_session": "default-enabled; clear any ambient override for both arms",
+    "clear_optional_provider_environment": [
+      "REPOGRAMMAR_TYPESCRIPT_WORKER",
+      "REPOGRAMMAR_TYPESCRIPT_WORKER_ARGS_JSON",
+      "REPOGRAMMAR_TSJS_TRUST_PROJECT_TYPESCRIPT",
+      "REPOGRAMMAR_RUST_ANALYZER",
+      "REPOGRAMMAR_RUST_ANALYZER_ARGS_JSON"
+    ],
+    "environment_policy": "Use existing harness isolation; pin only interpreter, worker, product/harness hashes, project-session setting and optional-provider absence. Do not record a full host environment.",
+    "provider_ablation": "NOT_APPLICABLE to this query-only change. The ordinary derived-support product path is not a raw structural-only baseline."
+  },
+  "metric_definitions": {
+    "role_prefix_precision": "Numerator: selected retrieval rows whose family ID matches their declared prefix. Denominator: selected retrieval rows with applicable family-prefix gold. Report numerator/denominator and null for an empty denominator.",
+    "correct_abstention": "Only the 11 abstention-intent rows belong in this denominator; a typed UNKNOWN is correct only after successful indexing and a valid product query response.",
+    "retrieval_recall": "All nine retrieval-intent rows remain in the denominator. UNKNOWN, missing family, parser failure and operational error never become a retrieval hit.",
+    "selected_on_abstention_gold": "Report every selected family on the 11 abstention-intent rows independently as a safety failure.",
+    "operational_failures": "Parser failure, unavailable index, nonzero unexpected query exit, malformed response, and harness failure are distinct failures, never correct UNKNOWN outcomes.",
+    "existing_harness_metrics": "Retain repo-guard metrics verbatim under their existing definitions; do not rename its all-selection committed_precision to the narrower role_prefix_precision metric.",
+    "task_correctness": "NOT_MEASURED: role-prefix gold establishes role-prefix reachability only, not exact variant/member correctness for sessions, cookies, authentication or redirects. Source/evidence/read-plan validity is checked separately."
+  },
+  "query_label_notes": {
+    "f-conflicting-languages": "The frozen ID is retained, but its meaning is an OR-language bare-concept score-6 control, not a contradictory-language constraint. Target and gold are unchanged."
+  },
+  "snapshot_deviation_before_public_evaluation": {
+    "reason": "The frozen FastAPI Git tree contains four symlink blobs under agent-skill directories; the first acquisition stopped before product evaluation. The same source-independent rule omits two verified symlink blobs from Requests. All 236 FastAPI and 129 Requests tracked regular files are retained.",
+    "policy": "Verify every Git blob, including symlink-target bytes, against the pinned Git tree. Materialize all tracked regular files only; never follow or replace a symlink with regular source. Preserve omitted path/mode/blob-hash metadata. No corpus or query is dropped based on product outcomes.",
+    "claim": "Evaluation covers all pinned tracked regular files, not an exact full worktree. Existing product discovery skips symlinks, but equivalence to analysis of a symlink-bearing worktree is an inference, not a measured result."
+  },
+  "negative_qualification": {
+    "existing_corpus": "Keep all 36 frozen abstention cases and all exact/path/conflict cases unchanged.",
+    "additional_inputs": [
+      "src/fixtures/python/release/v0_1/low-support",
+      "src/fixtures/python/release/v0_1/dynamic-unknown",
+      "a temporary copy of low-support with a deliberately malformed Python source file"
+    ],
+    "queries": ["HTTP handler", "REST endpoint", "HTTP route", "writing tests"],
+    "oracle": "No selected family in CLI/MCP; preserve typed UNKNOWN/PARTIAL_CONTEXT or explicit parser failure, zero new family IDs, and no source text in default responses. Never treat successful parsing or a nonempty read plan as family proof."
+  },
+  "timing": {
+    "order": ["old,candidate", "candidate,old", "old,candidate"],
+    "pair_count": 3,
+    "run_after_builds_and_checks": true,
+    "frozen_real_snapshots": "Only fresh-init, full-resync and unchanged-sync; do not mutate public source for timing.",
+    "incremental_edits": "Existing synthetic performance template plus all existing sync-equivalence scenarios.",
+    "report": "Retain all samples, native child-rusage RSS interpretation and unavailable fields; no absolute CI threshold or causal speedup claim."
+  }
+}
