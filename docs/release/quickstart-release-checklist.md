@@ -13,6 +13,8 @@ cannot serve the current-source `--quickstart` flow.
 - Synchronize Cargo.toml, Cargo.lock and the npm source manifest to that chosen
   version. Manifest agreement is not npm publication. Preserve the current
   GitHub-only stable channel and the disabled stable npm staging job.
+- Update the installer stable-version hint and public version-pinned examples
+  only as part of that reviewed new release; do not relabel immutable 0.5.0.
 - Complete review, the [required repository gates](../development/testing.md),
   and atomic local commits. Push/merge requires its own authorization.
 - Freeze the reviewed source commit. Record its full SHA, version, local

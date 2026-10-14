@@ -1,0 +1,515 @@
+{
+  "schema_version": "one-command-quickstart-qualification.v1",
+  "status": "LOCAL_VERIFIED",
+  "publication_status": "UNRELEASED",
+  "date": "2026-10-14",
+  "base_head": "aaf5444c3ad44c6c4e3f8f42b8f09b90658c1a9e",
+  "implementation_head": "3da8ceecb1e8f4c8d8988ccfecd7a9367279e726",
+  "branch": "feat/one-command-quickstart",
+  "preserved_simplification_head": "4ed1ff4aa74fef45d592ce8cb4dc99f31bf8eb72",
+  "reference": {
+    "codegraph_commit": "34dd3d2fb4e15199d313f36450b095acf32dcb14",
+    "codegraph_version": "1.6.2",
+    "repogrammar_public_release_observed": "v0.5.0",
+    "public_release_supports_quickstart": false
+  },
+  "candidate": {
+    "version": "0.5.0 source candidate, not the immutable published binary",
+    "binary_sha256": "e932069a934650d68b93b1c53bfbd7df63a4cbc72616e56e9b2c62db3ad28932",
+    "worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+    "installer_sha256": "51c8ff2ddf110f9b3d398b7e7f9fd3eff5fa1807357b00a5f556bae8a654dadd",
+    "archive_sha256": "903ba94d65a42c40b76942f621a0bdc8e11a9d1da0960a24355db0f74d2db00d",
+    "capability": "quickstart-v1",
+    "source_was_uncommitted_at_build": true,
+    "committed_source_verified_identical": true,
+    "source_sha256": {
+      "src/install/quickstart.test.py": "8896c1fcdcfd1915617c3b023bcaa30f693e5ef5b40bbcb0ab86dbaf3699c4fb",
+      "src/install/repogrammar-install.sh": "51c8ff2ddf110f9b3d398b7e7f9fd3eff5fa1807357b00a5f556bae8a654dadd",
+      "src/install/repogrammar-install.test.sh": "e2d787bb4a82fc70781a44406d445992e50daaaf45b348e62e3be869d4b1fba5",
+      "src/rust/application/install.rs": "a8caefc8a55660181967fa57331f9f5b538e7febefac492350037a950ffd68e3",
+      "src/rust/application/product_installation.rs": "956bf741ff0f6dfe4af648e37a5fd822a0f0d5db7ca8cf0aec9fac3e21ba5850",
+      "src/rust/application/query.rs": "603ecec41bf27a115f525c0f96312459921790137f7eb958455b300496f12d78",
+      "src/rust/application/setup.rs": "296119aff9e66be84da70a9347775f54c18d0643ad8f04daa5c16548d19e971c",
+      "src/rust/bin/repogrammar.rs": "c9547f4cfb78dd913050986616ea2923210e8bdd1927ad86d406e302a73d4c4e",
+      "src/rust/interfaces/cli/mod.rs": "09052605f612edd4dcc3f320b5fc45e1847b58648dec9e9eef814e123003851d"
+    }
+  },
+  "environment": {
+    "native_target": "aarch64-apple-darwin",
+    "macos": "27.2",
+    "python": "3.14.6",
+    "node": "22.23.1",
+    "rustc": "1.96.0",
+    "cargo": "1.96.0",
+    "PATH_prefix": "/opt/homebrew/bin",
+    "REPOGRAMMAR_PYTHON_EXECUTABLE": "/opt/homebrew/bin/python3",
+    "tests_isolate_home_and_agent_profiles": true
+  },
+  "native_matrix": {
+    "aarch64-apple-darwin": "PASS",
+    "x86_64-apple-darwin": "NOT_RUN",
+    "aarch64-unknown-linux-gnu": "NOT_RUN",
+    "x86_64-unknown-linux-gnu": "NOT_RUN"
+  },
+  "real_agent_hosts": "NOT_RUN; native protocol fixtures, actual file writer and actual product self-test only",
+  "e2e": {
+    "schema": "quickstart-tests.v1",
+    "binary_sha256": "e932069a934650d68b93b1c53bfbd7df63a4cbc72616e56e9b2c62db3ad28932",
+    "worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+    "installer_sha256": "51c8ff2ddf110f9b3d398b7e7f9fd3eff5fa1807357b00a5f556bae8a654dadd",
+    "platform": "darwin",
+    "target": "aarch64-apple-darwin",
+    "python": "3.14.6",
+    "tests_run": 33,
+    "success": true,
+    "cases": [
+      {
+        "case": "test_auto_detects_all_three_live_agents",
+        "status": "PASS",
+        "seconds": 2.036
+      },
+      {
+        "case": "test_bad_release_assets_fail_without_installation",
+        "status": "PASS",
+        "seconds": 9.9
+      },
+      {
+        "case": "test_default_autosync_has_live_readiness_and_stops",
+        "status": "PASS",
+        "seconds": 1.623
+      },
+      {
+        "case": "test_deferred_local_scope_does_not_write",
+        "status": "PASS",
+        "seconds": 0.061
+      },
+      {
+        "case": "test_direct_and_piped_authorization_refusal",
+        "status": "PASS",
+        "seconds": 0.069
+      },
+      {
+        "case": "test_direct_and_piped_dry_run_are_read_only",
+        "status": "PASS",
+        "seconds": 0.867
+      },
+      {
+        "case": "test_direct_one_agent_and_idempotent_repeat",
+        "status": "PASS",
+        "seconds": 2.286
+      },
+      {
+        "case": "test_download_interruption_is_bounded_and_nonmutating",
+        "status": "PASS",
+        "seconds": 0.367
+      },
+      {
+        "case": "test_explicit_invalid_project_fails_before_install",
+        "status": "PASS",
+        "seconds": 0.123
+      },
+      {
+        "case": "test_explicit_project_with_shell_characters",
+        "status": "PASS",
+        "seconds": 1.098
+      },
+      {
+        "case": "test_explicit_target_and_no_instructions",
+        "status": "PASS",
+        "seconds": 1.311
+      },
+      {
+        "case": "test_foreign_agent_preserved_while_repository_ready",
+        "status": "PASS",
+        "seconds": 1.066
+      },
+      {
+        "case": "test_foreign_path_command_is_not_executed_or_deleted",
+        "status": "PASS",
+        "seconds": 1.111
+      },
+      {
+        "case": "test_index_failure_rolls_back_new_agent_only",
+        "status": "PASS",
+        "seconds": 2.305
+      },
+      {
+        "case": "test_installed_dry_run_preserves_receipts_and_index",
+        "status": "PASS",
+        "seconds": 1.44
+      },
+      {
+        "case": "test_malformed_and_drifted_agent_config_preserved",
+        "status": "PASS",
+        "seconds": 3.157
+      },
+      {
+        "case": "test_malformed_product_receipt_refuses_update",
+        "status": "PASS",
+        "seconds": 1.32
+      },
+      {
+        "case": "test_managed_uninstall_preserves_repository_and_foreign_data",
+        "status": "PASS",
+        "seconds": 1.353
+      },
+      {
+        "case": "test_missing_and_unsupported_python_fail_before_writes",
+        "status": "PASS",
+        "seconds": 0.454
+      },
+      {
+        "case": "test_native_failure_retains_installed_cli",
+        "status": "PASS",
+        "seconds": 1.007
+      },
+      {
+        "case": "test_new_agent_after_confirmation_plan_requires_new_authorization",
+        "status": "PASS",
+        "seconds": 0.916
+      },
+      {
+        "case": "test_outside_git_installs_machine_only",
+        "status": "PASS",
+        "seconds": 0.704
+      },
+      {
+        "case": "test_permission_failure_preserves_existing_install_directory",
+        "status": "PASS",
+        "seconds": 0.493
+      },
+      {
+        "case": "test_piped_controlling_terminal_confirmation",
+        "status": "PASS",
+        "seconds": 1.064
+      },
+      {
+        "case": "test_piped_controlling_terminal_default_no",
+        "status": "PASS",
+        "seconds": 0.469
+      },
+      {
+        "case": "test_piped_yes_no_agents_indexes_and_selftests",
+        "status": "PASS",
+        "seconds": 1.247
+      },
+      {
+        "case": "test_previous_candidate_upgrade",
+        "status": "PASS",
+        "seconds": 3.146
+      },
+      {
+        "case": "test_refreshes_changed_repository",
+        "status": "PASS",
+        "seconds": 2.164
+      },
+      {
+        "case": "test_symlink_install_root_preserves_outside_sentinel",
+        "status": "PASS",
+        "seconds": 0.379
+      },
+      {
+        "case": "test_symlinked_temporary_directory_is_canonicalized",
+        "status": "PASS",
+        "seconds": 1.084
+      },
+      {
+        "case": "test_target_none_skips_detected_agents_and_instructions",
+        "status": "PASS",
+        "seconds": 1.067
+      },
+      {
+        "case": "test_unmanaged_collision_preserves_foreign_command",
+        "status": "PASS",
+        "seconds": 1.63
+      },
+      {
+        "case": "test_valid_checksum_without_trailing_newline",
+        "status": "PASS",
+        "seconds": 2.055
+      }
+    ],
+    "failures": [],
+    "errors": [],
+    "skipped": [],
+    "limitations": [
+      "Native coding agents are isolated protocol fakes; product binary, worker, setup and MCP self-test are real.",
+      "Only the current host executes natively."
+    ]
+  },
+  "validation": [
+    {
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "result": "PASS"
+    },
+    {
+      "argv": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "result": "PASS",
+      "log": "clippy-v3.log"
+    },
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--all-features"
+      ],
+      "result": "PASS",
+      "native_access": true,
+      "log": "cargo-test-v3.log",
+      "counts": {
+        "library_passed": 2281,
+        "repository_guard_passed": 118,
+        "product_binary_passed": 185,
+        "doctest_passed": 1,
+        "existing_ignored_benchmarks": 2
+      }
+    },
+    {
+      "argv": [
+        "python3",
+        "src/workers/python/worker.test.py"
+      ],
+      "result": "PASS",
+      "log": "python-worker.log"
+    },
+    {
+      "argv": [
+        "node",
+        "src/workers/typescript/worker.test.js"
+      ],
+      "result": "PASS",
+      "log": "typescript-worker.log"
+    },
+    {
+      "argv": [
+        "bash",
+        "src/install/repogrammar-install.test.sh"
+      ],
+      "environment": {
+        "REPOGRAMMAR_INSTALLER_TEST_BINARY": "<evidence-root>/candidate-v3/repogrammar"
+      },
+      "native_access": true,
+      "result": "PASS",
+      "log": "installer-v3.stderr",
+      "embedded_quickstart": {
+        "passed": 32,
+        "skipped_previous_binary_not_supplied": 1,
+        "separately_covered": true
+      }
+    },
+    {
+      "argv": [
+        "python3",
+        "src/install/quickstart.test.py",
+        "--binary",
+        "<evidence-root>/candidate-v3/repogrammar",
+        "--previous-binary",
+        "<evidence-root>/previous-repogrammar",
+        "--out",
+        "<new-evidence-dir>"
+      ],
+      "result": "PASS",
+      "native_access": true,
+      "counts": {
+        "passed": 33,
+        "skipped": 0
+      }
+    },
+    {
+      "argv": [
+        "node",
+        "src/npm/repogrammar.test.js"
+      ],
+      "result": "PASS",
+      "log": "npm-wrapper.log"
+    },
+    {
+      "argv": [
+        "npm",
+        "pack",
+        "--dry-run",
+        "--json"
+      ],
+      "environment": {
+        "npm_config_cache": "<evidence-root>/npm-cache"
+      },
+      "result": "PASS",
+      "log": "npm-pack.json"
+    },
+    {
+      "argv": [
+        "<evidence-root>/candidate-v3/repo-guard",
+        "smoke-packaged-artifact",
+        "--binary",
+        "<evidence-root>/packaged-v3/repogrammar",
+        "--worker",
+        "<evidence-root>/packaged-v3/workers/python/worker.py",
+        "--fixture",
+        "src/fixtures/python/release/v0_1/pydantic-basic/schemas.py",
+        "--expected-version",
+        "0.5.0",
+        "--require-product-uninstall"
+      ],
+      "result": "PASS",
+      "native_access": true,
+      "log": "packaged-v3-smoke.log"
+    },
+    {
+      "argv": [
+        "cargo",
+        "run",
+        "--quiet",
+        "--bin",
+        "repo-guard",
+        "--",
+        "check"
+      ],
+      "result": "PASS",
+      "log": "repo-guard-final.log"
+    },
+    {
+      "argv": [
+        "cargo",
+        "run",
+        "--quiet",
+        "--bin",
+        "repo-guard",
+        "--",
+        "check-diff",
+        "--base",
+        "origin/main",
+        "--head",
+        "HEAD"
+      ],
+      "result": "PASS",
+      "log": "check-diff.log"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "origin/main...HEAD"
+      ],
+      "result": "PASS"
+    },
+    {
+      "argv": [
+        "cmp",
+        "-s",
+        "AGENTS.md",
+        "CLAUDE.md"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "artifact_manifest": {
+    "cargo-test-v3.log": {
+      "sha256": "3f5e8a5e144edb8706127380cca72e90ea27e786d7c50446a3eb6879749699aa",
+      "bytes": 259168
+    },
+    "clippy-v3.log": {
+      "sha256": "889be85180f0a39fe2926f8ec5500b44a76758228b6230f7ec78a8f73da3938e",
+      "bytes": 137
+    },
+    "candidate-v3-build.log": {
+      "sha256": "076526fc3d8937d8dfe030fde1daf7317c2c3d9122b96ee3fe3905794321a864",
+      "bytes": 128
+    },
+    "installer-v3.stdout": {
+      "sha256": "65bbb72e061cdebf83b4f05740014aa37b5e889db9c995a1c8bceadc136be5c0",
+      "bytes": 59
+    },
+    "installer-v3.stderr": {
+      "sha256": "7f78a2255cdb2e4f41fd3dc9a1144d97cf221e7cd6c4d99e6b347338361c3e2f",
+      "bytes": 4312
+    },
+    "packaged-v3-smoke.log": {
+      "sha256": "af509951868990ac93f67ad367c40497f031d48cf7be044b75979e15139eeb6d",
+      "bytes": 31
+    },
+    "python-worker.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "typescript-worker.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "npm-wrapper.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "npm-pack.json": {
+      "sha256": "1c27f18290a2abcbaea2cbfd90fd9d6e4b60bb0819c7be9874fe1e2098448dbc",
+      "bytes": 808
+    },
+    "repo-guard-final.log": {
+      "sha256": "412236312eafaac6d372bab552d159d7f6dd388abe184490b4587c4be1f437fc",
+      "bytes": 24
+    },
+    "check-diff.log": {
+      "sha256": "98ec64a6174afb33474514c62c0aa4a669a839595967849fda37ae1635ceef6a",
+      "bytes": 31
+    },
+    "e2e-v3-final/summary.json": {
+      "sha256": "e447d7f798a0fe1f5daef72edbc46719ee9684b9bc67c74db48946c6f48b805f",
+      "bytes": 4796
+    },
+    "packaged-v3/artifact.json": {
+      "sha256": "1f673c2b464a2b985aa96edaaaaeaf64e62502bb759035053e5ac07d82c8e3ce",
+      "bytes": 301
+    }
+  },
+  "evidence_root": "/private/tmp/repogrammar-quickstart-20261014",
+  "active_test_daemons": 0,
+  "review_findings_closed": [
+    "reviewed plan could expand before setup execution",
+    "valid checksum final line without newline",
+    "macOS staging path alias rejected",
+    "setup ignored hash-checked stale family evidence",
+    "no native agent prevented CLI-only uninstall",
+    "no-agent next action referenced a nonexistent agent",
+    "native availability skipped empty/whitespace PATH and present nonregular candidates"
+  ],
+  "retained_initial_failures": [
+    "e2e-v1",
+    "e2e-v2",
+    "e2e-v2-tools-complete"
+  ],
+  "harness_corrections": [
+    "tool-only PATH required external kill for authoritative liveness",
+    "uninstall report existence is not completion; poll bounded known in_progress to terminal status"
+  ],
+  "limitations": [
+    "same-directory hostile concurrent rename/path-swap is not newly qualified",
+    "cross-revision upgrade uses a prior source candidate, not the public0.5.0 binary",
+    "bootstrap trust precedes archive verification; same-channel SHA-256 is not publisher authentication",
+    "no public remote quickstart smoke before new release publication",
+    "no push/merge/tag/release/npm mutation/global installation performed"
+  ],
+  "publication_prerequisites": [
+    "choose unused new stable version and synchronize manifests/stable hints/docs",
+    "authorize integration and push of reviewed source",
+    "run four native build/ABI/packaged/quickstart gates against exact source",
+    "retain exact ten artifacts and checksum sidecars without repacking",
+    "separately authorize immutable tag/release and verify public bytes/onboarding",
+    "keep npm channel separate"
+  ]
+}
