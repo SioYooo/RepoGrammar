@@ -12,6 +12,10 @@ url: https://sioyooo.github.io
 baseurl: /RepoGrammar
 lang: en
 author: SioYooo
+# Public ownership tokens for the Search Console / Bing Webmaster properties.
+webmaster_verifications:
+  google: ABscPPlMTzevUZdsyx1XGHDTDIbi6bbY6fnJq_JEFpQ
+  bing: 41C2A05149461D53456CB30713F1F626
 plugins:
   - jekyll-seo-tag
   - jekyll-sitemap

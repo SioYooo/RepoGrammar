@@ -182,7 +182,7 @@ custom domain, and chose to allow both `OAI-SearchBot` and `GPTBot`.
 | Published | Root README as `/`, quickstarts, limitations, examples, specifications, architecture, ADRs, reports, release records and root community files |
 | Excluded | `src/`, `algorithms/`, manifests, agent guides, the docs map, roadmap, case studies, demo runbooks, development docs, experiments, plans, promotion and prompts |
 | Crawler policy | A project site cannot serve the origin-root `robots.txt`. `https://sioyooo.github.io/robots.txt` returned 404 on 2026-10-14, which leaves every crawler allowed and matches the maintainer's choice. A different policy needs a user site or custom domain |
-| Owner steps not performed | Google Search Console and Bing Webmaster Tools verification, sitemap submission and IndexNow. Verification tokens are never committed |
+| Search-engine ownership | URL-prefix properties for the origin above in Google Search Console and Bing Webmaster Tools, verified by HTML meta tags that `_config.yml` `webmaster_verifications` renders on every page. Those tokens are public by design and live only in that configuration. IndexNow is not configured |
 
 Deviations from the handoff above: Jekyll's exclude list replaces an explicit
 page map, so new Markdown is published unless excluded (see the
