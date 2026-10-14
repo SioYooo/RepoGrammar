@@ -192,5 +192,34 @@ experiment and promotion documents do not resolve on the site; they still
 resolve on GitHub. README links stay absolute GitHub URLs because the npm
 package ships the same README. Pages carry no per-commit source links.
 
-A live page is not an indexing, citation or ranking result; search and
+### Live verification (2026-10-14)
+
+Signed-out `curl` checks against the `main` build of `0c1df94`:
+
+- `/`, the quickstarts, limitations, the FastAPI/pytest example and the CLI
+  specification return 200. Excluded experiment, promotion, `src/` and
+  docs-map paths return 404.
+- The homepage serves `RepoGrammar | Repository conventions for coding agents`
+  as its title, an absolute self-canonical URL, meta and OpenGraph
+  descriptions, `WebSite` JSON-LD and no `noindex`. Installation and
+  `repogrammar init` text is present in the static HTML. Per-page titles and
+  `defaults` descriptions render, for example `Quickstart | RepoGrammar`.
+- `sitemap.xml` returns 200 `application/xml`, is well-formed, and lists 127
+  URLs with no `lastmod` and no excluded path. `jekyll-sitemap` also serves
+  `/RepoGrammar/robots.txt` with a `Sitemap:` line; crawlers ignore a robots
+  file outside the origin root.
+- Relative `.md` links render as site `.html` paths; a sampled ADR link
+  returns 200. HTTPS is enforced and the repository homepage points here.
+
+Owner-account steps on the same day:
+
+- Google Search Console: the URL-prefix property verified by HTML tag.
+  `sitemap.xml` was submitted and showed "Couldn't fetch" at submission while
+  the same URL returned 200 to a Googlebot user agent; recheck it later. URL
+  Inspection reported the homepage as unknown to Google, and indexing was
+  requested.
+- Bing Webmaster Tools: the URL-prefix site verified by meta tag, and the
+  sitemap was accepted for processing.
+
+These are receipts, not indexing, ranking or citation evidence. Search and
 answer-engine visibility remains `NOT_MEASURED`.
