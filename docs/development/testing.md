@@ -2124,3 +2124,41 @@ not the required sixty-second idle observation. Linux native watcher behavior
 still requires an actual Linux run.
 Use `--project-session` explicitly for the opt-in candidate arm; the hermetic
 collector does not inherit unrelated frontend environment switches.
+
+## One-command quickstart qualification
+
+The installer suite delegates current-source quickstart coverage to
+`src/install/quickstart.test.py`. It requires an actual candidate executable,
+packages it with the checked-in Python worker into a local checksummed release
+fixture, and never invokes installed coding agents or writes real user profiles.
+The parent shell suite isolates HOME/XDG/Codex/Claude directories; fake source
+builds use a temporary checkout instead of replacing the checkout's release binary.
+Use `REPOGRAMMAR_INSTALLER_TEST_BINARY` to reuse a frozen candidate without a build.
+
+```text
+python3 src/install/quickstart.test.py --binary <frozen-candidate> --previous-binary <frozen-previous-product> --out <new-evidence-directory>
+REPOGRAMMAR_INSTALLER_TEST_BINARY=<frozen-candidate> bash src/install/repogrammar-install.test.sh
+```
+
+Direct-file and piped-stdin runs must cover explicit noninteractive consent,
+read-only plans, a controlling PTY, default-no/EOF, and agent detection changes
+while the reviewed plan awaits confirmation. Piped script input must never be
+an answer stream. A changed fingerprint must preserve the acquired CLI but
+refuse new setup writes. Exact isolated HOME/config/receipt/index snapshots
+prove negative controls, including malformed/missing checksum, valid checksum
+without a trailing newline, duplicate/traversal/link/archive entries, stale or
+malformed ownership, missing/unsupported Python, PATH shadows and permission
+refusal. Do not relabel a mocked CLI success as actual candidate onboarding.
+
+Fresh/repeat/previous-candidate upgrades must retain product receipt consistency,
+worker bytes, native configuration and marker-fenced instructions; failure
+injection must distinguish acquisition rollback from setup's newly created
+agent rollback. Index/autosync/product-self-test and family readiness are separate
+assertions. The optional previous binary comparison is omitted only with an
+explicit NOT_RUN note; it is not evidence of a published-version upgrade.
+
+Run the existing `repo-guard smoke-packaged-artifact` on the exact candidate
+executable and bundled worker, including `--require-product-uninstall`, plus
+npm launcher tests/local packing and all standard gates. Supported Linux/macOS
+native runners remain independent publication prerequisites; platform stubs,
+compilation and macOS-only PTY evidence do not prove Linux runtime behavior.

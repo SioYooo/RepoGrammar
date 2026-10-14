@@ -7649,7 +7649,7 @@ pub fn assemble_product_readiness(
     }
 }
 
-fn family_evidence_readiness(
+pub(crate) fn family_evidence_readiness(
     family_freshness: Option<FamilyFreshnessCounts>,
 ) -> FamilyEvidenceReadiness {
     match family_freshness {
@@ -7684,7 +7684,9 @@ fn family_evidence_readiness(
 /// Family-evidence freshness expressed as a recovery-context freshness signal, so
 /// it can be combined with the repository-level freshness and fed to the one
 /// recovery classifier.
-fn family_evidence_freshness_signal(evidence: &FamilyEvidenceReadiness) -> RecoveryFreshness {
+pub(crate) fn family_evidence_freshness_signal(
+    evidence: &FamilyEvidenceReadiness,
+) -> RecoveryFreshness {
     if evidence.evidence_unreadable {
         return RecoveryFreshness::CannotVerify;
     }

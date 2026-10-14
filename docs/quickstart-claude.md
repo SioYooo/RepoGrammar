@@ -1,7 +1,33 @@
 # Claude Code Quickstart
 
-Install the CLI using the [general quickstart](quickstart.md#install), then
-connect this agent and initialize each repository. Python 3.10+ is required.
+For published 0.5.0, install the CLI using the
+[general quickstart](quickstart.md#install), then use the explicit agent and
+repository steps below. Python 3.10+ is required for Python analysis.
+
+## One-command candidate (unreleased)
+
+Current source can combine acquisition, Claude Code configuration and repository
+setup in one reviewed plan. This is **not available in published 0.5.0**; a
+new immutable release must supply the `quickstart-v1` capability. With reviewed
+local candidate archives and checksums, run from the intended Git repository:
+
+```bash
+REPOGRAMMAR_RELEASE_DIR=/absolute/path/to/candidate-artifacts \
+  bash /absolute/path/to/RepoGrammar/src/install/repogrammar-install.sh \
+  --quickstart --target claude-code
+```
+
+Add `--dry-run` to inspect without persistent writes, or explicit `--yes` for
+noninteractive authorization. `--no-instructions` skips instruction updates;
+`--no-autosync` skips the background daemon. Agent configuration is global;
+project-local writes remain deferred. Read the
+[candidate installation and trust guide](quickstart.md#one-command-candidate-unreleased)
+before using an installer downloaded from a distribution channel.
+
+The result distinguishes product MCP self-test, native integration and
+repository readiness. Restart Claude Code afterward and verify that its session
+loads `repogrammar_context`; a successful config write alone does not prove an
+operational agent session. Foreign or drifted integrations are preserved.
 
 ## Review And Apply Claude Code Wiring
 

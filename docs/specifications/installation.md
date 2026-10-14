@@ -12,7 +12,7 @@ The ownership model has three separate layers:
    RepoGrammar index and daemon, or `repogrammar init --no-autosync` for a
    deterministic one-shot index without background sync.
 
-The public onboarding contract uses those three explicit layers. The npm
+The published 0.5.0 onboarding contract uses those three explicit layers. The npm
 launcher and release installers acquire only the product binary and bundled
 worker. `repogrammar install` is the optional coding-agent setup step, and
 `repogrammar init` is the per-repository initialization step.
@@ -25,6 +25,69 @@ delegates repository state/index/auto-sync to the existing lifecycle services,
 and ends with a read-only product-binary MCP self-test. It never downloads
 itself and does not make `repogrammar install` initialize or delete
 `.repogrammar/`.
+
+Current source adds an **unreleased** `--quickstart` bootstrap to the existing
+shell installer. It composes all three layers without merging ownership. See
+[ADR-0056](../decisions/ADR-0056-verified-one-command-quickstart.md) and the
+[publication gate](../release/quickstart-release-checklist.md). The immutable
+0.5.0 installer and binary do not provide this bootstrap protocol; a raw-main
+script cannot make an older release support it. The candidate refuses a binary
+without `quickstart-v1` before persistent writes.
+
+Quickstart validates platform/libc, stages and checks a prebuilt archive, checks
+Python when repository analysis is requested, and asks the staged binary for
+strict product ownership preflight and the existing setup dry-run plan. A user
+reviews managed paths, the actual Git root, agent ownership/detection, instruction
+changes, indexing, autosync and unchanged telemetry before one explicit consent.
+Without a controlling terminal, live quickstart requires `--yes`. Terminal
+consent comes from `/dev/tty`, never the script's stdin. Empty input/EOF is not consent. Delegated commands receive null
+stdin, and the confirmation descriptor closes before activation.
+
+The application install transaction owns activation of the executable, managed
+command, both deterministic worker locations and the existing product receipt.
+It reuses the command snapshot/rollback authority and runs the existing product
+MCP self-test before and after activation. Receipt/hash/layout drift, unsafe
+ancestors, symlinks, non-regular files and hard links fail before writes. An
+unmanaged regular command requires the independent
+`--replace-unmanaged-command` opt-in and a create-new
+`repogrammar.unmanaged-backup`; a pre-existing backup blocks replacement.
+Failure restores operation-owned bytes, permissions and receipt, and removes
+only new empty directories. Ownership drift after activation preserves the files
+for explicit recovery. This does not add a guarantee against hostile concurrent
+same-directory rename beyond the existing filesystem boundary.
+
+After acquisition, quickstart runs the existing setup executor. A fingerprint of
+the reviewed setup scope and instruction destinations must match its fresh plan
+before any agent or repository mutation. Changed agent detection, ownership or
+planned actions require another review; the acquired CLI is retained and reported.
+The bootstrap never deletes other PATH commands or changes telemetry preferences.
+
+CLI-only uninstall does not require a missing native agent executable when both
+that target's exact owned receipt and backup are absent beneath validated
+ancestors. Its unreceipted configuration is reported UNKNOWN/preserved, not
+claimed absent; such a file could still reference the removed product. Existing
+receipt evidence and non-NotFound failures remain strict blockers. Available
+native clients still undergo the foreign-entry checks, and opencode always uses
+its file-based inspection. Revalidate skipped lanes immediately before execution.
+
+`--quickstart --dry-run` may download and execute a verified binary in private
+temporary storage, but makes no persistent installation, agent or repository
+writes. Other installer actions retain their existing dry-run contracts. The
+bootstrap never infers a source build from stdin or the current directory;
+`--from-source` is incompatible with quickstart. Explicit `--project` must name
+a Git worktree directory; nested paths resolve through Git to the root displayed
+in the plan. With no current Git worktree, machine-only setup is offered using
+`setup --skip-repository`. Explicit `--skip-repository` suppresses project
+inspection/indexing/autosync. Local/project agent writers remain deferred and
+quickstart refuses those scopes with manual configuration guidance.
+
+Bootstrap script bytes are executed before archive verification. Their trust
+comes from the selected distribution channel or a reviewed immutable pin.
+Archive SHA-256 verifies bytes against the sidecar, not publisher authenticity.
+A reviewed release-hosted script plus its checksum, downloaded and checked
+before execution, remains a supported alternative to a moving raw-main pipe.
+New immutable installer and binary assets must be published together before the
+new command is described as available; npm publication is a separate gate.
 
 `setup --target auto` selects only detected targets with a live writer. If none
 are available, setup still initializes and indexes the repository and reports a
@@ -191,8 +254,10 @@ removal prints migration guidance and does not delete product files. The
 wrapper may retain its existing install/update PATH convergence checks, display
 PATH guidance, or build from source only when the user explicitly chooses the
 contributor source-build path. It must not duplicate native agent configuration
-or product-deletion ownership logic outside the Rust application, and it must
-not create or modify `.repogrammar/`.
+or product-deletion ownership logic outside the Rust application. Only explicit
+quickstart may delegate authorized repository work to `setup`; the shell itself
+must not create or modify `.repogrammar/`, and all other installer actions remain
+separate from repository initialization.
 
 The current release-source manifests use stable identity `0.5.0`. Source
 builds report that version consistently across Cargo and the local npm

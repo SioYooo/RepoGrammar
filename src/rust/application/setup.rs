@@ -4,16 +4,20 @@
 //! continue to own agent receipts/native writers, repository lifecycle,
 //! indexing, autosync processes, and MCP self-tests.
 
-use crate::application::install::{supported_concrete_targets, AgentTarget};
+use crate::application::install::{
+    supported_concrete_targets, AgentTarget, InstallExecutionContext,
+};
 use crate::application::recovery::{
     classify_recovery, RecoveryAction, RecoveryAgentState, RecoveryAutosyncState, RecoveryContext,
     RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth, RecoveryLockState,
     RecoveryRecommendation,
 };
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupTarget {
     Auto,
+    None,
     Codex,
     ClaudeCode,
     Opencode,
@@ -23,6 +27,7 @@ impl SetupTarget {
     fn candidates(self) -> Vec<AgentTarget> {
         match self {
             Self::Auto => supported_concrete_targets(),
+            Self::None => Vec::new(),
             Self::Codex => vec![AgentTarget::Codex],
             Self::ClaudeCode => vec![AgentTarget::ClaudeCode],
             Self::Opencode => vec![AgentTarget::Opencode],
@@ -37,6 +42,7 @@ pub struct SetupRequest {
     pub dry_run: bool,
     pub autosync: bool,
     pub write_instructions: bool,
+    pub initialize_repository: bool,
 }
 
 impl SetupRequest {
@@ -47,6 +53,7 @@ impl SetupRequest {
             dry_run: false,
             autosync: true,
             write_instructions: true,
+            initialize_repository: true,
         }
     }
 }
@@ -56,6 +63,7 @@ pub enum SetupAgentIntegrationState {
     Unmanaged,
     OwnedCurrent,
     OwnedOutdated,
+    OwnedDrifted,
     Foreign,
     Malformed,
 }
@@ -158,6 +166,7 @@ pub enum SetupLimitation {
     StorageUnhealthy,
     BlockingLock,
     NoPatternGroups,
+    RepositorySkipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,19 +258,44 @@ pub struct SetupPlanningFailure {
     pub class: SetupFailureClass,
 }
 
+/// Bind a bootstrap approval to its reviewed scope, excluding dry-run mechanics.
+pub fn setup_plan_fingerprint(plan: &SetupPlan, context: &InstallExecutionContext) -> String {
+    let scope = format!(
+        "setup-plan-v1:{:?}:{:?}:{:?}:{:?}:{:?}",
+        (
+            &plan.request.project,
+            plan.request.target,
+            plan.request.autosync,
+            plan.request.write_instructions,
+            plan.request.initialize_repository,
+        ),
+        plan.repository_before,
+        plan.agents,
+        plan.actions,
+        context,
+    );
+    let digest = Sha256::digest(scope.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("sha256:{hex}")
+}
+
 pub fn plan_setup(
     request: SetupRequest,
     probe: &impl SetupProbe,
 ) -> Result<SetupPlan, SetupPlanningFailure> {
-    let repository_before = probe
-        .inspect_repository(&request.project)
-        .map_err(|error| SetupPlanningFailure {
-            stage: SetupStage::Inspect,
-            class: match error.class {
-                SetupFailureClass::ProjectInspectionFailed => error.class,
-                _ => SetupFailureClass::ProjectInspectionFailed,
-            },
-        })?;
+    let repository_before = if request.initialize_repository {
+        probe
+            .inspect_repository(&request.project)
+            .map_err(|_| SetupPlanningFailure {
+                stage: SetupStage::Inspect,
+                class: SetupFailureClass::ProjectInspectionFailed,
+            })?
+    } else {
+        SetupRepositoryState::default()
+    };
 
     let candidates = request.target.candidates();
     let mut agents = Vec::with_capacity(candidates.len());
@@ -282,6 +316,9 @@ pub fn plan_setup(
     }
 
     let (mut agent_action, mut limitations) = plan_agent_integration(request.target, &agents);
+    if !request.initialize_repository {
+        limitations.push(SetupLimitation::RepositorySkipped);
+    }
     let repository_blocked = if repository_before.storage_health == RecoveryHealth::Unhealthy {
         limitations.push(SetupLimitation::StorageUnhealthy);
         true
@@ -308,7 +345,9 @@ pub fn plan_setup(
     let repository_init_action = SetupAction {
         stage: SetupStage::RepositoryInitialization,
         boundary: SetupBoundary::RepositoryLocalState,
-        disposition: if repository_blocked {
+        disposition: if !request.initialize_repository {
+            SetupDisposition::Disabled
+        } else if repository_blocked {
             SetupDisposition::Blocked
         } else if repository_before.initialized {
             SetupDisposition::SkipAlreadyComplete
@@ -320,7 +359,9 @@ pub fn plan_setup(
     let repository_index_action = SetupAction {
         stage: SetupStage::RepositoryIndex,
         boundary: SetupBoundary::RepositoryLocalState,
-        disposition: if repository_blocked {
+        disposition: if !request.initialize_repository {
+            SetupDisposition::Disabled
+        } else if repository_blocked {
             SetupDisposition::Blocked
         } else if repository_before.active_index
             && repository_before.freshness == RecoveryFreshness::Fresh
@@ -334,7 +375,9 @@ pub fn plan_setup(
     let autosync_action = SetupAction {
         stage: SetupStage::Autosync,
         boundary: SetupBoundary::BackgroundProcess,
-        disposition: if repository_blocked {
+        disposition: if !request.initialize_repository {
+            SetupDisposition::Disabled
+        } else if repository_blocked {
             SetupDisposition::Blocked
         } else if !request.autosync {
             SetupDisposition::Disabled
@@ -432,7 +475,7 @@ fn plan_agent_integration(
             SetupAgentIntegrationState::Foreign => {
                 limitations.push(SetupLimitation::ForeignAgentConfiguration(agent.target));
             }
-            SetupAgentIntegrationState::Malformed => {
+            SetupAgentIntegrationState::OwnedDrifted | SetupAgentIntegrationState::Malformed => {
                 limitations.push(SetupLimitation::MalformedAgentConfiguration(agent.target));
             }
         }
@@ -446,7 +489,9 @@ fn plan_agent_integration(
         limitations.push(SetupLimitation::NoLiveAgent);
     }
 
-    let (disposition, targets) = if !execute_targets.is_empty() {
+    let (disposition, targets) = if selection == SetupTarget::None {
+        (SetupDisposition::Disabled, Vec::new())
+    } else if !execute_targets.is_empty() {
         (SetupDisposition::Execute, execute_targets)
     } else if !owned_targets.is_empty() {
         (SetupDisposition::SkipAlreadyComplete, owned_targets)
@@ -809,7 +854,9 @@ pub fn execute_setup(
     if self_test_action.disposition == SetupDisposition::Execute {
         if let Err(error) = operations.mcp_self_test(&self_test_action.targets) {
             let mut preserved = preserved;
-            preserve_once(&mut preserved, SetupPreservedResource::ActiveGeneration);
+            if plan.request.initialize_repository {
+                preserve_once(&mut preserved, SetupPreservedResource::ActiveGeneration);
+            }
             if autosync_started || plan.repository_before.autosync_running {
                 preserve_once(&mut preserved, SetupPreservedResource::AutosyncProcess);
             }
@@ -1088,22 +1135,24 @@ fn recovery_from_plan(
     execution_completed: bool,
     autosync_started: bool,
 ) -> RecoveryRecommendation {
-    let initialized = plan.repository_before.initialized
-        || execution_completed
-        || failure.is_some_and(|failure| {
-            matches!(
-                failure.stage,
-                SetupStage::RepositoryIndex | SetupStage::Autosync | SetupStage::McpSelfTest
-            )
-        });
-    let active_index = plan.repository_before.active_index
-        || index.is_some()
-        || failure.is_some_and(|failure| {
-            matches!(
-                failure.stage,
-                SetupStage::Autosync | SetupStage::McpSelfTest
-            )
-        });
+    let initialized = plan.request.initialize_repository
+        && (plan.repository_before.initialized
+            || execution_completed
+            || failure.is_some_and(|failure| {
+                matches!(
+                    failure.stage,
+                    SetupStage::RepositoryIndex | SetupStage::Autosync | SetupStage::McpSelfTest
+                )
+            }));
+    let active_index = plan.request.initialize_repository
+        && (plan.repository_before.active_index
+            || index.is_some()
+            || failure.is_some_and(|failure| {
+                matches!(
+                    failure.stage,
+                    SetupStage::Autosync | SetupStage::McpSelfTest
+                )
+            }));
     let autosync_running = plan.repository_before.autosync_running || autosync_started;
     let family_evidence = match index.map(|summary| summary.family_inventory) {
         Some(SetupFamilyInventory::Available(count)) if count > 0 => {
@@ -1137,7 +1186,9 @@ fn recovery_from_plan(
         autosync: RecoveryAutosyncState {
             configured: plan.repository_before.autosync_configured || autosync_started,
             running: autosync_running,
-            recommended: plan.request.autosync && !autosync_running,
+            recommended: plan.request.initialize_repository
+                && plan.request.autosync
+                && !autosync_running,
         },
         agent,
     };
@@ -1185,7 +1236,8 @@ fn recovery_agent_state(
             }
             SetupLimitation::StorageUnhealthy
             | SetupLimitation::BlockingLock
-            | SetupLimitation::NoPatternGroups => None,
+            | SetupLimitation::NoPatternGroups
+            | SetupLimitation::RepositorySkipped => None,
         })
     {
         return agent;
@@ -1389,6 +1441,93 @@ mod tests {
                 .targets,
             vec![AgentTarget::Codex]
         );
+    }
+
+    #[test]
+    fn skipped_repository_and_agents_are_never_probed_or_mutated() {
+        let probe = FakeProbe {
+            repository: Err(SetupOperationError::new(
+                SetupFailureClass::ProjectInspectionFailed,
+            )),
+            agents: Vec::new(),
+            fail_agent_detection: true,
+        };
+        let mut request = SetupRequest::new("not-a-repository");
+        request.target = SetupTarget::None;
+        request.initialize_repository = false;
+        let plan = plan_setup(request, &probe).expect("unselected boundaries are not inspected");
+        assert_eq!(
+            plan.confirmation(),
+            SetupConfirmation::NotRequiredNoMutation
+        );
+        for stage in [
+            SetupStage::AgentIntegration,
+            SetupStage::RepositoryInitialization,
+            SetupStage::RepositoryIndex,
+            SetupStage::Autosync,
+        ] {
+            assert_eq!(
+                plan.action(stage).unwrap().disposition,
+                SetupDisposition::Disabled
+            );
+        }
+        let operations = FakeOperations::successful();
+        let outcome = execute_setup(&plan, SetupAuthorization::NotConfirmed, &operations);
+        assert_eq!(*operations.calls.borrow(), [SetupStage::McpSelfTest]);
+        assert_eq!(outcome.status, SetupOutcomeStatus::ReadyWithLimitations);
+        assert_eq!(outcome.limitations, [SetupLimitation::RepositorySkipped]);
+        assert_eq!(outcome.index, None);
+        assert!(outcome.preserved.is_empty());
+        assert_eq!(outcome.recovery.action, RecoveryAction::Setup);
+    }
+
+    #[test]
+    fn agent_only_setup_keeps_authorization_and_rolls_back_only_new_integrations() {
+        for existing in [false, true] {
+            let mut probe = clean_probe();
+            probe.repository = Err(SetupOperationError::new(
+                SetupFailureClass::ProjectInspectionFailed,
+            ));
+            if existing {
+                probe.agents[0].integration = SetupAgentIntegrationState::OwnedCurrent;
+            }
+            let mut request = SetupRequest::new("not-a-repository");
+            request.initialize_repository = false;
+            let plan = plan_setup(request, &probe).unwrap();
+            let operations = FakeOperations::successful();
+            if !existing {
+                let denied = execute_setup(&plan, SetupAuthorization::NotConfirmed, &operations);
+                assert_eq!(
+                    denied.failure.unwrap().class,
+                    SetupFailureClass::AuthorizationRequired
+                );
+                assert!(operations.calls.borrow().is_empty());
+            }
+            operations.fail.set(Some((
+                SetupStage::McpSelfTest,
+                SetupFailureClass::McpSelfTestFailed,
+            )));
+            let failed = execute_setup(&plan, SetupAuthorization::Confirmed, &operations);
+            assert_eq!(failed.status, SetupOutcomeStatus::Failed);
+            assert!(!failed
+                .preserved
+                .contains(&SetupPreservedResource::ActiveGeneration));
+            assert!(!failed
+                .preserved
+                .contains(&SetupPreservedResource::RepositoryStateCreatedThisRun));
+            assert_eq!(failed.rollback.is_some(), !existing);
+            assert!(!operations.calls.borrow().iter().any(|stage| matches!(
+                stage,
+                SetupStage::RepositoryInitialization
+                    | SetupStage::RepositoryIndex
+                    | SetupStage::Autosync
+            )));
+            if existing {
+                assert!(failed.preserved.contains(
+                    &SetupPreservedResource::PreExistingAgentIntegration(AgentTarget::Codex)
+                ));
+            }
+        }
     }
 
     #[test]

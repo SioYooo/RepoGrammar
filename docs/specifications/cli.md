@@ -181,13 +181,41 @@ output so terminal users are not flooded with machine progress events.
 ## Repository state commands
 
 `repogrammar setup [--project <path>] [--target
-auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json]
+auto|none|codex|claude-code|opencode] [--yes] [--dry-run] [--skip-repository] [--no-autosync] [--no-instructions] [--json]
 [--progress auto|always|never]` is the primary user-facing onboarding
 orchestrator. It composes the existing machine-level installation and
 repository lifecycle boundaries; it does not replace either boundary or invoke
 the product CLI recursively. The default project is the current directory, the
 default target is `auto`, and successful indexing starts auto-sync unless
 `--no-autosync` is present.
+
+`--target none` skips agent detection and configuration. `--skip-repository`
+skips repository inspection, initialization, indexing and autosync while retaining
+agent ownership checks and the product MCP self-test. It cannot be combined with
+`--project`. This is the machine-only path used by the unreleased shell
+`--quickstart` when no Git worktree is selected; it must not claim an active
+index, repository query readiness, or a suggested repository question. The
+existing recovery authority still recommends setup in a repository when needed.
+
+Setup JSON adds `repository_requested` and an `agents` inventory with target,
+detection, live-writer availability and the observed integration state. Human
+plans distinguish missing, configurable, current/outdated owned, foreign,
+malformed and drifted integrations. Drift still preserves the previous
+conservative limitation and refusal semantics.
+
+The private bootstrap handoff uses `--print-plan-fingerprint` only with a human
+`--dry-run`, and `--expected-plan <sha256:...>` before live execution. The token
+binds requested scope, repository readiness, concrete agents/ownership/actions
+and instruction destinations; it excludes dry-run/confirmation mechanics.
+A changed plan fails before setup writes even with `--yes`, so shell confirmation
+cannot silently authorize newly detected agents. These handoff flags are not
+required for ordinary direct setup.
+
+Setup consumes both the repository dirty-record signal and the existing
+hash-checked family-evidence freshness projection. Stale or unverifiable family
+evidence cannot be treated as fresh merely because dirty markers are empty;
+the existing resync action must run. A ready repository with no selected agent
+receives a CLI `find` next step instead of a nonexistent coding-agent question.
 
 Live setup performs one final interactive confirmation. Noninteractive live
 setup requires `--yes`; `--dry-run` is zero-write and may be combined with

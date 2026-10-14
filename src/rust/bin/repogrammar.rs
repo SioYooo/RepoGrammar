@@ -28,9 +28,10 @@ use repogrammar::application::indexing::{
 };
 use repogrammar::application::install::{
     execute_disconnect, execute_install, execute_prepared_agent_disconnect,
-    inspect_agent_integration, opencode_global_config_path, opencode_inspect_mcp_config,
-    opencode_native_add_action, opencode_native_remove_action, opencode_remove_mcp_config,
-    opencode_write_mcp_config, parse_opencode_mcp_entry, prepare_product_agent_disconnect,
+    inspect_agent_integration, install_verified_product, native_agent_cli_may_exist,
+    opencode_global_config_path, opencode_inspect_mcp_config, opencode_native_add_action,
+    opencode_native_remove_action, opencode_remove_mcp_config, opencode_write_mcp_config,
+    parse_opencode_mcp_entry, preflight_product_acquisition, prepare_product_agent_disconnect,
     rollback_agent_disconnect, AgentDisconnectRequest, AgentIntegrationInspection, AgentTarget,
     DisconnectExecutionOutcome, InstallExecutionContext, InstallExecutionOutcome, InstallRequest,
     InstallScope, McpSelfTestRunner, NativeAgentAction, NativeAgentConfigurator,
@@ -174,6 +175,14 @@ impl AutosyncSchedule {
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|command| {
+        matches!(
+            command.as_str(),
+            "__install-preflight" | "__install-product"
+        )
+    }) {
+        std::process::exit(run_hidden_product_acquisition(&args));
+    }
     if args
         .first()
         .is_some_and(|command| command == "__uninstall-finalize")
@@ -189,6 +198,103 @@ fn main() {
         run_with_runtime_and_install_prompt(args, &runtime, &ProductInstallTelemetryPrompt);
     write_std_streams(&output.stdout, &output.stderr);
     std::process::exit(output.status);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProductAcquisitionOptions {
+    data_dir: PathBuf,
+    command_dir: PathBuf,
+    replace_unmanaged_command: bool,
+    yes: bool,
+}
+
+fn parse_product_acquisition_options(args: &[String]) -> Result<ProductAcquisitionOptions, String> {
+    let mut data_dir = None;
+    let mut command_dir = None;
+    let mut replace_unmanaged_command = false;
+    let mut yes = false;
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--install-dir" | "--command-dir" => {
+                let path = arguments
+                    .next()
+                    .ok_or("installation directory requires a value")?;
+                let path = PathBuf::from(path);
+                if !path.is_absolute() {
+                    return Err("installation directories must be absolute".to_string());
+                }
+                let destination = if argument == "--install-dir" {
+                    &mut data_dir
+                } else {
+                    &mut command_dir
+                };
+                if destination.replace(path).is_some() {
+                    return Err("installation directory was specified more than once".to_string());
+                }
+            }
+            "--replace-unmanaged-command" => replace_unmanaged_command = true,
+            "--yes" => yes = true,
+            _ => return Err("unsupported product acquisition option".to_string()),
+        }
+    }
+    Ok(ProductAcquisitionOptions {
+        data_dir: data_dir.ok_or("--install-dir is required")?,
+        command_dir: command_dir.ok_or("--command-dir is required")?,
+        replace_unmanaged_command,
+        yes,
+    })
+}
+
+fn run_hidden_product_acquisition(args: &[String]) -> i32 {
+    if args[0] == "__install-preflight" && args[1..] == ["--capabilities"] {
+        println!("quickstart-v1");
+        return 0;
+    }
+    let result = (|| -> Result<(), String> {
+        let options = parse_product_acquisition_options(&args[1..])?;
+        let activate = args[0] == "__install-product";
+        if activate && !options.yes {
+            return Err("product installation requires explicit --yes authorization".to_string());
+        }
+        let executable = std::env::current_exe().map_err(|_| "cannot locate the staged product")?;
+        let worker = executable
+            .parent()
+            .ok_or("staged product has no parent")?
+            .join("workers/python/worker.py");
+        let context = InstallExecutionContext {
+            executable_path: executable.to_string_lossy().into_owned(),
+            command_dir: options.command_dir.to_string_lossy().into_owned(),
+            command_dir_on_path: false,
+            data_dir: options.data_dir.to_string_lossy().into_owned(),
+            current_dir: std::env::current_dir()
+                .map_err(|_| "cannot inspect the working directory")?
+                .to_string_lossy()
+                .into_owned(),
+            instruction_files: Vec::new(),
+        };
+        if activate {
+            install_verified_product(
+                &context,
+                &worker,
+                options.replace_unmanaged_command,
+                &ProductMcpSelfTester::new(),
+            )
+            .map_err(|error| error.to_string())?;
+            println!("CLI installation verified; product MCP self-test passed.");
+        } else {
+            preflight_product_acquisition(&context, &worker, options.replace_unmanaged_command)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("quickstart product acquisition refused: {error}");
+            2
+        }
+    }
 }
 
 /// Writes captured stdout/stderr, tolerating a broken pipe (e.g. piping to
@@ -524,9 +630,12 @@ fn read_prompt_response(prompt: &str) -> Result<String, String> {
         .flush()
         .map_err(|error| format!("failed to write prompt: {error}"))?;
     let mut response = String::new();
-    std::io::stdin()
+    let bytes = std::io::stdin()
         .read_line(&mut response)
         .map_err(|error| format!("failed to read prompt: {error}"))?;
+    if bytes == 0 {
+        return Err("confirmation input ended without authorization".to_string());
+    }
     Ok(response)
 }
 
@@ -909,7 +1018,10 @@ impl ProductCliRuntime {
         let agent_planned_paths = prepared_agents.planned_paths();
         let planned_paths = planned_product_paths(&installation);
         let residual_copies = residual_repogrammar_path_copies(&installation);
-        let preserved = product_uninstall_preserved_boundaries(&residual_copies);
+        let mut preserved = product_uninstall_preserved_boundaries(&residual_copies);
+        preserved.extend(prepared_agents.unverified_targets().iter().map(|target| {
+            format!("unreceipted {} configuration UNKNOWN: native CLI unavailable; any configuration preserved", target.as_str())
+        }));
 
         if request.dry_run {
             return Ok(ProductUninstallOutcome {
@@ -977,6 +1089,11 @@ impl ProductCliRuntime {
         // Do not wait here: the helper requires proof that this process has
         // exited before deleting the command, workers, receipt, or authority.
         drop(finalizer);
+        let message = if agent_targets.is_empty() {
+            "no owned agent integrations required removal; validated product cleanup is pending parent exit"
+        } else {
+            "agent integrations were removed; validated product cleanup is pending parent exit"
+        };
         Ok(ProductUninstallOutcome {
             command: "uninstall",
             dry_run: false,
@@ -988,9 +1105,7 @@ impl ProductCliRuntime {
             residual_copies,
             finalizer_pending: true,
             report_path: Some(prepared_finalizer.report_path.display().to_string()),
-            message:
-                "agent integrations were removed; validated product cleanup is pending parent exit"
-                    .to_string(),
+            message: message.to_string(),
         })
     }
 
@@ -2543,6 +2658,13 @@ impl ProductNativeAgentConfigurator {
 }
 
 impl NativeAgentConfigurator for ProductNativeAgentConfigurator {
+    fn can_inspect_mcp_server(&self, target: AgentTarget, current_dir: &str) -> bool {
+        target == AgentTarget::Opencode
+            || std::env::var("PATH")
+                .map(|path| native_agent_cli_may_exist(target, &path, Path::new(current_dir)))
+                .unwrap_or(true)
+    }
+
     fn inspect_mcp_server(
         &self,
         target: AgentTarget,
@@ -3115,6 +3237,64 @@ fn parse_opencode_mcp_probe(output: &str, scope: InstallScope) -> Option<NativeM
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn product_acquisition_parser_requires_explicit_paths_and_preserves_literal_names() {
+        let valid = [
+            "--install-dir",
+            "/tmp/data with spaces;$",
+            "--command-dir",
+            "/tmp/commands",
+            "--yes",
+        ]
+        .map(str::to_string);
+        let parsed = parse_product_acquisition_options(&valid).unwrap();
+        assert_eq!(parsed.data_dir, PathBuf::from("/tmp/data with spaces;$"));
+        assert!(parsed.yes);
+        for invalid in [
+            vec![],
+            vec!["--install-dir"],
+            vec!["--install-dir", "relative", "--command-dir", "/tmp/bin"],
+            vec![
+                "--install-dir",
+                "/tmp/data",
+                "--command-dir",
+                "/tmp/bin",
+                "--project",
+                "/tmp",
+            ],
+            vec![
+                "--install-dir",
+                "/tmp/data",
+                "--install-dir",
+                "/tmp/other",
+                "--command-dir",
+                "/tmp/bin",
+            ],
+        ] {
+            assert!(parse_product_acquisition_options(
+                &invalid.into_iter().map(str::to_string).collect::<Vec<_>>()
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn product_acquisition_refuses_missing_authorization_before_accessing_installation() {
+        assert_eq!(
+            run_hidden_product_acquisition(
+                &[
+                    "__install-product",
+                    "--install-dir",
+                    "/must-not-create/repogrammar",
+                    "--command-dir",
+                    "/must-not-create/bin",
+                ]
+                .map(str::to_string)
+            ),
+            2
+        );
+    }
 
     #[test]
     fn autosync_schedule_coalesces_events_and_retries_unacknowledged_changes() {

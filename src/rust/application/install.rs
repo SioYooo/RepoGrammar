@@ -1,15 +1,14 @@
 //! Safe machine-level agent integration planning.
 
 use crate::application::product_installation::{
-    record_product_installation, rollback_product_receipt_write, ProductInstallationRequest,
-    ProductReceiptWrite,
+    expected_worker_paths, inspect_product_installation, preflight_acquisition_destination,
+    record_product_installation, require_acquisition_parent, rollback_product_receipt_write,
+    validate_acquisition_source, ProductInstallationRequest, ProductReceiptWrite,
 };
 use crate::error::RepoGrammarError;
 use serde_json::json;
 use std::collections::BTreeSet;
-#[cfg(unix)]
-use std::fs::OpenOptions;
-use std::fs::{self, File, Permissions};
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -281,9 +280,16 @@ pub struct PreparedAgentDisconnect {
     request: AgentDisconnectRequest,
     context: InstallExecutionContext,
     snapshots: Vec<OwnedIntegrationSnapshot>,
+    unverified_targets: Vec<AgentTarget>,
 }
 
 impl PreparedAgentDisconnect {
+    /// Unreceipted integrations whose missing native CLI prevents inspection.
+    /// Product removal preserves their configuration and must report UNKNOWN.
+    pub fn unverified_targets(&self) -> &[AgentTarget] {
+        &self.unverified_targets
+    }
+
     pub fn targets(&self) -> Vec<AgentTarget> {
         self.snapshots
             .iter()
@@ -369,6 +375,12 @@ pub enum AgentIntegrationInspection {
 }
 
 pub trait NativeAgentConfigurator {
+    /// False only when the native executable is missing. Other probe failures
+    /// remain errors; file-based targets are always inspectable.
+    fn can_inspect_mcp_server(&self, _target: AgentTarget, _current_dir: &str) -> bool {
+        true
+    }
+
     fn inspect_mcp_server(
         &self,
         target: AgentTarget,
@@ -791,6 +803,7 @@ pub fn prepare_agent_disconnect(
 
 /// Preflight all live global agent integrations for full product uninstall.
 ///
+/// A missing native CLI with no receipt or backup preserves unverified config.
 /// A genuinely absent receipt plus absent native entry is a no-op. Any native
 /// entry without an owned receipt, any drifted owned entry, any malformed
 /// entry, or any unsafe receipt/instruction file fails the whole preflight
@@ -827,8 +840,14 @@ fn prepare_disconnect_targets(
         || request.target == AgentTarget::AllSupported
         || !request.selected_targets.is_empty();
     let mut snapshots = Vec::new();
+    let mut unverified_targets = Vec::new();
 
     for target in selected_targets {
+        if allow_empty && !configurator.can_inspect_mcp_server(target, &context.current_dir) {
+            require_absent_agent_receipt(context, target, request.scope)?;
+            unverified_targets.push(target);
+            continue;
+        }
         match inspect_agent_integration(context, target, request.scope, configurator)? {
             AgentIntegrationInspection::OwnedCurrent
             | AgentIntegrationInspection::OwnedOutdated => snapshots.push(
@@ -861,7 +880,30 @@ fn prepare_disconnect_targets(
         request: request.clone(),
         context: context.clone(),
         snapshots,
+        unverified_targets,
     })
+}
+
+fn require_absent_agent_receipt(
+    context: &InstallExecutionContext,
+    target: AgentTarget,
+    scope: InstallScope,
+) -> Result<(), RepoGrammarError> {
+    let receipt = receipt_path(context, target, scope);
+    for path in [&receipt, &receipt.with_extension("json.bak")] {
+        require_acquisition_parent(path)?;
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(RepoGrammarError::InvalidInput(format!(
+                "failed to inspect agent receipt before product removal: {error}"
+            ))),
+            Ok(_) => return Err(RepoGrammarError::InvalidInput(format!(
+                "native {} CLI is required to verify existing installation receipt state; restore the CLI before uninstalling",
+                target.as_str()
+            ))),
+        }
+    }
+    Ok(())
 }
 
 /// Apply a previously prepared disconnect atomically across all selected
@@ -872,6 +914,14 @@ pub fn execute_prepared_agent_disconnect(
     prepared: PreparedAgentDisconnect,
     configurator: &impl NativeAgentConfigurator,
 ) -> Result<AppliedAgentDisconnect, RepoGrammarError> {
+    for target in &prepared.unverified_targets {
+        if configurator.can_inspect_mcp_server(*target, &prepared.context.current_dir) {
+            return Err(RepoGrammarError::InvalidInput(
+                "native agent availability changed after product uninstall preflight; rerun uninstall".to_string(),
+            ));
+        }
+        require_absent_agent_receipt(&prepared.context, *target, prepared.request.scope)?;
+    }
     for snapshot in &prepared.snapshots {
         verify_owned_integration_unchanged(
             &prepared.context,
@@ -1052,6 +1102,21 @@ fn native_config_matches(
 
 pub fn supported_concrete_targets() -> Vec<AgentTarget> {
     LIVE_AGENT_TARGETS.to_vec()
+}
+
+/// Inspect only PATH metadata; execution and native-state validation remain in
+/// the target adapter. Inaccessible candidates must still be probed, not
+/// mistaken for an absent CLI during product removal.
+pub fn native_agent_cli_may_exist(target: AgentTarget, path: &str, current_dir: &Path) -> bool {
+    let Some(binary) = target.detection_binary() else {
+        return false;
+    };
+    std::env::split_paths(path).any(|entry| {
+        match fs::symlink_metadata(current_dir.join(entry).join(binary)) {
+            Ok(_) => true,
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        }
+    })
 }
 
 pub fn known_agent_targets() -> Vec<AgentTarget> {
@@ -1455,6 +1520,12 @@ struct CommandInstallRecord {
     previous_executable: Option<Vec<u8>>,
     previous_command_copy: Option<Vec<u8>>,
     product_receipt_write: Option<ProductReceiptWrite>,
+    worker_snapshots: Vec<(FileSnapshot, Option<Permissions>)>,
+    created_directories: Vec<PathBuf>,
+    unmanaged_command_backup: Option<PathBuf>,
+    previous_executable_permissions: Option<Permissions>,
+    previous_command_permissions: Option<Permissions>,
+    acquisition: Option<ProductInstallationRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1839,6 +1910,62 @@ fn install_cli_command_with_current_process(
     context: &InstallExecutionContext,
     current_process_executable: Option<&Path>,
 ) -> Result<CommandInstallRecord, RepoGrammarError> {
+    install_cli_command_with_bundle(context, current_process_executable, None, false)
+}
+
+/// Inspect a verified release bundle and destination ownership without writes.
+pub fn preflight_product_acquisition(
+    context: &InstallExecutionContext,
+    worker_path: &Path,
+    replace_unmanaged_command: bool,
+) -> Result<(), RepoGrammarError> {
+    validate_execution_context(context)?;
+    validate_acquisition_source(Path::new(&context.executable_path))?;
+    validate_acquisition_source(worker_path)?;
+    preflight_acquisition_destination(&acquisition_request(context), replace_unmanaged_command)?;
+    Ok(())
+}
+
+/// Acquire only the managed product. Agent and repository setup remains owned
+/// by the existing setup service, and authorization belongs to the caller.
+pub fn install_verified_product(
+    context: &InstallExecutionContext,
+    worker_path: &Path,
+    replace_unmanaged_command: bool,
+    self_tester: &impl McpSelfTestRunner,
+) -> Result<(), RepoGrammarError> {
+    preflight_product_acquisition(context, worker_path, replace_unmanaged_command)?;
+    self_tester.self_test(&context.executable_path, &context.current_dir)?;
+    let record = install_cli_command_with_bundle(
+        context,
+        Some(Path::new(&context.executable_path)),
+        Some(worker_path),
+        replace_unmanaged_command,
+    )?;
+    if let Err(error) = self_tester.self_test(&record.executable_path, &context.current_dir) {
+        return Err(install_rollback_error(
+            error,
+            rollback_command_install(&record),
+        ));
+    }
+    Ok(())
+}
+
+fn acquisition_request(context: &InstallExecutionContext) -> ProductInstallationRequest {
+    ProductInstallationRequest {
+        data_dir: PathBuf::from(&context.data_dir),
+        executable_path: Path::new(&context.data_dir).join("bin").join(binary_name()),
+        command_path: Path::new(&context.command_dir).join(binary_name()),
+        current_executable_path: Some(PathBuf::from(&context.executable_path)),
+    }
+}
+
+fn install_cli_command_with_bundle(
+    context: &InstallExecutionContext,
+    current_process_executable: Option<&Path>,
+    bundle_worker: Option<&Path>,
+    replace_unmanaged_command: bool,
+) -> Result<CommandInstallRecord, RepoGrammarError> {
     let source = Path::new(&context.executable_path);
     let data_bin_dir = Path::new(&context.data_dir).join("bin");
     let installed_executable = data_bin_dir.join(binary_name());
@@ -1854,90 +1981,189 @@ fn install_cli_command_with_current_process(
         previous_executable: None,
         previous_command_copy: None,
         product_receipt_write: None,
+        worker_snapshots: Vec::new(),
+        created_directories: Vec::new(),
+        unmanaged_command_backup: None,
+        previous_executable_permissions: None,
+        previous_command_permissions: None,
+        acquisition: bundle_worker.map(|_| acquisition_request(context)),
     };
 
-    fs::create_dir_all(&data_bin_dir).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!(
-            "failed to create install binary directory: {error}"
-        ))
-    })?;
-    fs::create_dir_all(command_dir).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!("failed to create command directory: {error}"))
-    })?;
-
-    if path_is_symlink(&installed_executable) {
-        return Err(RepoGrammarError::InvalidInput(
-            "installed RepoGrammar executable path is a symlink; refusing to overwrite".to_string(),
-        ));
-    }
-
-    let executable_existed = installed_executable.exists();
-    let command_path_was_managed_copy =
-        command_path_is_managed_copy(&command_path, &installed_executable);
-    let command_path_is_current_executable =
-        command_path_matches_current_executable(&command_path, source, current_process_executable);
-    let installed_is_current_executable = current_process_executable
-        .map(|current| same_path(&installed_executable, current))
-        .unwrap_or(false);
-    let should_refresh_command_copy = command_path.exists()
-        && !same_path(&command_path, &installed_executable)
-        && command_path_was_managed_copy
-        && !command_path_is_current_executable;
-    if command_path.exists()
-        && !same_path(&command_path, &installed_executable)
-        && !command_path_was_managed_copy
-        && !command_path_is_current_executable
-    {
-        return Err(RepoGrammarError::InvalidInput(
-            "repogrammar command path already exists and is not managed by RepoGrammar".to_string(),
-        ));
-    }
-    if !same_path(source, &installed_executable) && !installed_is_current_executable {
-        if executable_existed {
-            record.previous_executable = Some(read_file_bytes(
-                &installed_executable,
-                "installed RepoGrammar CLI",
-            )?);
-        }
-        if should_refresh_command_copy {
-            record.previous_command_copy =
-                Some(read_file_bytes(&command_path, "repogrammar command")?);
-        }
-        replace_managed_file(source, &installed_executable, "installed RepoGrammar CLI")
-            .inspect_err(|_| {
-                let _ = rollback_command_install(&record);
-            })?;
-        record.created_executable = !executable_existed;
-    }
-
-    if command_path.exists() {
-        if should_refresh_command_copy {
-            refresh_command_copy(&installed_executable, &command_path).inspect_err(|_| {
-                let _ = rollback_command_install(&record);
-            })?;
-        }
+    let replace_command = if let Some(worker) = bundle_worker {
+        validate_acquisition_source(source)?;
+        validate_acquisition_source(worker)?;
+        preflight_acquisition_destination(&acquisition_request(context), replace_unmanaged_command)?
     } else {
-        create_command_link_or_copy(&installed_executable, &command_path).inspect_err(|_| {
-            let _ = rollback_command_install(&record);
-        })?;
-        record.created_command = true;
-    }
-
-    let product_request = ProductInstallationRequest {
-        data_dir: PathBuf::from(&context.data_dir),
-        executable_path: PathBuf::from(&record.executable_path),
-        command_path: PathBuf::from(&record.command_path),
-        current_executable_path: current_process_executable.map(Path::to_path_buf),
+        false
     };
-    match record_product_installation(&product_request) {
-        Ok(write) => record.product_receipt_write = Some(write),
-        Err(error) => {
-            let rollback_failures = rollback_command_install(&record);
-            return Err(install_rollback_error(error, rollback_failures));
+    let result = (|| {
+        if bundle_worker.is_some() {
+            let request = acquisition_request(context);
+            let mut directories = vec![
+                data_bin_dir.clone(),
+                command_dir.to_path_buf(),
+                request.data_dir.join("receipts"),
+            ];
+            directories.extend(
+                expected_worker_paths(&request)
+                    .into_iter()
+                    .filter_map(|path| path.parent().map(Path::to_path_buf)),
+            );
+            for directory in directories {
+                create_acquisition_directory(&directory, &mut record.created_directories)?;
+            }
         }
-    }
 
+        fs::create_dir_all(&data_bin_dir).map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to create install binary directory: {error}"
+            ))
+        })?;
+        fs::create_dir_all(command_dir).map_err(|error| {
+            RepoGrammarError::InvalidInput(format!("failed to create command directory: {error}"))
+        })?;
+
+        if path_is_symlink(&installed_executable) {
+            return Err(RepoGrammarError::InvalidInput(
+                "installed RepoGrammar executable path is a symlink; refusing to overwrite"
+                    .to_string(),
+            ));
+        }
+
+        let executable_existed = installed_executable.exists();
+        let command_path_was_managed_copy =
+            command_path_is_managed_copy(&command_path, &installed_executable) || replace_command;
+        let command_path_is_current_executable = command_path_matches_current_executable(
+            &command_path,
+            source,
+            current_process_executable,
+        );
+        let installed_is_current_executable = current_process_executable
+            .map(|current| same_path(&installed_executable, current))
+            .unwrap_or(false);
+        let should_refresh_command_copy = command_path.exists()
+            && !same_path(&command_path, &installed_executable)
+            && command_path_was_managed_copy
+            && !command_path_is_current_executable;
+        if command_path.exists()
+            && !same_path(&command_path, &installed_executable)
+            && !command_path_was_managed_copy
+            && !command_path_is_current_executable
+        {
+            return Err(RepoGrammarError::InvalidInput(
+                "repogrammar command path already exists and is not managed by RepoGrammar"
+                    .to_string(),
+            ));
+        }
+        if !same_path(source, &installed_executable) && !installed_is_current_executable {
+            if executable_existed {
+                record.previous_executable = Some(read_file_bytes(
+                    &installed_executable,
+                    "installed RepoGrammar CLI",
+                )?);
+                record.previous_executable_permissions = Some(
+                    fs::metadata(&installed_executable)
+                        .map_err(|error| {
+                            RepoGrammarError::InvalidInput(format!(
+                                "failed to inspect executable permissions: {error}"
+                            ))
+                        })?
+                        .permissions(),
+                );
+            }
+            if should_refresh_command_copy {
+                record.previous_command_copy =
+                    Some(read_file_bytes(&command_path, "repogrammar command")?);
+                record.previous_command_permissions = Some(
+                    fs::metadata(&command_path)
+                        .map_err(|error| {
+                            RepoGrammarError::InvalidInput(format!(
+                                "failed to inspect command permissions: {error}"
+                            ))
+                        })?
+                        .permissions(),
+                );
+            }
+            if replace_command {
+                let backup =
+                    command_path.with_file_name(format!("{}.unmanaged-backup", binary_name()));
+                copy_new_managed_file(&command_path, &backup, "unmanaged command backup")?;
+                record.unmanaged_command_backup = Some(backup);
+            }
+            replace_managed_file(source, &installed_executable, "installed RepoGrammar CLI")?;
+            record.created_executable = !executable_existed;
+        }
+
+        if command_path.exists() {
+            if should_refresh_command_copy {
+                refresh_command_copy(&installed_executable, &command_path)?;
+            }
+        } else {
+            create_command_link_or_copy(&installed_executable, &command_path)?;
+            record.created_command = true;
+        }
+
+        let product_request = ProductInstallationRequest {
+            data_dir: PathBuf::from(&context.data_dir),
+            executable_path: PathBuf::from(&record.executable_path),
+            command_path: PathBuf::from(&record.command_path),
+            current_executable_path: current_process_executable.map(Path::to_path_buf),
+        };
+        if let Some(worker) = bundle_worker {
+            for destination in expected_worker_paths(&product_request) {
+                let snapshot = capture_file_snapshot(&destination, "bundled worker")?;
+                let permissions = if snapshot.contents.is_some() {
+                    Some(
+                        fs::metadata(&destination)
+                            .map_err(|error| {
+                                RepoGrammarError::InvalidInput(format!(
+                                    "failed to inspect worker permissions: {error}"
+                                ))
+                            })?
+                            .permissions(),
+                    )
+                } else {
+                    None
+                };
+                record.worker_snapshots.push((snapshot, permissions));
+                replace_managed_file(worker, &destination, "bundled worker")?;
+            }
+        }
+        record.product_receipt_write = Some(record_product_installation(&product_request)?);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        return Err(install_rollback_error(
+            error,
+            rollback_command_install(&record),
+        ));
+    }
     Ok(record)
+}
+
+fn create_acquisition_directory(
+    path: &Path,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), RepoGrammarError> {
+    let mut missing = Vec::new();
+    let mut current = path;
+    while !current.exists() {
+        missing.push(current.to_path_buf());
+        current = current.parent().ok_or_else(|| {
+            RepoGrammarError::InvalidInput(
+                "installation directory has no existing ancestor".to_string(),
+            )
+        })?;
+    }
+    for directory in missing.into_iter().rev() {
+        fs::create_dir(&directory).map_err(|error| {
+            RepoGrammarError::InvalidInput(format!(
+                "failed to create installation directory: {error}"
+            ))
+        })?;
+        created.push(directory);
+    }
+    Ok(())
 }
 
 fn command_path_matches_current_executable(
@@ -1980,9 +2206,7 @@ fn replace_managed_file(
     label: &str,
 ) -> Result<(), RepoGrammarError> {
     let temporary = managed_replace_temp_path(destination);
-    fs::copy(source, &temporary).map_err(|error| {
-        RepoGrammarError::InvalidInput(format!("failed to stage new {label}: {error}"))
-    })?;
+    copy_new_managed_file(source, &temporary, label)?;
     if destination.exists() {
         if let Err(error) = fs::remove_file(destination) {
             let _ = fs::remove_file(&temporary);
@@ -1993,6 +2217,35 @@ fn replace_managed_file(
         let _ = fs::remove_file(&temporary);
         RepoGrammarError::InvalidInput(format!("failed to activate new {label}: {error}"))
     })
+}
+
+fn copy_new_managed_file(
+    source: &Path,
+    destination: &Path,
+    label: &str,
+) -> Result<(), RepoGrammarError> {
+    let mut input = File::open(source).map_err(|error| {
+        RepoGrammarError::InvalidInput(format!("failed to read {label}: {error}"))
+    })?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| {
+            RepoGrammarError::InvalidInput(format!("failed to stage {label}: {error}"))
+        })?;
+    let result = (|| -> std::io::Result<()> {
+        output.set_permissions(input.metadata()?.permissions())?;
+        std::io::copy(&mut input, &mut output)?;
+        output.sync_all()
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(destination);
+        return Err(RepoGrammarError::InvalidInput(format!(
+            "failed to stage {label}: {error}"
+        )));
+    }
+    Ok(())
 }
 
 fn managed_replace_temp_path(destination: &Path) -> PathBuf {
@@ -2325,12 +2578,32 @@ fn restore_file_snapshot(snapshot: &FileSnapshot, label: &str) -> Result<(), Str
 
 fn rollback_command_install(command_record: &CommandInstallRecord) -> Vec<String> {
     let mut failures = Vec::new();
+    if command_record.product_receipt_write.is_some() {
+        if let Some(request) = &command_record.acquisition {
+            if inspect_product_installation(request).is_err() {
+                return vec!["product ownership changed after activation; preserved all files for manual recovery".to_string()];
+            }
+        }
+    }
+    for (snapshot, permissions) in command_record.worker_snapshots.iter().rev() {
+        if let Err(error) = restore_file_snapshot(snapshot, "bundled worker") {
+            failures.push(error);
+        } else if let Some(permissions) = permissions {
+            if let Err(error) = fs::set_permissions(&snapshot.path, permissions.clone()) {
+                failures.push(format!("worker permissions restore failed: {error}"));
+            }
+        }
+    }
     if command_record.created_command {
         if let Err(error) = fs::remove_file(&command_record.command_path) {
             failures.push(format!("command cleanup failed: {error}"));
         }
     } else if let Some(previous) = &command_record.previous_command_copy {
-        if let Err(error) = fs::write(&command_record.command_path, previous) {
+        if let Err(error) = restore_command_bytes(
+            &command_record.command_path,
+            previous,
+            command_record.previous_command_permissions.as_ref(),
+        ) {
             failures.push(format!("command restore failed: {error}"));
         }
     }
@@ -2339,7 +2612,11 @@ fn rollback_command_install(command_record: &CommandInstallRecord) -> Vec<String
             failures.push(format!("installed executable cleanup failed: {error}"));
         }
     } else if let Some(previous) = &command_record.previous_executable {
-        if let Err(error) = fs::write(&command_record.executable_path, previous) {
+        if let Err(error) = restore_command_bytes(
+            &command_record.executable_path,
+            previous,
+            command_record.previous_executable_permissions.as_ref(),
+        ) {
             failures.push(format!("installed executable restore failed: {error}"));
         }
     }
@@ -2348,7 +2625,47 @@ fn rollback_command_install(command_record: &CommandInstallRecord) -> Vec<String
             failures.push(error);
         }
     }
+    if let Some(backup) = &command_record.unmanaged_command_backup {
+        let unchanged = validate_acquisition_source(backup).is_ok()
+            && fs::read(backup).ok().as_ref() == command_record.previous_command_copy.as_ref()
+            && fs::read(&command_record.command_path).ok().as_ref()
+                == command_record.previous_command_copy.as_ref();
+        if unchanged {
+            if let Err(error) = fs::remove_file(backup) {
+                failures.push(format!("unmanaged command backup cleanup failed: {error}"));
+            }
+        } else {
+            failures.push(
+                "unmanaged command backup changed; preserved for manual recovery".to_string(),
+            );
+        }
+    }
+    for directory in command_record.created_directories.iter().rev() {
+        if let Err(error) = fs::remove_dir(directory) {
+            failures.push(format!(
+                "new installation directory cleanup failed: {error}"
+            ));
+        }
+    }
     failures
+}
+
+fn restore_command_bytes(
+    path: &str,
+    previous: &[u8],
+    permissions: Option<&Permissions>,
+) -> Result<(), String> {
+    let path = Path::new(path);
+    let snapshot = capture_file_snapshot(path, "managed command rollback")
+        .map_err(|error| error.to_string())?;
+    if snapshot.contents.is_some() {
+        validate_acquisition_source(path).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, previous).map_err(|error| error.to_string())?;
+    if let Some(permissions) = permissions {
+        fs::set_permissions(path, permissions.clone()).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn install_rollback_error(
@@ -5899,6 +6216,188 @@ mod tests {
     }
 
     #[test]
+    fn product_disconnect_missing_native_cli_preserves_unreceipted_state_as_unknown() {
+        let workspace = TempInstallWorkspace::new("product-disconnect-missing-cli");
+        let configurator = FakeConfigurator {
+            unavailable_probe_targets: vec![AgentTarget::Codex],
+            ..FakeConfigurator::default()
+        };
+        configurator.set_native_present(AgentTarget::Codex, "/foreign/repogrammar");
+        let prepared = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect("unreceipted unavailable agent is preserved");
+        assert!(prepared.is_empty());
+        assert_eq!(prepared.unverified_targets(), &[AgentTarget::Codex]);
+        execute_prepared_agent_disconnect(prepared, &configurator).expect("no agent mutations");
+        assert!(configurator.actions.borrow().is_empty());
+        assert!(matches!(
+            configurator.native_state(AgentTarget::Codex),
+            NativeMcpServerState::Present(_)
+        ));
+    }
+
+    #[test]
+    fn product_disconnect_missing_native_cli_refuses_existing_owned_receipt() {
+        let workspace = TempInstallWorkspace::new("product-disconnect-owned-missing-cli");
+        let mut configurator = FakeConfigurator::default();
+        execute_install(
+            &InstallRequest {
+                target: AgentTarget::Codex,
+                assume_yes: true,
+                ..InstallRequest::default()
+            },
+            &workspace.context,
+            &configurator,
+            &FakeSelfTest::default(),
+        )
+        .expect("install agent");
+        let receipt = receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
+        let before = fs::read(&receipt).expect("receipt");
+        configurator.actions.borrow_mut().clear();
+        configurator
+            .unavailable_probe_targets
+            .push(AgentTarget::Codex);
+        let error = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect_err("owned receipt still requires native verification");
+        assert!(error.to_string().contains("CLI is required"));
+        assert_eq!(fs::read(&receipt).expect("preserved receipt"), before);
+        assert!(configurator.actions.borrow().is_empty());
+    }
+
+    #[test]
+    fn product_disconnect_missing_native_cli_does_not_ignore_receipt_backup() {
+        let workspace = TempInstallWorkspace::new("product-disconnect-backup-missing-cli");
+        let configurator = FakeConfigurator {
+            unavailable_probe_targets: vec![AgentTarget::Codex],
+            ..FakeConfigurator::default()
+        };
+        let receipt = receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
+        fs::create_dir_all(receipt.parent().expect("receipt parent")).expect("receipts dir");
+        let backup = receipt.with_extension("json.bak");
+        fs::write(&backup, b"prior receipt").expect("backup");
+        assert!(prepare_product_agent_disconnect(&workspace.context, &configurator).is_err());
+        assert_eq!(
+            fs::read(&backup).expect("backup preserved"),
+            b"prior receipt"
+        );
+        assert!(configurator.actions.borrow().is_empty());
+    }
+
+    #[test]
+    fn product_disconnect_rechecks_unverified_targets_before_mutation() {
+        let workspace = TempInstallWorkspace::new("product-disconnect-unverified-race");
+        let mut configurator = FakeConfigurator {
+            unavailable_probe_targets: vec![AgentTarget::Codex],
+            ..FakeConfigurator::default()
+        };
+        let prepared = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect("unverified plan");
+        configurator.unavailable_probe_targets.clear();
+        assert!(execute_prepared_agent_disconnect(prepared, &configurator).is_err());
+        configurator
+            .unavailable_probe_targets
+            .push(AgentTarget::Codex);
+        let prepared = prepare_product_agent_disconnect(&workspace.context, &configurator)
+            .expect("second unverified plan");
+        let receipt = receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
+        fs::create_dir_all(receipt.parent().expect("receipt parent")).expect("receipts dir");
+        fs::write(&receipt, b"concurrent receipt").expect("new receipt");
+        assert!(execute_prepared_agent_disconnect(prepared, &configurator).is_err());
+        assert_eq!(
+            fs::read(&receipt).expect("preserved concurrent receipt"),
+            b"concurrent receipt"
+        );
+        assert!(configurator.actions.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn product_disconnect_missing_native_cli_rejects_dangling_and_ancestor_symlinks() {
+        use std::os::unix::fs::symlink;
+        for parent_alias in [false, true] {
+            let workspace = TempInstallWorkspace::new("product-disconnect-symlink-missing-cli");
+            let configurator = FakeConfigurator {
+                unavailable_probe_targets: vec![AgentTarget::Codex],
+                ..FakeConfigurator::default()
+            };
+            let receipt =
+                receipt_path(&workspace.context, AgentTarget::Codex, InstallScope::Global);
+            if parent_alias {
+                fs::create_dir_all(receipt.parent().unwrap().parent().unwrap())
+                    .expect("installation parent");
+                symlink(
+                    workspace.root.join("absent"),
+                    receipt.parent().expect("receipt parent"),
+                )
+                .expect("parent symlink");
+            } else {
+                fs::create_dir_all(receipt.parent().expect("receipt parent"))
+                    .expect("receipts dir");
+                symlink(workspace.root.join("absent"), &receipt).expect("dangling receipt");
+            }
+            assert!(prepare_product_agent_disconnect(&workspace.context, &configurator).is_err());
+            assert!(configurator.actions.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn agent_availability_preserves_native_path_semantics_and_never_runs_candidates() {
+        let workspace = TempInstallWorkspace::new("agent-availability");
+        let binary = AgentTarget::Codex.detection_binary().unwrap();
+        assert!(!native_agent_cli_may_exist(
+            AgentTarget::Codex,
+            "",
+            &workspace.root
+        ));
+        assert!(!native_agent_cli_may_exist(
+            AgentTarget::None,
+            "",
+            &workspace.root
+        ));
+        let cwd_command = workspace.root.join(binary);
+        fs::create_dir(&cwd_command).unwrap();
+        assert!(native_agent_cli_may_exist(
+            AgentTarget::Codex,
+            "",
+            &workspace.root
+        ));
+        assert!(native_agent_cli_may_exist(
+            AgentTarget::Codex,
+            ":absent",
+            &workspace.root
+        ));
+        fs::remove_dir(&cwd_command).unwrap();
+        for entry in ["agent-bin", " "] {
+            let directory = workspace.root.join(entry);
+            fs::create_dir(&directory).unwrap();
+            fs::write(directory.join(binary), b"not executable").unwrap();
+            assert!(native_agent_cli_may_exist(
+                AgentTarget::Codex,
+                entry,
+                &workspace.root
+            ));
+            assert!(native_agent_cli_may_exist(
+                AgentTarget::Codex,
+                &display_path(&directory),
+                &workspace.root
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_availability_treats_dangling_links_as_unverified_candidates() {
+        use std::os::unix::fs::symlink;
+        let workspace = TempInstallWorkspace::new("agent-availability-special");
+        let command = workspace.root.join("codex");
+        symlink(workspace.root.join("missing"), &command).unwrap();
+        assert!(native_agent_cli_may_exist(
+            AgentTarget::Codex,
+            "",
+            &workspace.root
+        ));
+    }
+
+    #[test]
     fn second_agent_remove_failure_restores_first_agent_transactionally() {
         let workspace = TempInstallWorkspace::new("disconnect-second-remove-failure");
         let configurator = FakeConfigurator::default();
@@ -7545,6 +8044,260 @@ mod tests {
         assert!(prepared.targets().is_empty());
     }
 
+    fn bundle_worker(workspace: &TempInstallWorkspace) -> PathBuf {
+        let worker = workspace.root.join("workers/python/worker.py");
+        fs::create_dir_all(worker.parent().expect("worker parent")).expect("bundle worker dir");
+        fs::write(&worker, "worker-v1").expect("bundle worker");
+        worker
+    }
+
+    #[test]
+    fn acquisition_preflight_is_read_only_and_install_updates_the_owned_bundle() {
+        let workspace = TempInstallWorkspace::new("acquisition");
+        let worker = bundle_worker(&workspace);
+        fs::remove_dir(&workspace.data_dir).expect("empty data dir");
+        fs::remove_dir(&workspace.context.command_dir).expect("empty command dir");
+        preflight_product_acquisition(&workspace.context, &worker, false).expect("preflight");
+        assert!(!workspace.data_dir.exists());
+        assert!(!Path::new(&workspace.context.command_dir).exists());
+        let self_test = FakeSelfTest::default();
+        install_verified_product(&workspace.context, &worker, false, &self_test).expect("install");
+        let request = acquisition_request(&workspace.context);
+        let plan = crate::application::product_installation::inspect_product_installation(&request)
+            .expect("owned bundle");
+        assert_eq!(plan.workers.len(), 2);
+        let receipt = plan.receipt_path.expect("receipt");
+        let first_receipt = fs::read(&receipt).expect("read receipt");
+        install_verified_product(&workspace.context, &worker, false, &self_test).expect("repeat");
+        assert_eq!(fs::read(&receipt).expect("repeat receipt"), first_receipt);
+        fs::write(&workspace.context.executable_path, b"binary-v2").expect("new binary");
+        fs::write(&worker, b"worker-v2").expect("new worker");
+        install_verified_product(&workspace.context, &worker, false, &self_test).expect("update");
+        assert_eq!(
+            fs::read(&request.executable_path).expect("installed"),
+            b"binary-v2"
+        );
+        for path in expected_worker_paths(&request) {
+            assert_eq!(fs::read(path).expect("installed worker"), b"worker-v2");
+        }
+        crate::application::product_installation::inspect_product_installation(&request)
+            .expect("updated ownership");
+    }
+
+    #[test]
+    fn acquisition_self_test_failure_restores_existing_bundle_and_receipt() {
+        let workspace = TempInstallWorkspace::new("acquisition-rollback");
+        let worker = bundle_worker(&workspace);
+        install_verified_product(&workspace.context, &worker, false, &FakeSelfTest::default())
+            .expect("install");
+        let request = acquisition_request(&workspace.context);
+        let receipt =
+            crate::application::product_installation::product_receipt_path(&workspace.data_dir);
+        let before = fs::read(&receipt).expect("receipt before");
+        fs::write(&workspace.context.executable_path, b"binary-v2").expect("new binary");
+        fs::write(&worker, b"worker-v2").expect("new worker");
+        let self_test = FakeSelfTest {
+            fail_on_call: Some(2),
+            ..FakeSelfTest::default()
+        };
+        let error = install_verified_product(&workspace.context, &worker, false, &self_test)
+            .expect_err("self-test failure");
+        assert!(error.to_string().contains("install rolled back"));
+        assert_eq!(
+            fs::read(&request.executable_path).expect("old binary"),
+            b"stub\n"
+        );
+        assert_eq!(fs::read(&receipt).expect("old receipt"), before);
+        for path in expected_worker_paths(&request) {
+            assert_eq!(fs::read(path).expect("old worker"), b"worker-v1");
+        }
+        crate::application::product_installation::inspect_product_installation(&request)
+            .expect("restored ownership");
+    }
+
+    #[test]
+    fn acquisition_failed_first_install_removes_only_its_new_files_and_directories() {
+        let workspace = TempInstallWorkspace::new("acquisition-clean-rollback");
+        let worker = bundle_worker(&workspace);
+        fs::remove_dir(&workspace.data_dir).expect("empty data dir");
+        fs::remove_dir(&workspace.context.command_dir).expect("empty command dir");
+        let self_test = FakeSelfTest {
+            fail_on_call: Some(2),
+            ..FakeSelfTest::default()
+        };
+        install_verified_product(&workspace.context, &worker, false, &self_test)
+            .expect_err("self-test failure");
+        assert!(!workspace.data_dir.exists());
+        assert!(!Path::new(&workspace.context.command_dir).exists());
+        assert!(worker.exists());
+        assert!(Path::new(&workspace.context.current_dir).exists());
+    }
+
+    #[test]
+    fn acquisition_requires_explicit_unmanaged_backup_and_restores_it_on_failure() {
+        let workspace = TempInstallWorkspace::new("acquisition-unmanaged");
+        let worker = bundle_worker(&workspace);
+        let command = workspace.command_path();
+        let backup = command.with_file_name(format!("{}.unmanaged-backup", binary_name()));
+        fs::write(&command, b"foreign command").expect("foreign command");
+        assert!(preflight_product_acquisition(&workspace.context, &worker, false).is_err());
+        assert!(!workspace.data_dir.join("bin").exists());
+        let self_test = FakeSelfTest {
+            fail_on_call: Some(2),
+            ..FakeSelfTest::default()
+        };
+        install_verified_product(&workspace.context, &worker, true, &self_test)
+            .expect_err("self-test failure");
+        assert_eq!(
+            fs::read(&command).expect("foreign restored"),
+            b"foreign command"
+        );
+        assert!(!backup.exists());
+        install_verified_product(&workspace.context, &worker, true, &FakeSelfTest::default())
+            .expect("explicit replacement");
+        assert_eq!(
+            fs::read(&backup).expect("foreign backup"),
+            b"foreign command"
+        );
+        install_verified_product(&workspace.context, &worker, false, &FakeSelfTest::default())
+            .expect("owned rerun");
+        assert_eq!(
+            fs::read(&backup).expect("backup preserved"),
+            b"foreign command"
+        );
+    }
+
+    #[test]
+    fn acquisition_receipt_or_worker_drift_cannot_be_bypassed_by_replacement_opt_in() {
+        for drift_receipt in [false, true] {
+            let workspace = TempInstallWorkspace::new("acquisition-drift");
+            let worker = bundle_worker(&workspace);
+            install_verified_product(&workspace.context, &worker, false, &FakeSelfTest::default())
+                .expect("install");
+            let request = acquisition_request(&workspace.context);
+            let receipt =
+                crate::application::product_installation::product_receipt_path(&workspace.data_dir);
+            let changed = if drift_receipt {
+                receipt
+            } else {
+                expected_worker_paths(&request).remove(0)
+            };
+            fs::write(&changed, b"foreign drift").expect("drift");
+            fs::write(&workspace.context.executable_path, b"new source").expect("new source");
+            assert!(install_verified_product(
+                &workspace.context,
+                &worker,
+                true,
+                &FakeSelfTest::default()
+            )
+            .is_err());
+            assert_eq!(
+                fs::read(&changed).expect("drift preserved"),
+                b"foreign drift"
+            );
+            assert_eq!(
+                fs::read(&request.executable_path).expect("binary preserved"),
+                b"stub\n"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acquisition_rejects_symlink_ancestors_source_workers_and_foreign_commands() {
+        use std::os::unix::fs::symlink;
+        let workspace = TempInstallWorkspace::new("acquisition-symlink");
+        let worker = bundle_worker(&workspace);
+        let alias = workspace.root.join("data-alias");
+        symlink(&workspace.data_dir, &alias).expect("data alias");
+        let mut context = workspace.context.clone();
+        context.data_dir = display_path(&alias);
+        assert!(preflight_product_acquisition(&context, &worker, false).is_err());
+        let worker_alias = workspace.root.join("worker-alias");
+        symlink(&worker, &worker_alias).expect("worker alias");
+        assert!(preflight_product_acquisition(&workspace.context, &worker_alias, false).is_err());
+        symlink(&worker, workspace.command_path()).expect("foreign command symlink");
+        assert!(preflight_product_acquisition(&workspace.context, &worker, true).is_err());
+        assert_eq!(fs::read(&worker).expect("worker preserved"), b"worker-v1");
+        assert!(!workspace.data_dir.join("bin").exists());
+    }
+
+    #[test]
+    fn acquisition_preserves_foreign_changes_detected_after_activation() {
+        struct ChangingSelfTest {
+            source: String,
+        }
+        impl McpSelfTestRunner for ChangingSelfTest {
+            fn self_test(&self, executable_path: &str, _: &str) -> Result<(), RepoGrammarError> {
+                if executable_path == self.source {
+                    return Ok(());
+                }
+                fs::write(executable_path, b"foreign replacement").expect("foreign replacement");
+                Err(RepoGrammarError::InvalidInput(
+                    "self-test failed".to_string(),
+                ))
+            }
+        }
+        let workspace = TempInstallWorkspace::new("acquisition-foreign-rollback");
+        let worker = bundle_worker(&workspace);
+        let error = install_verified_product(
+            &workspace.context,
+            &worker,
+            false,
+            &ChangingSelfTest {
+                source: workspace.context.executable_path.clone(),
+            },
+        )
+        .expect_err("ownership changed");
+        assert!(error
+            .to_string()
+            .contains("ownership changed after activation"));
+        assert_eq!(
+            fs::read(acquisition_request(&workspace.context).executable_path)
+                .expect("foreign file preserved"),
+            b"foreign replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acquisition_rejects_hardlinks_and_preserves_rollback_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let workspace = TempInstallWorkspace::new("acquisition-permissions");
+        let worker = bundle_worker(&workspace);
+        let alias = workspace.root.join("hardlinked-worker");
+        fs::hard_link(&worker, &alias).expect("hardlink");
+        assert!(preflight_product_acquisition(&workspace.context, &worker, false).is_err());
+        fs::remove_file(alias).expect("unlink fixture");
+        fs::set_permissions(
+            &workspace.context.executable_path,
+            Permissions::from_mode(0o700),
+        )
+        .expect("binary permissions");
+        install_verified_product(&workspace.context, &worker, false, &FakeSelfTest::default())
+            .expect("install");
+        let request = acquisition_request(&workspace.context);
+        fs::set_permissions(
+            &workspace.context.executable_path,
+            Permissions::from_mode(0o755),
+        )
+        .expect("new binary permissions");
+        let self_test = FakeSelfTest {
+            fail_on_call: Some(2),
+            ..FakeSelfTest::default()
+        };
+        install_verified_product(&workspace.context, &worker, false, &self_test)
+            .expect_err("self-test failure");
+        assert_eq!(
+            fs::metadata(&request.executable_path)
+                .expect("installed metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
     struct TempDir {
         path: PathBuf,
     }
@@ -7655,6 +8408,7 @@ mod tests {
         suppress_remove_state_target: RefCell<Option<AgentTarget>>,
         native_states: RefCell<Vec<(AgentTarget, NativeMcpServerState)>>,
         scripted_inspections: RefCell<Vec<(AgentTarget, NativeMcpServerState)>>,
+        unavailable_probe_targets: Vec<AgentTarget>,
     }
 
     impl FakeConfigurator {
@@ -7707,12 +8461,21 @@ mod tests {
     }
 
     impl NativeAgentConfigurator for FakeConfigurator {
+        fn can_inspect_mcp_server(&self, target: AgentTarget, _current_dir: &str) -> bool {
+            !self.unavailable_probe_targets.contains(&target)
+        }
+
         fn inspect_mcp_server(
             &self,
             target: AgentTarget,
             _scope: InstallScope,
             _current_dir: &str,
         ) -> Result<NativeMcpServerState, RepoGrammarError> {
+            if self.unavailable_probe_targets.contains(&target) {
+                return Err(RepoGrammarError::InvalidInput(
+                    "native CLI unavailable".to_string(),
+                ));
+            }
             if self.fail_probe_target == Some(target) {
                 return Err(RepoGrammarError::InvalidInput(
                     "native MCP probe failed".to_string(),

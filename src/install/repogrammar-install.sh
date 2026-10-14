@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+SCRIPT_DIR=""
+REPO_ROOT=""
+# A piped bootstrap has no source-checkout path, even inside this repository.
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+fi
 REPOGRAMMAR_REPO="${REPOGRAMMAR_REPO:-SioYooo/RepoGrammar}"
 REPOGRAMMAR_VERSION="${REPOGRAMMAR_VERSION:-latest}"
 STABLE_VERSION_HINT="${REPOGRAMMAR_STABLE_VERSION_HINT:-v0.5.0}"
@@ -32,6 +37,12 @@ TARGET_EXPLICIT=0
 INSTALL_SCOPE="global"
 SCOPE_EXPLICIT=0
 USE_SOURCE_BUILD="${REPOGRAMMAR_USE_SOURCE_BUILD:-0}"
+PROJECT_PATH=""
+SKIP_REPOSITORY=0
+NO_AUTOSYNC=0
+NO_INSTRUCTIONS=0
+QUICKSTART_OPTIONS=0
+RELEASE_STAGE=""
 TMP_DIRS=()
 
 cleanup() {
@@ -54,6 +65,7 @@ RepoGrammar installer
 
 Usage:
   repogrammar-install.sh                         # interactive setup menu
+  repogrammar-install.sh --quickstart            # reviewed CLI, agent and project setup
   repogrammar-install.sh --install-and-configure # install CLI, then run agent wizard
   repogrammar-install.sh --install-cli-only      # install CLI only
   repogrammar-install.sh --uninstall-agents      # remove RepoGrammar-owned agent wiring
@@ -62,12 +74,17 @@ Usage:
 
 Options:
   --yes                  Do not prompt for installer confirmations
-  --dry-run              Preview --uninstall-all without changing machine state
+  --dry-run              Preview --quickstart or --uninstall-all without persistent writes
+  --project <path>       Quickstart: select an existing Git repository
+  --skip-repository      Quickstart: install CLI/configure agents without indexing
+  --no-autosync          Quickstart: do not start repository-local autosync
+  --no-instructions      Quickstart: do not modify agent instruction files
   --replace-unmanaged-command
                          Allow replacing an existing unmanaged repogrammar
                          command path (backs it up first). Required opt-in;
                          --yes alone will not replace an unmanaged command.
-  --target <agents>      auto, all, none, or comma-separated agent ids
+  --target <agents>      Quickstart: auto, none, codex, claude-code, or opencode;
+                         legacy actions also accept all/comma-separated ids
   --scope <scope>        global or local/project for delegated agent actions
   --location <scope>     Alias for --scope
   --version <tag>        Release tag to install; default: latest
@@ -89,7 +106,12 @@ Environment:
   REPOGRAMMAR_VERSION        Release tag, or latest
   REPOGRAMMAR_USE_SOURCE_BUILD=1  Build from source instead of downloading
 
-Install/update actions also remove stale repogrammar copies found on PATH when
+Quickstart always acquires a verified prebuilt release, defaults to detected
+supported agents, and confirms the plan through /dev/tty (or explicit --yes).
+It preserves other PATH copies and existing telemetry preferences. Its dry-run
+may download and execute the verified binary in temporary storage.
+
+Legacy install/update actions also remove stale repogrammar copies found on PATH when
 their checksum differs from the managed installed executable. Use --yes to skip
 the cleanup confirmation.
 
@@ -102,6 +124,7 @@ USAGE
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --quickstart) ACTION="quickstart"; shift ;;
       --install-and-configure) ACTION="install_and_configure"; shift ;;
       --install-cli-only) ACTION="install_cli_only"; shift ;;
       --configure-agents) ACTION="configure_agents"; shift ;;
@@ -110,6 +133,15 @@ parse_args() {
       --uninstall-all) ACTION="uninstall_all"; shift ;;
       --yes) ASSUME_YES=1; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
+      --project)
+        [[ $# -ge 2 && -n "$2" ]] || die "--project requires a path"
+        PROJECT_PATH="$2"
+        QUICKSTART_OPTIONS=1
+        shift 2
+        ;;
+      --skip-repository) SKIP_REPOSITORY=1; QUICKSTART_OPTIONS=1; shift ;;
+      --no-autosync) NO_AUTOSYNC=1; QUICKSTART_OPTIONS=1; shift ;;
+      --no-instructions) NO_INSTRUCTIONS=1; QUICKSTART_OPTIONS=1; shift ;;
       --replace-unmanaged-command) REPLACE_UNMANAGED_COMMAND=1; shift ;;
       --target)
         [[ $# -ge 2 ]] || die "--target requires a value"
@@ -179,7 +211,7 @@ detect_target() {
       detect_linux_glibc "$arch"
       printf "%s-unknown-linux-gnu" "$arch"
       ;;
-    *) die "unsupported OS for this installer: $os; use install.ps1 on Windows" ;;
+    *) die "unsupported OS for this installer: $os; release installation supports macOS and Linux only" ;;
   esac
 }
 
@@ -267,11 +299,11 @@ fetch_asset() {
   local url
   url="$(release_asset_base)/${name}"
   if command -v curl >/dev/null 2>&1; then
-    if ! curl -fsSL "$url" -o "$dest" 2>/dev/null; then
+    if ! curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 --max-redirs 5 "$url" -o "$dest" 2>/dev/null; then
       release_asset_not_found "$url"
     fi
   elif command -v wget >/dev/null 2>&1; then
-    if ! wget -q "$url" -O "$dest" 2>/dev/null; then
+    if ! wget -q --timeout=60 --tries=3 --max-redirect=5 "$url" -O "$dest" 2>/dev/null; then
       release_asset_not_found "$url"
     fi
   else
@@ -304,9 +336,16 @@ sha256_file() {
 verify_checksum() {
   local archive="$1"
   local checksum_file="$2"
-  local expected
+  local expected=""
   local actual
-  expected="$(awk '{print $1}' "$checksum_file")"
+  local checksum_name=""
+  if ! awk 'NF != 2 || NR != 1 { exit 1 } END { if (NR != 1) exit 1 }' "$checksum_file"; then
+    die "malformed checksum data for $(basename "$archive")"
+  fi
+  # read returns nonzero for a complete final line without a trailing newline.
+  read -r expected checksum_name < "$checksum_file" || true
+  [[ "$expected" =~ ^[0-9a-fA-F]{64}$ && "${checksum_name#\*}" == "$(basename "$archive")" ]] || die "malformed checksum data for $(basename "$archive")"
+  expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
   actual="$(sha256_file "$archive")"
   if [[ -z "$expected" || "$expected" != "$actual" ]]; then
     die "checksum verification failed for $(basename "$archive")"
@@ -548,6 +587,11 @@ validate_release_archive_entries() {
   local raw_entry
   local entry
   local verbose_line
+  local entries
+  local verbose_entries
+  local seen=$'\n'
+  entries="$(tar -tzf "$archive")" || die "release artifact archive listing failed"
+  verbose_entries="$(tar -tvzf "$archive")" || die "release artifact archive type inspection failed"
   # Reject non-regular-file members (symlinks/hardlinks) before extraction so a
   # malicious archive cannot redirect extraction outside the temp dir on older
   # tar implementations. The first character of each `tar -tvzf` line is the
@@ -558,43 +602,53 @@ validate_release_archive_entries() {
       -|d) : ;;
       *) die "release artifact contains a non-regular-file member: ${verbose_line}" ;;
     esac
-  done < <(tar -tvzf "$archive")
+  done <<< "$verbose_entries"
   while IFS= read -r raw_entry; do
     if ! release_archive_entry_is_safe "$raw_entry"; then
       die "release artifact contains unsafe or unexpected path: ${raw_entry}"
     fi
     entry="$(normalize_release_archive_entry "$raw_entry")"
+    case "$seen" in
+      *$'\n'"$entry"$'\n'*) die "release artifact contains duplicate path: ${entry}" ;;
+    esac
+    seen="${seen}${entry}"$'\n'
     [[ "$entry" != "repogrammar" ]] || has_binary=1
     [[ "$entry" != "workers/python/worker.py" ]] || has_worker=1
-  done < <(tar -tzf "$archive")
+  done <<< "$entries"
   [[ "$has_binary" -eq 1 ]] || die "release artifact did not contain executable repogrammar"
   [[ "$has_worker" -eq 1 ]] || die "release artifact did not contain bundled Python worker at workers/python/worker.py"
 }
 
 has_source_checkout() {
-  [[ -f "${REPO_ROOT}/Cargo.toml" && -d "${REPO_ROOT}/src/rust" ]]
+  [[ -n "$REPO_ROOT" && -f "${REPO_ROOT}/Cargo.toml" && -d "${REPO_ROOT}/src/rust" ]]
 }
 
-install_cli_from_release() {
+prepare_release_artifact() {
   local target
   local artifact
   local tmpdir
   target="$(detect_target)"
   artifact="$(artifact_name)"
   tmpdir="$(mktemp -d)"
+  tmpdir="$(cd -- "$tmpdir" && pwd -P)"
   TMP_DIRS+=("$tmpdir")
+  RELEASE_STAGE="$tmpdir"
 
-  printf "Installing RepoGrammar %s for %s\n" "$REPOGRAMMAR_VERSION" "$target"
+  printf "Verifying RepoGrammar %s for %s\n" "$REPOGRAMMAR_VERSION" "$target"
   fetch_asset "$artifact" "${tmpdir}/${artifact}"
   fetch_asset "${artifact}.sha256" "${tmpdir}/${artifact}.sha256"
   verify_checksum "${tmpdir}/${artifact}" "${tmpdir}/${artifact}.sha256"
   validate_release_archive_entries "${tmpdir}/${artifact}"
   tar -xzf "${tmpdir}/${artifact}" -C "$tmpdir"
   # Re-verify the extracted paths are regular files, not symlinks, before use.
-  [[ -x "${tmpdir}/repogrammar" && ! -L "${tmpdir}/repogrammar" ]] || die "release artifact did not contain executable repogrammar"
+  [[ -f "${tmpdir}/repogrammar" && -x "${tmpdir}/repogrammar" && ! -L "${tmpdir}/repogrammar" ]] || die "release artifact did not contain executable repogrammar"
   [[ -f "${tmpdir}/workers/python/worker.py" && ! -L "${tmpdir}/workers/python/worker.py" ]] || die "release artifact did not contain bundled Python worker at workers/python/worker.py"
-  install_worker_asset "${tmpdir}/workers/python/worker.py"
-  install_managed_cli_binary "${tmpdir}/repogrammar"
+}
+
+install_cli_from_release() {
+  prepare_release_artifact
+  install_worker_asset "${RELEASE_STAGE}/workers/python/worker.py"
+  install_managed_cli_binary "${RELEASE_STAGE}/repogrammar"
   printf "Installed %s\n" "$COMMAND_PATH"
 }
 
@@ -698,6 +752,168 @@ install_and_configure() {
   run_agent_install
   prune_stale_path_copies
   print_command_status
+}
+
+quickstart_project() {
+  local requested="${PROJECT_PATH:-$PWD}"
+  local root=""
+  [[ "$SKIP_REPOSITORY" -eq 0 ]] || return 0
+  [[ -d "$requested" ]] || die "QUICKSTART_PROJECT_INVALID: --project must name an existing Git repository directory"
+  requested="$(cd -- "$requested" && pwd -P)"
+  if command -v git >/dev/null 2>&1; then
+    root="$(git -C "$requested" rev-parse --show-toplevel 2>/dev/null || true)"
+  fi
+  if [[ -n "$root" && -d "$root" ]]; then
+    root="$(cd -- "$root" && pwd -P)"
+  fi
+  if [[ -z "$root" ]]; then
+    [[ -z "$PROJECT_PATH" ]] || die "QUICKSTART_PROJECT_INVALID: --project must name a directory inside an existing Git worktree; Git must be installed"
+    SKIP_REPOSITORY=1
+    printf "Repository setup skipped: the current directory is not an available Git worktree.\n"
+    printf "Next: run repogrammar setup --project <repository-root>.\n"
+  else
+    PROJECT_PATH="$root"
+  fi
+}
+
+quickstart_python() {
+  local python="${REPOGRAMMAR_PYTHON_EXECUTABLE:-python3}"
+  local version=""
+  if command -v "$python" >/dev/null 2>&1; then
+    version="$("$python" -I -S -c 'import sys; print("%d.%d.%d" % sys.version_info[:3]); sys.exit(not (sys.version_info.major == 3 and sys.version_info.minor >= 10))' </dev/null 2>/dev/null)" || version=""
+  fi
+  if [[ -n "$version" ]]; then
+    printf "Python analysis runtime: %s\n" "$version"
+    return 0
+  fi
+  printf "Python analysis prerequisite: Python 3.10+ within 3.x is missing or unsupported.\n" >&2
+  printf "Install a supported interpreter, or set REPOGRAMMAR_PYTHON_EXECUTABLE to its absolute path.\n" >&2
+  printf "CLI-only acquisition remains available with --install-cli-only --yes; Python is not installed automatically.\n" >&2
+  [[ "$SKIP_REPOSITORY" -eq 1 || "$DRY_RUN" -eq 1 ]] || die "QUICKSTART_PYTHON_REQUIRED: no installation or repository changes were made"
+}
+
+quickstart_product_command() {
+  local action="$1"
+  local args=("$action" --install-dir "$DATA_DIR" --command-dir "$COMMAND_DIR")
+  [[ "$action" != "__install-product" ]] || args+=(--yes)
+  [[ "$REPLACE_UNMANAGED_COMMAND" -ne 1 ]] || args+=(--replace-unmanaged-command)
+  "${RELEASE_STAGE}/repogrammar" "${args[@]}" </dev/null
+}
+
+quickstart_setup() {
+  local binary="$1"
+  local mode="$2"
+  local args=(setup --target "$TARGET_SELECTION" "$mode")
+  if [[ "$mode" == "--dry-run" ]]; then
+    args+=(--print-plan-fingerprint)
+  elif [[ -n "${3:-}" ]]; then
+    args+=(--expected-plan "$3")
+  fi
+  if [[ "$SKIP_REPOSITORY" -eq 1 ]]; then
+    args+=(--skip-repository)
+  else
+    args+=(--project "$PROJECT_PATH")
+  fi
+  [[ "$NO_AUTOSYNC" -ne 1 ]] || args+=(--no-autosync)
+  [[ "$NO_INSTRUCTIONS" -ne 1 ]] || args+=(--no-instructions)
+  REPOGRAMMAR_INSTALL_DIR="$DATA_DIR" \
+  REPOGRAMMAR_COMMAND_DIR="$COMMAND_DIR" \
+  REPOGRAMMAR_EXECUTABLE="$INSTALLED_EXECUTABLE" \
+  "$binary" "${args[@]}" </dev/null
+}
+
+quickstart_path_status() {
+  local resolved=""
+  resolved="$(command -v repogrammar || true)"
+  printf "\nManaged CLI: %s\n" "$COMMAND_PATH"
+  if [[ "$resolved" != "$COMMAND_PATH" && "$resolved" != "$INSTALLED_EXECUTABLE" ]]; then
+    if [[ -n "$resolved" ]]; then
+      printf "PATH selects another command: %s (preserved).\n" "$resolved"
+    else
+      printf "The managed command directory is not on PATH.\n"
+    fi
+    printf "Use the managed CLI directly, or add this to your shell profile:\n"
+    printf '  export PATH=%q:"$PATH"\n' "$COMMAND_DIR"
+    printf "Then run: hash -r\n"
+  fi
+}
+
+run_quickstart() {
+  [[ "$USE_SOURCE_BUILD" != "1" ]] || die "QUICKSTART_RELEASE_REQUIRED: --quickstart uses verified release binaries; use --install-cli-only --from-source for contributor builds"
+  [[ "$INSTALL_SCOPE" == "global" ]] || die "QUICKSTART_SCOPE_UNSUPPORTED: live project-local agent configuration is deferred; use repogrammar install --scope local --print-config <agent> for guidance"
+  [[ -z "$WORKER_ROOT" || "$WORKER_ROOT" == "${DATA_DIR}/workers" ]] || die "QUICKSTART_WORKER_PATH_INVALID: managed workers must remain under the installation directory"
+  [[ "$TARGET_EXPLICIT" -eq 1 ]] || TARGET_SELECTION="auto"
+  case "$TARGET_SELECTION" in
+    auto|none|codex|claude-code|opencode) ;;
+    *) die "QUICKSTART_TARGET_UNSUPPORTED: choose auto, none, codex, claude-code, or opencode; auto selects detected live integrations" ;;
+  esac
+  [[ -z "$PROJECT_PATH" || "$SKIP_REPOSITORY" -eq 0 ]] || die "--project and --skip-repository cannot be combined"
+  if [[ "$ASSUME_YES" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+    if ! { exec 3<>/dev/tty; } 2>/dev/null || [[ ! -t 3 ]]; then
+      die "QUICKSTART_AUTHORIZATION_REQUIRED: no controlling terminal; review --quickstart --dry-run, then rerun with explicit --yes"
+    fi
+  fi
+  detect_target >/dev/null
+  quickstart_project
+  quickstart_python
+  [[ "$DATA_DIR" == /* && "$COMMAND_DIR" == /* ]] || die "QUICKSTART_PATH_INVALID: --install-dir and --command-dir must be absolute paths"
+  DATA_DIR="${DATA_DIR%/}"
+  COMMAND_DIR="${COMMAND_DIR%/}"
+  DATA_BIN_DIR="${DATA_DIR}/bin"
+  INSTALLED_EXECUTABLE="${DATA_BIN_DIR}/repogrammar"
+  COMMAND_PATH="${COMMAND_DIR}/repogrammar"
+  prepare_release_artifact
+  local capabilities=""
+  capabilities="$("${RELEASE_STAGE}/repogrammar" __install-preflight --capabilities </dev/null 2>/dev/null)" || capabilities=""
+  [[ "$capabilities" == "quickstart-v1" ]] || die "QUICKSTART_RELEASE_REQUIRED: the selected release does not support --quickstart; select a release containing quickstart-v1 or use --install-cli-only"
+  if ! quickstart_product_command __install-preflight; then
+    die "QUICKSTART_PREFLIGHT_FAILED: no installation changes were made; resolve the reported ownership issue or select a release that supports --quickstart"
+  fi
+  printf "\nQuickstart installation plan\n"
+  printf "  Managed installation: %s\n  Command: %s\n" "$DATA_DIR" "$COMMAND_PATH"
+  printf "  Agent scope: global; selection: %s\n" "$TARGET_SELECTION"
+  if [[ "$SKIP_REPOSITORY" -eq 0 ]]; then
+    printf "  Repository: %s\n" "$PROJECT_PATH"
+  fi
+  printf "  Existing telemetry preferences and other PATH copies are preserved.\n"
+  local setup_plan=""
+  local reviewed_plan=""
+  local plan_line=""
+  if ! setup_plan="$(quickstart_setup "${RELEASE_STAGE}/repogrammar" --dry-run)"; then
+    die "QUICKSTART_PLAN_FAILED: setup could not produce a safe plan; no installation changes were made"
+  fi
+  while IFS= read -r plan_line; do
+    case "$plan_line" in
+      'plan_fingerprint: '*) reviewed_plan="${plan_line#plan_fingerprint: }" ;;
+      *) printf '%s\n' "$plan_line" ;;
+    esac
+  done <<< "$setup_plan"
+  [[ "$reviewed_plan" =~ ^sha256:[0-9a-f]{64}$ ]] || die "QUICKSTART_PLAN_FAILED: release did not provide a reviewable setup plan"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf "Quickstart dry-run complete. No persistent installation, agent, or repository changes were made.\n"
+    return 0
+  fi
+  if [[ "$ASSUME_YES" -eq 0 ]]; then
+    local reply=""
+    printf "Apply this installation and setup plan? [y/N] " >&3
+    IFS= read -r reply <&3 || reply=""
+    exec 3>&-
+    case "$reply" in
+      y|Y|yes|YES|Yes) ;;
+      *) printf "Cancelled. No installation changes were made.\n"; return 0 ;;
+    esac
+  fi
+  quickstart_product_command __install-preflight || die "QUICKSTART_PREFLIGHT_CHANGED: ownership changed after planning; no installation changes were made"
+  quickstart_product_command __install-product || die "QUICKSTART_INSTALL_FAILED: product acquisition failed; review the transaction rollback result above before retrying"
+  printf "Managed CLI installation verified. Running the authorized setup plan.\n"
+  local status=0
+  quickstart_setup "$INSTALLED_EXECUTABLE" --yes "$reviewed_plan" || status=$?
+  quickstart_path_status
+  if [[ "$status" -ne 0 ]]; then
+    printf "QUICKSTART_SETUP_FAILED: the verified managed CLI is retained; setup reported its completed, preserved and rolled-back stages above.\n" >&2
+    printf "Resolve the reported failure and rerun --quickstart with the same options.\n" >&2
+    return "$status"
+  fi
 }
 
 select_agent_target() {
@@ -849,13 +1065,17 @@ run_menu() {
 
 main() {
   parse_args "$@"
-  if [[ "$DRY_RUN" -eq 1 && "$ACTION" != "uninstall_all" ]]; then
-    die "--dry-run is only valid with --uninstall-all"
+  if [[ "$DRY_RUN" -eq 1 && "$ACTION" != "uninstall_all" && "$ACTION" != "quickstart" ]]; then
+    die "--dry-run is only valid with --uninstall-all or --quickstart"
+  fi
+  if [[ "$QUICKSTART_OPTIONS" -eq 1 && "$ACTION" != "quickstart" ]]; then
+    die "--project/--skip-repository/--no-autosync/--no-instructions require --quickstart"
   fi
   if [[ "$ACTION" == "uninstall_all" && ( "$TARGET_EXPLICIT" -eq 1 || "$SCOPE_EXPLICIT" -eq 1 ) ]]; then
     die "--target/--scope select coding-agent integrations, not product files; use --uninstall-agents --target <agents> --scope <scope> --yes"
   fi
   case "$ACTION" in
+    quickstart) run_quickstart ;;
     print_target) detect_target; printf "\n" ;;
     install_cli_only) install_cli_binary; prune_stale_path_copies; print_command_status ;;
     install_and_configure) install_and_configure ;;

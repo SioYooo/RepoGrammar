@@ -150,6 +150,8 @@ context lives under `.agents/memories/`.
   `plans/codegraph-provider-plan.md`.
 - CLI surface: `specifications/cli.md`.
 - Agent installation: `specifications/installation.md`.
+- Unreleased one-command bootstrap: `decisions/ADR-0056-verified-one-command-quickstart.md`
+  and `release/quickstart-release-checklist.md`.
 - Initialization progress: `specifications/initialization-progress.md`.
 - Pattern-family vocabulary: `specifications/domain-model.md`.
 - UNKNOWN governance: `specifications/unknowns.md` and

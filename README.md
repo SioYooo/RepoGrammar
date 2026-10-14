@@ -26,7 +26,30 @@ The older npm release is a separate channel; see the
 Requires **Python 3.10+**, Bash, `curl`, `tar`, and `gzip`. macOS and glibc Linux
 are supported. Rust, Cargo, Node.js, Docker, and API keys are not required.
 
-### 1. Install — copy and run
+### One-command candidate — unreleased
+
+Current source adds `--quickstart`: review one plan, authorize it, then install
+the verified CLI, connect detected supported agents, index the selected Git
+repository, and start repository-local autosync. Python and agent prerequisites
+are checked; product MCP self-test and repository readiness remain separate
+reported results. No agent is required to install the CLI and index a project.
+
+**This is not available in published 0.5.0.** Its binary lacks the
+`quickstart-v1` capability. A new immutable release containing both the installer
+and matching binaries must pass the [publication checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/quickstart-release-checklist.md)
+before the public one-line command can be recommended. For reviewed local
+candidate artifacts, run this from the Git repository being initialized:
+
+```bash
+REPOGRAMMAR_RELEASE_DIR=/absolute/path/to/candidate-artifacts \
+  bash /absolute/path/to/RepoGrammar/src/install/repogrammar-install.sh --quickstart
+```
+
+The [candidate quickstart guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md#one-command-candidate-unreleased)
+covers `--dry-run`, noninteractive `--yes`, agent selection, and installation
+trust. Public users can use the pinned 0.5.0 steps below today.
+
+### 1. Install published 0.5.0 — copy and run
 
 This single block downloads the pinned installer, verifies its checksum, and
 installs the CLI. It does not alter coding-agent settings or index a repository.

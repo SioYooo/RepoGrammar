@@ -5,28 +5,23 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALLER="${SCRIPT_DIR}/repogrammar-install.sh"
 TMP_ROOT="$(mktemp -d)"
 TMP_ROOT="$(cd -- "$TMP_ROOT" && pwd -P)"
-RELEASE_BINARY_TO_RESTORE=""
-RELEASE_BINARY_BACKUP=""
-RELEASE_BINARY_EXISTED=0
 ORIGINAL_PATH="${PATH:-}"
 SYSTEM_PATH="$(command -p getconf PATH 2>/dev/null || printf '/usr/bin:/bin')"
 CARGO_BIN="$(command -v cargo || true)"
+BUILD_CARGO_HOME="${CARGO_HOME:-${HOME}/.cargo}"
+BUILD_RUSTUP_HOME="${RUSTUP_HOME:-${HOME}/.rustup}"
 NODE_BIN="$(command -v node || true)"
+PYTHON_BIN="${REPOGRAMMAR_PYTHON_EXECUTABLE:-$(command -v python3 || true)}"
+PRODUCT_BINARY="${REPOGRAMMAR_INSTALLER_TEST_BINARY:-}"
 PATH="$SYSTEM_PATH"
-
-restore_release_binary() {
-  if [[ -z "$RELEASE_BINARY_TO_RESTORE" ]]; then
-    return
-  fi
-  if [[ "$RELEASE_BINARY_EXISTED" -eq 1 ]]; then
-    cp "$RELEASE_BINARY_BACKUP" "$RELEASE_BINARY_TO_RESTORE"
-  else
-    rm -f "$RELEASE_BINARY_TO_RESTORE"
-  fi
-  RELEASE_BINARY_TO_RESTORE=""
-}
-
-trap 'restore_release_binary; rm -rf "$TMP_ROOT"' EXIT
+export HOME="${TMP_ROOT}/home"
+export XDG_CONFIG_HOME="${HOME}/.config"
+export XDG_DATA_HOME="${HOME}/.local/share"
+export XDG_CACHE_HOME="${HOME}/.cache"
+export CODEX_HOME="${HOME}/.codex"
+export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+mkdir -p "$HOME"
+trap 'rm -rf "$TMP_ROOT"' EXIT
 
 # Extract one top-level workflow job without depending on a third-party YAML
 # parser. GitHub Actions job identifiers are exactly two spaces below `jobs:`;
@@ -563,14 +558,11 @@ DEFAULT_SOURCE_COMMAND_DIR="${TMP_ROOT}/default-source-bin"
 DEFAULT_SOURCE_INSTALL_DIR="${TMP_ROOT}/default-source-data"
 DEFAULT_SOURCE_CARGO_LOG="${TMP_ROOT}/default-source-cargo.log"
 FAKE_CARGO_DIR="${TMP_ROOT}/fake-cargo"
-RELEASE_BINARY_TO_RESTORE="${SCRIPT_DIR}/../../target/release/repogrammar"
-RELEASE_BINARY_BACKUP="${TMP_ROOT}/repogrammar.release.backup"
-if [[ -e "$RELEASE_BINARY_TO_RESTORE" ]]; then
-  cp "$RELEASE_BINARY_TO_RESTORE" "$RELEASE_BINARY_BACKUP"
-  RELEASE_BINARY_EXISTED=1
-else
-  RELEASE_BINARY_EXISTED=0
-fi
+SOURCE_CHECKOUT="${TMP_ROOT}/source-checkout"
+mkdir -p "${SOURCE_CHECKOUT}/src/install" "${SOURCE_CHECKOUT}/src/rust" "${SOURCE_CHECKOUT}/src/workers/python"
+cp "$INSTALLER" "${SOURCE_CHECKOUT}/src/install/repogrammar-install.sh"
+cp "${SCRIPT_DIR}/../workers/python/worker.py" "${SOURCE_CHECKOUT}/src/workers/python/worker.py"
+touch "${SOURCE_CHECKOUT}/Cargo.toml"
 mkdir -p "$FAKE_CARGO_DIR"
 cat > "${FAKE_CARGO_DIR}/cargo" <<'FAKE_CARGO'
 #!/usr/bin/env sh
@@ -586,15 +578,14 @@ chmod +x "${FAKE_CARGO_DIR}/cargo"
 PATH="${FAKE_CARGO_DIR}:$PATH" \
 REPOGRAMMAR_FAKE_CARGO_LOG="$DEFAULT_SOURCE_CARGO_LOG" \
 REPOGRAMMAR_FAKE_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
-REPOGRAMMAR_FAKE_RELEASE_BINARY="$RELEASE_BINARY_TO_RESTORE" \
+REPOGRAMMAR_FAKE_RELEASE_BINARY="${SOURCE_CHECKOUT}/target/release/repogrammar" \
 REPOGRAMMAR_COMMAND_DIR="$DEFAULT_SOURCE_COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$DEFAULT_SOURCE_INSTALL_DIR" \
-"$INSTALLER" --install-cli-only --from-source --yes >/dev/null
+"${SOURCE_CHECKOUT}/src/install/repogrammar-install.sh" --install-cli-only --from-source --yes >/dev/null
 
 grep -q "build --release" "$DEFAULT_SOURCE_CARGO_LOG"
 "${DEFAULT_SOURCE_COMMAND_DIR}/repogrammar" version | grep -q "repogrammar 0.1.0-test"
 test -x "${DEFAULT_SOURCE_INSTALL_DIR}/bin/repogrammar"
-restore_release_binary
 
 REPOGRAMMAR_SOURCE_BINARY="${PACKAGE_DIR}/repogrammar" \
 REPOGRAMMAR_COMMAND_DIR="$SOURCE_COMMAND_DIR" \
@@ -604,11 +595,15 @@ REPOGRAMMAR_FAKE_LOG="$SOURCE_LOG" \
 
 grep -q "install --target all --scope global --yes --no-telemetry" "$SOURCE_LOG"
 
-if [[ -z "$CARGO_BIN" ]]; then
-  echo "cargo is required for installer product smoke test" >&2
-  exit 1
+if [[ -z "$PRODUCT_BINARY" ]]; then
+  if [[ -z "$CARGO_BIN" ]]; then
+    echo "cargo or REPOGRAMMAR_INSTALLER_TEST_BINARY is required for installer product smoke test" >&2
+    exit 1
+  fi
+  PATH="$ORIGINAL_PATH" CARGO_HOME="$BUILD_CARGO_HOME" RUSTUP_HOME="$BUILD_RUSTUP_HOME" \
+    "$CARGO_BIN" build --quiet --bin repogrammar
+  PRODUCT_BINARY="${SCRIPT_DIR}/../../target/debug/repogrammar"
 fi
-PATH="$ORIGINAL_PATH" "$CARGO_BIN" build --quiet --bin repogrammar
 PRODUCT_COMMAND_DIR="${TMP_ROOT}/product-bin"
 PRODUCT_INSTALL_DIR="${TMP_ROOT}/product-data"
 PRODUCT_REPO="${TMP_ROOT}/product-repo"
@@ -617,7 +612,7 @@ cat > "${PRODUCT_REPO}/app.py" <<'PY_FIXTURE'
 def hello():
     return "ok"
 PY_FIXTURE
-REPOGRAMMAR_SOURCE_BINARY="${SCRIPT_DIR}/../../target/debug/repogrammar" \
+REPOGRAMMAR_SOURCE_BINARY="$PRODUCT_BINARY" \
 REPOGRAMMAR_COMMAND_DIR="$PRODUCT_COMMAND_DIR" \
 REPOGRAMMAR_INSTALL_DIR="$PRODUCT_INSTALL_DIR" \
 "$INSTALLER" --install-cli-only --from-source --yes >/dev/null
@@ -642,6 +637,8 @@ test ! -e "${CONDA_FIRST_DIR}/repogrammar"
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" init --state-only >/dev/null)
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" index --progress never >/dev/null)
 (cd "$PRODUCT_REPO" && PATH="$ORIGINAL_PATH" "${PRODUCT_COMMAND_DIR}/repogrammar" families --json >/dev/null)
+
+"$PYTHON_BIN" "${SCRIPT_DIR}/quickstart.test.py" --binary "$PRODUCT_BINARY"
 
 FOREIGN_COMMAND_DIR="${TMP_ROOT}/foreign-bin"
 FOREIGN_INSTALL_DIR="${TMP_ROOT}/foreign-data"

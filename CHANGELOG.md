@@ -4,6 +4,14 @@
 
 ### Added
 
+- Current source adds an unreleased `--quickstart` bootstrap that verifies a
+  prebuilt product, presents one consent plan, and delegates agent/repository
+  onboarding to existing Rust services. Piped input uses controlling-terminal
+  confirmation or explicit `--yes`; plan fingerprints reject expanded writes.
+  Product worker/receipt rollback, machine-only setup and agent opt-out are
+  included. Immutable 0.5.0 lacks this capability; publication requires a new
+  verified release and does not update the separate npm channel.
+
 - Published the public documentation at https://sioyooo.github.io/RepoGrammar/
   through GitHub's Jekyll build of the existing Markdown; experiments, plans,
   prompts and unsent drafts are excluded. Search and answer-engine visibility
@@ -28,6 +36,11 @@
   is unchanged. Agent adoption and token effects remain unmeasured.
 
 ### Fixed
+
+- Setup now consumes hash-checked family freshness before skipping a refresh,
+  and no-agent completion offers a CLI next step. CLI-only uninstall can preserve
+  an unreceipted unavailable native-agent lane as explicitly UNKNOWN; present
+  receipts and inspectable foreign configuration still fail closed.
 
 - Unsupported fuzzy queries with no possible indexed path/member locus skip
   the complete unit inventory. UNKNOWN/recovery, payloads and freshness checks

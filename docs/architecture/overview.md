@@ -107,6 +107,12 @@ directory named by `REPOGRAMMAR_DIR`.
 
 Installer flows stay separate from repository indexing flows because they modify
 machine-level agent integration rather than repository-local index state.
+The unreleased one-command bootstrap composes acquisition and setup under
+ADR-0056. Shell owns temporary verified downloads and terminal input; the
+existing install transaction owns product activation, worker copies, receipt
+and rollback, and the existing setup executor owns agent/repository actions.
+Setup can explicitly omit repository work or agents, and a reviewed scope
+fingerprint prevents bootstrap execution from expanding the confirmed plan.
 `install` and `uninstall` must not create or remove `.repogrammar/`; `init` and
 `uninit` own that lifecycle. The install service is also the sole authority for
 reconciling an internally consistent owned integration from an obsolete managed

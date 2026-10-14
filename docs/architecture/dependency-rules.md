@@ -440,6 +440,13 @@ direct SQL calls or SQLite row types.
 
 ## MCP boundary
 
+The shell quickstart may acquire and inspect release bytes, but product ownership
+preflight/activation and rollback remain in `application/install.rs` and
+`product_installation.rs`. Private binary entrypoints only parse bootstrap
+arguments and wire those services and the existing product MCP self-test.
+Setup scope fingerprinting uses the installed SHA-256 dependency over owned
+plan/context types; it is not a second readiness or ownership classifier.
+
 MCP tool names, schemas, transport errors, and serialization rules belong in
 `src/rust/interfaces/mcp/`. Domain classifications are expressed in core types before
 they are serialized for MCP.

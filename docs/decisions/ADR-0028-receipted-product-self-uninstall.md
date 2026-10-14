@@ -1,5 +1,11 @@
 # ADR-0028: Ownership-aware product uninstall and agent disconnect
 
+Current-source refinement: [ADR-0056](ADR-0056-verified-one-command-quickstart.md)
+defines the narrow CLI-only uninstall case where a native client is unavailable
+and both its owned receipt and backup are strictly absent. Such configuration is
+reported UNKNOWN/preserved; present receipts and inspectable foreign entries
+retain this ADR's refusal rules. Immutable published artifacts are unchanged.
+
 - Status: Accepted
 - Date: 2026-07-21
 

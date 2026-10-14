@@ -4,6 +4,13 @@ The MCP interface is implemented as a minimal pre-alpha read-only stdio server.
 This file records the concrete bootstrap tool boundary and the current
 Codex/Claude Code installer wiring without claiming a final stable API.
 
+The unreleased shell quickstart composes existing acquisition and setup services;
+it adds no MCP operation or protocol field. Installation and setup run the
+product-binary initialize/tools/list/shutdown self-test. That proves the product
+server contract, not an actual coding-agent tools/call round trip. Agent receipt
+readiness, repository indexing, autosync and product self-test remain separate
+completion facts; machine-only setup cannot claim repository query readiness.
+
 ## Default tool surface
 
 The default v0.1 MCP surface should expose one primary tool:

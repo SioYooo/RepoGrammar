@@ -23,20 +23,21 @@ use crate::application::progress::{ProgressEvent, ProgressStage, WorkUnits};
 use crate::application::query::{
     bounded_family_members, build_read_plan, estimate_alignment_potential_token_savings,
     estimate_family_output_potential_token_savings,
-    estimate_partial_context_potential_token_savings, family_query_abstention_reason,
-    family_query_route_report, family_query_unknown_metric, found_outcome_token_savings,
-    product_readiness_value, query_preflight, read_plan_with_rendered_spans,
-    repository_status_unavailable_fallback, scoped_readiness_value, select_family_evidence,
-    validate_query_target, validate_query_token_budget, AlignmentCertificateReport,
-    DiagnosticSignal, FamilyDetailReport, FamilyEvidenceMode, FamilyFreshnessCounts,
-    FamilyListReport, FamilyLookupMode, FamilyLookupReport, FamilyOutputOptions,
-    FamilyPartialContextReport, FamilyQueryRouteReport, FamilyQueryUnknown, FamilyUnknownReport,
-    IndexedCodeUnitsReport, IndexedFilesReport, OutcomeTokenSavings, ProductReadinessReport,
-    QueryPreflightOperation, QueryPreflightReport, ReadPlan, ReadPlanItem,
-    ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport, RepoShapeLanguageDiagnostics,
-    ResolvedQueryTarget, ScopedReadinessReport, SelectedFamilyEvidence, SourceSpanRenderReport,
-    TermRetrievalRoute, TokenSavingReadiness, UnknownInventoryBucket, UnknownInventoryReport,
-    Verbosity, VerbosityTier, PRODUCT_SCHEMA_VERSION,
+    estimate_partial_context_potential_token_savings, family_evidence_freshness_signal,
+    family_evidence_readiness, family_query_abstention_reason, family_query_route_report,
+    family_query_unknown_metric, found_outcome_token_savings, product_readiness_value,
+    query_preflight, read_plan_with_rendered_spans, repository_status_unavailable_fallback,
+    scoped_readiness_value, select_family_evidence, validate_query_target,
+    validate_query_token_budget, AlignmentCertificateReport, DiagnosticSignal, FamilyDetailReport,
+    FamilyEvidenceMode, FamilyFreshnessCounts, FamilyListReport, FamilyLookupMode,
+    FamilyLookupReport, FamilyOutputOptions, FamilyPartialContextReport, FamilyQueryRouteReport,
+    FamilyQueryUnknown, FamilyUnknownReport, IndexedCodeUnitsReport, IndexedFilesReport,
+    OutcomeTokenSavings, ProductReadinessReport, QueryPreflightOperation, QueryPreflightReport,
+    ReadPlan, ReadPlanItem, ReadPlanLineRangeOmission, RepoShapeDiagnosticsReport,
+    RepoShapeLanguageDiagnostics, ResolvedQueryTarget, ScopedReadinessReport,
+    SelectedFamilyEvidence, SourceSpanRenderReport, TermRetrievalRoute, TokenSavingReadiness,
+    UnknownInventoryBucket, UnknownInventoryReport, Verbosity, VerbosityTier,
+    PRODUCT_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::application::query::{
@@ -45,11 +46,11 @@ use crate::application::query::{
 };
 use crate::application::query_resolution::Resolution;
 use crate::application::recovery::{
-    recovery_command, recovery_guidance, RecoveryEvidenceState, RecoveryFreshness, RecoveryHealth,
-    RecoveryLockState,
+    recovery_command, recovery_guidance, RecoveryAction, RecoveryEvidenceState, RecoveryFreshness,
+    RecoveryHealth, RecoveryLockState,
 };
 #[cfg(test)]
-use crate::application::recovery::{RecoveryAction, RecoveryReason, RecoveryRecommendation};
+use crate::application::recovery::{RecoveryReason, RecoveryRecommendation};
 use crate::application::repository::{
     init_repository, repository_doctor, repository_freshness_for_report, repository_logs,
     repository_status, uninit_repository, unlock_repository, RepositoryDoctorCode,
@@ -61,12 +62,12 @@ use crate::application::repository::{
     RepositoryUninitRequest, RepositoryUnlockReport, RepositoryUnlockRequest,
 };
 use crate::application::setup::{
-    execute_setup, plan_setup, SetupAgentIntegrationState, SetupAgentMutation, SetupAgentState,
-    SetupAuthorization, SetupAutosyncMutation, SetupConfirmation, SetupDisposition,
-    SetupExecutionPort, SetupFailureClass, SetupFamilyInventory, SetupIndexSummary,
-    SetupLimitation, SetupOperationError, SetupOutcome, SetupOutcomeStatus, SetupPlan,
-    SetupPreservedResource, SetupProbe, SetupRepositoryMutation, SetupRepositoryState,
-    SetupRequest, SetupStage, SetupStageStatus, SetupTarget,
+    execute_setup, plan_setup, setup_plan_fingerprint, SetupAgentIntegrationState,
+    SetupAgentMutation, SetupAgentState, SetupAuthorization, SetupAutosyncMutation,
+    SetupConfirmation, SetupDisposition, SetupExecutionPort, SetupFailureClass,
+    SetupFamilyInventory, SetupIndexSummary, SetupLimitation, SetupOperationError, SetupOutcome,
+    SetupOutcomeStatus, SetupPlan, SetupPreservedResource, SetupProbe, SetupRepositoryMutation,
+    SetupRepositoryState, SetupRequest, SetupStage, SetupStageStatus, SetupTarget,
 };
 use crate::application::storage::DEFAULT_RETAINED_INACTIVE_GENERATIONS;
 use crate::application::telemetry::{
@@ -660,7 +661,7 @@ fn full_usage() -> String {
         "  repogrammar <command> -h",
         "",
         "Project lifecycle:",
-        "  setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
+        "  setup [--project <path>] [--target auto|none|codex|claude-code|opencode] [--yes] [--dry-run] [--skip-repository] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
         "      Complete agent wiring, repository indexing, autosync, and MCP self-test in one plan.",
         "  init [--project <path>] [--yes] [--state-only] [--resync] [--autosync|--no-autosync] [--write-gitignore] [--json] [--progress auto|always|never]",
         "      Create repo-local state, build the active index, and start autosync by default.",
@@ -749,16 +750,17 @@ fn help_text(lines: &[&str]) -> String {
 pub fn command_usage(command: &str) -> Option<String> {
     match command {
         "setup" => Some(help_text(&[
-            "Usage: repogrammar setup [--project <path>] [--target auto|codex|claude-code|opencode] [--yes] [--dry-run] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
+            "Usage: repogrammar setup [--project <path>] [--target auto|none|codex|claude-code|opencode] [--yes] [--dry-run] [--skip-repository] [--no-autosync] [--no-instructions] [--json] [--progress auto|always|never]",
             "",
             "Builds one reversible onboarding plan, asks once, then wires a detected agent, initializes and indexes the repository, starts autosync, and verifies the read-only MCP server.",
             "Telemetry remains off. Missing agents do not prevent repository-only setup. Foreign or malformed integration is never overwritten.",
             "",
             "Options:",
             "  --project <path>                  Repository root. Defaults to the current directory.",
-            "  --target auto|codex|claude-code|opencode  Auto-select live supported agents, or request one explicitly.",
+            "  --target auto|none|codex|claude-code|opencode  Select detected agents, skip wiring, or request one explicitly.",
             "  --yes                             Confirm the complete plan noninteractively.",
             "  --dry-run                         Inspect the plan without any writes.",
+            "  --skip-repository                 Configure agents only; do not inspect, index or start autosync.",
             "  --no-autosync                     Build the active index without starting background sync.",
             "  --no-instructions                 Skip managed instruction writes; retain prior receipt ownership.",
             "  --json                            Emit one machine-readable result object.",
@@ -3727,14 +3729,32 @@ where
         };
         let initialized = matches!(status.status, RepositoryStatus::Initialized { .. });
         let active_index = status.readiness.active_generation_available;
+        let mut freshness = repository_freshness_for_report(&status, active_index);
         let family_evidence = if active_index {
             match self.runtime.families(RepositoryStatusRequest {
                 path: project.to_string(),
                 state_dir_override: self.state_dir_override.clone(),
             }) {
                 Ok(report) if report.families.is_empty() => RecoveryEvidenceState::Unavailable,
-                Ok(_) => RecoveryEvidenceState::Available,
-                Err(_) => RecoveryEvidenceState::Unknown,
+                Ok(report) => {
+                    let evidence = family_evidence_readiness(report.freshness_counts);
+                    let evidence_freshness = family_evidence_freshness_signal(&evidence);
+                    if freshness == RecoveryFreshness::Fresh
+                        && !matches!(
+                            evidence_freshness,
+                            RecoveryFreshness::Fresh | RecoveryFreshness::NotApplicable
+                        )
+                    {
+                        freshness = evidence_freshness;
+                    }
+                    RecoveryEvidenceState::Available
+                }
+                Err(_) => {
+                    if freshness == RecoveryFreshness::Fresh {
+                        freshness = RecoveryFreshness::CannotVerify;
+                    }
+                    RecoveryEvidenceState::Unknown
+                }
             }
         } else {
             RecoveryEvidenceState::NotApplicable
@@ -3742,10 +3762,7 @@ where
         Ok(SetupRepositoryState {
             initialized,
             active_index,
-            freshness: repository_freshness_for_report(
-                &status,
-                status.readiness.active_generation_available,
-            ),
+            freshness,
             autosync_configured: status.readiness.autosync.configured,
             autosync_running: status.readiness.autosync.running,
             storage_health,
@@ -3787,7 +3804,9 @@ where
             }
             Ok(AgentIntegrationInspection::Unmanaged) => SetupAgentIntegrationState::Unmanaged,
             Ok(AgentIntegrationInspection::Foreign) => SetupAgentIntegrationState::Foreign,
-            Ok(AgentIntegrationInspection::OwnedDrifted) => SetupAgentIntegrationState::Malformed,
+            Ok(AgentIntegrationInspection::OwnedDrifted) => {
+                SetupAgentIntegrationState::OwnedDrifted
+            }
             Ok(AgentIntegrationInspection::Malformed) => SetupAgentIntegrationState::Malformed,
             Err(_) => return Err(setup_error(SetupFailureClass::AgentDetectionFailed)),
         };
@@ -3944,12 +3963,22 @@ where
     let mut request = SetupRequest::new(repository_root.clone());
     request.target = options.target;
     request.dry_run = options.dry_run;
-    request.autosync = options.autosync;
+    request.autosync = options.autosync && !options.skip_repository;
+    request.initialize_repository = !options.skip_repository;
     request.write_instructions = !options.no_instructions;
     let plan = match plan_setup(request, &probe) {
         Ok(plan) => plan,
         Err(failure) => return setup_planning_error(options.json, failure.stage, failure.class),
     };
+
+    let fingerprint = setup_plan_fingerprint(&plan, &install_context);
+    if options
+        .expected_plan
+        .as_ref()
+        .is_some_and(|expected| expected != &fingerprint)
+    {
+        return CliOutput::failure(2, "setup plan changed since review; no agent or repository changes were made; review --dry-run and authorize again\n");
+    }
 
     let authorization = if options.dry_run {
         SetupAuthorization::DryRun
@@ -3993,10 +4022,11 @@ where
             stderr: String::new(),
         }
     } else if options.dry_run {
-        CliOutput::success(setup_plan_human_with_instructions(
-            &plan,
-            &operations.install_context,
-        ))
+        let mut output = setup_plan_human_with_instructions(&plan, &operations.install_context);
+        if options.print_plan_fingerprint {
+            output.push_str(&format!("plan_fingerprint: {fingerprint}\n"));
+        }
+        CliOutput::success(output)
     } else if status == 0 {
         CliOutput::success(setup_outcome_human(&plan, &outcome))
     } else {
@@ -4074,6 +4104,23 @@ fn setup_planning_error(json: bool, stage: SetupStage, class: SetupFailureClass)
     }
 }
 
+fn setup_agent_state_label(agent: &SetupAgentState) -> &'static str {
+    if !agent.detected {
+        return "missing";
+    }
+    if !agent.live_writer {
+        return "manual_configuration_required";
+    }
+    match agent.integration {
+        SetupAgentIntegrationState::Unmanaged => "detected_configurable",
+        SetupAgentIntegrationState::OwnedCurrent => "owned_current",
+        SetupAgentIntegrationState::OwnedOutdated => "owned_outdated",
+        SetupAgentIntegrationState::OwnedDrifted => "owned_drifted_preserved",
+        SetupAgentIntegrationState::Foreign => "foreign_preserved",
+        SetupAgentIntegrationState::Malformed => "malformed_preserved",
+    }
+}
+
 fn setup_plan_human(plan: &SetupPlan) -> String {
     let mut output = String::from("Setup plan:\n");
     for action in plan.actions() {
@@ -4083,6 +4130,14 @@ fn setup_plan_human(plan: &SetupPlan) -> String {
             setup_disposition_label(action.disposition)
         ));
     }
+    for agent in plan.agents() {
+        output.push_str(&format!(
+            "- {}: {}\n",
+            agent.target.as_str(),
+            setup_agent_state_label(agent)
+        ));
+    }
+    output.push_str("- automatic agent integration: Codex, Claude Code, opencode (global); other targets require manual configuration\n");
     output.push_str("- telemetry: unchanged by setup; off by default\n");
     output.push_str("- rollback: only changes created and owned by this run\n");
     output
@@ -4149,10 +4204,7 @@ fn setup_outcome_human(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
             setup_stage_label(failure.stage),
             setup_failure_token(failure.class),
         );
-        output.push_str(&format!(
-            "next: {}\n",
-            recovery_command(outcome.recovery.action)
-        ));
+        output.push_str(&format!("next: {}\n", setup_next_command(plan, outcome)));
         return output;
     }
 
@@ -4185,6 +4237,8 @@ fn setup_outcome_human(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
                 ));
             }
         }
+    } else if !plan.request().initialize_repository {
+        output.push_str("repository: not selected; no repository state changed\n");
     } else if plan.repository_before().active_index {
         output.push_str("repository: existing active index preserved\n");
     } else if outcome.status != SetupOutcomeStatus::DryRun {
@@ -4202,7 +4256,11 @@ fn setup_outcome_human(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
             output.push_str("product MCP: repogrammar_context self-test passed\n");
         }
         let ready_targets = setup_ready_agent_targets(plan, outcome);
-        if ready_targets.is_empty() {
+        if ready_targets.is_empty() && !plan.request().initialize_repository {
+            output.push_str(
+                "agent MCP: not configured; use repogrammar install to connect an agent\n",
+            );
+        } else if ready_targets.is_empty() {
             output.push_str(
                 "agent MCP: not active; use the repository index through the RepoGrammar CLI\n",
             );
@@ -4215,18 +4273,27 @@ fn setup_outcome_human(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
-            if setup_product_self_test_passed(outcome) {
+            if setup_product_self_test_passed(outcome)
+                && setup_repository_index_ready(plan, outcome)
+            {
                 output.push_str(
                     "Ask your coding agent: \"How are API routes implemented in this repository?\"\n",
                 );
             }
         }
     }
-    output.push_str(&format!(
-        "next: {}\n",
-        recovery_command(outcome.recovery.action)
-    ));
+    output.push_str(&format!("next: {}\n", setup_next_command(plan, outcome)));
     output
+}
+
+fn setup_next_command(plan: &SetupPlan, outcome: &SetupOutcome) -> &'static str {
+    if outcome.recovery.action == RecoveryAction::None
+        && setup_ready_agent_targets(plan, outcome).is_empty()
+    {
+        "repogrammar find \"<path-or-pattern>\""
+    } else {
+        recovery_command(outcome.recovery.action)
+    }
 }
 
 fn setup_outcome_json(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
@@ -4234,13 +4301,22 @@ fn setup_outcome_json(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
     let blocked_agent_targets = setup_blocked_agent_targets(plan, &ready_agent_targets);
     let product_self_test_passed = setup_product_self_test_passed(outcome);
     let family_evidence = setup_family_evidence(plan, outcome);
-    let agent_query_ready = product_self_test_passed && !ready_agent_targets.is_empty();
+    let agent_query_ready = product_self_test_passed
+        && !ready_agent_targets.is_empty()
+        && setup_repository_index_ready(plan, outcome);
     json_line(json!({
         "command": "setup",
         "status": setup_outcome_status_token(outcome.status),
         "target": setup_target_token(plan.request().target),
         "autosync_requested": plan.request().autosync,
         "instructions_requested": plan.request().write_instructions,
+        "repository_requested": plan.request().initialize_repository,
+        "agents": plan.agents().iter().map(|agent| json!({
+            "target": agent.target.as_str(),
+            "detected": agent.detected,
+            "live_writer": agent.live_writer,
+            "integration_state": setup_agent_state_label(agent),
+        })).collect::<Vec<_>>(),
         "telemetry_changed": false,
         "telemetry_enabled_by_setup": false,
         "ready_agent_targets": ready_agent_targets.iter().map(|target| target.as_str()).collect::<Vec<_>>(),
@@ -4273,7 +4349,7 @@ fn setup_outcome_json(plan: &SetupPlan, outcome: &SetupOutcome) -> String {
             "class": setup_failure_token(failure.class),
             "rollback_failure": failure.rollback_failure.map(setup_failure_token),
         })),
-        "recovery": recovery_command(outcome.recovery.action),
+        "recovery": setup_next_command(plan, outcome),
         "suggested_question": if agent_query_ready {
             Some("How are API routes implemented in this repository?")
         } else {
@@ -4339,7 +4415,9 @@ fn setup_ready_agent_targets(plan: &SetupPlan, outcome: &SetupOutcome) -> Vec<Ag
             SetupAgentIntegrationState::Unmanaged => {
                 integration_completed && !rolled_back.contains(&agent.target)
             }
-            SetupAgentIntegrationState::Foreign | SetupAgentIntegrationState::Malformed => false,
+            SetupAgentIntegrationState::Foreign
+            | SetupAgentIntegrationState::OwnedDrifted
+            | SetupAgentIntegrationState::Malformed => false,
         })
         .map(|agent| agent.target)
         .collect()
@@ -4403,6 +4481,7 @@ fn setup_family_evidence_token(evidence: RecoveryEvidenceState) -> &'static str 
 fn setup_target_token(target: SetupTarget) -> &'static str {
     match target {
         SetupTarget::Auto => "auto",
+        SetupTarget::None => "none",
         SetupTarget::Codex => "codex",
         SetupTarget::ClaudeCode => "claude-code",
         SetupTarget::Opencode => "opencode",
@@ -4502,6 +4581,9 @@ fn setup_limitation_label(limitation: SetupLimitation) -> &'static str {
         SetupLimitation::StorageUnhealthy => "repository storage needs repair",
         SetupLimitation::BlockingLock => "repository indexing is locked",
         SetupLimitation::NoPatternGroups => "no supported pattern groups were verified",
+        SetupLimitation::RepositorySkipped => {
+            "repository setup was explicitly skipped; no index or autosync was created"
+        }
     }
 }
 
@@ -4514,6 +4596,7 @@ fn setup_limitation_token(limitation: SetupLimitation) -> &'static str {
         SetupLimitation::StorageUnhealthy => "storage_unhealthy",
         SetupLimitation::BlockingLock => "blocking_lock",
         SetupLimitation::NoPatternGroups => "no_pattern_groups",
+        SetupLimitation::RepositorySkipped => "repository_skipped",
     }
 }
 
@@ -8412,6 +8495,9 @@ struct SetupCliOptions {
     dry_run: bool,
     autosync: bool,
     no_instructions: bool,
+    skip_repository: bool,
+    print_plan_fingerprint: bool,
+    expected_plan: Option<String>,
     json: bool,
     progress: ProgressMode,
 }
@@ -8425,6 +8511,9 @@ impl Default for SetupCliOptions {
             dry_run: false,
             autosync: true,
             no_instructions: false,
+            skip_repository: false,
+            print_plan_fingerprint: false,
+            expected_plan: None,
             json: false,
             progress: ProgressMode::Auto,
         }
@@ -8654,19 +8743,41 @@ fn parse_setup_options(rest: &[String]) -> Result<SetupCliOptions, String> {
                     rest,
                     index,
                     "--target",
-                    "auto, codex, claude-code, or opencode",
+                    "auto, none, codex, claude-code, or opencode",
                 )?;
                 options.target = match value {
                     "auto" => SetupTarget::Auto,
+                    "none" => SetupTarget::None,
                     "codex" => SetupTarget::Codex,
                     "claude-code" | "claude" => SetupTarget::ClaudeCode,
                     "opencode" => SetupTarget::Opencode,
                     _ => {
                         return Err(
-                            "--target requires auto, codex, claude-code, or opencode".to_string()
+                            "--target requires auto, none, codex, claude-code, or opencode"
+                                .to_string(),
                         );
                     }
                 };
+                index += 2;
+            }
+            "--print-plan-fingerprint" => {
+                options.print_plan_fingerprint = true;
+                index += 1;
+            }
+            "--expected-plan" => {
+                let token = option_value(
+                    rest,
+                    index,
+                    "--expected-plan",
+                    "a reviewed plan fingerprint",
+                )?;
+                if !token.strip_prefix("sha256:").is_some_and(|hash| {
+                    hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }) || options.expected_plan.is_some()
+                {
+                    return Err("--expected-plan requires one SHA-256 plan fingerprint".to_string());
+                }
+                options.expected_plan = Some(token.to_string());
                 index += 2;
             }
             "--yes" => {
@@ -8675,6 +8786,10 @@ fn parse_setup_options(rest: &[String]) -> Result<SetupCliOptions, String> {
             }
             "--dry-run" => {
                 options.dry_run = true;
+                index += 1;
+            }
+            "--skip-repository" => {
+                options.skip_repository = true;
                 index += 1;
             }
             "--no-autosync" => {
@@ -8696,6 +8811,12 @@ fn parse_setup_options(rest: &[String]) -> Result<SetupCliOptions, String> {
             }
             other => return Err(format!("unknown setup option: {other}")),
         }
+    }
+    if options.skip_repository && options.project_path.is_some() {
+        return Err("--skip-repository cannot be combined with --project".to_string());
+    }
+    if options.print_plan_fingerprint && (!options.dry_run || options.json) {
+        return Err("--print-plan-fingerprint requires a human --dry-run".to_string());
     }
     Ok(options)
 }
@@ -12605,7 +12726,15 @@ mod tests {
                     "synthetic family inventory failure with /private/secret".to_string(),
                 ));
             }
-            TestRuntime.families(request)
+            let store = TestRuntime.store_for_status_request(&request)?;
+            crate::application::query::list_families_with_freshness(
+                crate::application::query::FamilyEvidenceFreshnessRequest {
+                    repository_root: request.path,
+                    max_file_bytes: crate::ports::file_discovery::DEFAULT_MAX_FILE_BYTES,
+                },
+                &store,
+                &FilesystemSourceStore,
+            )
         }
 
         fn inspect_agent_integration(
@@ -13073,6 +13202,140 @@ mod tests {
         assert!(confirmed.stdout.contains("agent MCP: not active"));
         assert!(!confirmed.stdout.contains("Ask your coding agent:"));
         assert!(project.path().join(DEFAULT_STATE_DIR).is_dir());
+    }
+
+    #[test]
+    fn setup_skip_repository_reports_only_verified_machine_readiness() {
+        let project = TempWorkspace::new("cli-setup-skip-repository");
+        let home = TempWorkspace::new("cli-setup-skip-home");
+        let env = |key: &str| match key {
+            "HOME" => Some(home.path().display().to_string()),
+            "PATH" => Some(String::new()),
+            _ => None,
+        };
+        for json in [false, true] {
+            let mut args = vec!["setup", "--skip-repository", "--target", "none", "--yes"];
+            if json {
+                args.push("--json");
+            }
+            let output = run_with_context_and_runtime(args, project.path(), &env, &TestRuntime);
+            assert_eq!(output.status, 0, "{}", output.stderr);
+            assert!(!project.path().join(DEFAULT_STATE_DIR).exists());
+            assert!(!output.stdout.contains("active index created"));
+            assert!(!output.stdout.contains("Ask your coding agent"));
+            if json {
+                let value: Value = serde_json::from_str(&output.stdout).unwrap();
+                assert_eq!(value["repository_requested"], false);
+                assert_eq!(value["repository_index_ready"], false);
+                assert_eq!(value["autosync_ready"], false);
+                assert_eq!(value["agent_query_ready"], false);
+                assert_eq!(value["product_self_test_state"], "passed");
+                assert_eq!(value["family_evidence_state"], "not_applicable");
+                assert_eq!(value["suggested_question"], Value::Null);
+            }
+        }
+        assert!(parse_setup_options(&[
+            "--skip-repository".into(),
+            "--project".into(),
+            "/tmp".into()
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn setup_bootstrap_plan_fingerprint_binds_scope_before_writes() {
+        let project = TempWorkspace::new("cli-setup-plan-fingerprint");
+        let home = TempWorkspace::new("cli-setup-plan-fingerprint-home");
+        let env = |key: &str| match key {
+            "HOME" => Some(home.path().display().to_string()),
+            "PATH" => Some(String::new()),
+            _ => None,
+        };
+        let planned = run_with_context_and_runtime(
+            [
+                "setup",
+                "--target",
+                "none",
+                "--no-autosync",
+                "--dry-run",
+                "--print-plan-fingerprint",
+            ],
+            project.path(),
+            &env,
+            &TestRuntime,
+        );
+        assert_eq!(planned.status, 0, "{}", planned.stderr);
+        let fingerprint = planned
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("plan_fingerprint: "))
+            .unwrap();
+        assert!(!project.path().join(DEFAULT_STATE_DIR).exists());
+        let changed = run_with_context_and_runtime(
+            [
+                "setup",
+                "--target",
+                "none",
+                "--yes",
+                "--expected-plan",
+                fingerprint,
+            ],
+            project.path(),
+            &env,
+            &TestRuntime,
+        );
+        assert_eq!(changed.status, 2);
+        assert!(changed.stderr.contains("plan changed since review"));
+        assert!(!project.path().join(DEFAULT_STATE_DIR).exists());
+        let accepted = run_with_context_and_runtime(
+            [
+                "setup",
+                "--target",
+                "none",
+                "--no-autosync",
+                "--yes",
+                "--expected-plan",
+                fingerprint,
+            ],
+            project.path(),
+            &env,
+            &TestRuntime,
+        );
+        assert_eq!(accepted.status, 0, "{}", accepted.stderr);
+        assert!(project.path().join(DEFAULT_STATE_DIR).exists());
+        assert!(
+            parse_setup_options(&["--expected-plan".into(), "not-a-fingerprint".into()]).is_err()
+        );
+        assert!(parse_setup_options(&["--print-plan-fingerprint".into()]).is_err());
+    }
+
+    #[test]
+    fn setup_plan_distinguishes_missing_owned_foreign_and_drifted_agents() {
+        let mut agent = SetupAgentState {
+            target: AgentTarget::Codex,
+            detected: true,
+            live_writer: true,
+            integration: SetupAgentIntegrationState::Unmanaged,
+        };
+        for (state, label) in [
+            (
+                SetupAgentIntegrationState::Unmanaged,
+                "detected_configurable",
+            ),
+            (SetupAgentIntegrationState::OwnedCurrent, "owned_current"),
+            (SetupAgentIntegrationState::OwnedOutdated, "owned_outdated"),
+            (
+                SetupAgentIntegrationState::OwnedDrifted,
+                "owned_drifted_preserved",
+            ),
+            (SetupAgentIntegrationState::Foreign, "foreign_preserved"),
+            (SetupAgentIntegrationState::Malformed, "malformed_preserved"),
+        ] {
+            agent.integration = state;
+            assert_eq!(setup_agent_state_label(&agent), label);
+        }
+        agent.detected = false;
+        assert_eq!(setup_agent_state_label(&agent), "missing");
     }
 
     #[test]

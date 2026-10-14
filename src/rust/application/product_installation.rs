@@ -256,6 +256,129 @@ pub fn inspect_product_installation(
     }
 }
 
+/// Validate acquisition destinations before creating any persistent state.
+/// The returned flag authorizes backing up one unowned regular command only;
+/// it never authorizes replacing drifted product ownership evidence.
+pub(crate) fn preflight_acquisition_destination(
+    request: &ProductInstallationRequest,
+    replace_unmanaged_command: bool,
+) -> Result<bool, RepoGrammarError> {
+    require_safe_absolute(&request.data_dir, "installation data directory")?;
+    require_exact_path(
+        &request.executable_path,
+        &expected_authority(&request.data_dir),
+        "managed executable",
+    )?;
+    require_safe_absolute(&request.command_path, "managed command")?;
+    if request.command_path.file_name() != Some(binary_name().as_ref()) {
+        return Err(invalid(
+            "managed command must use the RepoGrammar binary name",
+        ));
+    }
+    let mut product_paths = vec![
+        request.executable_path.clone(),
+        product_receipt_path(&request.data_dir),
+    ];
+    product_paths.extend(expected_worker_paths(request));
+    let mut product_exists = false;
+    for path in &product_paths {
+        require_acquisition_parent(path)?;
+        if let Some(metadata) = acquisition_file_metadata(path)? {
+            require_acquisition_regular_file(&metadata)?;
+            product_exists = true;
+        }
+    }
+    require_acquisition_parent(&request.command_path)?;
+    if product_exists {
+        inspect_product_installation(request)?;
+        if let Some(metadata) = acquisition_file_metadata(&request.command_path)? {
+            if !metadata.file_type().is_symlink() {
+                require_acquisition_regular_file(&metadata)?;
+            }
+        }
+        return Ok(false);
+    }
+    match acquisition_file_metadata(&request.command_path)? {
+        None => Ok(false),
+        Some(metadata) => {
+            require_acquisition_regular_file(&metadata)?;
+            if !replace_unmanaged_command {
+                return Err(invalid(
+                    "unmanaged repogrammar command exists; review it and use --replace-unmanaged-command to retain a backup before replacement",
+                ));
+            }
+            let backup = request
+                .command_path
+                .with_file_name(format!("{}.unmanaged-backup", binary_name()));
+            if acquisition_file_metadata(&backup)?.is_some() {
+                return Err(invalid("unmanaged command backup already exists; preserve it and choose an empty command directory"));
+            }
+            Ok(true)
+        }
+    }
+}
+
+pub(crate) fn validate_acquisition_source(path: &Path) -> Result<(), RepoGrammarError> {
+    require_acquisition_parent(path)?;
+    let metadata = acquisition_file_metadata(path)?
+        .ok_or_else(|| invalid("verified bundle file is missing"))?;
+    require_acquisition_regular_file(&metadata)
+}
+
+fn acquisition_file_metadata(path: &Path) -> Result<Option<fs::Metadata>, RepoGrammarError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(invalid(format!(
+            "failed to inspect acquisition file: {error}"
+        ))),
+    }
+}
+
+fn require_acquisition_regular_file(metadata: &fs::Metadata) -> Result<(), RepoGrammarError> {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(invalid(
+            "acquisition file must be a regular file, not a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err(invalid(
+                "acquisition file must not have multiple hard links",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn require_acquisition_parent(path: &Path) -> Result<(), RepoGrammarError> {
+    require_safe_absolute(path, "acquisition path")?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid("acquisition path has no parent"))?;
+    let mut current = PathBuf::new();
+    for component in parent.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(invalid(
+                    "acquisition path has a symlink or non-directory ancestor",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(invalid(format!(
+                    "failed to inspect acquisition parent: {error}"
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
 fn inspect_receipted(
     request: &ProductInstallationRequest,
     receipt_path: &Path,
@@ -556,7 +679,7 @@ fn expected_authority(data_dir: &Path) -> PathBuf {
     data_dir.join("bin").join(binary_name())
 }
 
-fn expected_worker_paths(request: &ProductInstallationRequest) -> Vec<PathBuf> {
+pub(crate) fn expected_worker_paths(request: &ProductInstallationRequest) -> Vec<PathBuf> {
     let mut paths = vec![request.data_dir.join(PYTHON_WORKER_RELATIVE)];
     if let Some(command_dir) = request.command_path.parent() {
         let duplicate = command_dir.join(COMMAND_WORKER_RELATIVE);
