@@ -1317,6 +1317,17 @@ from three pairs. The unchanged golden corpus, both products' full
 `sync-equivalence --all` results and ordinary repository gates remain separate
 requirements.
 
+The separate offline supplement uses the frozen role prefix and every matching
+Family ID in the unchanged baseline inventory as its relevance set. It preserves
+the first five recorded candidates in order and reports micro/macro Recall@5
+and Hit@5 as `POSTHOC_DESCRIPTIVE_ROLE_PREFIX`. It neither edits primary gold
+nor reclassifies an UNKNOWN as a committed answer:
+
+```text
+python3 src/experiments/language_capability/recall.test.py
+python3 src/experiments/language_capability/recall.py --baseline <old-public-results.json> --candidate <candidate-public-results.json> --capture <capture-directory> --out <new-outside-repository-summary.json>
+```
+
 ### Query intent taxonomy
 
 Every corpus query declares a measurement `intent` (a new optional field, so the
