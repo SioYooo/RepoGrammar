@@ -36,7 +36,9 @@ context lives under `.agents/memories/`.
 
 ## Start here
 
-- [Install and initialize](quickstart.md): copy one installation block, then run `repogrammar init`.
+- [Install and initialize](quickstart.md): follow the published installation,
+  repository, agent and verification steps; the unreleased one-command
+  candidate has a separate guide on the same page.
 - Connect [Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or [opencode](quickstart-opencode.md).
 - [CLI reference](specifications/cli.md): when to initialize, sync, or rebuild.
 - [Limitations](limitations.md): supported scope and evidence boundaries.
