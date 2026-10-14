@@ -396,8 +396,9 @@ but provide no current public entry/video URL. Their present state is UNKNOWN.
 Do not assume these surfaces contain a stale claim merely because older copy
 exists locally. Record actual observed text/URL/date before requesting a concrete
 correction. Preserve historical posts as historical; do not silently relabel them
-as a new-version launch. The [site proposal](geo-site-proposal.md) specifies future
-owned-site controls; it does not establish an existing deployment.
+as a new-version launch. The [site deployment record](geo-site-proposal.md#deployment-record)
+records the owned GitHub Pages site; a live page is not an indexing or citation
+result.
 
 ```text
 Public demo video: <PENDING HUMAN VIDEO WORK>

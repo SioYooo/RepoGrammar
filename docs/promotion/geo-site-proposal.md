@@ -1,6 +1,7 @@
 # Minimal documentation-site proposal
 
-Status: PROPOSED; no deployment authorized or performed. Reviewed 2026-09-30.
+Status: APPROVED by the maintainer on 2026-10-14 and deployed as a GitHub Pages
+project site; see the [deployment record](#deployment-record). Reviewed 2026-09-30.
 The checkout has no standalone site infrastructure. Repository-native answers
 and the [GEO corpus](geo-query-corpus.json) come first.
 
@@ -168,3 +169,28 @@ measurement statements are all supported by frozen authorities. Report its
 numerator, reviewed denominator and specific unsupported/stale statements.
 Absent captures remain NOT_MEASURED, never zero. Index counts require verified
 dashboard exports; ranking, citation lift and causal GEO effects are unproved.
+
+## Deployment record
+
+On 2026-10-14 the maintainer approved a GitHub Pages project site without a
+custom domain, and chose to allow both `OAI-SearchBot` and `GPTBot`.
+
+| Item | Deployed choice |
+| --- | --- |
+| Origin | `https://sioyooo.github.io/RepoGrammar/`; no custom domain or DNS |
+| Build | Pages legacy branch build of `main` at `/` with GitHub's own Jekyll. No workflow file, renderer dependency, or front matter is added. The root `_config.yml` sets site metadata, `jekyll-seo-tag` (title, description, self-canonical, OpenGraph, JSON-LD) and `jekyll-sitemap` |
+| Published | Root README as `/`, quickstarts, limitations, examples, specifications, architecture, ADRs, reports, release records and root community files |
+| Excluded | `src/`, `algorithms/`, manifests, agent guides, the docs map, roadmap, case studies, demo runbooks, development docs, experiments, plans, promotion and prompts |
+| Crawler policy | A project site cannot serve the origin-root `robots.txt`. `https://sioyooo.github.io/robots.txt` returned 404 on 2026-10-14, which leaves every crawler allowed and matches the maintainer's choice. A different policy needs a user site or custom domain |
+| Owner steps not performed | Google Search Console and Bing Webmaster Tools verification, sitemap submission and IndexNow. Verification tokens are never committed |
+
+Deviations from the handoff above: Jekyll's exclude list replaces an explicit
+page map, so new Markdown is published unless excluded (see the
+[documentation policy](../development/documentation-policy.md#published-site)).
+Eight links from published specifications, ADRs and reports into excluded
+experiment and promotion documents do not resolve on the site; they still
+resolve on GitHub. README links stay absolute GitHub URLs because the npm
+package ships the same README. Pages carry no per-commit source links.
+
+A live page is not an indexing, citation or ranking result; search and
+answer-engine visibility remains `NOT_MEASURED`.

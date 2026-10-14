@@ -4,6 +4,11 @@
 
 ### Added
 
+- Published the public documentation at https://sioyooo.github.io/RepoGrammar/
+  through GitHub's Jekyll build of the existing Markdown; experiments, plans,
+  prompts and unsent drafts are excluded. Search and answer-engine visibility
+  remains unmeasured.
+
 - Added opt-in repository-guard full-resync host-stage diagnostics, with
   exclusive wall timing, scoped operation/write-session counters, bounded
   isolated controls and complete owned-table parity. Normal product profiling

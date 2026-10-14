@@ -39,6 +39,11 @@ We therefore add no root `robots.txt`, sitemap, JSON-LD, or `llms.txt`, submit
 no URLs, and introduce no website dependency. [The site proposal](geo-site-proposal.md)
 is a separate maintainer decision.
 
+Update 2026-10-14: the maintainer approved that proposal. A GitHub Pages project
+site now renders the public Markdown; the [deployment record](geo-site-proposal.md#deployment-record)
+owns its origin, crawler policy, and live checks. The paragraphs above remain
+the 2026-09-30 finding.
+
 | Question cluster | Canonical answer surface | Verifiable depth |
 | --- | --- | --- |
 | What it is, who it helps, how it works, alternatives | [README](../../README.md#how-it-works) | [product specification](../specifications/product.md), [optional graph boundary](../decisions/ADR-0010-optional-codegraph-provider.md) |
