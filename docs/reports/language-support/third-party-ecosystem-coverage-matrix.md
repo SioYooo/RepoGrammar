@@ -6,12 +6,15 @@ This matrix audits the closed `DependencyEcosystem` vocabulary against actual
 consumers. “Inventory” means bounded repository evidence only; it never means
 installed, selected, importable, compatible, or behaviorally understood.
 
+2026-10-14 source correction: NuGet includes the implemented bounded C#
+`.csproj` inventory consumer. Resolution and semantic gaps remain unchanged.
+
 | Ecosystem token | Language lanes | Current reader/evidence | Current level | Principal gap |
 |---|---|---|---|---|
 | `pypi` | Python | bounded `pyproject.toml`, `setup.cfg`, static literal `setup.py` declarations | `manifest_declared` | common lockfiles, distribution metadata, `.pyi`/`py.typed`, import-to-distribution binding |
 | `npm` | JavaScript, TypeScript | bounded root `package.json` dependency sections | `manifest_declared` | npm/yarn/pnpm locks, workspaces, exports/imports, installed graph, package-qualified symbols |
 | `maven` | Java | bounded exact root/nested `pom.xml` direct dependencies | `manifest_declared` | effective model, parent/properties/BOM/profiles/reactor, Gradle, classpath/JAR symbols |
-| `nuget` | Visual Basic .NET; C# missing | bounded `.vbproj` literal `PackageReference` | `manifest_declared` | C# `.csproj`, central versions, restore/assets graph, target frameworks, assemblies |
+| `nuget` | Visual Basic .NET; C# | bounded `.vbproj` and `.csproj` literal `PackageReference` | `manifest_declared` | central versions, restore/assets graph, target frameworks, assemblies |
 | `cargo` | Rust | bounded Cargo project records from the metadata lane | `manifest_declared` | `Cargo.lock`, full feature/target graph, external item identity, proc-macro/build semantics |
 | `go_modules` | Go | bounded `go.mod` `require`; direct/`// indirect` retained | `manifest_declared` | `go.work` selection, module graph, `go.sum` authenticity, package/type identity |
 | `composer` | PHP | bounded `composer.json` declarations and `composer.lock` package pins | manifest plus `lockfile_resolved` | coherence/effective profile, virtual/platform packages, autoload and PHP symbol binding |

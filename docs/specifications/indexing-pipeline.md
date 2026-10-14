@@ -27,16 +27,17 @@ Repository files
 -> SQLite persistence
 ```
 
-## Bootstrap status
+## Current implementation status
 
-The repository currently defines module boundaries, semantic-worker protocol
-placeholders, a safe repo-local lifecycle, a TS/JS file discovery substrate, a
-Python `.py` discovery slice, syntax-only code-unit extractors, and
-`index`/`sync`/`resync` wiring. The current CLI can discover TS/JS/Python/Java/C#/C++/Rust/Go/PHP/Ruby/Swift/SQL/R
-files, read source through a hash-checked repo-relative boundary, store
-repo-relative file metadata and structural code units in a building generation
-inside the mutable `.repogrammar/repogrammar.sqlite` database, validate that
-generation, and mark the corresponding `index_generations` row active. `index`
+The product implements bounded language discovery, owned parser/worker
+contracts, framework roles, exact-anchor support derivation, conservative family
+construction and `index`/`sync`/`resync`. The current CLI discovers the admitted
+source/configuration paths listed below, including bounded source subsets under
+ADR-0040 and ADR-0042..0051; recognized extensions alone are not language
+support. It reads admitted source through a hash-checked repo-relative boundary,
+stores repo-relative file metadata and structural code units in a building
+generation inside the mutable `.repogrammar/repogrammar.sqlite` database,
+validates that generation, and marks the corresponding `index_generations` row active. `index`
 and `resync` do this as full rebuilds; `sync` attempts path-level incremental
 copy-forward from the readable active generation and falls back to the full
 rebuild path when project context, worker, engine-version, schema, layout, or
@@ -70,14 +71,15 @@ building generation's indexed file, code-unit id, content hash, byte range, and
 requested operation provenance. Incremental `sync` falls back to a full rebuild
 when an explicit worker is configured.
 
-R remains `discovered_only`: exact `.R` and `.r` bytes stay inventory-only, and
-only exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` are read through the
-bounded source store and dispatched to the `r-config` adapter. That adapter
-emits project-config/typed-UNKNOWN records and admits only explicit
-CRAN/Bioconductor renv package identities and versions. It never invokes R,
-renv, profiles, package/native code, or network resolution. R-source-only
-generations are `file_manifest_only`; admitted R metadata makes the generation
-`syntax_only_code_units` without creating a language family.
+Under [ADR-0042 D1–D5](../decisions/ADR-0042-bounded-r-testthat-frontend.md),
+only `tests/testthat/test-*.R`/`.r` source enters the bounded testthat parser;
+other R source stays unread inventory. The exact top-level call anchor requires
+the declared subset and a repository DESCRIPTION testthat declaration; external
+binding, NSE and execution remain unknown. Exact `DESCRIPTION`, `NAMESPACE`
+and `renv.lock` separately enter the bounded `r-config` metadata adapter. Those
+inventory rows do not prove a family. DESCRIPTION changes invalidate parser
+context; ordinary admitted R-source changes remain file-local. No R, renv,
+profile, package/native code or network resolution is invoked.
 
 Under ADR-0040 SQL bytes do cross the source-store boundary. `sql`,
 `sql-migration`, `sql-schema`, and `sql-catalog` are dispatched to the bounded
@@ -88,10 +90,10 @@ not UTF-8 is skipped with a `parser skipped non-UTF-8 source` warning and
 contributes no unit; that abstention is per file, so one undecodable dump cannot
 fail the run, and a skipped file is never recorded as a clean empty parse.
 
-Outside the internal Rust self-dogfood extractor and explicitly configured
-semantic workers, this slice does not use Tree-sitter, call a TypeScript
-compiler, perform full multi-view alignment, or anti-unify templates. It does
-include
+The Rust, Java, C# and C/C++ adapters use their accepted Tree-sitter grammars
+as bounded structural frontends; they are not semantic oracles. Default TS/JS
+analysis does not invoke a TypeScript compiler. Full multi-view alignment and
+general template anti-unification remain future work. The implementation includes
 a conservative EC-MVFI-lite family builder that groups by language,
 code-unit kind, framework role, and normalized shape, then applies a bounded
 role-specific complete-link clustering pass over internal support-family
@@ -701,14 +703,15 @@ forward exactly once. A future effective project/classpath model must add its
 actual cross-file inputs and restore the project-context gate before upgrading
 this file-local contract.
 
-Go is `discovered_only` and unsupported. Default discovery classifies bounded
+Go is a bounded `structural_substrate`, not completed language support. Default
+discovery classifies bounded
 `.go` inputs as `go` and root or nested `go.mod`/`go.work` as `go-config`, then
 stores their repo-relative path, strict hash, size, and language token in the
-normal file inventory. `.go` remains inventory-only before any source-store
-read: the parser receives no Go source bytes, the manifest-level warning is
-path-free, and no Go-source code unit, IR, fact, role, or family exists. This
-preserves metadata for non-UTF-8 Go content without interpreting or persisting
-its bytes.
+normal file inventory. [ADR-0050 D1–D5](../decisions/ADR-0050-bounded-go-testing-frontend.md)
+admits only `*_test.go` source to the bounded declaration parser. Its declared
+subset emits owned units/IR, exact Test/Benchmark/Fuzz anchors and typed
+UNKNOWNs; other `.go` files stay unread inventory. Malformed or unadmitted
+source cannot contribute confident function anchors.
 
 `go-config` uses a bounded, non-executing, file-local static parser. Every
 discovered config yields one `project_config` unit/IR node. A valid `go.mod`
@@ -724,16 +727,17 @@ directives produce bounded source-free facts with
 behavior, framework identity, or support. `go.sum` is neither discovered nor
 treated as a lockfile, and no Go command/process is invoked.
 
-`.go` add/modify/remove deltas use incremental metadata persistence and filter
-all claim-bearing copy-forward records for current source paths. Because the
+Unread `.go` add/modify/remove deltas use incremental metadata persistence and
+filter claim-bearing copy-forward records for those deferred paths. Admitted
+`*_test.go` deltas reparse file-locally and recompute derived support. Because the
 static config parser consumes only the current file's bytes and no
 `ParserProjectContext`, `go-config` additions/modifications reparse
 incrementally, unchanged units/facts/dependencies copy forward, and removals
 omit their records. A generation containing parsed config reports
-`syntax_only_code_units`; Go-source-only and empty generations remain
-`file_manifest_only`. A future cross-file Go frontend must add its actual inputs
-to `ParserProjectContext` and restore token-based invalidation before any Go
-source semantic or claim-bearing record is implemented.
+`syntax_only_code_units`, as does admitted source with units; generations with
+no units remain `file_manifest_only`. Any future cross-file Go semantics must
+add actual inputs to `ParserProjectContext` and restore context invalidation
+before those records can be reused.
 
 `GoLanguageAdapter::classify_source_path` is the single current Go path-shape
 authority. It accepts only normalized repo-relative paths and separates
@@ -749,22 +753,19 @@ end-to-end fixtures retain dot/underscore, `testdata`, and platform-suffix Go
 candidates where that generic policy permits them. The classification cannot
 support a family.
 
-This slice intentionally does not scan source text for `//go:build`, generated-
-file markers, `import "C"`, or `//go:generate`: ADR-0021 assigns those parser-
-backed markers to frontend/IR because regex or line-prefix guesses would
-overclaim structural facts. A future
-version-pinned Tree-sitter Go grammar may produce syntax candidates, while
-claim-supporting primary facts require an explicit, opt-in, sandboxed standard-
-library worker over supplied inputs. Default indexing must not execute
-`go/packages`, `go list`, gopls, cgo, or repository build/test/generate
-commands. Build/environment/workspace selection, generated files, external
-types, dispatch, cgo, and generators remain unimplemented obligations until
-their atomic modules and the completion audit land. The current worker process
-boundary remains insufficient for Go, and no discovered `.go` path may become
-family support without the future sandboxed frontend and authoritative claim-
-impact gate.
+The ADR-0050 parser records build-constraint uncertainty and refuses cgo
+imports; it never evaluates constraints, executes generators or treats a marker
+as runtime proof. It supersedes ADR-0041's auxiliary-only family boundary for
+this declared subset. ADR-0021's future version-pinned syntax fallback and
+opt-in sandboxed standard-library worker remain unimplemented and unadmitted.
+Default indexing must not execute `go/packages`, `go list`, gopls, cgo or
+repository build/test/generate commands. Environment/workspace selection,
+external types, dispatch and execution remain typed obligations/non-claims.
+Only the admitted exact declaration anchors may enter the existing
+claim-impact, derived-support and compatibility gates.
 
-PHP is `discovered_only` and unsupported. One pure normalized repository-
+PHP is a bounded `structural_substrate`, not completed language support. One
+pure normalized repository-
 relative classifier returns exact case-sensitive `.php` source, exact accepted
 root/nested `php-config` basename, PHP-specific exclusion, or not-PHP.
 Configuration classification precedes suffix matching. Exact `.composer` and
@@ -774,11 +775,17 @@ the existing global exclusion. Deferred `.inc`, `.phtml`, `.phpt`, `.php.dist`,
 extensionless `artisan`, `composer.phar`, and `auth.json` shapes are not N1
 inventory.
 
-Full and incremental indexing keep `php` source and PHPUnit XML inventory-only
-before parser-facing source-store access. They persist only repo-relative path,
-strict raw-byte SHA-256, size, and token, including bounded non-UTF-8 bytes, and
-emit at most one deterministic path-free unsupported warning per accepted
-deferred token. Exact `composer.json` and `composer.lock` basenames are the sole
+[ADR-0047 D1–D5](../decisions/ADR-0047-bounded-php-phpunit-frontend.md) admits
+the prologue-bearing PHPUnit subset and requires other `.php` inputs to remain
+zero-read inventory before source-store dispatch. Current code checks the
+byte-level prologue only inside the parser after reading the source; this is
+[OPEN CONTRACT_DRIFT](../reports/language-support/php-completion-review.md#2026-10-14-open-admission-contract-drift),
+not a relaxed admission rule. Parser rejection prevents unsupported anchors
+but cannot satisfy the stronger zero-read requirement. Malformed/unadmitted
+syntax cannot provide confident anchors.
+Owned source units/IR and exact support do not resolve runtime selection or
+external base identity. PHPUnit XML remains unread inventory. Exact
+`composer.json` and `composer.lock` basenames are the sole
 configuration exception: supplied UTF-8 bytes enter a bounded unique-member
 JSON parser and may create `PROJECT_CONFIG` units/IR, ADR-0030 `composer`
 dependency records, and `php_dependency_inventory` typed `UNKNOWN`. The parser
@@ -799,17 +806,17 @@ version text, cross-scope conflicts, platform packages, virtual relations, and
 resource overflow fail closed through claim-scoped UNKNOWN. Raw source and
 package text remain absent from ordinary index/status/files/units output.
 
-PHP-only generations with Composer evidence are `syntax_only_code_units`;
-those containing only deferred PHP/PHPUnit inputs are `file_manifest_only`.
-While all PHP tokens remain absent from `ParserProjectContext`, deltas stay
-incremental: added/modified Composer documents parse file-locally, removed
-documents drop their evidence, and unchanged Composer units/facts/dependencies
-copy forward. Generation copy-forward still purges legacy PHP semantic/support/
-family records while retaining deferred file metadata. Discovery and autosync
-fingerprinting both honor Git ignore over the same accepted manifest. No PHP
-family, selected project model, or readiness/support claim is created.
+PHP generations with parsed source or Composer units are
+`syntax_only_code_units`; generations with no units are `file_manifest_only`.
+These inputs remain file-local: source edits reparse and recompute support;
+Composer edits parse declarations, removed paths drop evidence, and unchanged
+qualified records copy forward under the shared gates. Deferred configuration
+paths retain metadata and no claim-bearing records. Discovery and autosync
+fingerprinting honor Git ignore over the same accepted manifest. Neither the
+source subset nor inventory establishes a selected project model or completed
+language readiness.
 
-ADR-0024's frontend/project-model contract remains future work. The candidate
+ADR-0024's separate external frontend/project-model contract remains future work. The candidate
 `mago-syntax` 1.43.0 frontend may enter only through a separately reviewed OS-
 sandboxed worker after its dependency and artifact gates pass. Official PHP
 8.5.8 `php -n -l` is the isolated syntax-validity oracle;
@@ -819,14 +826,14 @@ syntax candidates only. A future selected project-model stage may extend the
 implemented static Composer dependency inventory and treat PHPUnit XML as
 non-executing supplied data, but must never run Composer, PHPUnit, autoloaders,
 plugins, scripts, repository PHP, or target dependencies.
-No PHP source-store read, frontend request, or claim may occur until that model
-applies project selection and validated custom vendor/cache prefix exclusions
-over already discovered paths. Profile changes must reclassify affected paths
-and purge claims. No PHP path may support the future exact
-`php.phpunit.test_method` family before the ADR-0024 obligation registry,
-fixtures, product wiring, and final completion audit land.
+The future external-provider lane still needs selected project scope and
+validated custom vendor/cache exclusions; profile changes must invalidate its
+claims. ADR-0047 supersedes the earlier family closure only for the implemented
+bounded `php.phpunit.test_method` subset. It does not admit that provider,
+project model or ADR-0020 completion.
 
-Swift is `discovered_only` and unsupported. One pure normalized repository-
+Swift is a bounded `structural_substrate`, not completed language support. One
+pure normalized repository-
 relative classifier returns exact case-sensitive `.swift` source, exact
 accepted root/nested `swift-config` basename, Swift-specific exclusion, or
 not-Swift. Configuration classification precedes suffix matching. The complete
@@ -836,19 +843,22 @@ remains ordinary source inventory. Exact `.build` and `.swiftpm` components
 receive `language_specific_exclusion` only for Swift candidates and do not
 globally prune other languages.
 
-Full and incremental indexing keep `swift` source, `Package.swift`, version-
-specific manifests, and `.swift-version` inventory-only before parser-facing
-source-store access. Exact `Package.resolved` is the sole static-metadata
+[ADR-0048 D1–D8](../decisions/ADR-0048-bounded-swift-xctest-frontend.md) admits
+Swift source to the file-local declared-subset XCTest parser, which produces
+owned units/IR, exact declaration anchors or typed abstention. `Package.swift`,
+version-specific manifests and `.swift-version` remain unread inventory.
+Exact `Package.resolved` is the sole static-metadata
 exception: supplied UTF-8 bytes enter a bounded unique-member JSON reader for
 schema 2/3 pins. It emits a project-config unit, exact semantic-version SwiftPM
 lock rows with unknown scope/directness, and claim-scoped typed `UNKNOWN` for
 malformed, unsupported, conflicting, or over-budget pins. URLs, locations,
 revisions, and origin hashes are discarded. The reader invokes no Swift or
 SwiftPM process and creates no source unit, family, readiness, installed-graph,
-or support claim. Other Swift inventory continues to support non-UTF-8 bytes,
-path-free warnings, incremental metadata deltas, and legacy claim purging.
+or support claim. Deferred Swift configuration retains metadata-only
+incremental behavior; admitted source reparses file-locally and recomputes
+derived support through the shared pipeline.
 
-ADR-0025's frontend/project-model contract remains future work. SwiftSyntax
+ADR-0025's separate external frontend/project-model contract remains future work. SwiftSyntax
 603.0.2 may enter only through a separately reviewed OS-sandboxed worker after
 artifact, differential, dependency, five-target, and native-sandbox gates pass.
 Exact Swift 6.3.3 SourceKit/compiler is only a separately qualified semantic
@@ -856,11 +866,13 @@ identity candidate. A future bounded manifest project model may parse supplied
 SwiftPM data but must never evaluate manifests or run Swift, SwiftPM, Xcode,
 builds, tests, macros, plugins, generators, dependencies, children, or network
 access.
-No Swift path may support `swift.xctest.test_method` before the ADR-0025
-obligation registry, project model, fixtures, product wiring, reviews, and
-completion audit land.
+ADR-0048 supersedes the earlier family closure for the declared
+`swift.xctest.test_method` subset only. SwiftSyntax/SourceKit remain
+unadmitted; source-visible XCTest anchors do not prove module-qualified
+superclass identity, target selection or runtime behavior.
 
-Ruby is `discovered_only` and unsupported. One pure normalized repo-relative
+Ruby is a bounded `structural_substrate`, not completed language support. One
+pure normalized repo-relative
 classifier returns exact `.rb` source, accepted root/nested `ruby-config`,
 Ruby-specific exclusion, or not-Ruby. Exact configuration matching precedes
 source suffixes, so `gems.rb` is config; literal `.rb` and `.gemspec` basenames
@@ -868,9 +880,11 @@ are accepted. Candidates below exact `.bundle` or `.ruby-lsp` components receive
 `language_specific_exclusion`, but those directories are not globally pruned and
 other languages retain their own policy.
 
-Full and incremental indexing treat `ruby` source and every accepted
-`ruby-config` path except exact `Gemfile.lock` as inventory-only before
-parser-facing source-store access. Exact lock bytes enter a bounded pure Rust
+[ADR-0049 D1–D5](../decisions/ADR-0049-bounded-ruby-minitest-frontend.md) admits
+only `test_*.rb`/`*_test.rb` under a `test/` or `tests/` path component to the
+bounded Minitest frontend. Other Ruby source and every accepted `ruby-config`
+path except exact `Gemfile.lock` remain unread inventory. Exact lock bytes
+enter a bounded pure Rust
 parser, create one project-config unit, and may emit strict direct `rubygems`
 manifest declarations from the unique top-level `DEPENDENCIES` section.
 Requirements are bounded ASCII clauses, scope is `unknown`, directness is
@@ -883,14 +897,16 @@ package/source text is exposed by those UNKNOWNs.
 
 Exact `Gemfile.lock` changes parse file-locally; unrelated incremental
 source/config changes copy forward unchanged evidence-bound dependency rows.
-Other Ruby deltas remain inventory-only and incremental. Generation
-copy-forward purges legacy claim-bearing records for deferred Ruby paths. This
-slice creates no Ruby source unit/IR, framework fact, family, engine/root
-selection, semantic support, or readiness claim.
+Admitted Ruby source deltas reparse file-locally and recompute derived support;
+other source/configuration deltas remain metadata-only. Copy-forward filters
+claim-bearing records for deferred paths. The source frontend owns bounded
+class/method units and exact Minitest anchors, without selected engine/root,
+external constant identity, runtime semantics or completed language readiness.
 
 The later dependency-and-sandbox qualification stage is documentation/evidence
 only. Production dependency/artifact admission and the sandboxed worker must
-land separately before frontend/IR may use that accepted boundary. Before
+land separately before an external frontend may use that boundary. The current
+ADR-0049 in-process parser admits no Prism/Ruby runtime. Before
 spawning, a bounded project-model step may validate only the sole repository-
 root `.ruby-version` exact `4.0.6` plus optional LF and pass normalized profile
 metadata. Nested/absent/alternate/conflicting forms must become
@@ -899,45 +915,55 @@ semantic capability is unavailable. The worker receives only `.rb` source, not
 raw executable configuration. It must restore project-context invalidation
 before any cross-file Ruby claim-bearing record exists. Default indexing must
 never run Ruby, Bundler, RubyGems, Rake, Rails, tests, generators, installed
-gems, project tooling, child processes, or network access. No Ruby path may
-become family support without the authoritative Ruby claim-impact classifier,
-exact direct Minitest slice, support >= 3, source-free product wiring, review,
-and completion audit required by ADR-0022.
+gems, project tooling, child processes or network access. ADR-0049 admits only
+the bounded Minitest declaration slice through the existing claim-impact and
+support >= 3 gates; it changes no external-provider requirement and does not
+close the ADR-0020 completion audit.
 
-Visual Basic .NET is `discovered_only` and unsupported under ADR-0031. One pure
+Visual Basic .NET is a bounded `structural_substrate`, not completed language
+support. One pure
 normalized-path classifier accepts exact lowercase `.vb` as `visual-basic` and
 `.vbproj` as `visual-basic-config`, excludes only VB candidates below exact
-`bin`/`.vs`, and does not admit VB6 `.vbp`/`.frm`/`.bas`/`.cls`. `.vb` source is
-hashed and persisted without a source-store or parser request. Exact `.vbproj`
+`bin`/`.vs`, and does not admit VB6 `.vbp`/`.frm`/`.bas`/`.cls`.
+[ADR-0043 D1–D5](../decisions/ADR-0043-bounded-vbnet-mstest-frontend.md) admits
+`.vb` source to the declared-subset MSTest parser, with owned units/IR, exact
+attribute anchors and typed uncertainty. Exact `.vbproj`
 bytes enter a bounded non-validating XML reader that rejects DTD/external or
 custom entities and never evaluates MSBuild. Literal direct-root
 `PackageReference Include` declarations may create project-config units and
 direct `nuget` manifest rows; SDK/import/property/condition/update/override,
 conflict, malformed, and resource cases produce scoped
 `visual_basic_dependency_inventory` UNKNOWN. Config rows update file-locally
-and copy forward when unchanged. Source-only generations are
-`file_manifest_only`; an admitted `.vbproj` makes the generation
-`syntax_only_code_units`. No VB source fact, role, family, or support follows.
+and copy forward when unchanged. Generation mode follows the actual code-unit
+count: parsed source/configuration units use `syntax_only_code_units`; no units
+means `file_manifest_only`. Manifest inventory itself proves no framework
+behavior, family or language support.
 
-The Delphi-qualified Object Pascal lane is likewise `discovered_only` and
-unsupported under ADR-0032. Exact `.pas`/`.dpr`/`.dpk` persist as generic
+The Delphi-qualified Object Pascal lane is a bounded `structural_substrate`,
+not completed language support. Exact `.pas`/`.dpr`/`.dpk` persist as generic
 `object-pascal` inventory because source suffixes do not prove Delphi versus
 Free Pascal; exact `.dproj` alone is `delphi-config`. `.pp`/`.lpr`/`.lpi`/`.lpk`
-are not admitted. All source, including package source, bypasses source reads.
-The same bounded XML reader may create one project-config unit and runtime
+are not admitted. [ADR-0044 D1–D5](../decisions/ADR-0044-bounded-delphi-dunitx-frontend.md)
+admits `.pas` units to the declared-subset DUnitX parser; `.dpr` and `.dpk`
+remain unread. The source frontend yields owned units/IR, exact declaration
+anchors and typed uncertainty. The same bounded XML reader may create one project-config unit and runtime
 `delphi_package` manifest rows from literal direct-root `DCC_UsePackage`
 entries. Directness stays unknown; imports, properties, conditions, invalid
 values, and limits emit scoped `delphi_dependency_inventory` UNKNOWN. No
-Delphi/FPC tool, MSBuild, package loader, project code, source parser, family,
-or dialect-equivalence claim is involved.
+Delphi/FPC tool, MSBuild, package loader or project code is executed. Manifest
+rows prove no family or dialect equivalence; source anchors remain bounded by
+ADR-0044's declared subset and non-claims.
 
-Ada is `discovered_only` and unsupported. A pure normalized path classifier
+Ada is a bounded `structural_substrate`, not completed language support. A
+pure normalized path classifier
 admits only lowercase GNAT-default `.ads` specifications and `.adb` bodies as
 `ada`; GPR-configured alternative names such as `.ada` remain deferred. Exact
 lowercase `.gpr`, `alire.toml`, and `alire.lock` basenames are `ada-config`.
-Ada source and GPR bytes are inventory-only before SourceStore access, so binary
-content is still safely hashed and no source/config code unit, IR, fact, or
-family is created for those paths.
+[ADR-0045 D1–D4](../decisions/ADR-0045-bounded-ada-aunit-frontend.md) admits
+only `.adb` bodies to the bounded AUnit parser, which emits owned registration
+units/IR and exact anchors within its declared subset. `.ads` and GPR bytes
+remain unread inventory. Malformed/unadmitted bodies abstain and cannot
+contribute registration anchors.
 
 Exact `alire.toml` and `alire.lock` bytes enter a bounded file-local parser.
 Only ASCII string assignments under exact unconditional `[[depends-on]]`
@@ -954,16 +980,21 @@ The Libadalang qualification result is documentation-only. Its parser/semantic
 API, recovery behavior, incomplete legality coverage, GNAT toolchain coupling,
 and project-provider file access do not satisfy the current source-free default
 boundary. No Libadalang, GNAT, gprbuild, alr, repository/dependency code,
-child process, or network action is added by this slice. No Ada path may become
-family support before a separate provider/project-model/obligation decision,
-fixtures, source-free readiness review, and completion audit land.
+child process or network action is added. ADR-0045 admits only the bounded
+AUnit registration family through the shared support gates; the Libadalang
+NO_GO, external identity limitations and ADR-0020 completion audit remain.
 
-Fortran is `discovered_only` and unsupported. The pure path classifier freezes
+Fortran is a bounded `structural_substrate`, not completed language support.
+The pure path classifier freezes
 the documented GNU non-preprocessed lowercase forms: fixed `.f`, `.for`, and
 `.ftn`; free `.f90`, `.f95`, `.f03`, and `.f08`. Uppercase forms and `.fpp`
 remain deferred because they invoke preprocessing by documented default; `.fi`,
-`.fii`, and other suffixes are likewise unproven. Source bytes are inventory-
-only before SourceStore access. Exact root/nested `fpm.toml` is
+`.fii`, and other suffixes are likewise unproven.
+[ADR-0051 D1–D4](../decisions/ADR-0051-bounded-fortran-testdrive-frontend.md)
+admits only the free-form suffixes to the bounded test-drive parser; fixed-form
+source stays unread inventory. The declared subset produces owned units/IR,
+exact signature anchors and typed obligations; preprocessing/include/unsupported
+source shapes abstain. Exact root/nested `fpm.toml` is
 `fortran-config` and enters one bounded file-local parser.
 
 The fpm reader admits only direct ASCII string requirements in exact root
@@ -973,30 +1004,33 @@ inline git/path, target-specific, non-string, conflicting, malformed, and
 resource-bounded shapes are omitted or fail closed with source-free
 `fortran_dependency_inventory` UNKNOWN. It neither preprocesses nor resolves a
 dependency graph. Config edits reparse file-locally and unchanged evidence rows
-copy forward; source deltas stay zero-read and incremental.
+copy forward; admitted source deltas reparse file-locally, while fixed-form
+source stays zero-read metadata.
 
 The Flang qualification result is documentation-only. Its prescanner expands
 includes and runs preprocessing before parsing, and its driver/compiler phases
 do not meet this source-free non-execution lane. No Flang/f18, fpm, compiler,
 preprocessor, repository/dependency code, child process, or network action is
-introduced. No Fortran family, support, readiness, or semantic claim may follow
-without a separately qualified frontend and completion gate.
+introduced. ADR-0051 admits only the bounded test-drive signature family;
+external module identity, registration, execution and completed language
+readiness remain unproved.
 MATLAB is a bounded `structural_substrate`, not completed language support.
 A single pure classifier admits lowercase `.m` as `matlab` and exact root/nested
 `resources/mpackage.json` as `matlab-config`, and excludes candidates under an
 exact `codegen`, `slprj`, or `sccprj` path component as MathWorks
 code-generation output. Admitted `.m` bytes enter the bounded ADR-0046 parser,
 which anchors only `classdef` files whose `methods` blocks declare
-`matlab.unittest.TestCase` test methods; everything else abstains whole-file
-with typed refusals. Package-definition bytes alone enter the shared bounded
+`matlab.unittest.TestCase` test methods. A non-classdef-first file yields only
+a module unit without a structural claim; malformed or unadmitted class syntax
+abstains with typed refusals. Package-definition bytes alone enter the shared bounded
 unique-member JSON gate and may create one project-config unit, exact direct
 `matlab_add_on` declaration rows, and source-free
 `matlab_dependency_inventory` UNKNOWNs. Supported schema 1.0.0/1.1.0 metadata
 does not establish installed packages or resolved versions; later valid schema
 versions abstain. Incremental changes parse file-locally, unchanged dependency
-evidence copies forward, removals omit it, and legacy MATLAB source claims are
-purged. No MATLAB/Octave/Simulink execution, external symbol resolution,
-provider, readiness promotion, or support claim exists.
+evidence copies forward and removals omit it; source support is recomputed
+through the shared family gates. No MATLAB/Octave/Simulink execution, external
+symbol resolution, provider or language-completion promotion follows.
 
 Assembly is a bounded `structural_substrate`, not completed language support.
 Discovery admits only lowercase `.s`; uppercase `.S` is excluded rather than
@@ -1518,8 +1552,10 @@ interface-hash gate below). Adding or removing any project-context source file,
 editing any `.py` module whose interface changed or could not be verified,
 editing any `conftest.py`, and changing any project config consumed as cross-file
 parser context fall back to a full rebuild (see the gate table below). Current
-inventory-only `.go`, Ada, or Fortran source plus deferred PHP/Ruby/Swift/Ada
-source/config paths are explicit exceptions. Bounded file-local
+source paths outside the declared Go/Ada/Fortran/Ruby/R subsets and deferred
+PHP/Ruby/Swift/Ada configuration remain inventory-only exceptions. Admitted
+bounded-frontend source follows its file-local reparse/support path; R
+DESCRIPTION remains a cross-file context input and forces a rebuild. Bounded file-local
 `go.mod`/`go.work`, Composer JSON/lock, `Gemfile.lock`, `Package.resolved`,
 `alire.toml`/`alire.lock`, and `fpm.toml` parsing follows the static-manifest
 evidence lifecycle. When safe, incremental `sync`
@@ -1556,7 +1592,7 @@ appears in both the base and the current manifest with a changed content hash
 | Content-only modify | context-bearing discovered project config | full-rebuild fallback (`project_context_changed`) |
 | Add/modify/remove | file-local static `go.mod`/`go.work`, Composer/Bundler/SwiftPM/Alire/fpm, vcpkg, or Conan config | incremental — parse changed files and evidence-copy unchanged files |
 | Add or remove | `.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.rs` source, or context-bearing project config | full-rebuild fallback (`project_context_changed`) |
-| Add/modify/remove | Java/C#/C/C++ and inventory-only source | incremental — parsers ignore project context |
+| Add/modify/remove | Java/C#/C/C++, admitted bounded-frontend source, and inventory-only source | incremental — file-local source changes reparse; inventory-only paths retain metadata. R DESCRIPTION is a context-bearing config and follows the full-rebuild row |
 
 The content-only Rust and TS/JS fast path is sound because their parsers consume
 only their own discovered path set plus root configuration — Rust: the

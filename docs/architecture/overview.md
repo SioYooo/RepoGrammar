@@ -55,10 +55,12 @@ bin --wires together--> interfaces + application + adapters
 
 ## Data flow
 
-The intended indexing flow is:
+The implemented indexing flow is:
 
 ```text
-repository files -> discovery/exclusion policy -> parser adapter -> code units -> language-native semantic worker -> core IR -> application pipeline -> store port -> repo-local SQLite adapter
+repository files -> discovery/exclusion policy -> parser adapter -> owned units/IR/facts -> framework roles and validated support -> family construction -> store ports -> repo-local SQLite
+                                                                         ^
+                                                    optional admitted worker facts
 ```
 
 The discovery/exclusion boundary applies fixed aggregate file, byte, skipped-
@@ -74,9 +76,14 @@ same-handle metadata/content reads. The dependency/platform qualification and
 implementation remain incomplete; the architecture must not claim concurrent
 filesystem confinement yet.
 
-The current product path implements discovery, a dependency-free syntax-only
-parser adapter, code-unit metadata storage, CodeUnit-derived IR node and
-containment-edge storage, and SQLite generation activation. The Rust-side
+The product dispatches to the Python AST worker, bounded TS/JS syntax adapter,
+accepted Tree-sitter adapters and declared-subset in-process frontends listed
+in the language decisions. It stores owned units, IR nodes/containment edges,
+validated facts, exact-anchor derived support and compatible pattern families
+in an atomically activated SQLite generation. Discovery-only inputs remain
+inventory; raw structural similarity and heuristic roles never establish a
+family. Missing, stale, conflicting or insufficient support abstains.
+The Rust-side
 TypeScript semantic-worker process boundary can validate NDJSON worker output
 into owned facts. `index` and `sync` can optionally run an explicit worker
 executable through `REPOGRAMMAR_TYPESCRIPT_WORKER`, pass a JSON configured argv

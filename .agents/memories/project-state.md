@@ -1,5 +1,44 @@
 # Project State
 
+## Evidence-driven query reachability audit — 2026-10-14
+
+The bounded v0.6 retrieval repair is committed as `3741afd`; reproducible
+qualification tools and frozen protocols are in `450c87c`. Vocabulary v3 adds
+HTTP handler, REST endpoint, HTTP route and writing test through the existing
+adjacent-term table. Score 10, margin 1, exact-identity precedence, freshness,
+family evidence, providers and the old golden corpus are unchanged. This adds
+zero family kinds or language-completion gates.
+
+Current-source measurements and producer hashes are recorded in
+`docs/reports/language-support/evidence-driven-capability-review.md` and its
+summary JSON. Development retrieval improved from 30/47 to 34/47, preserving
+36/36 correct abstentions and zero wrong selections. On two pinned public
+regular-file snapshots, prospective role-prefix retrieval improved from 0/9 to
+3/9; the six remaining pytest queries tied existing variants and correctly
+retained no selected family. They are retrieval misses, not correct-abstention
+successes. Role-prefix gold and valid read-plan spans do not prove exact task
+correctness, agent adoption or token savings. Primary public Recall@5 has no explicit candidate gold denominator. A separate
+post-hoc role-prefix supplement uses all matching baseline Family IDs and
+records micro Recall@5 of 27/33 to 28/33, with Hit@5 at 9/9 in both arms;
+this candidate coverage is not committed-answer or exact-task correctness.
+
+Source audits corrected stale descriptions of already accepted bounded
+frontends and confirmed the existing C# csproj persistence regression. They did
+not authorize new language/framework/provider scope. PHP has a distinct open
+contract mismatch: ADR-0047 D1 requires non-prologue inputs to stay before the
+source-store boundary, but current dispatch reads before the parser checks the
+prologue. Preserve the requirement and report G1 PARTIAL / NOT_REQUALIFIED;
+the old PHP 8/9 is historical, not a current qualification. Strict Top-20
+completion remains 0/20, with TypeScript separate.
+
+Three paired native samples per arm were followed by a separately frozen
+Requests stability diagnostic. The larger initial exact/readiness gaps did not
+repeat consistently; fuzzy CLI still measured about 4.7% higher in the
+follow-up. These small local samples establish neither speedup nor statistical
+performance equivalence. Future work should first qualify pytest-variant
+narrowing with independently frozen exact-family/task gold, while handling the
+PHP admission contract in a separate fix or approved decision.
+
 ## Python host requirement admitted — 2026-09-30
 
 The shared private frontend launcher enforces the existing public Python 3.10+

@@ -4,13 +4,16 @@ Date: 2026-08-01. `Static` means supplied repository bytes with bounded,
 non-executing parsing. `Inventory-only` means the path is discovered but is not
 interpreted as dependency evidence.
 
+2026-10-14 source correction: the C# row includes the implemented `.csproj`
+discovery and incremental inventory path; no lock/resolution claim is added.
+
 | Language | Static manifest/config coverage | Lock/resolution coverage | Deliberately deferred or rejected |
 |---|---|---|---|
 | Python | `pyproject.toml`, `setup.cfg`, literal authoritative `setup.py` dependency fields | none | poetry/pdm/uv/pip-tools locks, installed distribution metadata, `.pyi`, `py.typed`, dynamic setup backends |
 | C | shared root `vcpkg.json`, `conanfile.txt`; compile-command candidates | none | C-specific header language, CMake effective model, vcpkg lock/registries, Conan lock/profile, pkg-config/system libs |
 | C++ | root `vcpkg.json`, `conanfile.txt`; bounded `compile_commands.json` and CMake config context | none | effective CMake/targets, vcpkg registries/features/platforms, Conan ranges/revisions/lock/profile, headers/ABI |
 | Java | direct exact root/nested Maven `pom.xml` dependencies | none | Maven effective model, Gradle, wrapper/toolchains, classpath/module path, JAR metadata, repositories/checksums |
-| C# | none | none | `.csproj`, MSBuild evaluation, central package versions, `packages.lock.json`, `project.assets.json`, NuGet/assembly metadata |
+| C# | bounded literal `.csproj` PackageReference, persisted with incremental copy-forward/removal | none | MSBuild evaluation, central package versions, `packages.lock.json`, `project.assets.json`, NuGet/assembly metadata |
 | JavaScript | root `package.json` dependency sections and bounded shared TS/JS project config | none | npm/yarn/pnpm locks, workspaces, conditional exports/imports, installed `node_modules`, `.d.ts` package ownership |
 | Visual Basic .NET | bounded `.vbproj` direct literal `PackageReference` | none | SDK/import/property/condition evaluation, central versions, NuGet restore/assets/lock, assemblies/analyzers/generators |
 | SQL | migration/schema/catalog/generic artifact path inventory only | none | dialect extension manifests, migration tool config/effective order, live catalogs/databases |
