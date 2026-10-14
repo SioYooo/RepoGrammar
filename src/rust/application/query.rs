@@ -7326,7 +7326,7 @@ pub const PRODUCT_SCHEMA_VERSION: &str = "product-schemas.v1";
 /// Committed query-retrieval vocabulary version (the small normalized-query
 /// tables in `query_terms`). Reported so consumers can detect a vocabulary change
 /// across index generations.
-const QUERY_RETRIEVAL_VOCABULARY_VERSION: &str = "query-vocabulary.v2";
+const QUERY_RETRIEVAL_VOCABULARY_VERSION: &str = "query-vocabulary.v3";
 
 /// Bounded cap on the top blocking-unknown mechanisms surfaced with the report.
 const READINESS_TOP_UNKNOWN_LIMIT: usize = 5;
@@ -10039,7 +10039,7 @@ mod tests {
         assert_eq!(value["family_evidence"]["stale_count"], 2);
         assert_eq!(
             value["query_retrieval"]["vocabulary_version"],
-            "query-vocabulary.v2"
+            "query-vocabulary.v3"
         );
         assert_eq!(value["measurement"]["token_saving_status"], "NOT_MEASURED");
         assert_eq!(value["recovery"]["executable"], true);
@@ -14005,6 +14005,283 @@ mod tests {
     }
 
     #[test]
+    fn public_lookup_resolves_qualified_route_and_test_phrases_conservatively() {
+        let index = FakeStore::new(Vec::new());
+        let store = FakeFamilyStore::with_families(vec![
+            term_family(
+                "family:route",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                "app/api.py",
+            ),
+            term_family(
+                "family:test",
+                "framework:pytest.test",
+                "DOMINANT_PATTERN",
+                "tests/test_api.py",
+            ),
+            term_family(
+                "family:fixture",
+                "framework:pytest.fixture",
+                "DOMINANT_PATTERN",
+                "tests/conftest.py",
+            ),
+        ]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        for (target, expected_family) in [
+            ("HTTP handler", "family:route"),
+            ("REST endpoints", "family:route"),
+            ("HTTP routes", "family:route"),
+            ("writing tests", "family:test"),
+        ] {
+            let report = lookup_family_with_freshness_and_local_context(
+                family_freshness_request(),
+                &index,
+                &store,
+                &source,
+                Some(target),
+                None,
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("qualified public lookup");
+            let FamilyLookupReport::Found(family) = &report else {
+                panic!("expected Found for {target}, got {report:?}");
+            };
+            assert_eq!(family.family_id, expected_family, "{target}");
+            assert_eq!(term_route(&report).top_score, Some(MIN_RETRIEVAL_SCORE));
+            assert_eq!(term_route(&report).hydrated_candidate_count, 1);
+        }
+        for target in [
+            "endpoint",
+            "htpt handler",
+            "rest endpiont",
+            "http rout",
+            "writting tests",
+            "handler HTTP",
+            "endpoint REST",
+            "route HTTP",
+            "tests writing",
+            "HTTP the route",
+            "writing new tests",
+            "HTTP unit:unknown handler",
+            "REST family:unknown endpoint",
+            "../outside.py HTTP route",
+            "/outside.py HTTP route",
+            "..\\outside.py HTTP route",
+            "file://outside HTTP route",
+            "app/\0bad.py HTTP route",
+        ] {
+            let report = lookup_family_with_freshness_and_local_context(
+                family_freshness_request(),
+                &index,
+                &store,
+                &source,
+                Some(target),
+                None,
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("negative public lookup");
+            assert!(
+                matches!(report, FamilyLookupReport::Unknown(_)),
+                "{target:?}: {report:?}"
+            );
+            let route = family_query_route_report(&report, FamilyLookupMode::FuzzyQuery);
+            assert!(route.selected_family_id.is_none(), "{target:?}");
+            if let Some(term) = route.term_retrieval {
+                assert_eq!(term.hydrated_candidate_count, 0, "{target:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn public_qualified_phrases_abstain_on_competing_families_before_hydration() {
+        let index = FakeStore::new(Vec::new());
+        let source = TermRetrievalSourceStore { fresh: true };
+        for (target, first_role, second_role, framework) in [
+            (
+                "HTTP handler",
+                "framework:fastapi.route",
+                "framework:express.route_handler",
+                "FastAPI",
+            ),
+            (
+                "REST endpoint",
+                "framework:fastapi.route",
+                "framework:express.route_handler",
+                "FastAPI",
+            ),
+            (
+                "HTTP route",
+                "framework:fastapi.route",
+                "framework:express.route_handler",
+                "FastAPI",
+            ),
+            (
+                "writing tests",
+                "framework:pytest.test",
+                "framework:jest_vitest.test",
+                "pytest",
+            ),
+        ] {
+            let store = FakeFamilyStore::with_families(vec![
+                term_family(
+                    "family:python:first",
+                    first_role,
+                    "DOMINANT_PATTERN",
+                    "app/first.py",
+                ),
+                term_family(
+                    "family:typescript:second",
+                    second_role,
+                    "UNKNOWN_PREVALENCE",
+                    "app/second.ts",
+                ),
+            ]);
+            let report = lookup_family_with_freshness_and_local_context(
+                family_freshness_request(),
+                &index,
+                &store,
+                &source,
+                Some(target),
+                None,
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("ambiguous public lookup");
+            assert!(
+                matches!(report, FamilyLookupReport::Unknown(_)),
+                "{target}: {report:?}"
+            );
+            assert_eq!(
+                term_route(&report).abstention_reason,
+                Some(TermRetrievalAbstention::MarginTooClose)
+            );
+            assert_eq!(term_route(&report).hydrated_candidate_count, 0);
+            assert!(
+                family_query_route_report(&report, FamilyLookupMode::FuzzyQuery)
+                    .selected_family_id
+                    .is_none()
+            );
+
+            let narrowed = lookup_family_with_freshness_and_local_context(
+                family_freshness_request(),
+                &index,
+                &store,
+                &source,
+                Some(&format!("{framework} {target}")),
+                None,
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("framework-qualified public lookup");
+            let FamilyLookupReport::Found(family) = narrowed else {
+                panic!("expected narrowed Found for {target}");
+            };
+            assert_eq!(family.family_id, "family:python:first");
+        }
+    }
+
+    #[test]
+    fn public_qualified_phrases_require_fresh_readable_matching_evidence() {
+        let index = FakeStore::new(Vec::new());
+        for (target, role) in [
+            ("HTTP handler", "framework:fastapi.route"),
+            ("REST endpoint", "framework:fastapi.route"),
+            ("HTTP route", "framework:fastapi.route"),
+            ("writing tests", "framework:pytest.test"),
+        ] {
+            let store = FakeFamilyStore::with_families(vec![term_family(
+                "family:candidate",
+                role,
+                "DOMINANT_PATTERN",
+                "app/example.py",
+            )]);
+            for result in [
+                Ok(SourceText {
+                    path: "app/example.py".to_string(),
+                    content_hash: freshness_hash('f'),
+                    text: String::new(),
+                }),
+                Err(SourceStoreError::Missing("missing evidence".to_string())),
+                Err(SourceStoreError::HashMismatch(
+                    "changed evidence".to_string(),
+                )),
+            ] {
+                let malformed_response = result.is_ok();
+                let source = FamilyEvidenceSourceStore {
+                    path: "app/example.py".to_string(),
+                    result,
+                };
+                let report = lookup_family_with_freshness_and_local_context(
+                    family_freshness_request(),
+                    &index,
+                    &store,
+                    &source,
+                    Some(target),
+                    None,
+                    FamilyLookupMode::FuzzyQuery,
+                );
+                // A successful source response with the wrong hash violates the port contract.
+                if malformed_response {
+                    assert!(matches!(report, Err(RepoGrammarError::InvalidInput(_))));
+                    continue;
+                }
+                let report = report.expect("stale public lookup");
+                assert!(
+                    matches!(report, FamilyLookupReport::Unknown(_)),
+                    "{target}: {report:?}"
+                );
+                assert_eq!(
+                    term_route(&report).abstention_reason,
+                    Some(TermRetrievalAbstention::StaleCandidates)
+                );
+                assert_eq!(term_route(&report).hydrated_candidate_count, 1);
+                assert!(
+                    family_query_route_report(&report, FamilyLookupMode::FuzzyQuery)
+                        .selected_family_id
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn public_qualified_phrases_do_not_override_exact_family_member_or_path() {
+        let index = FakeStore::new(Vec::new());
+        let family = term_family(
+            "family:python:pytest_test:framework_pytest_test",
+            "framework:pytest.test",
+            "DOMINANT_PATTERN",
+            "app/http-route.py",
+        );
+        let member = family.members[0].code_unit_id.clone();
+        let store = FakeFamilyStore::with_families(vec![family]);
+        let source = TermRetrievalSourceStore { fresh: true };
+        for target in [
+            "family:python:pytest_test:framework_pytest_test",
+            member.as_str(),
+            "app/http-route.py",
+        ] {
+            let report = lookup_family_with_freshness_and_local_context(
+                family_freshness_request(),
+                &index,
+                &store,
+                &source,
+                Some(target),
+                None,
+                FamilyLookupMode::FuzzyQuery,
+            )
+            .expect("exact public lookup");
+            let FamilyLookupReport::Found(family) = report else {
+                panic!("expected exact Found for {target}");
+            };
+            assert_eq!(
+                family.family_id,
+                "family:python:pytest_test:framework_pytest_test"
+            );
+            assert!(family.term_retrieval.is_none(), "{target}");
+        }
+    }
+
+    #[test]
     fn term_retrieval_abstains_unsupported_target_without_concept() {
         let store = FakeFamilyStore::with_families(vec![term_family(
             "family:python:fastapi_route:framework_fastapi_route",
@@ -14047,20 +14324,23 @@ mod tests {
             .collect();
         let store = FakeFamilyStore::with_families(families);
         let source = TermRetrievalSourceStore { fresh: true };
-        let report = run_term_retrieval(
-            &family_freshness_request(),
-            &store,
-            &source,
-            "How are FastAPI routes implemented?",
-            "gen-000001",
-        )
-        .expect("term retrieval");
-        let route = term_route(&report);
-        assert!(route.truncated);
-        assert_eq!(
-            route.abstention_reason,
-            Some(TermRetrievalAbstention::TruncatedTie)
-        );
+        for target in ["How are FastAPI routes implemented?", "HTTP route"] {
+            let report = run_term_retrieval(
+                &family_freshness_request(),
+                &store,
+                &source,
+                target,
+                "gen-000001",
+            )
+            .expect("term retrieval");
+            let route = term_route(&report);
+            assert!(route.truncated);
+            assert_eq!(
+                route.abstention_reason,
+                Some(TermRetrievalAbstention::TruncatedTie)
+            );
+            assert_eq!(route.hydrated_candidate_count, 0);
+        }
     }
 
     #[test]

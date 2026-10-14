@@ -14,9 +14,11 @@ store projection, and **routed into the production lookup path**
 language, synonym, and framework-plus-concept targets now resolve deterministically
 with calibrated absolute-score and margin abstention; bare frameworks, bare
 concepts, typos, and genuinely ambiguous targets abstain with a typed `UNKNOWN`
-and a low-cardinality route reason. Vocabulary v2 additionally recognizes a
+and a low-cardinality route reason. Vocabulary v3 recognizes a
 bounded set of two-term qualified concepts without relaxing either selection
-gate.
+gate. It adds `HTTP handler`, `REST endpoint`, `HTTP route`, and `writing test`
+to the existing v2 phrases. These phrases retrieve existing evidence-backed
+families; they add no language, framework role, parser fact, or semantic proof.
 
 ## Routed pipeline
 
@@ -293,9 +295,10 @@ dropped. `selected_family_id` and every diagnostic routing field (`input_kind`,
 out of the `minimal` shape. Abstention still never leaks a family: the reduction
 only removes ids already carried by `follow_up_family_ids`.
 
-### Calibration summary
+### Historical calibration and vocabulary changes
 
-Calibrated against the product-eval corpus (`query-corpus-v1.json`), now 107
+The 2026-07-21 vocabulary-v2 calibration used the product-eval corpus
+(`query-corpus-v1.json`), then 107
 queries (47 retrieval + 34 abstention + 26 context) after the universal
 target-resolution expansion added directory, composite, candidate-set,
 two-sided explain/check (`against`), and scoped-readiness cases. On the
@@ -312,22 +315,29 @@ candidate recall, 26/26 context matches, and 10/10 directory / 3/3 composite /
 
 The earlier v1 threshold sweep put hit@1 on a plateau across
 `MIN_RETRIEVAL_SCORE ∈ {7, 8, 10}` (all 21/42); `= 11` regressed to 18/42 (the
-framework+concept anchor scores exactly 10). Vocabulary v2 does not change
-either gate: `10` remains the principled absolute floor, equal to both
+framework+concept anchor scores exactly 10). Vocabulary v2 and v3 retain
+both gates: `10` remains the principled absolute floor, equal to both
 `WEIGHT_FRAMEWORK_FILTER + WEIGHT_CONCEPT` and `WEIGHT_QUALIFIED_CONCEPT`, and
 keeps the non-qualified abstention decoys below the floor.
 
+The [2026-09-30 frozen audit](../experiments/retrieval-miss-audit.md) subsequently
+reproduced 93/110 total matches, 30/47 retrieval matches, 36/36 correct
+abstentions and zero false-family selections at vocabulary v2. Those historical
+measurements do not establish vocabulary-v3 improvement. The four new phrases
+were identified from that development corpus; separate frozen evaluation is
+required before making a broader retrieval-quality claim. Neither historical
+gold labels nor score/margin thresholds change with the vocabulary.
+
 Some natural-language retrieval queries deliberately abstain because they are
-indistinguishable, after normalization, from an intentional abstention decoy — for
-example `endpoint` shares its `{concept: route}` normalized form with the
-abstaining `How are API routes implemented?` and `handler`, so any resolver that
-serves one serves all three; and `unit test`/`test case`/`writing tests` normalize
-to `{concept: test}` (a bare concept, score 4) below the floor. These are missed
-hits, never constraint violations. The `repository` data-access concept and the
-dual `model` concept (validation model + data-access model) are now committed
-substrate, so `How do Prisma repositories work?` resolves and `How are models
-defined?` remains genuinely ambiguous with both model kinds reachable as
-candidates.
+indistinguishable, after normalization, from an intentional abstention decoy.
+For example, `endpoint`, `How are API routes implemented?`, and `handler` all
+carry only `{concept: route}` (score 4). In contrast, `unit test` and `test case`
+have been qualified phrases since v2; `writing tests` becomes a qualified test
+phrase in v3. A qualified phrase scores 10 only for a matching role concept;
+competing families still tie and abstain. The `repository` data-access concept
+and dual `model` concept (validation model + data-access model) remain unchanged,
+so model-variant ambiguity requires narrowing rather than a vocabulary-only
+selection.
 
 ## Normalization
 
@@ -381,7 +391,7 @@ produce; the module's alias-consistency tests enforce this against
 | `COMPOUND_LANGUAGE_ALIASES` | 2 | `c# → csharp`, `c++ → cpp`, detected before punctuation splitting. |
 | `FRAMEWORK_ALIASES` | 27 | Framework term → one or more producible framework tokens. |
 | `CONCEPT_ALIASES` | 21 | Term → `Concept`. |
-| `QUALIFIED_CONCEPT_ALIASES` | 3 | Two aligned terms → one qualified `Concept`: `test fixture`, `unit test`, and `test case` (singular/plural folded). |
+| `QUALIFIED_CONCEPT_ALIASES` | 7 | Two aligned terms → one qualified `Concept`: `test fixture`, `unit test`, `test case`, `HTTP handler`, `REST endpoint`, `HTTP route`, and `writing test` (ASCII case and singular/plural folded). |
 | `ROLE_CONCEPTS` | 54 | `framework_role` → `Concept`. |
 
 The concept vocabulary is exactly five tokens: `route`, `fixture`,
@@ -482,6 +492,18 @@ the `fastapi` token.
 families would still tie and abstain through the unchanged margin gate. A typo
 such as `pytset fixture` and broad `tests written` do not match the qualified
 table and remain below the floor.
+
+Likewise `HTTP handler`, `REST endpoint`, and `HTTP route` name the route
+concept, while `writing tests` names the test concept. The two terms must be
+adjacent after the existing punctuation split and plural folding. Reversed
+phrases, an intervening word, or a passthrough locator/handle do not qualify:
+`handler HTTP`, `HTTP the route`, and `HTTP unit:app.py#handler handler` cannot
+inherit the phrase score. Language/framework filters, exact family/member/path
+precedence, candidate truncation, margin abstention and evidence freshness are
+unchanged. Unscoped MCP `inspect_readiness` reports `query-vocabulary.v3` at
+`readiness.query_retrieval.vocabulary_version`; CLI `status`/`doctor` carry
+the same field under `product_readiness`. This identifies retrieval vocabulary,
+not language completion.
 
 ## Determinism guarantees
 

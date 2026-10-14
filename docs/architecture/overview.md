@@ -87,18 +87,21 @@ application layer can currently promote only matching TypeScript-provider
 `resolve_reexport` facts for relative repo-local Express/Fastify named handler
 imports, Prisma shared-client imports, or Drizzle db/table imports into
 TS/JS-derived provider-resolved support; fallback worker facts remain context.
-Tree-sitter, full TypeScript compiler `Program`/`TypeChecker` worker support,
-freshness-validated semantic claims beyond bounded worker operations, typed IR
-attributes beyond the structural bootstrap graph, family mining, and stronger
-query evidence remain later boundaries.
+Full TypeScript compiler `Program`/`TypeChecker` worker support,
+semantic claims beyond admitted bounded operations, richer typed IR attributes
+and general package-qualified semantics remain later boundaries. Existing
+family construction is implemented; it does not imply these broader semantics
+or ADR-0020 language completion.
 
 Query and conformance flows reverse that direction by reading stored family and
 source evidence through ports before returning interface-specific output.
 The application query boundary keeps exact identifiers authoritative, then uses
 the committed dependency-free query vocabulary for bounded normalization,
-ranking, calibrated abstention, and freshness hydration. Vocabulary v2 can
-qualify three exact two-term test/fixture phrases without lowering the absolute
-selection or competing-family margin gates; ambiguous families still abstain.
+ranking, calibrated abstention, and freshness hydration. Vocabulary v3 can
+qualify seven exact two-term route/test/fixture phrases without lowering the
+absolute selection or competing-family margin gates; ambiguous families still
+abstain. The four added phrases reuse the existing normalization and scoring
+path and change no family evidence or language semantics.
 Inventory-style queries such as `stats --json`, `families --json`, and MCP
 candidate discovery use bounded read-model ports so agent loops do not hydrate
 full family evidence, semantic facts, IR graphs, or all family details. The
