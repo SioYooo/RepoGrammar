@@ -1,0 +1,67 @@
+# GitHub Pages legacy (branch) build of the existing Markdown at
+# https://sioyooo.github.io/RepoGrammar/. The Markdown sources stay the
+# authority; see docs/promotion/geo-site-proposal.md#deployment-record.
+title: RepoGrammar
+tagline: Repository conventions for coding agents
+description: >-
+  RepoGrammar indexes repeated implementations in your repository and gives
+  coding agents a source-backed read plan: examples of how this codebase
+  implements a route, fixture, model, or data-access role, with the evidence
+  behind each match.
+url: https://sioyooo.github.io
+baseurl: /RepoGrammar
+lang: en
+author: SioYooo
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# Every Markdown file outside this list is published. Keep internal material
+# (raw experiment traces, plans, prompts, unsent launch drafts) excluded.
+exclude:
+  - src
+  - algorithms
+  - target
+  - AGENTS.md
+  - CLAUDE.md
+  - Cargo.toml
+  - Cargo.lock
+  - package.json
+  - rust-toolchain.toml
+  - rustfmt.toml
+  - docs/README.md
+  - docs/roadmap.md
+  - docs/case-studies
+  - docs/demo
+  - docs/development
+  - docs/experiments
+  - docs/plans
+  - docs/promotion
+  - docs/prompts
+
+defaults:
+  - scope: { path: docs/quickstart.md }
+    values:
+      description: >-
+        Install the RepoGrammar CLI from the verified GitHub release, then run
+        repogrammar init in each repository; sync, resync, status, and doctor
+        keep the index current.
+  - scope: { path: docs/quickstart-codex.md }
+    values:
+      description: Connect RepoGrammar's read-only MCP tool to Codex and initialize each repository.
+  - scope: { path: docs/quickstart-claude.md }
+    values:
+      description: Connect RepoGrammar's read-only MCP tool to Claude Code and initialize each repository.
+  - scope: { path: docs/quickstart-opencode.md }
+    values:
+      description: Connect RepoGrammar's read-only MCP tool to opencode and initialize each repository.
+  - scope: { path: docs/examples/python-fastapi-pytest.md }
+    values:
+      description: >-
+        Reproducible FastAPI and pytest fixture walkthrough: a RepoGrammar read
+        plan, optional source spans, and negative cases.
+  - scope: { path: docs/limitations.md }
+    values:
+      description: >-
+        RepoGrammar release channels, bounded language scope, UNKNOWN results,
+        and why static alignment is not proof of runtime behavior.

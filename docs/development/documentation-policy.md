@@ -34,6 +34,15 @@ Documentation is part of the same change as implementation.
 | `src/protocol/` | semantic worker specification |
 | testing strategy | `docs/development/testing.md` |
 
+## Published site
+
+The root `_config.yml` builds the GitHub Pages site from the repository's
+Markdown with GitHub's own Jekyll. Every Markdown file not listed in its
+`exclude` is published, so a new internal directory (experiments, plans,
+prompts, drafts) must be added to that list in the same change. Pages do not
+use front matter; per-page metadata lives in `_config.yml` `defaults`. See the
+[deployment record](../promotion/geo-site-proposal.md#deployment-record).
+
 ## Drift prevention
 
 Do not duplicate requirements casually. Update the canonical document first,
