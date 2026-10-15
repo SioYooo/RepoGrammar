@@ -1,7 +1,8 @@
 # Domain Model Specification
 
-This specification defines the initial domain vocabulary. The Rust-core bootstrap
-implements only minimal types and placeholders.
+This specification defines the RepoGrammar-owned domain vocabulary used by the
+implemented indexing, family and query pipeline. Bounded source evidence is
+distinct from provider-backed semantics and ADR-0020 language completion.
 
 ## Dependency and library semantics
 
@@ -55,52 +56,73 @@ be represented as `python-config` language files with `project_config` code
 units so each config artifact shares the same generation, hash, and evidence
 validation boundary. Their structural parser methods are `tomllib`,
 `configparser`, and `cpython_ast`; `setup.py` is parsed, never executed.
-Go discovery defines stable `go` and `go-config` language tokens. `.go` remains
-inventory-only: source reads and parsing are skipped, and it creates no Go
-`CodeUnit`, IR, semantic fact, or family. Discovered root/nested `go.mod` and
+Go discovery defines stable `go` and `go-config` language tokens. Under
+[ADR-0050 D1–D5](../decisions/ADR-0050-bounded-go-testing-frontend.md), only
+`*_test.go` source enters the declared-subset parser, producing owned module
+and declaration units, IR, typed UNKNOWNs and exact Test/Benchmark/Fuzz anchors.
+Other `.go` files remain unread inventory. Discovered root/nested `go.mod` and
 `go.work` files enter a bounded static project-config parser. `go.mod` may create
 `project_config` units plus language-neutral, `manifest_declared` `go_modules`
 dependency records; unresolved or unsupported inventory semantics create typed
 UNKNOWNs scoped only to `go_dependency_inventory`. `go.work` always creates
 that scoped workspace UNKNOWN. These config records are not language, library,
 framework, resolution, or family evidence. A generation containing config units
-is `syntax_only_code_units`; Go-source-only and empty generations remain
+is `syntax_only_code_units`; the same is true when admitted source yields
+units. A generation with only unread inventory or no units remains
 `file_manifest_only`.
 Ruby discovery likewise defines stable `ruby` and `ruby-config` tokens for
-bounded `.rb` and accepted root/nested project/configuration paths. Ruby
-source and every config except exact `Gemfile.lock` remain inventory-only.
+bounded `.rb` and accepted root/nested project/configuration paths.
+[ADR-0049 D1–D5](../decisions/ADR-0049-bounded-ruby-minitest-frontend.md) admits
+runner-scoped `test_*.rb`/`*_test.rb` under `test/` or `tests/` to the bounded
+Minitest parser; other source and every config except exact `Gemfile.lock`
+remain unread inventory.
 The exact lock produces a project-config unit and may emit source-free
 `ruby_dependency_inventory` `UNKNOWN`s plus bounded direct `rubygems`
 `DependencyRecord`s from its unique `DEPENDENCIES` section. Those records are
 manifest declarations with unknown scope, directness `direct`, and no resolved
 version. Executable Gemfile/gemspec DSLs are never read by the parser, evaluated,
 or turned into dependency records.
-No Ruby source IR, framework fact, family, engine/root selection, semantic
-support state, or readiness claim exists.
+The source frontend owns module/class/method units, IR, exact anchors and typed
+uncertainty for its declared subset. It establishes no selected engine/root,
+external constant identity or runtime behavior; lock inventory is not family
+evidence.
 PHP discovery defines stable `php` and `php-config` tokens for exact `.php`
-paths and exact accepted Composer/PHPUnit configuration basenames. PHP source
-and PHPUnit XML remain inventory-only: only repository-relative path, strict
-raw-byte hash, byte size, and token are persisted. Exact `composer.json` and
+paths and exact accepted Composer/PHPUnit configuration basenames.
+[ADR-0047 D1–D5](../decisions/ADR-0047-bounded-php-phpunit-frontend.md) admits a
+bounded PHPUnit source subset and requires non-prologue `.php` input to stay
+zero-read inventory before source-store admission. The current parser checks
+the prologue only after dispatch reads the text, an
+[open contract drift](../reports/language-support/php-completion-review.md#2026-10-14-open-admission-contract-drift).
+Parser rejection does not discharge that stronger admission requirement.
+Admitted source may produce owned units/IR and exact anchors. PHPUnit XML
+remains unread inventory. Exact `composer.json` and
 `composer.lock` may additionally create bounded `ProjectConfig` units/IR,
 ADR-0030 `composer` dependency records, and `php_dependency_inventory` typed
 `UNKNOWN`. Those records describe static declarations or lock entries only;
 they do not select a PHP profile, Composer project, PHPUnit version, installed
 or runtime dependency graph, custom vendor directory, family, or support state.
-PHP-only generations with Composer evidence are `syntax_only_code_units`;
-those with only deferred PHP/PHPUnit inventory remain `file_manifest_only`.
+PHP generations with parsed source or Composer units are
+`syntax_only_code_units`; those with no units remain `file_manifest_only`.
 Swift discovery defines stable `swift` and `swift-config` tokens for exact
-`.swift` paths and exact accepted SwiftPM/toolchain-selector basenames. Swift
-source and executable/toolchain config remain inventory-only. Exact
+`.swift` paths and exact accepted SwiftPM/toolchain-selector basenames.
+[ADR-0048 D1–D8](../decisions/ADR-0048-bounded-swift-xctest-frontend.md) admits
+discovered Swift source to the bounded XCTest frontend, producing owned
+module/class/method units, exact anchors and typed uncertainty. Executable
+manifests/toolchain configuration remain unread inventory. Exact
 `Package.resolved` files additionally receive a bounded static project-config
 unit and may own schema-2/3 SwiftPM lock rows with exact recorded versions,
 unknown scope, and unknown directness. Typed uncertainty covers malformed,
-unsupported, conflicting, and over-budget pins. No Swift source frontend,
-manifest evaluation, family, selected target/toolchain/SDK, installed graph, or
-support state follows from that lock inventory.
+unsupported, conflicting, and over-budget pins. No manifest evaluation, family
+evidence, selected target/toolchain/SDK, installed graph or support state
+follows from lock inventory; the separate source anchor does not prove those
+properties either.
 MATLAB discovery defines stable `matlab` and `matlab-config` tokens for exact
 lowercase `.m` paths and exact root/nested `resources/mpackage.json` paths.
-MATLAB source remains inventory-only. An admitted package definition may create
-one `project_config` unit and direct `matlab_add_on` dependency declarations
+[ADR-0046 D1–D5](../decisions/ADR-0046-bounded-matlab-unittest-frontend.md)
+admits `.m` source to the bounded unittest frontend: non-classdef-first files
+produce a module unit without a structural claim, and declared-subset test
+classes/methods can produce exact anchors and owned IR. An admitted package
+definition may create one `project_config` unit and direct `matlab_add_on` dependency declarations
 whose identity is the validated package name plus UUID, whose requirement is
 the bounded `compatibleVersions` text, and whose resolved version is absent.
 Malformed, unsupported-schema, conflicting, or over-budget package metadata
@@ -130,8 +152,11 @@ artifact variants, exclusions, and plugins remain typed UNKNOWN scoped to
 external symbol, framework role, build, installation, or runtime selection.
 Visual Basic discovery defines stable `visual-basic` and
 `visual-basic-config` tokens for exact `.vb` and `.vbproj` paths. The scope is
-VB.NET only; VB6 formats are not aliases. `.vb` source remains unread
-inventory. Exact `.vbproj` files may own a bounded project-config unit, direct
+VB.NET only; VB6 formats are not aliases.
+[ADR-0043 D1–D5](../decisions/ADR-0043-bounded-vbnet-mstest-frontend.md) admits
+`.vb` source to the bounded MSTest parser, with owned units/IR, exact
+attribute anchors and typed uncertainty. Exact `.vbproj` files may own a bounded
+project-config unit, direct
 `nuget` manifest rows from literal direct-root `PackageReference` declarations,
 and `visual_basic_dependency_inventory` UNKNOWN for MSBuild evaluation,
 malformed/conflicting metadata, or resource limits. The rows have unknown
@@ -143,11 +168,18 @@ and `.dpk`; the generic token does not choose Delphi versus Free Pascal. Exact
 parser may inventory literal `DCC_UsePackage` values as runtime
 `delphi_package` manifest rows with unknown directness and no version, plus
 `delphi_dependency_inventory` UNKNOWN. `.dpk` source stays unread, and
-`.pp`/`.lpr`/`.lpi`/`.lpk` remain deferred. No compiler, MSBuild, package
-manager, source frontend, family, dialect equivalence, or support state follows.
+`.pp`/`.lpr`/`.lpi`/`.lpk` remain deferred.
+[ADR-0044 D1–D5](../decisions/ADR-0044-bounded-delphi-dunitx-frontend.md) admits
+only `.pas` source to the bounded DUnitX frontend, with owned declarations/IR,
+exact anchors and typed uncertainty. `.dpr` stays unread. Neither source nor
+manifest evidence executes a compiler, MSBuild or package manager, or proves
+universal Delphi/Free-Pascal equivalence or completed language support.
 Ada discovery defines stable `ada` and `ada-config` tokens. Only exact lowercase
-GNAT-default `.ads` and `.adb` sources are admitted; those bytes and exact `.gpr`
-project files remain inventory-only. Exact `alire.toml` may own one
+GNAT-default `.ads` and `.adb` sources are discovered.
+[ADR-0045 D1–D4](../decisions/ADR-0045-bounded-ada-aunit-frontend.md) admits only
+`.adb` bodies to the bounded AUnit frontend, yielding owned registration units,
+IR, exact anchors and typed refusals. `.ads` and exact `.gpr` project files
+remain unread inventory. Exact `alire.toml` may own one
 `ProjectConfig` unit, `ada_dependency_inventory` typed UNKNOWNs, and bounded
 direct runtime `manifest_declared` `alire` records from unconditional
 `[[depends-on]]` string entries. `alire.lock` owns a config unit and an internal-
@@ -156,12 +188,18 @@ naming selection, lock resolution, Ada semantics, library behavior, a family,
 support, or readiness.
 Fortran discovery defines stable `fortran` and `fortran-config` tokens. The
 source token covers only the frozen non-preprocessed lowercase fixed/free-form
-suffix set and remains inventory-only. Exact `fpm.toml` may own one
+suffix set. [ADR-0051 D1–D4](../decisions/ADR-0051-bounded-fortran-testdrive-frontend.md)
+admits only free-form `.f90`/`.f95`/`.f03`/`.f08` source to the bounded
+test-drive parser; fixed-form source remains unread inventory. Admitted source
+produces owned units/IR, exact signature anchors and typed uncertainty.
+Exact `fpm.toml` may own one
 `ProjectConfig` unit, `fortran_dependency_inventory` typed UNKNOWNs, and bounded
 direct `manifest_declared` `fpm` records: root `[dependencies]` maps to runtime
 scope and root `[dev-dependencies]` to development scope. Dotted namespace,
 git/path, target-specific, preprocessing, and environment selection remain
-unresolved. No Fortran source IR, family, support, or readiness state exists.
+unresolved. Manifest evidence does not establish source semantics or family
+support; the separate bounded frontend does not prove a compiler profile,
+external binding, test registration/execution or completed language readiness.
 SQL discovery defines stable `sql`, `sql-migration`, `sql-schema`, and
 `sql-catalog` file tokens, which persist path, strict raw-byte hash, size, and
 source-free artifact classification and prove no dialect or semantic role. All
@@ -174,9 +212,13 @@ selection it cannot make. A construct the two spell differently degrades the
 whole file to its module unit plus a `ConflictingFacts` UNKNOWN, because a
 diverged token stream leaves every later statement boundary unproven. No table,
 column, index, or literal text reaches a unit id, fact, or public surface.
-R discovery defines stable `r` and `r-config` tokens. Exact `.R` and `.r`
-source is
-inventory-only. Exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` create bounded
+R discovery defines stable `r` and `r-config` tokens.
+[ADR-0042 D1–D5](../decisions/ADR-0042-bounded-r-testthat-frontend.md) admits only
+`tests/testthat/test-*.R`/`.r` paths to the bounded testthat frontend; other R
+source remains unread inventory. Exact top-level calls can produce owned test
+units and family anchors under the declared subset and dependency precondition;
+block-unit IR kind abstains, and external binding/NSE/execution stay unknown.
+Exact `DESCRIPTION`, `NAMESPACE`, and `renv.lock` create bounded
 `project_config` units and claim-scoped `r_dependency_inventory` UNKNOWNs.
 Only explicit renv CRAN/Bioconductor identities become dependency rows with
 resolved versions, unknown scope, unknown directness, and `lockfile_resolved`

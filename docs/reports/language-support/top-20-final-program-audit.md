@@ -66,6 +66,12 @@ The accepted terminal label is partial audited progress. `COMPLETE`,
 “Gates” is the number of ADR-0020 gates currently evidenced out of nine. It is
 not a percentage or support score.
 
+2026-10-14 qualification exception: PHP's 8/9 cell retains the historical
+2026-09-05 audit. Current G1 is partial/not requalified because the source-read
+path conflicts with ADR-0047 D1; see the
+[open PHP finding](php-completion-review.md#2026-10-14-open-admission-contract-drift).
+No current numeric recount or completion promotion is implied by that cell.
+
 “Blocked by” partitions the remaining work under the zero-external-dependency
 constraint. `zero_dependency_excluded` means the binding gate needs an artifact
 the constraint forbids, named in the JSON blocker text.
@@ -79,7 +85,7 @@ means a recorded ADR decision closed the lane.
 | 2 | C | `structural_substrate` | 2/9 | `zero_dependency_excluded` | shared vcpkg/Conan manifest declarations only | no |
 | 3 | C++ | `structural_substrate` | 3/9 | `zero_dependency_excluded` | vcpkg/Conan manifest declarations only | no |
 | 4 | Java | `structural_substrate` | 3/9 | `zero_dependency_excluded` | direct literal Maven declarations only | no |
-| 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | bounded `.csproj` NuGet reader landed at the parser layer; discovery admission pending | no |
+| 5 | C# | `structural_substrate` | 3/9 | `zero_dependency_excluded` | bounded `.csproj` NuGet inventory and persistence; effective project unresolved | no |
 | 6 | JavaScript | `structural_substrate` | 3/9 | `zero_dependency_excluded` | root npm manifest declarations only | no |
 | 7 | Visual Basic .NET | `structural_substrate` | 8/9 | `open_under_zero_dependency` | literal `.vbproj` NuGet declarations only | no |
 | 8 | SQL | `structural_substrate` | 8/9 | `open_under_zero_dependency` | no SQL extension dependency consumer | no |
@@ -266,3 +272,12 @@ supplied-input boundary, join one PyPI distribution and exact external symbol to
 a reviewed exact-version FastAPI/pytest/Pydantic/SQLAlchemy contract, preserve
 blocking `UNKNOWN`s, expose source-free evidence, and close all nine gates for
 one narrowly scoped family before copying the mechanism to another language.
+
+## 2026-10-14 inventory correction
+
+Source inspection at `4916f57` confirms `.csproj` discovery, bounded NuGet
+inventory and incremental persistence already exist; the prior pending-wiring
+cell was stale. The [C# review](csharp-completion-review.md) identifies the
+product-pipeline regression. This correction changes no strict gate count and
+is not an effective MSBuild/Roslyn claim. The 2026-10-14 full workspace run
+subsequently passed that regression, as recorded in the linked C# review.

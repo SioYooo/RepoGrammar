@@ -3,6 +3,12 @@
 RepoGrammar separates machine-level agent integration from repository-level
 indexing.
 
+The maintainer's 2026-10-15 instruction authorizes the new 0.5.1 GitHub/npm
+candidate under the [dual-channel checklist](../release/stable-v0.5.1-release-checklist.md).
+Its public availability must be verified separately; immutable 0.5.0 remains
+historical GitHub-only evidence. npm uses the same-version native assets and
+the existing OIDC staging plus maintainer 2FA approval boundary.
+
 The ownership model has three separate layers:
 
 1. install the `repogrammar` CLI binary;
@@ -380,7 +386,7 @@ Npm dogfood uses either a local packed package or a direct binary override:
 - `npm_config_cache=/tmp/repogrammar-npm-cache npm pack --dry-run` for the
   package-content smoke;
 - `npm pack` followed by
-  `npm install -g ./sioyooo-repogrammar-0.5.0.tgz` for the current
+  `npm install -g ./sioyooo-repogrammar-0.5.1.tgz` for the current
   source identity;
 - `REPOGRAMMAR_BINARY=/absolute/path/to/repogrammar node src/npm/repogrammar.js ...`.
 

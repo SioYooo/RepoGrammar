@@ -1,11 +1,113 @@
 # Quickstart
 
 Published 0.5.0 uses the explicit CLI, agent, and repository steps below.
-Current source also implements the unreleased one-command candidate described
-next. Python 3.10+ within 3.x, Bash, curl, tar, and gzip are required for the
+Follow Install → Initialize a repository → Connect a coding agent → Verify setup.
+The [one-command candidate](#one-command-candidate-unreleased) is available
+only with reviewed local artifacts until a new release is published.
+Python 3.10+ within 3.x, Bash, curl, tar, and gzip are required for the
 complete Python onboarding flow; Git identifies the selected repository.
 Rust, Cargo, Node.js, npm, Docker, API keys, and cloud models are not required
 for release-binary installation.
+
+## Install
+
+The commands below install the verified GitHub binary release `0.5.0`.
+This version is not published to npm; use these GitHub assets or the
+[source installation](#source-installation).
+
+Copy this block on macOS or glibc-based Linux. It verifies the installer before
+execution, then the installer verifies the matching native archive:
+
+```bash
+(
+set -eu
+install_tmp="$(mktemp -d)" || exit 1
+trap 'rm -rf "$install_tmp"' EXIT
+cd "$install_tmp" || exit 1
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh || exit 1
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh.sha256 || exit 1
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c install.sh.sha256 || exit 1
+else
+  shasum -a 256 -c install.sh.sha256 || exit 1
+fi
+bash install.sh --version v0.5.0 --install-cli-only --yes
+) &&
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Run `repogrammar version` to check the installation. Add the `export PATH` line
+once to your shell configuration if `$HOME/.local/bin` is not already on PATH.
+Installation does not connect an agent or create a repository index.
+
+Supported archives cover macOS arm64/x86_64, Linux x86_64 with glibc 2.35+, and
+Linux arm64 with glibc 2.39+. Windows and musl Linux are not supported.
+
+## Initialize a repository
+
+```bash
+cd /path/to/repository &&
+repogrammar init &&
+repogrammar status
+```
+
+Commands use the current directory by default. `init` creates `.repogrammar/`,
+builds the first index, and starts that repository's autosync daemon. You do not
+need a separate `index` command. There is no global repository scanner.
+
+For scripts or CI, use `repogrammar init --yes --no-autosync --progress never`.
+Use `--project /path/to/repository` when operating from another directory.
+
+| Command | When to use it |
+|---|---|
+| `repogrammar init` | First use in a repository; creates state and builds the index. |
+| `repogrammar sync` | Refresh ordinary edits immediately instead of waiting for autosync. |
+| `repogrammar resync` | Rebuild analysis when recovery guidance requests it or after analysis changes. |
+
+Autosync is best-effort. Follow `repogrammar status` or `repogrammar doctor`
+recovery guidance if the index is unavailable or stale.
+
+## Connect a coding agent (optional)
+
+```bash
+repogrammar install --target auto --scope global --yes --no-telemetry
+```
+
+This configures detected supported agents; it does not initialize repositories.
+Restart the agent session afterward. For a specific client, follow the
+[Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or
+[opencode](quickstart-opencode.md) guide. Global instruction-file synchronization
+follows the version-specific guidance in those guides: current source can add
+receipt-owned conditional Codex/Claude guidance, while published 0.5.0 retains
+its shipped override-only behavior. Use current source's `--no-instructions`
+to skip instruction writes.
+
+## Verify setup
+
+From the initialized repository, check the command selected by your shell and
+the repository status:
+
+```bash
+command -v repogrammar
+repogrammar version
+repogrammar status
+```
+
+For the published installation above, the version should be `0.5.0`. If status
+reports an unavailable or stale index, run `repogrammar doctor` and follow its
+recovery guidance. For an agent integration, restart the agent and confirm
+that `repogrammar_context` appears in its available MCP tools. CLI installation,
+repository readiness and a working agent session are separate checks.
+
+## Find repository conventions
+
+```bash
+repogrammar find "FastAPI route" --mode compact --verbosity minimal
+repogrammar check "path/to/file.py:LINE" --mode compact --verbosity minimal
+```
+
+Read the returned `read_plan`. `UNKNOWN` and `PARTIAL_CONTEXT` identify evidence
+limits or recovery steps; static alignment does not prove runtime equivalence.
 
 ## One-command candidate (unreleased)
 
@@ -15,6 +117,9 @@ installer with that release stops before persistent installation changes.
 Do not use the proposed raw-main URL as a working onboarding command yet.
 Publication requires a new immutable installer and matching native binaries;
 see the [release checklist](release/quickstart-release-checklist.md).
+
+This route handles the separate Install, Initialize and Connect steps above.
+After a successful quickstart, go straight to [Verify setup](#verify-setup).
 
 To exercise a reviewed local candidate, obtain its native archive and matching
 `.sha256` file, then enter the Git repository you intend to initialize:
@@ -126,89 +231,6 @@ release/asset attestations provide additional provenance evidence; see the
 release checklist. A moving-branch raw script is optional convenience, not the
 only supported distribution path.
 
-## Install
-
-The commands below install the verified GitHub binary release `0.5.0`.
-This version is not published to npm; use these GitHub assets or the
-[source installation](#source-installation).
-
-Copy this block on macOS or glibc-based Linux. It verifies the installer before
-execution, then the installer verifies the matching native archive:
-
-```bash
-(
-set -eu
-install_tmp="$(mktemp -d)"
-trap 'rm -rf "$install_tmp"' EXIT
-cd "$install_tmp"
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh.sha256
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c install.sh.sha256
-else
-  shasum -a 256 -c install.sh.sha256
-fi
-bash install.sh --version v0.5.0 --install-cli-only --yes
-) &&
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Run `repogrammar version` to check the installation. Add the `export PATH` line
-once to your shell configuration if `$HOME/.local/bin` is not already on PATH.
-Installation does not connect an agent or create a repository index.
-
-Supported archives cover macOS arm64/x86_64, Linux x86_64 with glibc 2.35+, and
-Linux arm64 with glibc 2.39+. Windows and musl Linux are not supported.
-
-## Initialize a repository
-
-```bash
-cd /path/to/repository
-repogrammar init
-repogrammar status
-```
-
-Commands use the current directory by default. `init` creates `.repogrammar/`,
-builds the first index, and starts that repository's autosync daemon. You do not
-need a separate `index` command. There is no global repository scanner.
-
-For scripts or CI, use `repogrammar init --yes --no-autosync --progress never`.
-Use `--project /path/to/repository` when operating from another directory.
-
-| Command | When to use it |
-|---|---|
-| `repogrammar init` | First use in a repository; creates state and builds the index. |
-| `repogrammar sync` | Refresh ordinary edits immediately instead of waiting for autosync. |
-| `repogrammar resync` | Rebuild analysis when recovery guidance requests it or after analysis changes. |
-
-Autosync is best-effort. Follow `repogrammar status` or `repogrammar doctor`
-recovery guidance if the index is unavailable or stale.
-
-## Connect a coding agent (optional)
-
-```bash
-repogrammar install --target auto --scope global --yes --no-telemetry
-```
-
-This configures detected supported agents; it does not initialize repositories.
-Restart the agent session afterward. For a specific client, follow the
-[Codex](quickstart-codex.md), [Claude Code](quickstart-claude.md), or
-[opencode](quickstart-opencode.md) guide. Global instruction-file synchronization
-follows the version-specific guidance in those guides: current source can add
-receipt-owned conditional Codex/Claude guidance, while published 0.5.0 retains
-its shipped override-only behavior. Use current source's `--no-instructions`
-to skip instruction writes.
-
-## Find repository conventions
-
-```bash
-repogrammar find "FastAPI route" --mode compact --verbosity minimal
-repogrammar check "path/to/file.py:LINE" --mode compact --verbosity minimal
-```
-
-Read the returned `read_plan`. `UNKNOWN` and `PARTIAL_CONTEXT` identify evidence
-limits or recovery steps; static alignment does not prove runtime equivalence.
-
 ## Updates, PATH and partial setup
 
 For published 0.5.0, repeat its pinned CLI-only installation block to reinstall
@@ -270,8 +292,8 @@ you intend to remove.
 From a RepoGrammar source checkout:
 
 ```bash
-cargo build --release
-bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes
+cargo build --release &&
+bash src/install/repogrammar-install.sh --install-cli-only --from-source --yes &&
 export PATH="$HOME/.local/bin:$PATH"
 ```
 

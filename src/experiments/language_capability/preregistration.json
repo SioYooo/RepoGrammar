@@ -1,0 +1,75 @@
+{
+  "schema_version": "qualified-phrase-evaluation.v1",
+  "status": "FROZEN_BEFORE_CANDIDATE_IMPLEMENTATION",
+  "objective": "Qualify four adjacent phrases for existing FastAPI/pytest retrieval without adding families or relaxing semantic selection.",
+  "baseline_commit": "4916f57b2d4a22534a885ce18dcafb3710e74d53",
+  "baseline_binary_sha256": "e932069a934650d68b93b1c53bfbd7df63a4cbc72616e56e9b2c62db3ad28932",
+  "baseline_worker_sha256": "c25552c77b237eb330287d299224c821448a44fd8eca017e161b45fe45f1e5bc",
+  "candidate_phrases": ["http handler", "rest endpoint", "http route", "writing test"],
+  "locks": {
+    "minimum_retrieval_score": 10,
+    "minimum_retrieval_margin": 1,
+    "new_family_count": 0,
+    "existing_corpus": "src/fixtures/evaluation/query-corpus-v1.json",
+    "existing_gold_changes": false,
+    "provider_ablation": "NOT_APPLICABLE: only query normalization changes; semantic frontends and provider configuration remain identical.",
+    "product_repetitions": 3,
+    "no_repository_code_execution": true,
+    "no_dependency_installation": true,
+    "no_post_result_query_or_gold_edits": true
+  },
+  "corpora": [
+    {
+      "id": "fastapi-template",
+      "url": "https://github.com/fastapi/full-stack-fastapi-template",
+      "commit": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8",
+      "scope": "complete tracked source snapshot; do not select only backend files",
+      "split": "prospective_queries_on_previously_used_public_repository",
+      "selection_reason": "Existing pinned independent application with Python FastAPI and pytest plus a frontend; reuse is declared, not presented as an unseen repository.",
+      "prior_use": "src/experiments/agent_study/repos.lock.json labels this repository pilot_burned."
+    },
+    {
+      "id": "requests",
+      "url": "https://github.com/psf/requests",
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "tag_at_selection": "v2.32.3",
+      "scope": "complete tracked source snapshot; no tests or documentation executed",
+      "split": "prospective_queries_on_new_public_repository",
+      "selection_reason": "A Python HTTP client library uses pytest while server-route phrases are negative controls. Its HTTP vocabulary stresses confusion between client implementation and FastAPI route evidence.",
+      "pin_source": "https://github.com/psf/requests/commit/0e322af87745eff34caffe4df68456ebc20d9068",
+      "prior_use": "No psf/requests pin was found in the audited existing evaluation protocols or manifest; no claim is made about undocumented historical use."
+    }
+  ],
+  "prospective_queries": [
+    {"id":"f-http-handlers","corpus":"fastapi-template","target":"Locate the HTTP handlers for the backend.","intent":"retrieval","expected":"ok","family_prefix":"family:python:fastapi_route"},
+    {"id":"f-rest-endpoints","corpus":"fastapi-template","target":"Which REST endpoints should guide a new API operation?","intent":"retrieval","expected":"ok","family_prefix":"family:python:fastapi_route"},
+    {"id":"f-http-routes","corpus":"fastapi-template","target":"Find the HTTP route conventions used by this application.","intent":"retrieval","expected":"ok","family_prefix":"family:python:fastapi_route"},
+    {"id":"f-writing-tests-backend","corpus":"fastapi-template","target":"How should I approach writing tests for this backend?","intent":"retrieval","expected":"ok","family_prefix":"family:python:pytest_test"},
+    {"id":"f-writing-tests-api","corpus":"fastapi-template","target":"Show the existing style for writing tests before extending the API.","intent":"retrieval","expected":"ok","family_prefix":"family:python:pytest_test"},
+    {"id":"f-bare-endpoint","corpus":"fastapi-template","target":"endpoint","intent":"abstention","expected":"unknown"},
+    {"id":"f-handler-typo","corpus":"fastapi-template","target":"http hanlder","intent":"abstention","expected":"unknown"},
+    {"id":"f-endpoint-typo","corpus":"fastapi-template","target":"REST endpont","intent":"abstention","expected":"unknown"},
+    {"id":"f-bare-models","corpus":"fastapi-template","target":"models","intent":"abstention","expected":"unknown"},
+    {"id":"f-conflicting-languages","corpus":"fastapi-template","target":"python javascript routes","intent":"abstention","expected":"unknown"},
+    {"id":"r-writing-tests-sessions","corpus":"requests","target":"Where is the pattern for writing tests for sessions?","intent":"retrieval","expected":"ok","family_prefix":"family:python:pytest_test"},
+    {"id":"r-writing-tests-cookies","corpus":"requests","target":"Show examples of writing tests for cookie handling.","intent":"retrieval","expected":"ok","family_prefix":"family:python:pytest_test"},
+    {"id":"r-writing-tests-auth","corpus":"requests","target":"How should I start writing tests for request authentication?","intent":"retrieval","expected":"ok","family_prefix":"family:python:pytest_test"},
+    {"id":"r-writing-tests-redirects","corpus":"requests","target":"Describe the convention for writing tests around redirects.","intent":"retrieval","expected":"ok","family_prefix":"family:python:pytest_test"},
+    {"id":"r-no-http-handler","corpus":"requests","target":"HTTP handler","intent":"abstention","expected":"unknown"},
+    {"id":"r-no-rest-endpoint","corpus":"requests","target":"REST endpoints","intent":"abstention","expected":"unknown"},
+    {"id":"r-no-http-route","corpus":"requests","target":"HTTP routes","intent":"abstention","expected":"unknown"},
+    {"id":"r-bare-endpoint","corpus":"requests","target":"endpoint","intent":"abstention","expected":"unknown"},
+    {"id":"r-tests-typo","corpus":"requests","target":"writing tsets","intent":"abstention","expected":"unknown"},
+    {"id":"r-unseparated-phrase","corpus":"requests","target":"httphandler","intent":"abstention","expected":"unknown"}
+  ],
+  "evidence_policy": {
+    "primary": "Unchanged 110-query development corpus gains are reported separately from the prospective public-repository queries. Every false family or selection on abstention gold is a safety failure.",
+    "public_gold": "These are intent labels frozen before product outcomes. Family absence, conservative ambiguity, or unresolved semantic obligations remain recorded misses; never change gold or weaken selection to manufacture hits.",
+    "family_invariance": "Compare complete old/candidate family inventories, IDs, support, and source-evidence projections on byte-identical inputs; the expected newly created family count is zero.",
+    "payload_delta": "Keep raw payload hashes and bytes. The sole predeclared unchanged-query delta is query vocabulary metadata v2 to v3; exact JSON paths must be frozen before candidate output is inspected.",
+    "negative_outcomes": ["NO_GAIN", "FAMILY_ABSENT", "CONSERVATIVE_ABSTENTION", "PARSER_FAILURE", "ENVIRONMENT_FAILURE", "SAFETY_REGRESSION"],
+    "provider_state": "Record the existing absent optional providers; a label-only structural/no-provider condition is not an ablation.",
+    "baseline_control": "The existing token-overlap control is a diagnostic lower bound. Its route-match counts and in-process latency are not comparable to product subprocess measurements.",
+    "claim_limit": "This is a narrow prospective phrase/context check, not a sealed independent-author benchmark, arbitrary-language support, whole-Top-20 completion, agent adoption, or measured token savings. The evaluator saw the historical development corpus; FastAPI content is previously used."
+  }
+}

@@ -216,6 +216,17 @@ jobs:
             --fixture src/fixtures/python/release/v0_1/pydantic-basic/schemas.py \
             --expected-version "${expected_version}" \
             --require-product-uninstall
+      - name: Qualify native quickstart and verified predecessor upgrade
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo run --quiet --locked --bin repo-guard -- smoke-quickstart-artifact --binary "${RUNNER_TEMP}/repogrammar-package-smoke/unpacked/repogrammar" --release-dir "${GITHUB_WORKSPACE}" --out "${RUNNER_TEMP}/repogrammar-quickstart-evidence"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: quickstart-${{ matrix.target }}
+          path: ${{ runner.temp }}/repogrammar-quickstart-evidence/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}
@@ -227,7 +238,7 @@ jobs:
   prepare_github_release:
     name: Prepare GitHub release assets
     needs: [classify, build, package_installer, package_npm]
-    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'preview'
+    if: github.event_name == 'push' && github.ref_type == 'tag' && (needs.classify.outputs.channel == 'preview' || (needs.classify.outputs.channel == 'stable' && needs.classify.outputs.version == '0.5.1'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -329,8 +340,8 @@ jobs:
   stage_npm_stable:
     name: Stage immutable npm stable launcher
     needs: [classify, package_npm, prepare_github_release]
-    # Maintainer decision 2026-09-09: v0.5.0 is GitHub-only; never stage npm.
-    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' && false
+    # Maintainer authorization 2026-10-15: restore dual-channel staging for v0.5.1 only.
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' && needs.classify.outputs.version == '0.5.1'
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -359,15 +370,15 @@ jobs:
           set -euo pipefail
           test "$(npm --version)" = "11.18.0"
           cargo run --quiet --locked --bin repo-guard -- smoke-npm-package \
-            --tarball ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz \
-            --expected-version 0.5.0 \
+            --tarball ./npm-candidate/sioyooo-repogrammar-0.5.1.tgz \
+            --expected-version 0.5.1 \
             > npm-candidate/candidate-manifest.recheck.json
           cargo run --quiet --locked --bin repo-guard -- verify-npm-pack-evidence \
             --pack-json npm-candidate/npm-pack.json \
             --candidate-manifest npm-candidate/candidate-manifest.recheck.json \
-            --expected-version 0.5.0
+            --expected-version 0.5.1
           set +e
-          npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance
+          npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.1.tgz --access public --tag latest --provenance
           stage_status="$?"
           set -e
           if [ "${stage_status}" -ne 0 ]; then

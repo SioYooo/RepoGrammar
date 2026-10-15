@@ -3,9 +3,47 @@
 - Status: Incomplete — `structural_substrate`
 - Authority: ADR-0020, ADR-0024, and ADR-0047
 - Dependency prerequisite: none linked yet (first lane commit)
-- Last updated: 2026-09-05
+- Last updated: 2026-10-14 (open admission-contract drift; historical score retained)
 
-## ADR-0020 gate
+## 2026-10-14 open admission-contract drift
+
+**OPEN CONTRACT_DRIFT — current G1 is PARTIAL / NOT REQUALIFIED.**
+[ADR-0047 D1](../../decisions/ADR-0047-bounded-php-phpunit-frontend.md)
+requires a non-prologue `.php` input to remain zero-read inventory and never
+cross the source-store boundary. That accepted requirement is unchanged; the
+implementation cannot silently relax it by moving admission into the parser.
+
+Current source contradicts that specific admission guarantee:
+
+1. `application/indexing.rs::file_is_inventory_only` admits every valid `.php`
+   path through `is_phpunit_source_path`; it has no prologue evidence.
+2. `index_repository_full_after_discovery` calls `read_source_for_parsing` for
+   non-inventory paths before constructing the parser's `SourceDocument`.
+   That helper invokes `SourceStore::read_source`; the incremental path also
+   calls the same helper.
+3. `adapters/parsing/php/phpunit.rs::parse_output` checks
+   `lexer::prologue_code_start(document.text)` only after the text has crossed
+   that boundary, returning `UnsupportedLanguage` if the prologue is missing.
+
+Evidence: [indexing source](../../../src/rust/application/indexing.rs) (full
+loop at lines 804–841, PHP classifier at 6350–6353, read helper at 6479–6497)
+and [PHP parser](../../../src/rust/adapters/parsing/php/phpunit.rs)
+(lines 287–296), inspected at the campaign's `4916f57` baseline. This is a
+source-established contract mismatch, not a new product execution or a claim
+that non-prologue input creates a family. The parser's rejection does not prove
+the stronger zero-read requirement, and the passing general suite does not
+close that missing boundary assertion.
+
+The **8/9 below is the 2026-09-05 historical audit**, not a newly qualified
+current score. The specific D1 zero-read subclaim fails the source review; G1 as
+a whole is partial because discovery/configuration and inventory evidence still
+exist. No numeric recount or language-completion promotion is made here. Strict
+Top-20 remains 0/20. Closure needs either a conforming admission implementation
+with a product-level non-prologue source-read sentinel, or a separately approved
+ADR change; this campaign implements neither and authorizes neither broader
+source reads nor a new PHP provider.
+
+## ADR-0020 gate (2026-09-05 historical audit)
 
 - [x] Discovery/configuration — unchanged from ADR-0024 D4 and already
   audited there: exact case-sensitive `.php` source suffix, exact
@@ -127,7 +165,7 @@
   intermediate states that never existed rather than re-slicing existing
   ones. No external artifact blocks it.
 
-## Current evidence and blocker
+## 2026-09-05 evidence and blocker (historical)
 
 Exactly one admission class is decoded: `.php` files beginning with the
 `<?php` prologue. The parse is the bounded in-process one ADR-0047 D4
@@ -165,7 +203,7 @@ sqlite repo-shape stats allowlists (`REPO_SHAPE_LANGUAGE_SCOPES` and all four
 `repo_shape_*_where` predicates) omitted PHP, so the language silently counted
 zero; the pre-existing four-predicate invariant test now actually covers it.
 
-## Completion verdict
+## 2026-09-05 completion verdict (historical)
 
 Not complete. PHP has a bounded recursive-descent parser over one admission
 class and one declaration anchor, owned units and IR, a complete claim-scoped
@@ -178,7 +216,7 @@ provider and no final audit. Strict gate count is `8/9` with gate 9 open on
 the commit-shape ruling above; PHP is `structural_substrate` and must not be
 counted as supported.
 
-## Final program audit fields
+## 2026-09-05 program audit fields (historical)
 
 | Required field | Audited result |
 |---|---|
@@ -194,7 +232,7 @@ counted as supported.
 | Source-free / security | Only prologue-bearing `.php` bytes are read; no source text, identifier, literal, or absolute path reaches the parse surface (asserted over every fixture through the product dispatch); diagnostics are fixed strings; input is bounded by bytes, units, and nesting depth; nothing executes. |
 | Completion state / counted | `structural_substrate`; strict gate count `8/9` with gate 9 open on the commit-shape ruling; Top-20 complete = no. |
 
-## Four-part review
+## 2026-09-05 four-part review (historical)
 
 **Correctness.** Every anchor is established from parsed declaration
 structure — class resolution follows written `extends` chains through

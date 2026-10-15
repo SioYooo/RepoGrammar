@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The 0.5.1 candidate restores coordinated GitHub and npm publication under the
+[release checklist](docs/release/stable-v0.5.1-release-checklist.md). Candidate
+manifests and staged packages are not public-release evidence.
+
 ### Added
 
 - Current source adds an unreleased `--quickstart` bootstrap that verifies a
@@ -10,7 +14,7 @@
   confirmation or explicit `--yes`; plan fingerprints reject expanded writes.
   Product worker/receipt rollback, machine-only setup and agent opt-out are
   included. Immutable 0.5.0 lacks this capability; publication requires a new
-  verified release and does not update the separate npm channel.
+  verified release. The 0.5.1 candidate includes a matching npm launcher.
 
 - Published the public documentation at https://sioyooo.github.io/RepoGrammar/
   through GitHub's Jekyll build of the existing Markdown; experiments, plans,
@@ -36,6 +40,12 @@
   is unchanged. Agent adoption and token effects remain unmeasured.
 
 ### Fixed
+
+- Qualified HTTP handler, REST endpoint, HTTP route and writing test queries
+  now reach existing FastAPI/pytest families without lowering score, margin or
+  evidence gates. Ambiguous variants remain UNKNOWN; no family kind is added.
+- Installer qualification now includes GNU tar's `gzip` prerequisite and binds
+  the broken-worker rollback test to its installed fault, including debug builds.
 
 - Setup now consumes hash-checked family freshness before skipping a refresh,
   and no-agent completion offers a CLI next step. CLI-only uninstall can preserve

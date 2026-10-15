@@ -172,7 +172,7 @@
       "completion_gates_passed": 3,
       "top20_complete": false,
       "blocker_class": "zero_dependency_excluded",
-      "blocker": "Gate 2 needs the MSBuild effective project and assembly resolution; Roslyn is required and excluded. A bounded .csproj NuGet manifest reader mirroring the .vbproj contract now exists at the parser layer, but discovery does not admit .csproj yet, so it yields no product-path inventory.",
+      "blocker": "Gate 2 needs the MSBuild effective project and assembly resolution; Roslyn is required and excluded. Source inspection on 2026-10-14 at 4916f57 confirms .csproj discovery, bounded NuGet manifest inventory and incremental persistence already exist, with a product-pipeline regression. The effective MSBuild project and assembly graph remain unresolved; no strict gate count changes.",
       "framework_support": {
         "state": "landed",
         "framework": "FluentValidation",
@@ -180,11 +180,11 @@
         "wave": "F1"
       },
       "provider_status": "no_roslyn_provider_slot",
-      "library_analysis_status": "csproj_manifest_reader_pending_discovery_wiring",
+      "library_analysis_status": "csproj_manifest_inventory_with_product_persistence",
       "primary_unknowns": [
         "msbuild_project_profile",
         "assembly_and_external_symbols",
-        "csproj_discovery_admission"
+        "effective_msbuild_project_selection"
       ],
       "evidence_paths": [
         "docs/reports/language-support/csharp-completion-review.md",
@@ -496,7 +496,10 @@
       ],
       "prerequisite_commits": [
         "f27812bf79c1eb3c5eca8179b17285794b344491"
-      ]
+      ],
+      "current_qualification_note": "2026-10-14 source inspection: ADR-0047 D1 requires non-prologue .php files to remain zero-read before source-store admission, but current dispatch reads first and rejects inside the parser. OPEN CONTRACT_DRIFT; current G1 PARTIAL/NOT_REQUALIFIED. The completion_gates_passed=8 field retains the historical 2026-09-05 audit, not a newly qualified current score.",
+      "current_gate_1_status": "partial_not_requalified",
+      "historical_gate_count_date": "2026-09-05"
     },
     {
       "language": "Swift",

@@ -1,5 +1,13 @@
 # Roadmap
 
+## 0.5.1 publication preparation
+
+The maintainer authorized a new GitHub/npm release on 2026-10-15. The
+[0.5.1 checklist](release/stable-v0.5.1-release-checklist.md) coordinates reviewed
+current source, four native artifacts, quickstart qualification and one exact
+npm candidate. This is release preparation, not public availability or closure
+of the v0.6 evidence milestone below.
+
 ## Next evidence milestone after d981d57
 
 The current [execution handoff](plans/v0.6-adoption-retrieval-release-plan.md)
@@ -8,6 +16,15 @@ retrieval gap, host-stage attribution and release-candidate qualification.
 Language/framework/provider breadth is outside this milestone. Existing scope
 and historical completion records below remain unchanged; v0.6.0 is not yet
 qualified or published.
+
+2026-10-14 campaign: the [capability review](reports/language-support/evidence-driven-capability-review.md)
+records the completed four qualified-phrase retrieval repair for existing
+FastAPI/pytest families: development retrieval 30/47 → 34/47, prospective public
+role-prefix retrieval 0/9 → 3/9, with unchanged correct abstention and no measured
+wrong-family selection. New family kinds, languages, frameworks and providers
+remain zero. Performance is descriptive and uncertain; PHP has an open existing
+ADR-0047 D1 admission-contract mismatch. Strict Top-20 remains 0/20, the frozen
+scope is unchanged, and v0.6 release/adoption gates remain open.
 
 ## Bootstrap complete
 

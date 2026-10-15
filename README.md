@@ -13,8 +13,8 @@ It runs locally and exposes a pattern-first CLI and one read-only MCP tool.
 There are no LLM calls, API keys, embeddings, or cloud services in the analysis
 path. Python 3.10+ is required for the bundled Python analyzer.
 
-The current GitHub stable release is **0.5.0**, published through GitHub only.
-The older npm release is a separate channel; see the
+Verified GitHub release baseline: **0.5.0**.
+For current channel versions and their verification, see the
 [publication evidence](https://github.com/SioYooo/RepoGrammar/blob/main/docs/promotion/launch-kit.md#current-publication-truth).
 
 ![RepoGrammar indexing a temporary fixture repository](https://raw.githubusercontent.com/SioYooo/RepoGrammar/main/docs/assets/index-progress.gif)
@@ -23,53 +23,56 @@ The older npm release is a separate channel; see the
 
 ## Quick start
 
-Requires **Python 3.10+**, Bash, `curl`, `tar`, and `gzip`. macOS and glibc Linux
-are supported. Rust, Cargo, Node.js, Docker, and API keys are not required.
+Choose an installation route, then **initialize your project → connect your
+agent → verify**. Releases that include the
+[one-command bootstrap](#one-command-bootstrap) can combine these steps.
 
-### One-command candidate — unreleased
+Full Python project setup requires **Python 3.10+ within 3.x**, Git, Bash,
+`curl`, `tar`, and `gzip`. CLI-only installation does not require Python.
+Supported platforms are macOS arm64/x86_64, Linux x86_64 with glibc 2.35+, and
+Linux arm64 with glibc 2.39+. The native installer does not require Rust, Cargo,
+Node.js, Docker, or API keys. The npm launcher requires Node.js 18 or newer.
 
-Current source adds `--quickstart`: review one plan, authorize it, then install
-the verified CLI, connect detected supported agents, index the selected Git
-repository, and start repository-local autosync. Python and agent prerequisites
-are checked; product MCP self-test and repository readiness remain separate
-reported results. No agent is required to install the CLI and index a project.
+### 1. Install the CLI
 
-**This is not available in published 0.5.0.** Its binary lacks the
-`quickstart-v1` capability. A new immutable release containing both the installer
-and matching binaries must pass the [publication checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/quickstart-release-checklist.md)
-before the public one-line command can be recommended. For reviewed local
-candidate artifacts, run this from the Git repository being initialized:
+Choose npm or the pinned native installer below; you do not need both.
+
+#### npm
 
 ```bash
-REPOGRAMMAR_RELEASE_DIR=/absolute/path/to/candidate-artifacts \
-  bash /absolute/path/to/RepoGrammar/src/install/repogrammar-install.sh --quickstart
+npm install -g @sioyooo/repogrammar &&
+repogrammar version
 ```
 
-The [candidate quickstart guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md#one-command-candidate-unreleased)
-covers `--dry-run`, noninteractive `--yes`, agent selection, and installation
-trust. Public users can use the pinned 0.5.0 steps below today.
+The launcher downloads and verifies the matching native release on first use.
+It does not initialize a project or configure an agent. Continue with step 2.
+To pin a version, append `@<version>` to the package name; that version must
+have matching GitHub native assets.
 
-### 1. Install published 0.5.0 — copy and run
+#### Pinned native baseline: 0.5.0
 
 This single block downloads the pinned installer, verifies its checksum, and
 installs the CLI. It does not alter coding-agent settings or index a repository.
+For an existing installation, review the
+[update and PATH behavior](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md#updates-path-and-partial-setup)
+before rerunning the installer.
 
 ```bash
 (
 set -eu
-install_tmp="$(mktemp -d)"
+install_tmp="$(mktemp -d)" || exit 1
 trap 'rm -rf "$install_tmp"' EXIT
-cd "$install_tmp"
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh
-curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh.sha256
+cd "$install_tmp" || exit 1
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh || exit 1
+curl -fsSLO https://github.com/SioYooo/RepoGrammar/releases/download/v0.5.0/install.sh.sha256 || exit 1
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c install.sh.sha256
+  sha256sum -c install.sh.sha256 || exit 1
 else
-  shasum -a 256 -c install.sh.sha256
+  shasum -a 256 -c install.sh.sha256 || exit 1
 fi
 bash install.sh --version v0.5.0 --install-cli-only --yes
 ) &&
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH" &&
 repogrammar version
 ```
 
@@ -84,7 +87,7 @@ From your project's directory:
 repogrammar init
 ```
 
-That is all: `init` builds the current project's index and starts background
+`init` builds the current project's index and starts background
 updates. There is no global repository scanner. Run `init` once in each project.
 The explicit form `repogrammar init --project "$PWD" --yes` does the same thing;
 use `--no-autosync` for CI or a one-shot index.
@@ -95,14 +98,40 @@ use `--no-autosync` for CI or a one-shot index.
 repogrammar install --target auto --scope global --yes --no-telemetry
 ```
 
-Current source builds also add a short conditional guide for Codex/Claude Code
-at their effective global profile path. Review it with `install --dry-run`;
-`--no-instructions` skips that write. Published 0.5.0 artifacts retain their
-shipped override-only instruction wiring. This is configuration behavior, not
-evidence of agent adoption or token savings.
-
 Restart the coding-agent session after connecting. Choose a specific client with
 `--target codex`, `--target claude-code`, or `--target opencode`.
+
+### 4. Verify setup
+
+From the initialized project:
+
+```bash
+command -v repogrammar
+repogrammar version
+repogrammar status
+```
+
+Check that the version and command path match the installation you chose.
+If the index is unavailable or stale, run `repogrammar doctor` and follow its
+recovery guidance. After
+restarting your agent, confirm that `repogrammar_context` is available in its
+MCP tools. Installing the CLI alone does not establish a working agent session.
+
+### One-command bootstrap
+
+The 0.5.1 source includes `--quickstart`: review one plan, authorize it, then install
+the CLI, connect detected supported agents, index the selected Git repository,
+and start repository-local autosync. No agent is required for CLI/index setup.
+After a successful quickstart, go straight to [Verify setup](#4-verify-setup);
+the separate install, init and agent-connection steps are already handled.
+
+Use an installer and matching binary that include the `quickstart-v1` capability;
+the pinned 0.5.0 baseline above does not. The
+[quickstart guide](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md)
+records availability, verified commands, plan preview, noninteractive execution
+and agent selection. The
+[publication checklist](https://github.com/SioYooo/RepoGrammar/blob/main/docs/release/quickstart-release-checklist.md)
+records the artifact and installation gates for this flow.
 
 | I want to… | Guide |
 | --- | --- |

@@ -3,17 +3,19 @@
 `repo-guard` is a repository governance CLI implemented in
 `src/rust/bin/repo_guard.rs`. It is separate from the RepoGrammar product runtime.
 
-## GitHub-only 0.5.0 publication
+## Stable 0.5.1 dual-channel preparation
 
-The maintainer's 2026-09-09 release instruction selects GitHub binary assets
-only. Follow `docs/release/stable-v0.5.0-release-checklist.md`: use an exact-SHA
-successful build-only run, retain four native archives and their checksums plus
-the installer/checksum, and verify the immutable public GitHub release.
-Stable npm staging and automatic stable draft creation are disabled. Existing
-npm packing, provenance, dist-tag, and dual-channel finalizer commands remain
-compatibility tools; they do not gate or describe 0.5.0 GitHub-only completion.
-Do not run them to change npm state or manufacture `STABLE_RELEASE_READY`.
-The prior npm `latest=0.4.3` is preserved.
+The maintainer's explicit 2026-10-15 request restores npm publication for the
+new `0.5.1` candidate. Follow
+[the 0.5.1 checklist](../release/stable-v0.5.1-release-checklist.md): one exact
+reviewed source/tag/run identity, four qualified native archives, one frozen npm
+pack, an eleven-asset GitHub draft, OIDC staging and maintainer 2FA approval,
+then read-only public verification. Preparation is not publication evidence.
+
+The immutable [0.5.0 release](../release/stable-v0.5.0-release-checklist.md)
+remains the historical GitHub-only ten-asset release. Its source/byte record is
+not changed to include npm or quickstart. The new patch-forward release does
+not establish the separate v0.6 milestone's completion or adoption claims.
 
 ## Commands
 
@@ -27,6 +29,7 @@ cargo run --quiet --bin repo-guard -- product-eval --corpus <path> --out <dir> [
 cargo run --quiet --bin repo-guard -- payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>]
 cargo run --quiet --bin repo-guard -- performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>]
 cargo run --quiet --bin repo-guard -- smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall]
+cargo run --quiet --bin repo-guard -- smoke-quickstart-artifact --binary <path> --release-dir <path> --out <new-dir> [--installer <path>]
 cargo run --quiet --bin repo-guard -- smoke-npm-package --tarball <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version>
 cargo run --quiet --bin repo-guard -- verify-stable-release-evidence --evidence-dir <path>
@@ -80,14 +83,14 @@ The check command verifies:
 - the release workflow classifies preview versus stable through `repo-guard`,
   keeps manual dispatch build-only, and creates one exact npm candidate that
   downstream jobs download rather than repack;
-- preview tags create draft GitHub Releases and use Node 24, npm 11.18.0,
-  and Trusted Publisher OIDC to stage that candidate. Stable npm staging is
-  explicitly disabled and automatic draft creation is preview-only under the
-  2026-09-09 GitHub-only decision. Neither path contains a traditional npm token,
-  direct publish, approval, rejection, or dist-tag mutation authority;
+- preview and registered stable tags create draft GitHub Releases and use
+  Node 24, npm 11.18.0 and Trusted Publisher OIDC to stage the retained candidate.
+  The 2026-10-15 request enables the new stable 0.5.1 lane; manual dispatch
+  remains build-only. Neither staging path contains a traditional npm token,
+  direct publish, approval, rejection or dist-tag mutation authority;
 - preview staging has one registered assignment for its exact
   `./npm-candidate/...tgz` local tarball, and stable staging has one registered
-  literal command for `./npm-candidate/sioyooo-repogrammar-0.5.0.tgz`; a bare
+  literal command for `./npm-candidate/sioyooo-repogrammar-0.5.1.tgz`; a bare
   package path that npm could parse as GitHub shorthand, dynamic npm
   subcommands, marker-only comments, or alternate packing and staging paths
   fail the guard;
@@ -97,6 +100,10 @@ The check command verifies:
 - manual stable finalization is read-only and delegates the authoritative
   asset, checksum, SRI, provenance, dist-tag, version, and setup decisions to
   `verify-stable-release-evidence`.
+- every native release build and the public finalizer contain the exact active
+  quickstart qualification step. Conditions, `continue-on-error`, command
+  substitution or swallowed failures must not turn that gate into an optional
+  check; native evidence upload is separate from the publication asset set.
 
 Check mode reports concrete paths and rules and does not modify the repository.
 Linked-agent-worktree recognition reads at most 4 KiB from a regular,
@@ -437,6 +444,65 @@ the smoke option nor the hidden helper accepts caller-selected deletion paths.
 The option is intentionally explicit because hosts outside the declared
 macOS/Linux lifecycle matrix retain the ordinary packaged-artifact smoke.
 
+## smoke-quickstart-artifact
+
+```text
+cargo run --quiet --locked --bin repo-guard -- smoke-quickstart-artifact --binary <unpacked/repogrammar> --release-dir <current-archives-and-sidecars> --out <new-evidence-dir> [--installer <exact-installer>]
+```
+
+This native qualification command accepts only the four declared Linux/macOS
+release hosts. `--out` must be a new directory under an existing parent and
+must contain no `..` traversal. It uses the existing isolated packaged-product
+environment and tool PATH; it does not configure real user profiles.
+
+`--binary` names the unpacked candidate, with its adjacent
+`workers/python/worker.py`. The worker must match the source checkout. The
+default installer is `src/install/repogrammar-install.sh`; an explicit
+`--installer` must match that source installer's bytes/hash. Before any
+predecessor network read, the candidate's actual `version` output must equal
+the manifest version. `--release-dir` must contain the exact current native
+archive and sidecar; checksums and the harness bind these supplied bytes to
+the candidate rather than creating replacement fixture archives.
+
+The helper downloads only the matching immutable public `v0.5.0` predecessor
+archive/sidecar, verifies release and per-asset attestations plus the checksum,
+and installs it through the existing isolated CLI-only installer. The harness
+receives the paired predecessor binary **and its own bundled worker**. Its
+upgrade case first creates and verifies an old index, then runs the current
+quickstart against the supplied current archive and checks repository readiness.
+
+Qualification requires `quickstart-tests.v1`, the exact version/target and input
+hashes, `release_assets_source: "provided"`, `input_hashes_unchanged: true`,
+exactly 34 uniquely named PASS cases, and empty `failures`, `errors` and
+`skipped`. The candidate, predecessor binary/worker, current archive/sidecar,
+installer, source worker and harness inputs are checked for changes. Native
+agent adapters remain isolated protocol fixtures; product binary, worker,
+indexing and MCP self-test are real.
+
+Only success writes `qualification.json` with schema
+`native-quickstart-artifact.v1` and `status: "PASS"`. It records `target`,
+`package_version`, `predecessor_tag`, `release_archive`, predecessor
+archive/checksum hashes, `harness_sha256`, the seven named hash fields in
+`inputs`, and `summary: "suite/summary.json"`. Retained evidence also includes
+`predecessor-assets/`, completed stage stdout/stderr and suite logs. Each
+captured subprocess is bounded to 15 minutes and 16 MiB per output stream.
+A timeout, output-limit or spawn failure may provide only a stage-labelled CI
+error; do not claim that partial output is always retained. No failure writes
+a PASS qualification.
+
+Each native job uploads `quickstart-<target>` evidence even after failure; this
+workflow artifact is not an additional GitHub publication asset. The public
+finalizer calls the same helper with the independently downloaded current asset
+directory and explicit public `install.sh`, retaining `evidence/public-quickstart`.
+Its final evidence verifier requires the PASS qualification and all 34 cases,
+binding current public archive/sidecar/installer, source worker/harness and
+predecessor evidence before `STABLE_RELEASE_READY` is possible.
+The finalizer always attempts to upload available `evidence/` as
+`stable-0.5.1-public-evidence-<run_id>-<run_attempt>`, including public asset,
+SRI/provenance and quickstart evidence. A failed stage may leave an incomplete
+bundle; an uploaded artifact alone is not PASS. npm audit working directories,
+authentication configuration and private-stage output are outside this bundle.
+
 ## npm candidate and final evidence
 
 `smoke-npm-package` accepts only a bounded regular, non-symlink tarball whose
@@ -455,8 +521,8 @@ immutable GitHub state and the exact eleven assets, including the public
 attestation evidence; SHA-256 sidecars; semantically identical retained,
 GitHub, and public npm candidate manifests; registry SRI; exact `latest` and
 `preview` tag keys; public channel and installer versions; the exact packaged
-native-smoke success line; and truthful installer, pinned, and latest live
-`init` JSON.
+native-smoke success line; truthful installer, pinned, and latest live `init`
+JSON; and the public quickstart qualification described above.
 Historical optional setup dry-run evidence is accepted only when it remains
 truthful.
 
@@ -474,7 +540,7 @@ launcher tool list that omits `git`.
 
 The npm provenance gate consumes only the structured output from
 `npm audit signatures --json --include-attestations`. It requires one verified
-`@sioyooo/repogrammar@0.5.0` entry from the exact registry and exactly one SLSA
+`@sioyooo/repogrammar@0.5.1` entry from the exact registry and exactly one SLSA
 Provenance v1 declaration. npm 11.18 reports that declaration under the
 `attestations.provenance` object and provides both npm publish-v0.1 and SLSA
 entries in `attestationBundles`; the guard requires that exact two-bundle
@@ -482,7 +548,7 @@ inventory, including exactly one publish-v0.1 bundle and exactly one SLSA v1
 bundle, then requires an in-toto JSON DSSE payload for SLSA provenance. Its
 bounded dependency-free base64 decoder binds the decoded predicate and subject
 digest to the candidate SHA-512, the GitHub-hosted workflow builder to
-`.github/workflows/release.yml`, the push tag to `refs/tags/v0.5.0`, the
+`.github/workflows/release.yml`, the push tag to `refs/tags/v0.5.1`, the
 resolved dependency URI to the same repository and tag, its git commit to the
 checked-out release SHA, and the invocation identity to the exact retained
 Actions run id and attempt. It does not inspect certificates, raw signature
@@ -517,7 +583,7 @@ The release dist-tag classifier verifies the complete public npm state after a
 publication becomes visible:
 
 - preview preserves the existing `preview-dist-tag-action` policy;
-- the registered stable `0.5.0` policy requires exact `latest=0.5.0`, exact
+- the registered stable `0.5.1` policy requires exact `latest=0.5.1`, exact
   `preview=0.2.0-preview.0`, and the preview, prior public `0.4.3`, and new
   stable versions in the bounded complete inventory. The failed or abandoned,
   unpublished `0.2.0`, `0.2.1`, `0.3.0`, `0.3.1`, and `0.3.2` candidates are
@@ -555,20 +621,29 @@ verification.
 
 ## Staged publication boundary
 
-Version `0.5.0` follows the [GitHub-only checklist](../release/stable-v0.5.0-release-checklist.md):
-retain a successful build-only run and manually publish ten verified assets.
-The installer contract tests require both the exact disabled stable-stage
-condition and the preview-only automatic-draft condition. The retained stable
-staging command and dual-channel finalizer are compatibility infrastructure,
-not authorization to publish npm or the completion gate for this version.
+Version `0.5.1` follows the
+[dual-channel checklist](../release/stable-v0.5.1-release-checklist.md) under
+explicit 2026-10-15 maintainer authorization. A preview or registered stable tag
+first attaches all native archives/checksums, installer/checksum and the npm
+candidate manifest to one non-overwritable eleven-asset GitHub draft. Only then
+does the workflow stage the exact retained npm tarball through the protected
+`npm-release` environment, Trusted Publisher OIDC, Node 24 and npm 11.18.0.
+Manual workflow dispatch remains build-only. The installer/workflow contract
+checks must reject a disabled stable stage or a preview-only draft prerequisite
+for this new stable lane.
 
-A preview tag first attaches all native assets to a draft GitHub
-Release. Only then does the workflow stage the exact retained npm tarball with
-the protected `npm-release` environment, Trusted Publisher OIDC, Node 24, and
-npm 11.18.0. Neither path reads `NPM_TOKEN`/`NODE_AUTH_TOKEN` or directly
-publishes. A maintainer publishes the complete GitHub prerelease, approves the matching
-npm stage with 2FA, and then runs the
-read-only channel verifier.
+Neither staging path reads `NPM_TOKEN`/`NODE_AUTH_TOKEN`, repacks or directly
+publishes. The maintainer reviews both private candidates, publishes the
+complete GitHub release first, approves the matching npm stage with 2FA, then
+runs the read-only finalizer. GitHub assets precede npm approval because the
+launcher resolves native artifacts at its own version. The remote Trusted
+Publisher binding and authenticated private-stage state require actual checks;
+workflow text is not evidence of either.
+
+The immutable `0.5.0` release retains its
+[GitHub-only historical checklist](../release/stable-v0.5.0-release-checklist.md)
+and ten-asset evidence. Restoring the new stable lane does not modify that tag,
+add a missing npm manifest to its assets, or claim npm 0.5.0 was published.
 
 A rerun after successful staging may fail because npm already reserved the
 version. The OIDC job deliberately cannot list, download, approve, reject, or
@@ -580,8 +655,8 @@ Release immutability remains a maintainer preflight before tag creation. The
 read-only finalizer needs no long-lived admin token: the public release API plus
 `gh release verify` and every `gh release verify-asset` result are the release
 evidence. The corrected post-public finalizer definition is dispatched from
-`main`, but its checkout remains pinned to immutable `v0.5.0` and its inputs
-must identify the exact successful `v0.5.0` tag-run attempt. Updating verifier
+`main`, but its checkout remains pinned to immutable `v0.5.1` and its inputs
+must identify the exact successful `v0.5.1` tag-run attempt. Updating verifier
 orchestration after tagging therefore cannot move the tag, rebuild release
 artifacts, or replace publication authority. Expired retained artifacts,
 unavailable attestations, absent provenance, or a failed public smoke prevents
@@ -624,14 +699,16 @@ The release workflow uses `release-source`, exports its exact outputs through
 `GITHUB_OUTPUT`, and runs the npm candidate evidence commands before OIDC
 staging. Its draft is guarded against replacement and contains exactly eleven
 assets. The guard requires both the positive draft-collision query contract and
-the rejection of runner-incompatible `--slurp` plus `--jq` usage. The stable
+the rejection of runner-incompatible `--slurp` plus `--jq` usage. The
+native builds and public finalizer run the exact active quickstart step using
+their current native archive directory; failure cannot be suppressed. The
 finalizer projects the selected run attempt into eight
 canonical fields, verifies the public npm pack before any public product
 execution, runs each public npm channel from a separate external lane working
 directory, and delegates the final verdict to `repo-guard`. Manual verification
 uses `release-dist-tag-action` against public tags and the complete inventory;
 stable requires exact
-`latest=0.5.0`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
+`latest=0.5.1`/`preview=0.2.0-preview.0`. All inconsistent states fail visibly
 without registry writes. Manual release dispatch remains build-only and manual
 finalization remains read-only.
 

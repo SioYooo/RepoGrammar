@@ -334,6 +334,10 @@ pub const QUALIFIED_CONCEPT_ALIASES: &[(&str, &str, Concept)] = &[
     ("test", "fixture", Concept::Fixture),
     ("unit", "test", Concept::Test),
     ("test", "case", Concept::Test),
+    ("http", "handler", Concept::Route),
+    ("rest", "endpoint", Concept::Route),
+    ("http", "route", Concept::Route),
+    ("writing", "test", Concept::Test),
 ];
 
 /// The `framework_role` -> [`Concept`] table. Built from the concrete role
@@ -935,6 +939,10 @@ mod tests {
             ("test fixtures", Concept::Fixture),
             ("unit tests", Concept::Test),
             ("test cases", Concept::Test),
+            ("HTTP handlers", Concept::Route),
+            ("REST endpoints", Concept::Route),
+            ("HTTP routes", Concept::Route),
+            ("writing tests", Concept::Test),
         ] {
             let normalized = normalize_query(target);
             assert_eq!(
@@ -946,7 +954,26 @@ mod tests {
             assert!(normalized.residue_terms.is_empty(), "{target}");
         }
 
-        for target in ["pytset fixture", "tests written", "endpoint"] {
+        for target in [
+            "pytset fixture",
+            "tests written",
+            "endpoint",
+            "htpt handler",
+            "rest endpiont",
+            "http rout",
+            "writting tests",
+            "handler http",
+            "endpoint rest",
+            "route http",
+            "tests writing",
+            "http the route",
+            "writing new tests",
+            "http unit:app.py#handler handler",
+            "rest family:route endpoint",
+            "http src/app.py route",
+            "writing app.py:12 tests",
+            "http c# route",
+        ] {
             assert!(
                 normalize_query(target).qualified_concept_tokens.is_empty(),
                 "{target} must not inherit a qualified phrase"
@@ -1128,6 +1155,56 @@ mod tests {
         assert_eq!(ranking.candidates[0].family_id, "family:fixture");
         assert_eq!(ranking.candidates[0].score, WEIGHT_QUALIFIED_CONCEPT);
         assert!(ranking.candidates[0].signals.concept);
+    }
+
+    #[test]
+    fn qualified_phrases_preserve_language_filters_and_do_not_double_score_concepts() {
+        let summaries = vec![
+            summary(
+                "family:python:route",
+                "python",
+                "framework:fastapi.route",
+                "DOMINANT_PATTERN",
+                &[],
+            ),
+            summary(
+                "family:typescript:route",
+                "typescript",
+                "framework:express.route_handler",
+                "DOMINANT_PATTERN",
+                &[],
+            ),
+            summary(
+                "family:python:test",
+                "python",
+                "framework:pytest.test",
+                "DOMINANT_PATTERN",
+                &[],
+            ),
+        ];
+        for (target, expected_family) in [
+            ("python HTTP handler route", "family:python:route"),
+            ("python REST endpoint route", "family:python:route"),
+            ("typescript HTTP route route", "family:typescript:route"),
+            ("python writing tests test", "family:python:test"),
+        ] {
+            let ranking = score_family_candidates(&normalize_query(target), &summaries);
+            assert_eq!(ranking.candidates[0].family_id, expected_family, "{target}");
+            assert_eq!(
+                ranking.candidates[0].score,
+                WEIGHT_QUALIFIED_CONCEPT + WEIGHT_LANGUAGE_FILTER,
+                "{target} must score its concept only once"
+            );
+            assert!(ranking.candidates.iter().all(|candidate| {
+                candidate
+                    .family_id
+                    .starts_with(if target.starts_with("python") {
+                        "family:python:"
+                    } else {
+                        "family:typescript:"
+                    })
+            }));
+        }
     }
 
     #[test]
