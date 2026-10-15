@@ -348,7 +348,10 @@ class Quickstart(unittest.TestCase):
     def test_index_failure_rolls_back_new_agent_only(self):
         self.agents("codex")
         self.env["REPOGRAMMAR_RELEASE_DIR"] = str(release(self.root / "broken-worker", ARGS.binary, self.target, mutation="broken-worker"))
-        self.quickstart("--yes", "--no-autosync", success=False)
+        # Debug builds prefer the checkout worker; bind this fault to the installed bundle.
+        self.env["REPOGRAMMAR_PYTHON_WORKER"] = str(self.data / "workers/python/worker.py")
+        result = self.quickstart("--yes", "--no-autosync", success=False)
+        self.assertIn(b"index_failed", result.stderr)
         self.assertTrue(self.command.exists())
         self.assertFalse((self.home / ".fake-agents/codex.json").exists())
         self.assertFalse((self.home / ".codex/AGENTS.md").exists())
