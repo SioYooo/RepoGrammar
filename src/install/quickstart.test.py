@@ -21,6 +21,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_VERSION = json.loads((ROOT / "package.json").read_text())["version"]
 INSTALLER = ROOT / "src/install/repogrammar-install.sh"
 WORKER = ROOT / "src/workers/python/worker.py"
 FIXTURE = ROOT / "src/fixtures/python/release/v0_1/pydantic-basic/schemas.py"
@@ -48,11 +49,11 @@ def snapshot(root):
     return result
 
 
-def release(directory, binary, target, *, mutation=None):
+def release(directory, binary, target, *, worker=WORKER, mutation=None):
     directory.mkdir(parents=True)
     archive = directory / f"repogrammar-{target}.tar.gz"
     with tarfile.open(archive, "w:gz", format=tarfile.USTAR_FORMAT) as bundle:
-        for name, source in [("repogrammar", binary), ("workers/python/worker.py", WORKER)]:
+        for name, source in [("repogrammar", binary), ("workers/python/worker.py", worker)]:
             if mutation == "missing-worker" and name.endswith("worker.py"):
                 continue
             info = tarfile.TarInfo(name)
@@ -124,8 +125,20 @@ else:
 class Quickstart(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.target = subprocess.check_output(["/bin/bash", str(INSTALLER), "--print-target"], text=True).strip()
-        cls.assets = release(ARGS.out / "release", ARGS.binary, cls.target)
+        cls.target = subprocess.check_output(["/bin/bash", str(ARGS.installer), "--print-target"], text=True).strip()
+        cls.assets = ARGS.release_dir or release(ARGS.out / "release", ARGS.binary, cls.target)
+        archive = cls.assets / f"repogrammar-{cls.target}.tar.gz"
+        cls.inputs = {"binary":ARGS.binary, "worker":WORKER, "installer":ARGS.installer,
+                      "release_archive":archive, "release_checksum":archive.with_name(archive.name + ".sha256")}
+        if ARGS.previous_binary:
+            cls.inputs.update(previous_binary=ARGS.previous_binary, previous_worker=ARGS.previous_worker)
+        cls.input_hashes = {name:digest(path) for name, path in cls.inputs.items()}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.input_hashes_unchanged = cls.input_hashes == {name:digest(path) for name, path in cls.inputs.items()}
+        if not cls.input_hashes_unchanged:
+            raise AssertionError("candidate, predecessor, worker, installer or release inputs changed during qualification")
 
     def setUp(self):
         self.root = ARGS.out / self._testMethodName
@@ -175,9 +188,9 @@ class Quickstart(unittest.TestCase):
         return completed
 
     def quickstart(self, *options, piped=False, success=True, cwd=None):
-        command = ["/bin/bash", "-s", "--"] if piped else ["/bin/bash", str(INSTALLER)]
+        command = ["/bin/bash", "-s", "--"] if piped else ["/bin/bash", str(ARGS.installer)]
         return self.run_process(command + ["--quickstart", *options], cwd=cwd,
-                                data=INSTALLER.read_bytes() if piped else b"", success=success)
+                                data=ARGS.installer.read_bytes() if piped else b"", success=success)
 
     def cli(self, *arguments, success=True):
         output = self.run_process([str(self.command), *arguments, "--json"], success=success)
@@ -231,7 +244,7 @@ class Quickstart(unittest.TestCase):
 
     def test_direct_one_agent_and_idempotent_repeat(self):
         self.agents("codex")
-        self.quickstart("--yes", "--version", "v0.5.0", "--no-autosync")
+        self.quickstart("--yes", "--version", f"v{PACKAGE_VERSION}", "--no-autosync")
         first = self.assert_indexed()
         instructions = self.home / ".codex/AGENTS.md"
         self.assertTrue(instructions.is_file())
@@ -481,7 +494,7 @@ class Quickstart(unittest.TestCase):
                                    cwd=self.repo, env=self.env, stdin=subprocess.PIPE,
                                    stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
         os.close(slave)
-        process.stdin.write(INSTALLER.read_bytes())
+        process.stdin.write(ARGS.installer.read_bytes())
         process.stdin.close()
         output, sent, deadline = b"", False, time.monotonic() + 90
         try:
@@ -564,14 +577,27 @@ class Quickstart(unittest.TestCase):
 
     def test_previous_candidate_upgrade(self):
         if not ARGS.previous_binary:
-            self.skipTest("--previous-binary not supplied; cross-revision upgrade not measured")
-        previous = release(self.root / "previous-release", ARGS.previous_binary, self.target)
+            self.skipTest("--previous-binary/--previous-worker not supplied; cross-revision upgrade not measured")
+        previous = release(self.root / "previous-release", ARGS.previous_binary, self.target,
+                           worker=ARGS.previous_worker)
         self.env["REPOGRAMMAR_RELEASE_DIR"] = str(previous)
+        before = snapshot(self.home), snapshot(self.repo)
         result = self.quickstart("--yes", "--no-autosync", success=False)
         self.assertIn(b"QUICKSTART_RELEASE_REQUIRED", result.stderr)
         self.assertFalse(self.command.exists())
-        self.run_process(["/bin/bash", str(INSTALLER), "--install-cli-only", "--yes"])
+        self.assertEqual((snapshot(self.home), snapshot(self.repo)), before)
+        self.run_process(["/bin/bash", str(ARGS.installer), "--install-cli-only", "--yes"])
         self.assertEqual(digest(self.command), digest(ARGS.previous_binary))
+        old_worker = self.data / "workers/python/worker.py"
+        self.assertEqual(digest(old_worker), digest(ARGS.previous_worker))
+        self.assertEqual(digest(self.command.parent / "repogrammar-workers/python/worker.py"), digest(ARGS.previous_worker))
+        self.env["REPOGRAMMAR_PYTHON_WORKER"] = str(old_worker)
+        self.cli("init", "--yes", "--no-autosync", "--project", str(self.repo))
+        previous_status = self.cli("status", "--project", str(self.repo))
+        self.assertTrue(previous_status["initialized"])
+        self.assertTrue(previous_status["active_generation"])
+        self.assertEqual(previous_status["integrity_check"], "ok")
+        self.env.pop("REPOGRAMMAR_PYTHON_WORKER")
         self.env["REPOGRAMMAR_RELEASE_DIR"] = str(self.assets)
         self.quickstart("--yes", "--no-autosync", piped=True)
         self.assert_indexed()
@@ -600,17 +626,30 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--previous-binary", type=Path, help="Pre-quickstart binary for the cross-revision upgrade control")
+    parser.add_argument("--previous-worker", type=Path, help="Worker bundled with --previous-binary; both inputs are required together")
+    parser.add_argument("--release-dir", type=Path, help="Read-only current archive and checksum directory; otherwise build a local fixture")
+    parser.add_argument("--installer", type=Path, default=INSTALLER, help="Exact installer script to execute; defaults to the checked-in script")
     parser.add_argument("--out", type=Path, help="New directory retaining fixtures, command logs and summary.json")
     parser.add_argument("--case", help="Run one named test while diagnosing a failed contract")
     ARGS = parser.parse_args()
     if sys.version_info.major != 3 or sys.version_info.minor < 10:
         parser.error("Python 3.10+ within 3.x is required")
+    if bool(ARGS.previous_binary) != bool(ARGS.previous_worker):
+        parser.error("--previous-binary and --previous-worker must be supplied together")
     ARGS.binary = ARGS.binary.resolve(strict=True)
+    ARGS.installer = ARGS.installer.resolve(strict=True)
+    if ARGS.release_dir:
+        ARGS.release_dir = ARGS.release_dir.resolve(strict=True)
+        if not ARGS.release_dir.is_dir():
+            parser.error("--release-dir must be an existing directory")
     if ARGS.previous_binary:
         ARGS.previous_binary = ARGS.previous_binary.resolve(strict=True)
+        ARGS.previous_worker = ARGS.previous_worker.resolve(strict=True)
     temporary = None
     if ARGS.out:
         ARGS.out = ARGS.out.resolve()
+        if ARGS.release_dir and ARGS.out.is_relative_to(ARGS.release_dir):
+            parser.error("--out must not write inside the read-only --release-dir")
         ARGS.out.mkdir(parents=True, exist_ok=False)
     else:
         temporary = tempfile.TemporaryDirectory(prefix="repogrammar-quickstart-tests-")
@@ -619,7 +658,14 @@ def main():
     result = unittest.TextTestRunner(verbosity=2, resultclass=EvidenceResult).run(suite)
     (ARGS.out / "summary.json").write_text(json.dumps({
         "schema":"quickstart-tests.v1", "binary_sha256":digest(ARGS.binary),
-        "worker_sha256":digest(WORKER), "installer_sha256":digest(INSTALLER),
+        "package_version":PACKAGE_VERSION,
+        "previous_binary_sha256":digest(ARGS.previous_binary) if ARGS.previous_binary else None,
+        "previous_worker_sha256":digest(ARGS.previous_worker) if ARGS.previous_worker else None,
+        "worker_sha256":digest(WORKER), "installer_sha256":digest(ARGS.installer),
+        "release_archive_sha256":getattr(Quickstart, "input_hashes", {}).get("release_archive"),
+        "release_checksum_sha256":getattr(Quickstart, "input_hashes", {}).get("release_checksum"),
+        "release_assets_source":"provided" if ARGS.release_dir else "fixture",
+        "input_hashes_unchanged":getattr(Quickstart, "input_hashes_unchanged", False),
         "platform":sys.platform, "target":getattr(Quickstart, "target", None),
         "python":sys.version.split()[0], "tests_run":result.testsRun,
         "success":result.wasSuccessful(), "cases":RESULTS,

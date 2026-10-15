@@ -17,9 +17,10 @@ development, and governance documentation.
   specifications.
 - `reports/`: release-readiness and audit reports. Reports are evidence
   snapshots, not canonical product contracts.
-- `release/`: maintainer-owned release runbooks. The stable `0.5.0` candidate checklist
-  is the canonical GitHub-only publication gate; the stable `0.4.3`
-  checklist and earlier checklists remain historical release evidence.
+- `release/`: maintainer-owned release runbooks. The stable `0.5.1` checklist
+  is the current dual-channel preparation/publication gate under the explicit
+  2026-10-15 npm request. The immutable GitHub-only `0.5.0` record and older
+  checklists remain historical evidence; preparation does not imply publication.
 - `experiments/`: reproducible experiment and dogfood protocols. Protocols do
   not imply measured results until filled with run evidence.
 - `examples/`: user-facing examples and fixture-oriented walkthroughs.
@@ -127,7 +128,10 @@ context lives under `.agents/memories/`.
   `promotion/launch-kit.md`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
-- Stable `0.5.0` candidate GitHub-only publication gate:
+- Stable `0.5.1` dual-channel candidate and publication gate:
+  `release/stable-v0.5.1-release-checklist.md` (PREPARATION / UNRELEASED until
+  exact public GitHub/npm evidence and finalizer pass).
+- Historical stable `0.5.0` GitHub-only publication evidence:
   `release/stable-v0.5.0-release-checklist.md`.
 - Stable `0.4.3` publication evidence remains in
   `release/stable-v0.4.3-release-checklist.md`.
@@ -135,7 +139,7 @@ context lives under `.agents/memories/`.
   `release/stable-v0.4.2-release-checklist.md`.
 - Historical stable `0.4.0` publication evidence remains in
   `release/stable-v0.4.0-release-checklist.md`; its completed dual-channel
-  record does not redefine the current GitHub-only `0.5.0` gate.
+  record does not itself qualify the current `0.5.1` candidate.
 - Public-preview install proof snapshot:
   `reports/public-preview-install-proof-matrix.md`.
 - Zero-friction onboarding authority and execution evidence:
@@ -152,8 +156,13 @@ context lives under `.agents/memories/`.
   `plans/codegraph-provider-plan.md`.
 - CLI surface: `specifications/cli.md`.
 - Agent installation: `specifications/installation.md`.
-- Unreleased one-command bootstrap: `decisions/ADR-0056-verified-one-command-quickstart.md`
-  and `release/quickstart-release-checklist.md`.
+- One-command bootstrap implementation and native/public qualification:
+  `decisions/ADR-0056-verified-one-command-quickstart.md` and
+  `release/quickstart-release-checklist.md`, composed with the current `0.5.1`
+  dual-channel gate. `development/repository-guard.md` documents
+  `smoke-quickstart-artifact`, the supplied-asset 34-case native/public gate and
+  its verified predecessor binary/worker upgrade. Candidate/source behavior
+  remains distinct from publication.
 - Initialization progress: `specifications/initialization-progress.md`.
 - Pattern-family vocabulary: `specifications/domain-model.md`.
 - UNKNOWN governance: `specifications/unknowns.md` and

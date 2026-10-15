@@ -1,5 +1,13 @@
 # Roadmap
 
+## 0.5.1 publication preparation
+
+The maintainer authorized a new GitHub/npm release on 2026-10-15. The
+[0.5.1 checklist](release/stable-v0.5.1-release-checklist.md) coordinates reviewed
+current source, four native artifacts, quickstart qualification and one exact
+npm candidate. This is release preparation, not public availability or closure
+of the v0.6 evidence milestone below.
+
 ## Next evidence milestone after d981d57
 
 The current [execution handoff](plans/v0.6-adoption-retrieval-release-plan.md)

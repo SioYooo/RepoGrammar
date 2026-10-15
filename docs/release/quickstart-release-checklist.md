@@ -1,30 +1,36 @@
 # One-command quickstart publication checklist
 
-Status: **UNRELEASED**. This document authorizes no push, merge, tag, GitHub
-Release, npm publication, global installation or user configuration write.
+Status: **PREPARATION / UNRELEASED** for candidate `0.5.1`. The maintainer's
+explicit 2026-10-15 request authorizes latest-version npm publication after CI
+fixes; the [0.5.1 dual-channel checklist](stable-v0.5.1-release-checklist.md)
+owns the source/tag/stage/publication gates. This document supplies its native
+onboarding qualification. It records no future gate as passed and authorizes no
+test writes to real user profiles or global installations.
 The immutable 0.5.0 release remains unchanged. It lacks `quickstart-v1` and
 cannot serve the current-source `--quickstart` flow.
 
 ## Publication decision and source identity
 
-- Obtain maintainer authorization for publication and an unused new stable
-  version. Do not silently choose or occupy a tag, and never move an existing
-  tag or replace immutable assets.
+- Use the recorded `0.5.1` release authorization and verify that the new
+  version/tag/private-stage identity is unoccupied under the canonical gate.
+  Never move an existing tag or replace immutable assets.
 - Synchronize Cargo.toml, Cargo.lock and the npm source manifest to that chosen
-  version. Manifest agreement is not npm publication. Preserve the current
-  GitHub-only stable channel and the disabled stable npm staging job.
+  version. Manifest agreement is not npm publication. The new `0.5.1` stable
+  lane uses a private GitHub draft and OIDC npm stage; the earlier GitHub-only
+  restriction remains historical to `0.5.0`.
 - Update the installer stable-version hint and public version-pinned examples
   only as part of that reviewed new release; do not relabel immutable 0.5.0.
 - Complete review, the [required repository gates](../development/testing.md),
-  and atomic local commits. Push/merge requires its own authorization.
+  and atomic commits before the authorized release integration and tag.
 - Freeze the reviewed source commit. Record its full SHA, version, local
   verification commands, results and unresolved platform limitations.
 
 ## Exact candidate artifact gate
 
-Run the existing `release.yml` build-only workflow at the authorized reviewed
-commit. Retain the exact successful run id, attempt and source SHA. Require
-all four native targets:
+Qualify one exact successful `release.yml` tag run and attempt at the reviewed
+`v0.5.1` commit. A manual build-only run is an optional preflight, not a
+substitute for the tag-bound publication candidate. Retain run id, attempt,
+source SHA and the annotated tag identity. Require all four native targets:
 
 | Artifact target | Native runtime gate |
 |---|---|
@@ -34,10 +40,14 @@ all four native targets:
 | `x86_64-unknown-linux-gnu` | Linux x86_64, glibc 2.35+ |
 
 Retain the four `repogrammar-<target>.tar.gz` archives, four matching `.sha256`
-files, `install.sh`, and `install.sh.sha256`: ten assets from that exact run.
+files, `install.sh`, `install.sh.sha256`, and `npm-candidate-manifest.json`:
+eleven GitHub draft assets from that exact run. Retain the once-packed npm
+tarball and npm pack metadata separately as workflow artifacts; the tarball is
+not an extra GitHub release asset.
 Each archive must contain the executable and `workers/python/worker.py`.
-Do not rebuild or repack between review and publication. Windows, musl Linux,
-npm tarballs and dist-tag changes are outside this release gate.
+Do not rebuild or repack between review and publication. Windows and musl Linux
+remain outside scope. npm stage/SRI/provenance, pinned/latest launchers and the
+preserved preview tag follow the canonical `0.5.1` gate.
 
 On each native runner, test the exact unpacked candidate binary and bundled
 worker with the existing packaged-product smoke, including managed product
@@ -45,6 +55,30 @@ uninstall. Retain Linux ABI checks and the interpreter's Python 3.10+ identity.
 The installer test must use the exact candidate `install.sh`, not an older
 download or a wrapper from another commit. Confirm its binary answers
 `quickstart-v1` to the internal capability probe.
+
+Run the shared qualification helper on every native candidate:
+
+```text
+cargo run --quiet --locked --bin repo-guard -- smoke-quickstart-artifact --binary <unpacked/repogrammar> --release-dir <exact-current-archive-and-sidecar-dir> --out <new-evidence-dir> [--installer <exact-installer>]
+```
+
+The source installer is the default. An explicit installer must match the
+source checkout's bytes/hash. The helper rejects a candidate version mismatch
+before predecessor network access, verifies the supplied current archive and
+sidecar, acquires the attested immutable 0.5.0 predecessor, and passes both its
+binary and bundled worker to the suite. The predecessor creates a valid index
+before the upgrade case. Qualification requires all **34** uniquely named
+cases to PASS, no skips/failures/errors, supplied rather than synthesized release
+assets, and unchanged input hashes. A partial suite is not a release gate PASS.
+
+Retain `qualification.json`, `suite/summary.json`, suite logs, completed stage
+output and predecessor asset/attestation evidence. Capture timeout/output-limit
+or spawn errors may retain only a stage-labelled CI error; never invent missing
+failure logs. `quickstart-<target>` workflow artifacts retain this evidence and
+do not change the eleven-asset publication inventory.
+Public qualification is retained inside the finalizer's
+`stable-0.5.1-public-evidence-<run_id>-<run_attempt>` workflow artifact; uploads
+after failed stages preserve available evidence without asserting completion.
 
 ## One-command onboarding gate
 
@@ -70,7 +104,9 @@ Retain evidence for:
   malformed state;
 - clean/repeated installation, update, rollback after acquisition or receipt
   failure, pre-existing installation preservation and explicit unmanaged
-  command backup authorization;
+  command backup authorization. Qualify the published immutable `0.5.0`
+  predecessor's verified native binary as the upgrade input; a locally renamed
+  candidate or a skipped `--previous-binary` case does not prove this upgrade;
 - earlier PATH commands preserved with actionable guidance, missing/old Python,
   missing/corrupt/truncated downloads, malformed/missing checksums, unsafe or
   duplicate archive entries, symlinks, permissions and ownership failures;
@@ -87,10 +123,11 @@ Do not mark a runner `PASS` merely because its archive exists.
 
 ## Authorized publication and public verification
 
-Only after the source/artifact gates and separate publication authorization:
+Under the recorded maintainer request, after source/artifact gates pass:
 
-1. Bind the new tag to the retained build's exact source SHA and publish the
-   exact ten reviewed assets as a stable immutable GitHub release.
+1. Verify the new annotated `v0.5.1` tag equals the retained successful tag-run
+   source SHA, inspect both private candidates, and publish the exact eleven
+   reviewed assets as a stable immutable GitHub release.
 2. Download the public assets independently, compare every byte with the
    retained candidate, and verify all checksums.
 3. Run `gh release verify TAG --repo SioYooo/RepoGrammar --format json` and
@@ -100,14 +137,22 @@ Only after the source/artifact gates and separate publication authorization:
 4. Test the public pinned installer and matching native archive in isolated
    environments. Exercise direct, piped, interactive and noninteractive
    quickstart, including actual product MCP self-test and repository readiness.
-5. Confirm latest-stable acquisition resolves to the newly qualified release.
-   Confirm existing npm metadata/dist-tags remain untouched.
+   The finalizer invokes the same helper with `--release-dir evidence/github-assets`,
+   `--installer evidence/github-assets/install.sh` and
+   `--out evidence/public-quickstart`. Its final verifier binds the 34-case PASS
+   summary to the exact public archive/checksum/installer and source
+   worker/harness, including verified predecessor hashes.
+5. Approve the exact retained npm stage through maintainer 2FA after GitHub
+   assets are publicly verified. Confirm npm SRI/provenance and pinned/latest
+   launchers against `0.5.1`, preserve `preview=0.2.0-preview.0`, and run the
+   read-only stable finalizer. Confirm latest-stable binary acquisition also
+   resolves to the newly qualified release. Do not repair dist-tags with
+   ad-hoc writes.
 
-The preferred immutable entrypoint, after replacing the placeholder with the
-newly verified tag, is:
+The preferred immutable entrypoint **after public 0.5.1 verification** is:
 
 ```bash
-quickstart_tag='REPLACE_WITH_NEW_QUICKSTART_RELEASE_TAG'
+quickstart_tag='v0.5.1'
 curl -fsSL "https://github.com/SioYooo/RepoGrammar/releases/download/${quickstart_tag}/install.sh" \
   | bash -s -- --quickstart --version "$quickstart_tag"
 ```

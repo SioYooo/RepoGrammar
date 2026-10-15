@@ -2179,9 +2179,14 @@ collector does not inherit unrelated frontend environment switches.
 ## One-command quickstart qualification
 
 The installer suite delegates current-source quickstart coverage to
-`src/install/quickstart.test.py`. It requires an actual candidate executable,
-packages it with the checked-in Python worker into a local checksummed release
-fixture, and never invokes installed coding agents or writes real user profiles.
+`src/install/quickstart.test.py`. It requires an actual candidate executable and
+never invokes installed coding agents or writes real user profiles. Local tests
+package it with the checked-in Python worker into a checksummed fixture. Release
+qualification instead passes `--release-dir` for the exact existing archive and
+sidecar; normal cases read those assets without repacking or modifying them.
+Negative, boundary and predecessor fixtures use separate test-built archives
+under the evidence directory. `--installer` selects the exact script bytes for
+direct, piped and PTY runs; its default is the checked-in installer.
 The parent shell suite isolates HOME/XDG/Codex/Claude directories; fake source
 builds use a temporary checkout instead of replacing the checkout's release binary.
 Use `REPOGRAMMAR_INSTALLER_TEST_BINARY` to reuse a frozen candidate without a build.
@@ -2191,10 +2196,15 @@ integrity check pins this prerequisite on both hosts.
 The broken-worker rollback fixture explicitly selects its installed worker via
 `REPOGRAMMAR_PYTHON_WORKER`, because debug builds otherwise prefer the healthy
 checkout worker. It must fail with `index_failed`; other cases retain normal
-worker discovery.
+worker discovery. The direct/repeat test pins the version from the checkout's
+`package.json`, so a new candidate version cannot silently exercise an older
+hardcoded release pin. The summary records that package version, candidate
+archive/sidecar/installer hashes, and the previous binary and worker hashes when
+supplied. All input hashes are rechecked after the suite. The current installed
+worker must match the checked-in worker from the candidate source revision.
 
 ```text
-python3 src/install/quickstart.test.py --binary <frozen-candidate> --previous-binary <frozen-previous-product> --out <new-evidence-directory>
+python3 src/install/quickstart.test.py --binary <frozen-candidate> --previous-binary <frozen-previous-product> --previous-worker <frozen-previous-worker> --release-dir <exact-current-assets> --installer <exact-current-installer> --out <new-evidence-directory>
 REPOGRAMMAR_INSTALLER_TEST_BINARY=<frozen-candidate> bash src/install/repogrammar-install.test.sh
 ```
 
@@ -2212,8 +2222,30 @@ Fresh/repeat/previous-candidate upgrades must retain product receipt consistency
 worker bytes, native configuration and marker-fenced instructions; failure
 injection must distinguish acquisition rollback from setup's newly created
 agent rollback. Index/autosync/product-self-test and family readiness are separate
-assertions. The optional previous binary comparison is omitted only with an
-explicit NOT_RUN note; it is not evidence of a published-version upgrade.
+assertions. `--previous-binary` and `--previous-worker` must be supplied together;
+substituting the current worker does not qualify a published predecessor.
+The optional previous bundle comparison is omitted only with an
+explicit `NOT_MEASURED` skip; it is not evidence of a published-version upgrade.
+All four native release build jobs must supply the same-architecture public
+`v0.5.0` pre-quickstart binary and its authentic bundled worker, and require all
+34 cases to pass with no skips. Acquire its exact archive and checksum sidecar
+from that tag into a fresh directory; retain successful `gh release verify` and `gh release
+verify-asset` evidence for both files. The checked-in installer's existing
+`--install-cli-only --yes --version v0.5.0` path, with isolated HOME/config/data/
+command directories and `REPOGRAMMAR_RELEASE_DIR` pointing to those verified
+assets, then verifies the checksum and archive layout before installing the
+predecessor. Pass that installed executable and worker through the paired flags
+and retain the full quickstart evidence directory for each target. The predecessor
+control must reject quickstart before writes, install through the legacy
+CLI-only path, verify both installed old worker copies, and create a real index
+with the old binary and worker using `init --yes --no-autosync`. Its status must
+show an active generation and valid storage before candidate quickstart upgrades
+the installation and existing index. The upgraded installation must contain the
+current worker. The predecessor is never replaced by a stub or a candidate
+binary with a changed version label. Public-asset qualification must pass the
+downloaded current archive/sidecar directory and the downloaded verified
+installer explicitly; source-only or repacked-fixture results cannot establish
+that exact public-input qualification.
 
 Run the existing `repo-guard smoke-packaged-artifact` on the exact candidate
 executable and bundled worker, including `--require-product-uninstall`, plus

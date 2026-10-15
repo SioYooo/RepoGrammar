@@ -113,13 +113,25 @@ const SOURCE_EXTENSIONS: &[&str] = &[
 const IGNORED_DIRS: &[&str] = &[".git", "target", ".codegraph", ".repogrammar"];
 const IGNORED_DIR_PREFIXES: &[&str] = &[".repogrammar-"];
 const MAX_GITDIR_POINTER_BYTES: u64 = 4 * 1024;
-const STABLE_RELEASE_VERSION: &str = "0.5.0";
+const STABLE_RELEASE_VERSION: &str = "0.5.1";
 const STABLE_PREVIEW_VERSION: &str = "0.2.0-preview.0";
 const STABLE_PREVIOUS_PUBLIC_VERSION: &str = "0.4.3";
 const FAILED_STABLE_RELEASE_VERSIONS: &[&str] = &["0.2.0", "0.2.1", "0.3.0", "0.3.1", "0.3.2"];
 const PREVIEW_NPM_STAGE_PACKAGE_ASSIGNMENT: &str = r#"package_file="./npm-candidate/sioyooo-repogrammar-${{ needs.classify.outputs.version }}.tgz""#;
 const STABLE_NPM_STAGE_COMMAND: &str =
-    "npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance";
+    "npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.1.tgz --access public --tag latest --provenance";
+const STABLE_NPM_STAGE_CONDITION: &str = "if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' && needs.classify.outputs.version == '0.5.1'";
+const GITHUB_RELEASE_DRAFT_CONDITION: &str = "if: github.event_name == 'push' && github.ref_type == 'tag' && (needs.classify.outputs.channel == 'preview' || (needs.classify.outputs.channel == 'stable' && needs.classify.outputs.version == '0.5.1'))";
+const NATIVE_QUICKSTART_STEP: &str = r#"      - name: Qualify native quickstart and verified predecessor upgrade
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo run --quiet --locked --bin repo-guard -- smoke-quickstart-artifact --binary "${RUNNER_TEMP}/repogrammar-package-smoke/unpacked/repogrammar" --release-dir "${GITHUB_WORKSPACE}" --out "${RUNNER_TEMP}/repogrammar-quickstart-evidence""#;
+const PUBLIC_QUICKSTART_STEP: &str = r#"      - name: Qualify verified public quickstart and predecessor upgrade
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo run --quiet --locked --bin repo-guard -- smoke-quickstart-artifact --binary "${RUNNER_TEMP}/public-native-smoke/unpacked/repogrammar" --release-dir evidence/github-assets --out evidence/public-quickstart --installer evidence/github-assets/install.sh"#;
 const NPM_PACKAGE_NAME: &str = "@sioyooo/repogrammar";
 const MAX_NPM_CANDIDATE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RELEASE_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -136,7 +148,7 @@ const GITHUB_WORKFLOW_BUILD_TYPE_V1: &str =
 const GITHUB_HOSTED_BUILDER: &str = "https://github.com/actions/runner/github-hosted";
 const RELEASE_REPOSITORY_URL: &str = "https://github.com/SioYooo/RepoGrammar";
 const RELEASE_WORKFLOW_PATH: &str = ".github/workflows/release.yml";
-const RELEASE_DEPENDENCY_URI: &str = "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.5.0";
+const RELEASE_DEPENDENCY_URI: &str = "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.5.1";
 const NPM_PACKAGE_FILES: &[&str] = &[
     "package/LICENSE",
     "package/README.md",
@@ -265,6 +277,33 @@ where
                 Err(error) => CommandResult::err(format!("{error}\n")),
             }
         }
+        [command, binary_flag, binary, release_flag, release_dir, out_flag, out]
+            if command == "smoke-quickstart-artifact"
+                && binary_flag == "--binary"
+                && release_flag == "--release-dir"
+                && out_flag == "--out" =>
+        {
+            match smoke_quickstart_artifact(root, binary, release_dir, None, out) {
+                Ok(()) => CommandResult::ok("native quickstart artifact smoke passed\n"),
+                Err(error) => {
+                    CommandResult::err(format!("quickstart artifact smoke failed: {error}\n"))
+                }
+            }
+        }
+        [command, binary_flag, binary, release_flag, release_dir, out_flag, out, installer_flag, installer]
+            if command == "smoke-quickstart-artifact"
+                && binary_flag == "--binary"
+                && release_flag == "--release-dir"
+                && out_flag == "--out"
+                && installer_flag == "--installer" =>
+        {
+            match smoke_quickstart_artifact(root, binary, release_dir, Some(installer), out) {
+                Ok(()) => CommandResult::ok("native quickstart artifact smoke passed\n"),
+                Err(error) => {
+                    CommandResult::err(format!("quickstart artifact smoke failed: {error}\n"))
+                }
+            }
+        }
         [command, base_flag, base, head_flag, head]
             if command == "check-diff" && base_flag == "--base" && head_flag == "--head" =>
         {
@@ -386,7 +425,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "Usage: repo-guard host-stage-eval <performance-eval options> | check | check-geo | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
+    "Usage: repo-guard host-stage-eval <performance-eval options> | check | check-geo | sync-agent-guides --from <AGENTS.md|CLAUDE.md> | check-diff --base <rev> --head <rev> | product-eval --corpus <path> --out <dir> [--repetitions <n>] [--bin <path>] [--condition <token>] [--baseline token-overlap] | performance-eval --out <dir> [--bin <path>] [--worker <path>] [--fixture <local-snapshot>] [--condition <token>] [--repetitions <1..9>] [--python-files <1..256>] [--timeout-seconds <1..3600>] | sync-equivalence --fixture <repo-relative-fixture-root> [--scenario <id> | --all] [--bin <path>] --out <dir> | payload-measure --out <dir> [--bin <path>] [--fixture <repo-relative-fixture-root>] | smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall] | smoke-quickstart-artifact --binary <path> --release-dir <path> --out <new-dir> [--installer <path>] | smoke-npm-package --tarball <path> --expected-version <version> | verify-npm-pack-evidence --pack-json <path> --candidate-manifest <path> --expected-version <version> | verify-stable-release-evidence --evidence-dir <path> | release-source --event-name <workflow_dispatch|push> --ref-name <name> | release-channel --version <version> | release-dist-tag-action --version <version> --preview <version-or-empty> --latest <version-or-empty> --tags-json <json-object> --versions-json <json-array> | preview-dist-tag-action --version <version> --preview <version> --latest <version-or-empty> --versions-json <json-array>"
 }
 
 const MAX_PUBLISHED_VERSIONS_JSON_BYTES: usize = 16 * 1024;
@@ -1253,6 +1292,337 @@ impl Drop for PackagedArtifactSmoke {
     }
 }
 
+#[cfg(any(unix, test))]
+fn create_quickstart_output(root: &Path, input: &str) -> Result<PathBuf, String> {
+    let path = root.join(input);
+    if path
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err("quickstart output must not contain traversal".into());
+    }
+    let parent = path
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok())
+        .ok_or("quickstart output parent is unavailable")?;
+    let name = path
+        .file_name()
+        .ok_or("quickstart output name is invalid")?;
+    let output = parent.join(name);
+    fs::create_dir(&output).map_err(|_| "quickstart output must be a new directory")?;
+    Ok(output)
+}
+
+#[cfg(unix)]
+fn capture_quickstart_stage(command: Command, out: &Path, label: &str) -> Result<Vec<u8>, String> {
+    let output = performance_capture(command, None, std::time::Duration::from_secs(900))
+        .map_err(|error| format!("{label}: {error}"))?;
+    fs::write(out.join(format!("{label}.stdout")), &output.stdout)
+        .and_then(|()| fs::write(out.join(format!("{label}.stderr")), &output.stderr))
+        .map_err(|_| "could not retain quickstart stage output")?;
+    if !output.status.success() {
+        return Err(format!(
+            "{label} failed; retained output identifies the stage"
+        ));
+    }
+    Ok(output.stdout)
+}
+
+fn validate_quickstart_summary(
+    summary: &serde_json::Value,
+    version: &str,
+    target: &str,
+    hashes: &[(&str, String)],
+) -> Result<(), String> {
+    let cases = summary["cases"]
+        .as_array()
+        .ok_or("quickstart cases are missing")?;
+    let mut names = std::collections::BTreeSet::new();
+    if summary["schema"] != "quickstart-tests.v1"
+        || summary["package_version"] != version
+        || summary["target"] != target
+        || summary["success"] != true
+        || summary["release_assets_source"] != "provided"
+        || summary["input_hashes_unchanged"] != true
+        || summary["tests_run"] != 34
+        || cases.len() != 34
+        || cases.iter().any(|case| {
+            case["status"] != "PASS"
+                || case["case"]
+                    .as_str()
+                    .is_none_or(|name| name.is_empty() || !names.insert(name))
+        })
+        || ["failures", "errors", "skipped"].iter().any(|key| {
+            summary[key]
+                .as_array()
+                .is_none_or(|values| !values.is_empty())
+        })
+        || hashes.iter().any(|(key, hash)| {
+            !is_sha256_sri(hash) || summary[key].as_str() != hash.strip_prefix("sha256:")
+        })
+    {
+        return Err("quickstart evidence is incomplete, skipped, failed, or mismatched".into());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn smoke_quickstart_artifact(
+    root: &Path,
+    binary: &str,
+    release_dir: &str,
+    installer: Option<&str>,
+    out: &str,
+) -> Result<(), String> {
+    use std::os::unix::fs::symlink;
+    let target = match (env::consts::OS, env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        _ => return Err("quickstart smoke requires a declared native release host".into()),
+    };
+    let binary = regular_input_file(root, binary, "quickstart candidate")?;
+    let worker = binary
+        .parent()
+        .ok_or("candidate layout is invalid")?
+        .join("workers/python/worker.py");
+    let source_installer = regular_input_file(
+        root,
+        "src/install/repogrammar-install.sh",
+        "candidate installer",
+    )?;
+    let installer = installer
+        .map(|path| regular_input_file(root, path, "selected installer"))
+        .transpose()?
+        .unwrap_or_else(|| source_installer.clone());
+    if sha256_file_sri(&installer)? != sha256_file_sri(&source_installer)? {
+        return Err("selected and source quickstart installers differ".into());
+    }
+    let suite = regular_input_file(root, "src/install/quickstart.test.py", "quickstart suite")?;
+    let source_worker = regular_input_file(
+        root,
+        "src/workers/python/worker.py",
+        "candidate source worker",
+    )?;
+    let version = package_json_release_version(root)?;
+    if sha256_file_sri(&worker)? != sha256_file_sri(&source_worker)? {
+        return Err("packaged and source quickstart workers differ".into());
+    }
+    let mut admitted_inputs = [
+        &binary,
+        &worker,
+        &installer,
+        &suite,
+        &source_worker,
+        &source_installer,
+    ]
+    .into_iter()
+    .map(|path| Ok((path.clone(), sha256_file_sri(path)?)))
+    .collect::<Result<Vec<_>, String>>()?;
+    let out = create_quickstart_output(root, out)?;
+    let smoke = PackagedArtifactSmoke::new(
+        root,
+        binary.to_str().ok_or("candidate path is not UTF-8")?,
+        worker.to_str().ok_or("worker path is not UTF-8")?,
+        "src/fixtures/python/release/v0_1/pydantic-basic/schemas.py",
+    )?;
+    let mut candidate_version = smoke.command();
+    candidate_version.arg("version");
+    if capture_quickstart_stage(candidate_version, &out, "candidate-version")?
+        != format!("repogrammar {version}\n").as_bytes()
+    {
+        return Err("quickstart candidate version does not match release manifests".into());
+    }
+    let current_assets = root.join(release_dir);
+    let metadata = fs::symlink_metadata(&current_assets)
+        .map_err(|_| "current release assets are unavailable")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("current release assets must be a regular directory".into());
+    }
+    let current_assets =
+        fs::canonicalize(current_assets).map_err(|_| "current release assets are unavailable")?;
+    let archive = format!("repogrammar-{target}.tar.gz");
+    let checksum = format!("{archive}.sha256");
+    for name in [&archive, &checksum] {
+        let path = current_assets.join(name);
+        admitted_inputs.push((path.clone(), sha256_file_sri(&path)?));
+    }
+    verify_sha256_sidecar(&current_assets, &checksum)?;
+    let assets = out.join("predecessor-assets");
+    fs::create_dir(&assets).map_err(|_| "could not create predecessor assets directory")?;
+    let gh = executable_on_path("gh").ok_or("GitHub CLI is unavailable")?;
+    let mut download = Command::new(&gh);
+    download
+        .args([
+            "release",
+            "download",
+            "v0.5.0",
+            "--repo",
+            "SioYooo/RepoGrammar",
+            "--pattern",
+            &archive,
+            "--pattern",
+            &checksum,
+            "--dir",
+        ])
+        .arg(&assets);
+    capture_quickstart_stage(download, &out, "predecessor-download")?;
+    let mut verify = Command::new(&gh);
+    verify.args([
+        "release",
+        "verify",
+        "v0.5.0",
+        "--repo",
+        "SioYooo/RepoGrammar",
+        "--format",
+        "json",
+    ]);
+    capture_quickstart_stage(verify, &out, "predecessor-release-attestation")?;
+    for name in [&archive, &checksum] {
+        let mut verify = Command::new(&gh);
+        verify
+            .args(["release", "verify-asset", "v0.5.0"])
+            .arg(assets.join(name))
+            .args(["--repo", "SioYooo/RepoGrammar", "--format", "json"]);
+        capture_quickstart_stage(verify, &out, &format!("predecessor-{name}-attestation"))?;
+    }
+    verify_sha256_sidecar(&assets, &checksum)?;
+    for tool in [
+        "bash",
+        "sh",
+        "env",
+        "cat",
+        "cp",
+        "chmod",
+        "mkdir",
+        "rm",
+        "dirname",
+        "basename",
+        "uname",
+        "tar",
+        "gzip",
+        "awk",
+        "grep",
+        "sed",
+        "tr",
+        "readlink",
+        "getconf",
+        "ldd",
+        "id",
+        "date",
+        "mv",
+        "cmp",
+        "ln",
+        "which",
+        "head",
+        "stat",
+        "sleep",
+        "mktemp",
+        "sha256sum",
+        "shasum",
+        "wc",
+        "sort",
+        "touch",
+    ] {
+        if let Some(executable) = executable_on_path(tool) {
+            symlink(executable, smoke.tools.join(tool))
+                .map_err(|_| "could not isolate quickstart tool")?;
+        }
+    }
+    let mut install = smoke.command_with_binary(&smoke.tools.join("bash"));
+    install
+        .arg(&installer)
+        .args(["--install-cli-only", "--yes", "--version", "v0.5.0"])
+        .env("REPOGRAMMAR_RELEASE_DIR", &assets)
+        .env("REPOGRAMMAR_INSTALL_DIR", smoke.managed_data_dir())
+        .env("REPOGRAMMAR_COMMAND_DIR", smoke.managed_command_dir())
+        .env("CLAUDE_CONFIG_DIR", smoke.home.join(".claude"));
+    capture_quickstart_stage(install, &out, "predecessor-install")?;
+    let previous = smoke.managed_authority();
+    let previous_worker = smoke.managed_data_dir().join("workers/python/worker.py");
+    let mut previous_version = smoke.command_with_binary(&previous);
+    previous_version.arg("version");
+    if capture_quickstart_stage(previous_version, &out, "predecessor-version")?
+        != b"repogrammar 0.5.0\n"
+    {
+        return Err("quickstart predecessor version does not match v0.5.0".into());
+    }
+    let hashes = [
+        ("binary_sha256", sha256_file_sri(&binary)?),
+        ("previous_binary_sha256", sha256_file_sri(&previous)?),
+        ("previous_worker_sha256", sha256_file_sri(&previous_worker)?),
+        ("worker_sha256", sha256_file_sri(&worker)?),
+        ("installer_sha256", sha256_file_sri(&installer)?),
+        (
+            "release_archive_sha256",
+            sha256_file_sri(&current_assets.join(&archive))?,
+        ),
+        (
+            "release_checksum_sha256",
+            sha256_file_sri(&current_assets.join(&checksum))?,
+        ),
+    ];
+    let mut harness = smoke.command_with_binary(&smoke.python);
+    harness
+        .arg(&suite)
+        .arg("--binary")
+        .arg(&binary)
+        .arg("--previous-binary")
+        .arg(&previous)
+        .arg("--previous-worker")
+        .arg(&previous_worker)
+        .arg("--release-dir")
+        .arg(&current_assets)
+        .arg("--installer")
+        .arg(&installer)
+        .arg("--out")
+        .arg(out.join("suite"));
+    capture_quickstart_stage(harness, &out, "quickstart-suite")?;
+    validate_quickstart_summary(
+        &read_evidence_json(&out.join("suite"), "summary.json")?,
+        &version,
+        target,
+        &hashes,
+    )?;
+    for (path, hash) in admitted_inputs {
+        if sha256_file_sri(&path)? != hash {
+            return Err("quickstart input changed during qualification".into());
+        }
+    }
+    if sha256_file_sri(&previous)? != hashes[1].1
+        || sha256_file_sri(&previous_worker)? != hashes[2].1
+    {
+        return Err("quickstart predecessor changed during qualification".into());
+    }
+    let provenance = serde_json::json!({
+        "schema": "native-quickstart-artifact.v1", "status": "PASS", "target": target,
+        "package_version": version, "predecessor_tag": "v0.5.0",
+        "release_archive": archive,
+        "predecessor_archive_sha256": sha256_file_sri(&assets.join(&archive))?,
+        "predecessor_checksum_sha256": sha256_file_sri(&assets.join(&checksum))?,
+        "harness_sha256": sha256_file_sri(&suite)?, "inputs": hashes.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+        "summary": "suite/summary.json", "network": "immutable public predecessor reads only"
+    });
+    fs::write(
+        out.join("qualification.json"),
+        serde_json::to_vec_pretty(&provenance)
+            .map_err(|_| "quickstart provenance serialization failed")?,
+    )
+    .map_err(|_| "could not retain quickstart provenance".into())
+}
+
+#[cfg(not(unix))]
+fn smoke_quickstart_artifact(
+    _root: &Path,
+    _binary: &str,
+    _release_dir: &str,
+    _installer: Option<&str>,
+    _out: &str,
+) -> Result<(), String> {
+    Err("quickstart smoke requires a declared native release host".into())
+}
+
 fn smoke_packaged_artifact(
     repository_root: &Path,
     binary: &str,
@@ -1947,6 +2317,99 @@ fn verify_npm_pack_evidence(
     Ok(())
 }
 
+fn verify_public_quickstart_evidence(
+    root: &Path,
+    evidence: &Path,
+    assets: &Path,
+) -> Result<(), String> {
+    let output = evidence.join("public-quickstart");
+    let metadata =
+        fs::symlink_metadata(&output).map_err(|_| "public quickstart output is missing")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("public quickstart output must be a regular directory".into());
+    }
+    let qualification = read_evidence_json(&output, "qualification.json")?;
+    let target = "x86_64-unknown-linux-gnu";
+    let archive = format!("repogrammar-{target}.tar.gz");
+    let checksum = format!("{archive}.sha256");
+    if qualification["schema"] != "native-quickstart-artifact.v1"
+        || qualification["status"] != "PASS"
+        || qualification["package_version"] != STABLE_RELEASE_VERSION
+        || qualification["target"] != target
+        || qualification["release_archive"] != archive
+        || qualification["predecessor_tag"] != "v0.5.0"
+        || qualification["summary"] != "suite/summary.json"
+        || qualification["harness_sha256"]
+            != sha256_file_sri(&root.join("src/install/quickstart.test.py"))?
+    {
+        return Err("public quickstart qualification identity is mismatched".into());
+    }
+    let inputs = qualification["inputs"]
+        .as_object()
+        .filter(|inputs| inputs.len() == 7)
+        .ok_or("public quickstart input inventory is not exact")?;
+    let hashes = [
+        "binary_sha256",
+        "previous_binary_sha256",
+        "previous_worker_sha256",
+        "worker_sha256",
+        "installer_sha256",
+        "release_archive_sha256",
+        "release_checksum_sha256",
+    ]
+    .into_iter()
+    .map(|key| {
+        Ok((
+            key,
+            inputs
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .ok_or("public quickstart input hash is missing")?
+                .to_string(),
+        ))
+    })
+    .collect::<Result<Vec<_>, String>>()?;
+    for (key, path) in [
+        ("release_archive_sha256", assets.join(&archive)),
+        ("release_checksum_sha256", assets.join(&checksum)),
+        ("installer_sha256", assets.join("install.sh")),
+        (
+            "installer_sha256",
+            root.join("src/install/repogrammar-install.sh"),
+        ),
+        ("worker_sha256", root.join("src/workers/python/worker.py")),
+    ] {
+        if inputs[key] != sha256_file_sri(&path)? {
+            return Err("public quickstart input differs from verified release or source".into());
+        }
+    }
+    let previous_assets = output.join("predecessor-assets");
+    for (key, name) in [
+        ("predecessor_archive_sha256", &archive),
+        ("predecessor_checksum_sha256", &checksum),
+    ] {
+        if qualification[key] != sha256_file_sri(&previous_assets.join(name))? {
+            return Err("public quickstart predecessor input is mismatched".into());
+        }
+    }
+    verify_sha256_sidecar(&previous_assets, &checksum)?;
+    for name in [
+        "predecessor-release-attestation.stdout".to_string(),
+        format!("predecessor-{archive}-attestation.stdout"),
+        format!("predecessor-{checksum}-attestation.stdout"),
+    ] {
+        if read_evidence_json(&output, &name)?.is_null() {
+            return Err("public quickstart predecessor attestation is missing".into());
+        }
+    }
+    validate_quickstart_summary(
+        &read_evidence_json(&output.join("suite"), "summary.json")?,
+        STABLE_RELEASE_VERSION,
+        target,
+        &hashes,
+    )
+}
+
 fn verify_stable_release_evidence(
     repository_root: &Path,
     evidence_dir: &str,
@@ -1964,7 +2427,7 @@ fn verify_stable_release_evidence(
     }
 
     let release = read_evidence_json(&directory, "github-release.json")?;
-    if release["tag_name"] != "v0.5.0"
+    if release["tag_name"] != "v0.5.1"
         || release["draft"] != false
         || release["prerelease"] != false
         || release["immutable"] != true
@@ -2133,7 +2596,7 @@ fn verify_stable_release_evidence(
     if candidate_run["name"] != "Release"
         || candidate_run["event"] != "push"
         || candidate_run["conclusion"] != "success"
-        || candidate_run["head_branch"] != "v0.5.0"
+        || candidate_run["head_branch"] != "v0.5.1"
         || candidate_run["path"] != RELEASE_WORKFLOW_PATH
         || candidate_run["head_sha"].as_str() != Some(expected_sha)
     {
@@ -2147,10 +2610,10 @@ fn verify_stable_release_evidence(
     verify_npm_provenance(&audit, manifest_sha512, expected_sha, run_id, run_attempt)?;
 
     for (name, expected) in [
-        ("pinned-version.txt", "repogrammar 0.5.0"),
-        ("latest-version.txt", "repogrammar 0.5.0"),
+        ("pinned-version.txt", "repogrammar 0.5.1"),
+        ("latest-version.txt", "repogrammar 0.5.1"),
         ("preview-version.txt", "repogrammar 0.2.0-preview.0"),
-        ("public-installer-version.txt", "repogrammar 0.5.0"),
+        ("public-installer-version.txt", "repogrammar 0.5.1"),
     ] {
         if read_evidence_text(&directory, name)?.trim() != expected {
             return Err("public npm version smoke did not match the expected channel".to_string());
@@ -2161,6 +2624,8 @@ fn verify_stable_release_evidence(
     {
         return Err("public native product smoke did not pass".to_string());
     }
+    verify_public_quickstart_evidence(repository_root, &directory, &assets)
+        .map_err(|error| format!("public quickstart evidence: {error}"))?;
     for init_name in [
         "public-installer-init.json",
         "pinned-init.json",
@@ -2363,7 +2828,7 @@ fn validate_slsa_provenance(
         || build_definition["buildType"] != GITHUB_WORKFLOW_BUILD_TYPE_V1
         || workflow["repository"] != RELEASE_REPOSITORY_URL
         || workflow["path"] != RELEASE_WORKFLOW_PATH
-        || workflow["ref"] != "refs/tags/v0.5.0"
+        || workflow["ref"] != "refs/tags/v0.5.1"
         || github["event_name"] != "push"
         || dependencies[0]["uri"] != RELEASE_DEPENDENCY_URI
         || dependencies[0]["digest"]["gitCommit"] != expected_sha
@@ -8258,10 +8723,14 @@ fn check_geo_assets(root: &Path) -> Result<(), String> {
         .map_err(|_| "GEO README is unavailable".to_string())?;
     let download_prefix = format!("releases/download/v{version}/");
     let current_intro = format!("The current GitHub stable release is **{version}**");
-    if !readme.contains(&current_intro)
+    let baseline_intro = format!("Verified GitHub release baseline: **{version}**.");
+    if !(readme.contains(&current_intro) || readme.lines().any(|line| line == baseline_intro))
         || readme.lines().any(|line| {
             line.starts_with("The current GitHub stable release is ")
                 && !line.starts_with(&current_intro)
+        })
+        || readme.lines().any(|line| {
+            line.starts_with("Verified GitHub release baseline:") && line != baseline_intro
         })
         || !readme.contains(&format!("bash install.sh --version v{version}"))
         || readme.lines().any(|line| {
@@ -8675,6 +9144,26 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
             "macOS/Linux CI and newly built release candidates must explicitly require the receipt-backed post-exit product uninstall smoke",
         ));
     }
+    let quickstart_markers = [
+        "name: quickstart-${{ matrix.target }}",
+        "path: ${{ runner.temp }}/repogrammar-quickstart-evidence/",
+        "if: always()",
+    ];
+    if build_job.is_none_or(|job| {
+        !workflow_has_exact_step(job, NATIVE_QUICKSTART_STEP)
+            || job.lines().any(|line| {
+                line.starts_with("    continue-on-error:") || line.starts_with("    if:")
+            })
+            || quickstart_markers
+                .iter()
+                .any(|marker| !job.contains(marker))
+    }) {
+        violations.push(GuardViolation::new(
+            ".github/workflows/release.yml",
+            "NativeQuickstartSmokeContract",
+            "each native release build must qualify the unpacked quickstart and verified predecessor, retaining complete success or failure evidence",
+        ));
+    }
     if prepare_job.is_none_or(|job| !release_workflow_has_draft_collision_guard(job)) {
         violations.push(GuardViolation::new(
             ".github/workflows/release.yml",
@@ -8682,11 +9171,20 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
             "draft creation must query every release page with the runner-compatible exact tag filter and fail when that tag already has a release or draft",
         ));
     }
+    if prepare_job.is_none_or(|job| {
+        !job.lines()
+            .any(|line| line.trim() == GITHUB_RELEASE_DRAFT_CONDITION)
+    }) {
+        violations.push(GuardViolation::new(
+            ".github/workflows/release.yml",
+            "ReleaseDraftChannelContract",
+            "draft preparation must run only for pushed preview tags or the registered stable version, never a build-only dispatch",
+        ));
+    }
     let exact_stage_command = STABLE_NPM_STAGE_COMMAND;
     let stable_global_markers = ["release-source", "draft: true"];
     let stable_job_markers = [
         "needs: [classify, package_npm, prepare_github_release]",
-        "if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable'",
         "environment: npm-release",
         "id-token: write",
         "node-version: 24",
@@ -8722,9 +9220,11 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         || exact_stage_count != 1
         || stable_has_forbidden_authority
         || stable_job.is_none_or(|job| {
-            stable_job_markers
-                .iter()
-                .any(|marker| !job.contains(marker))
+            !job.lines()
+                .any(|line| line.trim() == STABLE_NPM_STAGE_CONDITION)
+                || stable_job_markers
+                    .iter()
+                    .any(|marker| !job.contains(marker))
         })
     {
         violations.push(GuardViolation::new(
@@ -8866,8 +9366,8 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         "permissions:",
         "contents: read",
         "actions: read",
-        "gh release verify v0.5.0",
-        "gh release verify-asset v0.5.0",
+        "gh release verify v0.5.1",
+        "gh release verify-asset v0.5.1",
         "npm-candidate-manifest.json",
         "test \"$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')\" = \"11\"",
         "--jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}'",
@@ -8878,6 +9378,7 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         "--candidate-manifest evidence/retained-candidate-manifest.json",
         "smoke-npm-package",
         "evidence/public-native-smoke.txt",
+        "--require-product-uninstall",
         "evidence/public-installer-version.txt",
         "evidence/public-installer-init.json",
         "evidence/pinned-init.json",
@@ -8899,6 +9400,12 @@ fn check_release_workflow_contract(root: &Path, violations: &mut Vec<GuardViolat
         || finalizer.contains("id-token: write")
         || !pack_verification_precedes_execution
         || !npx_launcher_uses_isolated_workdirs
+        || workflow_job_section(&finalizer, "verify_public_release").is_none_or(|job| {
+            !workflow_has_exact_step(job, PUBLIC_QUICKSTART_STEP)
+                || job.lines().any(|line| {
+                    line.starts_with("    continue-on-error:") || line.starts_with("    if:")
+                })
+        })
         || stable_finalize_markers
             .iter()
             .any(|marker| !finalizer.contains(marker))
@@ -8969,6 +9476,23 @@ fn release_workflow_has_draft_collision_guard(job: &str) -> bool {
     logical_job.contains(EXACT_QUERY)
         && job.contains("if [ -n \"${existing_release_id}\" ]; then")
         && job.lines().any(|line| line.trim() == "exit 1")
+}
+
+fn workflow_has_exact_step(workflow: &str, expected: &str) -> bool {
+    let Some(header) = expected.lines().next() else {
+        return false;
+    };
+    let starts = workflow
+        .match_indices(header)
+        .filter(|(index, _)| *index == 0 || workflow.as_bytes()[index - 1] == b'\n')
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [start] = starts.as_slice() else {
+        return false;
+    };
+    let remaining = &workflow[*start..];
+    let end = remaining.find("\n      - ").unwrap_or(remaining.len());
+    remaining[..end].trim_end() == expected.trim_end()
 }
 
 fn workflow_job_section<'a>(workflow: &'a str, job: &str) -> Option<&'a str> {
@@ -9587,8 +10111,8 @@ mod tests {
                 STABLE_RELEASE_VERSION,
                 STABLE_RELEASE_VERSION,
                 STABLE_RELEASE_VERSION,
-                r#"{"latest":"0.5.0","preview":"0.5.0"}"#,
-                r#"["0.5.0"]"#,
+                r#"{"latest":"0.5.1","preview":"0.5.1"}"#,
+                r#"["0.5.1"]"#,
             ),
             Err("preview does not match the required stable predecessor")
         );
@@ -9597,8 +10121,8 @@ mod tests {
                 STABLE_RELEASE_VERSION,
                 "0.1.0-preview.9",
                 STABLE_RELEASE_VERSION,
-                r#"{"latest":"0.5.0","preview":"0.1.0-preview.9"}"#,
-                r#"["0.1.0-preview.9","0.5.0"]"#,
+                r#"{"latest":"0.5.1","preview":"0.1.0-preview.9"}"#,
+                r#"["0.1.0-preview.9","0.5.1"]"#,
             ),
             Err("preview does not match the required stable predecessor")
         );
@@ -9618,7 +10142,7 @@ mod tests {
                 STABLE_PREVIEW_VERSION,
                 STABLE_RELEASE_VERSION,
                 &stable_tags,
-                r#"["0.5.0"]"#,
+                r#"["0.5.1"]"#,
             ),
             Err("preview does not reference a published version")
         );
@@ -9638,14 +10162,14 @@ mod tests {
                 STABLE_PREVIEW_VERSION,
                 STABLE_RELEASE_VERSION,
                 &stable_tags,
-                r#"["0.2.0-preview.0","0.5.0"]"#,
+                r#"["0.2.0-preview.0","0.5.1"]"#,
             ),
             Err("previous public stable version is not published")
         );
 
         for tags in [
-            r#"{"latest":"0.5.0"}"#,
-            r#"{"latest":"0.5.0","preview":"0.2.0-preview.0","beta":"0.5.0"}"#,
+            r#"{"latest":"0.5.1"}"#,
+            r#"{"latest":"0.5.1","preview":"0.2.0-preview.0","beta":"0.5.1"}"#,
         ] {
             assert_eq!(
                 release_dist_tag_action(
@@ -9663,7 +10187,7 @@ mod tests {
                 STABLE_RELEASE_VERSION,
                 STABLE_PREVIEW_VERSION,
                 STABLE_RELEASE_VERSION,
-                r#"{"latest":"0.5.0","preview":"0.1.0-preview.9"}"#,
+                r#"{"latest":"0.5.1","preview":"0.1.0-preview.9"}"#,
                 &published_stable,
             ),
             Err("dist-tag inventory does not match the classified values")
@@ -9721,15 +10245,15 @@ mod tests {
             [
                 "release-dist-tag-action",
                 "--version",
-                "0.5.0",
+                "0.5.1",
                 "--preview",
                 "0.2.0-preview.0",
                 "--latest",
-                "0.5.0",
+                "0.5.1",
                 "--tags-json",
-                r#"{"latest":"0.5.0","preview":"0.2.0-preview.0"}"#,
+                r#"{"latest":"0.5.1","preview":"0.2.0-preview.0"}"#,
                 "--versions-json",
-                r#"["0.2.0-preview.0","0.2.2","0.4.0","0.4.1","0.4.2","0.4.3","0.5.0"]"#,
+                r#"["0.2.0-preview.0","0.2.2","0.4.0","0.4.1","0.4.2","0.4.3","0.5.1"]"#,
             ],
             Path::new("."),
         );
@@ -9946,6 +10470,31 @@ mod tests {
     }
 
     #[test]
+    fn geo_readme_accepts_a_verified_baseline_without_claiming_it_is_current() {
+        let root = TempRoot::new("geo-readme-baseline");
+        write_geo_fixture(root.path());
+        let path = root.path().join("README.md");
+        let baseline = fs::read_to_string(&path)
+            .expect("read fixture README")
+            .replace(
+                "The current GitHub stable release is **0.5.0**, published through GitHub only.",
+                "Verified GitHub release baseline: **0.5.0**.",
+            );
+        write_file(path.clone(), baseline.as_bytes());
+        assert_eq!(check_geo_assets(root.path()), Ok(()));
+        for conflicting_marker in [
+            "Verified GitHub release baseline: **0.5.1**.",
+            "The current GitHub stable release is **0.5.1**.",
+        ] {
+            write_file(
+                path.clone(),
+                format!("{baseline}\n{conflicting_marker}\n").as_bytes(),
+            );
+            assert!(check_geo_assets(root.path()).is_err());
+        }
+    }
+
+    #[test]
     fn geo_assets_reject_fabricated_unmeasured_results_and_uncaptured_observations() {
         let root = TempRoot::new("geo-observation-evidence");
         for field in ["mention", "citation", "cited_url", "rank", "evidence_ref"] {
@@ -10090,8 +10639,20 @@ mod tests {
             ),
             valid_release_workflow().replace("id-token: write", "id-token: read"),
             valid_release_workflow().replace(
+                STABLE_NPM_STAGE_CONDITION,
+                &format!("{STABLE_NPM_STAGE_CONDITION} && false"),
+            ),
+            valid_release_workflow().replace(
+                STABLE_NPM_STAGE_CONDITION,
+                "if: github.event_name == 'workflow_dispatch'",
+            ),
+            valid_release_workflow().replace(
+                STABLE_NPM_STAGE_CONDITION,
+                &STABLE_NPM_STAGE_CONDITION.replace("0.5.1", "0.5.0"),
+            ),
+            valid_release_workflow().replace(
                 STABLE_NPM_STAGE_COMMAND,
-                "npm stage inspect ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance",
+                "npm stage inspect ./npm-candidate/sioyooo-repogrammar-0.5.1.tgz --access public --tag latest --provenance",
             ),
         ] {
             write_file(
@@ -10121,13 +10682,32 @@ mod tests {
     }
 
     #[test]
+    fn release_draft_requires_preview_or_registered_stable_tag() {
+        let root = TempRoot::new("release-draft-channel");
+        write_valid_release_contract(root.path());
+        for condition in [
+            "if: github.event_name == 'workflow_dispatch'".to_string(),
+            "if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'preview'".to_string(),
+            format!("{GITHUB_RELEASE_DRAFT_CONDITION} && false"),
+            GITHUB_RELEASE_DRAFT_CONDITION.replace("0.5.1", "0.5.0"),
+        ] {
+            let invalid = valid_release_workflow().replace(GITHUB_RELEASE_DRAFT_CONDITION, &condition);
+            assert_ne!(invalid, valid_release_workflow());
+            write_file(root.path().join(".github/workflows/release.yml"), invalid.as_bytes());
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(violations.iter().any(|violation| violation.rule == "ReleaseDraftChannelContract"), "{violations:?}");
+        }
+    }
+
+    #[test]
     fn stable_release_stage_requires_the_exact_explicit_relative_tarball_path() {
         let root = TempRoot::new("stable-release-stage-relative-path");
         write_valid_release_contract(root.path());
 
         let invalid = valid_release_workflow().replace(
             STABLE_NPM_STAGE_COMMAND,
-            "npm stage publish npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance",
+            "npm stage publish npm-candidate/sioyooo-repogrammar-0.5.1.tgz --access public --tag latest --provenance",
         );
         assert_ne!(invalid, valid_release_workflow());
         write_file(
@@ -10260,7 +10840,7 @@ mod tests {
         let exact = STABLE_NPM_STAGE_COMMAND;
         let dynamic = valid_release_workflow().replace(
             exact,
-            &format!("# {exact}\n    npm \"${{subcommand}}\" ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance"),
+            &format!("# {exact}\n    npm \"${{subcommand}}\" ./npm-candidate/sioyooo-repogrammar-0.5.1.tgz --access public --tag latest --provenance"),
         );
         write_file(
             root.path().join(".github/workflows/release.yml"),
@@ -10340,6 +10920,7 @@ mod tests {
             "= \"11\"",
             "verify-npm-pack-evidence",
             "evidence/public-native-smoke.txt",
+            "--require-product-uninstall",
             "evidence/public-installer-version.txt",
             "evidence/public-installer-init.json",
             "evidence/pinned-init.json",
@@ -10386,6 +10967,93 @@ mod tests {
                     .any(|violation| { violation.rule == "PackagedProductUninstallSmokeContract" }),
                 "{path}: {violations:?}"
             );
+        }
+    }
+
+    #[test]
+    fn native_quickstart_smoke_and_retained_evidence_are_required_per_build() {
+        let root = TempRoot::new("native-quickstart-workflow-gate");
+        for marker in [
+            "smoke-quickstart-artifact --binary",
+            "GH_TOKEN: ${{ github.token }}",
+            "name: quickstart-${{ matrix.target }}",
+            "path: ${{ runner.temp }}/repogrammar-quickstart-evidence/",
+            "if: always()",
+        ] {
+            write_valid_release_contract(root.path());
+            let invalid = valid_release_workflow().replace(marker, "removed");
+            write_file(
+                root.path().join(".github/workflows/release.yml"),
+                invalid.as_bytes(),
+            );
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.rule == "NativeQuickstartSmokeContract"),
+                "{marker}: {violations:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn quickstart_release_gates_reject_skipped_or_suppressed_steps() {
+        let root = TempRoot::new("quickstart-workflow-suppression");
+        for (path, valid, step, rule) in [
+            (
+                ".github/workflows/release.yml",
+                valid_release_workflow(),
+                NATIVE_QUICKSTART_STEP,
+                "NativeQuickstartSmokeContract",
+            ),
+            (
+                ".github/workflows/stable-release-finalize.yml",
+                valid_stable_finalize_workflow(),
+                PUBLIC_QUICKSTART_STEP,
+                "StableReleaseFinalizeContract",
+            ),
+        ] {
+            for modified in [
+                step.replace(
+                    "        shell: bash",
+                    "        continue-on-error: true\n        shell: bash",
+                ),
+                step.replace(
+                    "        shell: bash",
+                    "        if: false\n        shell: bash",
+                ),
+                format!("{step} || true"),
+                step.replace("        run: cargo", "        run: echo cargo"),
+                format!("{step}\n{step}"),
+                format!("  unused:\n    if: false\n    steps:\n{step}"),
+            ] {
+                write_valid_release_contract(root.path());
+                write_file(
+                    root.path().join(path),
+                    valid.replace(step, &modified).as_bytes(),
+                );
+                let mut violations = Vec::new();
+                check_release_workflow_contract(root.path(), &mut violations);
+                assert!(
+                    violations.iter().any(|violation| violation.rule == rule),
+                    "{path}: {violations:?}"
+                );
+            }
+        }
+        for disabled in ["    continue-on-error: true", "    if: false"] {
+            write_valid_release_contract(root.path());
+            write_file(
+                root.path().join(".github/workflows/release.yml"),
+                valid_release_workflow()
+                    .replace("  build:\n", &format!("  build:\n{disabled}\n"))
+                    .as_bytes(),
+            );
+            let mut violations = Vec::new();
+            check_release_workflow_contract(root.path(), &mut violations);
+            assert!(violations
+                .iter()
+                .any(|violation| violation.rule == "NativeQuickstartSmokeContract"));
         }
     }
 
@@ -10449,6 +11117,13 @@ npm@11.18.0
   build:
     smoke-packaged-artifact
     --require-product-uninstall
+NATIVE_QUICKSTART_STEP
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: quickstart-${{ matrix.target }}
+          path: ${{ runner.temp }}/repogrammar-quickstart-evidence/
+          if-no-files-found: error
   package_npm:
     needs: [classify, verify]
     npm pack --json --ignore-scripts --pack-destination npm-candidate
@@ -10461,6 +11136,7 @@ npm@11.18.0
     name: repogrammar-installer
   prepare_github_release:
     needs: [classify, build, package_installer, package_npm]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && (needs.classify.outputs.channel == 'preview' || (needs.classify.outputs.channel == 'stable' && needs.classify.outputs.version == '0.5.1'))
     npm-candidate-manifest.json
     test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
     Refuse an existing release or draft for this tag
@@ -10480,7 +11156,7 @@ npm@11.18.0
     npm stage publish "${package_file}" --access public --tag preview --provenance
   stage_npm_stable:
     needs: [classify, package_npm, prepare_github_release]
-    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable'
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' && needs.classify.outputs.version == '0.5.1'
     environment: npm-release
     id-token: write
     node-version: 24
@@ -10489,9 +11165,9 @@ npm@11.18.0
     name: npm-package-${{ needs.classify.outputs.version }}
     smoke-npm-package
     verify-npm-pack-evidence
-    npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.0.tgz --access public --tag latest --provenance
+    npm stage publish ./npm-candidate/sioyooo-repogrammar-0.5.1.tgz --access public --tag latest --provenance
 "#
-        .to_string()
+        .replace("NATIVE_QUICKSTART_STEP", NATIVE_QUICKSTART_STEP)
     }
 
     fn valid_finalize_workflow() -> String {
@@ -10527,8 +11203,8 @@ candidate_run_attempt:
 permissions:
 contents: read
 actions: read
-gh release verify v0.5.0
-gh release verify-asset v0.5.0
+gh release verify v0.5.1
+gh release verify-asset v0.5.1
 npm-candidate-manifest.json
 test "$(find evidence/github-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "11"
 --jq '{run_id: .id, run_attempt: .run_attempt, name: .name, path: .path, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}'
@@ -10541,6 +11217,7 @@ npm audit signatures --json --include-attestations
 --candidate-manifest evidence/retained-candidate-manifest.json
 smoke-npm-package
 evidence/public-native-smoke.txt
+--require-product-uninstall
 evidence/public-installer-version.txt
 evidence/public-installer-init.json
 evidence/pinned-init.json
@@ -10571,8 +11248,12 @@ run_npx() {
   )
 }
 verify-stable-release-evidence --evidence-dir evidence
+jobs:
+  verify_public_release:
+    steps:
+PUBLIC_QUICKSTART_STEP
 "#
-        .to_string()
+        .replace("PUBLIC_QUICKSTART_STEP", PUBLIC_QUICKSTART_STEP)
     }
 
     fn write_valid_release_contract(root: &Path) {
@@ -10600,6 +11281,164 @@ verify-stable-release-evidence --evidence-dir evidence
             "smoke-packaged-artifact --binary <path> --worker <path> --fixture <path> --expected-version <version> [--require-product-uninstall]"
         ));
         assert!(usage().contains("smoke-npm-package --tarball <path> --expected-version <version>"));
+        assert!(usage().contains("smoke-quickstart-artifact --binary <path> --release-dir <path> --out <new-dir> [--installer <path>]"));
+    }
+
+    fn complete_quickstart_summary(target: &str, hashes: &[(&str, String)]) -> serde_json::Value {
+        let mut summary = serde_json::json!({
+            "schema": "quickstart-tests.v1", "package_version": STABLE_RELEASE_VERSION,
+            "target": target, "success": true, "tests_run": 34,
+            "release_assets_source": "provided", "input_hashes_unchanged": true,
+            "cases": (0..34).map(|index| serde_json::json!({"case": format!("test_{index}"), "status": "PASS"})).collect::<Vec<_>>(),
+            "failures": [], "errors": [], "skipped": []
+        });
+        for (key, hash) in hashes {
+            summary[key] = serde_json::json!(hash.strip_prefix("sha256:").unwrap());
+        }
+        summary
+    }
+
+    #[test]
+    fn quickstart_summary_requires_every_case_and_exact_input_provenance() {
+        let hashes = [
+            ("binary_sha256", format!("sha256:{}", "a".repeat(64))),
+            (
+                "previous_binary_sha256",
+                format!("sha256:{}", "b".repeat(64)),
+            ),
+            ("worker_sha256", format!("sha256:{}", "c".repeat(64))),
+            ("installer_sha256", format!("sha256:{}", "d".repeat(64))),
+            (
+                "previous_worker_sha256",
+                format!("sha256:{}", "e".repeat(64)),
+            ),
+            (
+                "release_archive_sha256",
+                format!("sha256:{}", "f".repeat(64)),
+            ),
+            (
+                "release_checksum_sha256",
+                format!("sha256:{}", "0".repeat(64)),
+            ),
+        ];
+        let mut summary = complete_quickstart_summary("aarch64-apple-darwin", &hashes);
+        assert_eq!(
+            validate_quickstart_summary(&summary, "0.5.1", "aarch64-apple-darwin", &hashes),
+            Ok(())
+        );
+        for field in [
+            "success",
+            "tests_run",
+            "cases",
+            "skipped",
+            "errors",
+            "failures",
+            "package_version",
+            "target",
+            "binary_sha256",
+            "previous_binary_sha256",
+            "worker_sha256",
+            "installer_sha256",
+            "previous_worker_sha256",
+            "release_archive_sha256",
+            "release_checksum_sha256",
+            "release_assets_source",
+            "input_hashes_unchanged",
+        ] {
+            let mut invalid = summary.clone();
+            invalid[field] = serde_json::Value::Null;
+            assert!(
+                validate_quickstart_summary(&invalid, "0.5.1", "aarch64-apple-darwin", &hashes)
+                    .is_err(),
+                "{field}"
+            );
+        }
+        for status in ["FAIL", "SKIP", "NOT_MEASURED"] {
+            let mut invalid = summary.clone();
+            invalid["cases"][0]["status"] = serde_json::json!(status);
+            assert!(validate_quickstart_summary(
+                &invalid,
+                "0.5.1",
+                "aarch64-apple-darwin",
+                &hashes
+            )
+            .is_err());
+        }
+        summary["cases"][1] = summary["cases"][0].clone();
+        assert!(
+            validate_quickstart_summary(&summary, "0.5.1", "aarch64-apple-darwin", &hashes)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn quickstart_output_is_fresh_and_preserves_existing_paths() {
+        let root = TempRoot::new("quickstart-output-admission");
+        let output = create_quickstart_output(root.path(), "new-output").expect("new output");
+        write_file(output.join("sentinel"), b"preserve");
+        assert!(create_quickstart_output(root.path(), "new-output").is_err());
+        assert!(create_quickstart_output(root.path(), "../outside").is_err());
+        assert!(create_quickstart_output(root.path(), "missing-parent/output").is_err());
+        assert_eq!(fs::read(output.join("sentinel")).unwrap(), b"preserve");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&output, root.path().join("link")).unwrap();
+            assert!(create_quickstart_output(root.path(), "link").is_err());
+            assert_eq!(fs::read(output.join("sentinel")).unwrap(), b"preserve");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn quickstart_rejects_wrong_candidate_version_before_predecessor_acquisition() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempRoot::new("quickstart-candidate-version");
+        write_file(root.path().join("package.json"), br#"{"version":"0.5.1"}"#);
+        for path in [
+            "src/install/repogrammar-install.sh",
+            "src/install/quickstart.test.py",
+            "src/workers/python/worker.py",
+            "src/fixtures/python/release/v0_1/pydantic-basic/schemas.py",
+            "candidate/workers/python/worker.py",
+        ] {
+            write_file(root.path().join(path), b"# fixture\n");
+        }
+        let binary = root.path().join("candidate/repogrammar");
+        write_file(
+            binary.clone(),
+            b"#!/bin/sh\nprintf 'repogrammar 0.5.0\\n'\n",
+        );
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            smoke_quickstart_artifact(
+                root.path(),
+                "candidate/repogrammar",
+                "current-assets",
+                None,
+                "evidence"
+            ),
+            Err("quickstart candidate version does not match release manifests".into())
+        );
+        assert!(!root.path().join("evidence/predecessor-assets").exists());
+        assert_eq!(
+            fs::read(root.path().join("evidence/candidate-version.stdout")).unwrap(),
+            b"repogrammar 0.5.0\n"
+        );
+        write_file(
+            root.path().join("public-install.sh"),
+            b"# mismatched public installer\n",
+        );
+        assert_eq!(
+            smoke_quickstart_artifact(
+                root.path(),
+                "candidate/repogrammar",
+                "current-assets",
+                Some("public-install.sh"),
+                "other-evidence"
+            ),
+            Err("selected and source quickstart installers differ".into())
+        );
+        assert!(!root.path().join("other-evidence").exists());
     }
 
     #[test]
@@ -10743,6 +11582,77 @@ verify-stable-release-evidence --evidence-dir evidence
     }
 
     #[test]
+    fn stable_release_requires_public_quickstart_bound_to_exact_artifacts() {
+        for field in [
+            "missing",
+            "status",
+            "archive",
+            "installer",
+            "source_installer",
+            "previous_worker",
+            "summary",
+            "skipped",
+            "fixture_assets",
+            "input_drift",
+            "attestation",
+            "harness",
+        ] {
+            let root = TempRoot::new(&format!("public-quickstart-{field}"));
+            write_stable_evidence_fixture(root.path());
+            let output = root.path().join("evidence/public-quickstart");
+            let qualification_path = output.join("qualification.json");
+            let summary_path = output.join("suite/summary.json");
+            let mut qualification = read_json(&qualification_path);
+            let mut summary = read_json(&summary_path);
+            match field {
+                "missing" => {
+                    fs::remove_file(&qualification_path).unwrap();
+                }
+                "status" => qualification["status"] = serde_json::json!("NOT_MEASURED"),
+                "archive" => {
+                    qualification["inputs"]["release_archive_sha256"] =
+                        serde_json::json!(format!("sha256:{}", "0".repeat(64)))
+                }
+                "installer" => {
+                    qualification["inputs"]["installer_sha256"] =
+                        serde_json::json!(format!("sha256:{}", "0".repeat(64)))
+                }
+                "source_installer" => write_file(
+                    root.path().join("src/install/repogrammar-install.sh"),
+                    b"different source installer\n",
+                ),
+                "previous_worker" => {
+                    summary["previous_worker_sha256"] = serde_json::json!("0".repeat(64))
+                }
+                "summary" => {
+                    fs::remove_file(&summary_path).unwrap();
+                }
+                "skipped" => summary["skipped"] = serde_json::json!([{"case": "upgrade"}]),
+                "fixture_assets" => summary["release_assets_source"] = serde_json::json!("fixture"),
+                "input_drift" => summary["input_hashes_unchanged"] = serde_json::json!(false),
+                "attestation" => write_json(
+                    output.join("predecessor-release-attestation.stdout"),
+                    &serde_json::Value::Null,
+                ),
+                "harness" => {
+                    qualification["harness_sha256"] =
+                        serde_json::json!(format!("sha256:{}", "0".repeat(64)))
+                }
+                _ => unreachable!(),
+            }
+            if field != "missing" {
+                write_json(qualification_path, &qualification);
+            }
+            if field != "summary" {
+                write_json(summary_path, &summary);
+            }
+            let error = verify_stable_release_evidence(root.path(), "evidence")
+                .expect_err("public quickstart mutation must fail");
+            assert!(error.contains("public quickstart"), "{field}: {error}");
+        }
+    }
+
+    #[test]
     fn npm_11_18_live_audit_shape_selects_the_single_slsa_bundle() {
         let statement = stable_provenance_statement();
         let audit = stable_audit_signatures(&statement);
@@ -10775,8 +11685,10 @@ verify-stable-release-evidence --evidence-dir evidence
             "repository",
             "workflow_path",
             "ref",
+            "previous_ref",
             "event",
             "dependency_uri",
+            "previous_dependency_uri",
             "head_sha",
             "run_id",
             "run_attempt",
@@ -10805,6 +11717,10 @@ verify-stable-release-evidence --evidence-dir evidence
                     statement["predicate"]["buildDefinition"]["externalParameters"]["workflow"]
                         ["ref"] = serde_json::Value::String("refs/heads/main".to_string());
                 }
+                "previous_ref" => {
+                    statement["predicate"]["buildDefinition"]["externalParameters"]["workflow"]
+                        ["ref"] = serde_json::Value::String("refs/tags/v0.5.0".to_string());
+                }
                 "event" => {
                     statement["predicate"]["buildDefinition"]["internalParameters"]["github"]
                         ["event_name"] = serde_json::Value::String("workflow_dispatch".to_string());
@@ -10812,7 +11728,14 @@ verify-stable-release-evidence --evidence-dir evidence
                 "dependency_uri" => {
                     statement["predicate"]["buildDefinition"]["resolvedDependencies"][0]["uri"] =
                         serde_json::Value::String(
-                            "git+https://github.com/foreign/RepoGrammar@refs/tags/v0.5.0"
+                            "git+https://github.com/foreign/RepoGrammar@refs/tags/v0.5.1"
+                                .to_string(),
+                        );
+                }
+                "previous_dependency_uri" => {
+                    statement["predicate"]["buildDefinition"]["resolvedDependencies"][0]["uri"] =
+                        serde_json::Value::String(
+                            "git+https://github.com/SioYooo/RepoGrammar@refs/tags/v0.5.0"
                                 .to_string(),
                         );
                 }
@@ -11582,7 +12505,7 @@ verify-stable-release-evidence --evidence-dir evidence
             "schema_version": 1,
             "package_name": NPM_PACKAGE_NAME,
             "version": STABLE_RELEASE_VERSION,
-            "filename": "sioyooo-repogrammar-0.5.0.tgz",
+            "filename": "sioyooo-repogrammar-0.5.1.tgz",
             "sha512": hex_digest(&digest),
             "integrity": format!("sha512-{}", base64_encode(&digest)),
             "files": NPM_PACKAGE_FILES,
@@ -11595,7 +12518,7 @@ verify-stable-release-evidence --evidence-dir evidence
         serde_json::json!({
             "_type": IN_TOTO_STATEMENT_V1,
             "subject": [{
-                "name": "pkg:npm/%40sioyooo/repogrammar@0.5.0",
+                "name": "pkg:npm/%40sioyooo/repogrammar@0.5.1",
                 "digest": {"sha512": hex_digest(&[0x2a_u8; 64])}
             }],
             "predicateType": SLSA_PROVENANCE_V1,
@@ -11606,7 +12529,7 @@ verify-stable-release-evidence --evidence-dir evidence
                         "workflow": {
                             "repository": RELEASE_REPOSITORY_URL,
                             "path": RELEASE_WORKFLOW_PATH,
-                            "ref": "refs/tags/v0.5.0"
+                            "ref": "refs/tags/v0.5.1"
                         }
                     },
                     "internalParameters": {"github": {"event_name": "push"}},
@@ -11645,7 +12568,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "location": "node_modules/@sioyooo/repogrammar",
                 "registry": NPM_REGISTRY_URL,
                 "attestations": {
-                    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@sioyooo%2frepogrammar@0.5.0",
+                    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@sioyooo%2frepogrammar@0.5.1",
                     "provenance": {"predicateType": SLSA_PROVENANCE_V1}
                 },
                 "attestationBundles": [
@@ -11706,7 +12629,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(
             evidence.join("github-release.json"),
             &serde_json::json!({
-                "tag_name": "v0.5.0",
+                "tag_name": "v0.5.1",
                 "draft": false,
                 "prerelease": false,
                 "immutable": true,
@@ -11729,7 +12652,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(
             evidence.join("public-npm-pack.json"),
             &serde_json::json!([{
-                "filename": "sioyooo-repogrammar-0.5.0.tgz",
+                "filename": "sioyooo-repogrammar-0.5.1.tgz",
                 "integrity": manifest["integrity"],
                 "files": [
                     {"path": "LICENSE"},
@@ -11771,7 +12694,7 @@ verify-stable-release-evidence --evidence-dir evidence
                 "name": "Release",
                 "path": RELEASE_WORKFLOW_PATH,
                 "event": "push",
-                "head_branch": "v0.5.0",
+                "head_branch": "v0.5.1",
                 "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "conclusion": "success"
             }),
@@ -11785,10 +12708,10 @@ verify-stable-release-evidence --evidence-dir evidence
             &stable_audit_signatures(&stable_provenance_statement()),
         );
         for (name, value) in [
-            ("pinned-version.txt", "repogrammar 0.5.0\n"),
-            ("latest-version.txt", "repogrammar 0.5.0\n"),
+            ("pinned-version.txt", "repogrammar 0.5.1\n"),
+            ("latest-version.txt", "repogrammar 0.5.1\n"),
             ("preview-version.txt", "repogrammar 0.2.0-preview.0\n"),
-            ("public-installer-version.txt", "repogrammar 0.5.0\n"),
+            ("public-installer-version.txt", "repogrammar 0.5.1\n"),
             (
                 "public-native-smoke.txt",
                 "packaged artifact smoke passed\n",
@@ -11806,6 +12729,7 @@ verify-stable-release-evidence --evidence-dir evidence
         write_json(evidence.join("public-installer-init.json"), &live_init);
         write_json(evidence.join("pinned-init.json"), &live_init);
         write_json(evidence.join("latest-init.json"), &live_init);
+        write_public_quickstart_fixture(root, &evidence, &assets);
         write_json(
             evidence.join("setup.json"),
             &serde_json::json!({
@@ -11813,6 +12737,85 @@ verify-stable-release-evidence --evidence-dir evidence
                 "repository_index_ready": false,
                 "agent_query_ready": false,
                 "suggested_question": null
+            }),
+        );
+    }
+
+    fn write_public_quickstart_fixture(root: &Path, evidence: &Path, assets: &Path) {
+        let output = evidence.join("public-quickstart");
+        let archive = "repogrammar-x86_64-unknown-linux-gnu.tar.gz";
+        let checksum = format!("{archive}.sha256");
+        write_file(
+            root.join("src/install/repogrammar-install.sh"),
+            &fs::read(assets.join("install.sh")).unwrap(),
+        );
+        write_file(
+            root.join("src/workers/python/worker.py"),
+            b"# synthetic worker\n",
+        );
+        write_file(
+            root.join("src/install/quickstart.test.py"),
+            b"# synthetic suite\n",
+        );
+        let previous = output.join("predecessor-assets");
+        write_file(previous.join(archive), b"synthetic predecessor archive\n");
+        let previous_digest = sha256_file_sri(&previous.join(archive)).unwrap();
+        write_file(
+            previous.join(&checksum),
+            format!(
+                "{}  {archive}\n",
+                previous_digest.strip_prefix("sha256:").unwrap()
+            )
+            .as_bytes(),
+        );
+        for name in [
+            "predecessor-release-attestation.stdout".to_string(),
+            format!("predecessor-{archive}-attestation.stdout"),
+            format!("predecessor-{checksum}-attestation.stdout"),
+        ] {
+            write_json(output.join(name), &serde_json::json!({"verified": true}));
+        }
+        let hashes = [
+            ("binary_sha256", format!("sha256:{}", "a".repeat(64))),
+            (
+                "previous_binary_sha256",
+                format!("sha256:{}", "b".repeat(64)),
+            ),
+            (
+                "previous_worker_sha256",
+                format!("sha256:{}", "c".repeat(64)),
+            ),
+            (
+                "worker_sha256",
+                sha256_file_sri(&root.join("src/workers/python/worker.py")).unwrap(),
+            ),
+            (
+                "installer_sha256",
+                sha256_file_sri(&assets.join("install.sh")).unwrap(),
+            ),
+            (
+                "release_archive_sha256",
+                sha256_file_sri(&assets.join(archive)).unwrap(),
+            ),
+            (
+                "release_checksum_sha256",
+                sha256_file_sri(&assets.join(&checksum)).unwrap(),
+            ),
+        ];
+        write_json(
+            output.join("suite/summary.json"),
+            &complete_quickstart_summary("x86_64-unknown-linux-gnu", &hashes),
+        );
+        write_json(
+            output.join("qualification.json"),
+            &serde_json::json!({
+                "schema": "native-quickstart-artifact.v1", "status": "PASS",
+                "package_version": STABLE_RELEASE_VERSION, "target": "x86_64-unknown-linux-gnu",
+                "release_archive": archive, "predecessor_tag": "v0.5.0", "summary": "suite/summary.json",
+                "harness_sha256": sha256_file_sri(&root.join("src/install/quickstart.test.py")).unwrap(),
+                "predecessor_archive_sha256": previous_digest,
+                "predecessor_checksum_sha256": sha256_file_sri(&previous.join(checksum)).unwrap(),
+                "inputs": hashes.into_iter().collect::<std::collections::BTreeMap<_, _>>()
             }),
         );
     }

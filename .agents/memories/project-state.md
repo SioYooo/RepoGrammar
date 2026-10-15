@@ -1,5 +1,14 @@
 # Project State
 
+## 0.5.1 publication preparation — 2026-10-15
+
+The maintainer requested the latest validated source on npm as well as the
+matching native release. Use `docs/release/stable-v0.5.1-release-checklist.md`;
+source version, exact candidate artifacts, a private npm stage, public channels
+and finalizer verification remain separate states. Historical GitHub-only
+0.5.0 is not rewritten, and v0.6 evidence gates remain open. The new release
+uses the existing OIDC stage and maintainer 2FA approval boundary.
+
 ## Evidence-driven query reachability audit — 2026-10-14
 
 The bounded v0.6 retrieval repair is committed as `3741afd`; reproducible
