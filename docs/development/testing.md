@@ -2137,6 +2137,10 @@ Use `REPOGRAMMAR_INSTALLER_TEST_BINARY` to reuse a frozen candidate without a bu
 The isolated tool PATH must include `gzip`: GNU tar launches it for `.tar.gz`
 archives even though macOS tar can decompress them internally. A direct archive
 integrity check pins this prerequisite on both hosts.
+The broken-worker rollback fixture explicitly selects its installed worker via
+`REPOGRAMMAR_PYTHON_WORKER`, because debug builds otherwise prefer the healthy
+checkout worker. It must fail with `index_failed`; other cases retain normal
+worker discovery.
 
 ```text
 python3 src/install/quickstart.test.py --binary <frozen-candidate> --previous-binary <frozen-previous-product> --out <new-evidence-directory>
