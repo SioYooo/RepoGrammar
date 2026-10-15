@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "src/install/repogrammar-install.sh"
 WORKER = ROOT / "src/workers/python/worker.py"
 FIXTURE = ROOT / "src/fixtures/python/release/v0_1/pydantic-basic/schemas.py"
-TOOLS = ("bash sh env cat cp chmod mkdir rm dirname basename uname tar awk grep sed tr "
+TOOLS = ("bash sh env cat cp chmod mkdir rm dirname basename uname tar gzip awk grep sed tr "
          "readlink getconf ldd git id date mv cmp ln which head stat sleep ps kill mktemp "
          "sha256sum shasum wc sort touch").split()
 ARGS = None
@@ -202,6 +202,10 @@ class Quickstart(unittest.TestCase):
         self.assertTrue(value["active_generation"])
         self.assertEqual(value["integrity_check"], "ok")
         return value
+
+    def test_isolated_path_can_run_archive_decompressor(self):
+        archive = self.assets / f"repogrammar-{self.target}.tar.gz"
+        self.run_process(["gzip", "--test", str(archive)])
 
     def test_direct_and_piped_authorization_refusal(self):
         before = snapshot(self.home), snapshot(self.repo)
