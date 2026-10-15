@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "src/install/repogrammar-install.sh"
 WORKER = ROOT / "src/workers/python/worker.py"
 FIXTURE = ROOT / "src/fixtures/python/release/v0_1/pydantic-basic/schemas.py"
-TOOLS = ("bash sh env cat cp chmod mkdir rm dirname basename uname tar awk grep sed tr "
+TOOLS = ("bash sh env cat cp chmod mkdir rm dirname basename uname tar gzip awk grep sed tr "
          "readlink getconf ldd git id date mv cmp ln which head stat sleep ps kill mktemp "
          "sha256sum shasum wc sort touch").split()
 ARGS = None
@@ -203,6 +203,10 @@ class Quickstart(unittest.TestCase):
         self.assertEqual(value["integrity_check"], "ok")
         return value
 
+    def test_isolated_path_can_run_archive_decompressor(self):
+        archive = self.assets / f"repogrammar-{self.target}.tar.gz"
+        self.run_process(["gzip", "--test", str(archive)])
+
     def test_direct_and_piped_authorization_refusal(self):
         before = snapshot(self.home), snapshot(self.repo)
         for piped in (False, True):
@@ -344,7 +348,10 @@ class Quickstart(unittest.TestCase):
     def test_index_failure_rolls_back_new_agent_only(self):
         self.agents("codex")
         self.env["REPOGRAMMAR_RELEASE_DIR"] = str(release(self.root / "broken-worker", ARGS.binary, self.target, mutation="broken-worker"))
-        self.quickstart("--yes", "--no-autosync", success=False)
+        # Debug builds prefer the checkout worker; bind this fault to the installed bundle.
+        self.env["REPOGRAMMAR_PYTHON_WORKER"] = str(self.data / "workers/python/worker.py")
+        result = self.quickstart("--yes", "--no-autosync", success=False)
+        self.assertIn(b"index_failed", result.stderr)
         self.assertTrue(self.command.exists())
         self.assertFalse((self.home / ".fake-agents/codex.json").exists())
         self.assertFalse((self.home / ".codex/AGENTS.md").exists())
