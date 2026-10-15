@@ -2134,6 +2134,13 @@ fixture, and never invokes installed coding agents or writes real user profiles.
 The parent shell suite isolates HOME/XDG/Codex/Claude directories; fake source
 builds use a temporary checkout instead of replacing the checkout's release binary.
 Use `REPOGRAMMAR_INSTALLER_TEST_BINARY` to reuse a frozen candidate without a build.
+The isolated tool PATH must include `gzip`: GNU tar launches it for `.tar.gz`
+archives even though macOS tar can decompress them internally. A direct archive
+integrity check pins this prerequisite on both hosts.
+The broken-worker rollback fixture explicitly selects its installed worker via
+`REPOGRAMMAR_PYTHON_WORKER`, because debug builds otherwise prefer the healthy
+checkout worker. It must fail with `index_failed`; other cases retain normal
+worker discovery.
 
 ```text
 python3 src/install/quickstart.test.py --binary <frozen-candidate> --previous-binary <frozen-previous-product> --out <new-evidence-directory>
