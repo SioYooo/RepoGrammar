@@ -212,3 +212,47 @@ update current publication/quickstart claims together; preserve the immutable
 
 Append exact identities, commands, results and remaining limitations as each
 gate executes. Do not replace these pending states with inferred success.
+
+## Preflight evidence, 2026-10-15
+
+Reviewed source: `2f5ef5d625bc6f87be3ee7e8287e5d2450c6197f`, on
+`chore/release-v0.5.1` in [PR #33](https://github.com/SioYooo/RepoGrammar/pull/33).
+This snapshot records candidate evidence only; subsequent documentation-only
+commits do not change the source identity of these runs.
+
+- [PR CI 38729942001](https://github.com/SioYooo/RepoGrammar/actions/runs/38729942001)
+  and [push CI 38729911640](https://github.com/SioYooo/RepoGrammar/actions/runs/38729911640)
+  both passed the required quality, macOS and Linux checks. The existing
+  Windows source-only diagnostic failed and remains nonblocking under the
+  repository's deferred-Windows policy.
+- [Release preflight 38729992347, attempt 1](https://github.com/SioYooo/RepoGrammar/actions/runs/38729992347)
+  completed successfully at the same source SHA. It was a `workflow_dispatch`
+  build-only run: draft creation and both npm stage jobs were skipped. It is
+  not the authority for a future tag publication.
+- All four native archive jobs passed packaging, product lifecycle smoke and
+  the supplied-archive quickstart/verified-0.5.0-upgrade gate. Both Linux ABI
+  checks passed. The four `quickstart-<target>` artifacts retain the native
+  qualification and full suite summaries separately from the release assets.
+- The once-packed npm candidate passed smoke and pack-evidence checks. Its
+  retained tarball has exactly the four required files; independent local
+  inspection confirmed their bytes match the reviewed checkout and the
+  SHA-512/SRI match the retained manifest.
+
+Preflight npm integrity (not a public registry assertion):
+
+```text
+sha512-BwiKREDXByAzNvlBoknOg+AWpZVTa88RfOy9DfMNNyIhI5TGLosV5Id+GyXWIVyKmV0WxKh7UTfDvLoK7qvR9Q==
+```
+
+Required local checks passed, including 2,598 Rust tests (two existing
+benchmark tests ignored), worker/npm tests, the installer compatibility suite,
+repository/GEO guards, guide equality and diff checks. The frozen retrieval
+corpus remained 97/110 overall, 34/47 retrieval and 36/36 correct abstention,
+with zero wrong-family selections; full sync-equivalence passed all 14
+scenarios. These results do not close the distinct v0.6 claims.
+
+The maintainer deferred npm login. Authenticated private-stage occupancy and
+the live Trusted Publisher binding remain unverified; no new tag, GitHub
+draft, npm stage or public package has been created. Resume the tag and
+publication gates above after authentication, using one exact tag run and
+attempt rather than these preflight artifacts.
