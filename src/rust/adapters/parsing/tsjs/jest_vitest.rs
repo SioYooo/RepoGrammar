@@ -19,7 +19,16 @@ pub(crate) struct TestRunnerCallNames {
 }
 
 pub(crate) fn exact_test_runner_call_names(document: &SourceDocument<'_>) -> TestRunnerCallNames {
-    let bindings = ScopeGraphLite::analyze(document.text, document.path, &document.language);
+    runner_call_names(&ScopeGraphLite::analyze(
+        document.text,
+        document.path,
+        &document.language,
+    ))
+}
+
+/// The runner names the TS/JS unit extractor treats as test calls; its only
+/// dependency on the scope graph.
+pub(super) fn runner_call_names(bindings: &ScopeGraphLite) -> TestRunnerCallNames {
     let mut names = TestRunnerCallNames::default();
     for (local, binding) in &bindings.imports {
         if bindings.unsafe_names.contains(local)

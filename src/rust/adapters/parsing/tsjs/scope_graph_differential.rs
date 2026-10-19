@@ -527,6 +527,19 @@ pub(super) fn compare(path: &str, text: &str, report: &mut Report) {
             }
         }
     }
+    // Unit extraction reads the graph only through the runner names, so equal
+    // names mean equal units; a difference here changes the unit set.
+    let (old_runners, new_runners) = (
+        super::super::jest_vitest::runner_call_names(&old),
+        super::super::jest_vitest::runner_call_names(&new),
+    );
+    if old_runners != new_runners {
+        report.differences.push((
+            "runner_names_changed",
+            path.to_string(),
+            format!("{old_runners:?} -> {new_runners:?}"),
+        ));
+    }
     if new.degraded {
         report.degraded_files += 1;
         report

@@ -235,6 +235,39 @@ The size baseline is the `33ed6a7` measurement; later commits may account for a
 little of the delta. The tree reader is about 5x slower than the line reader,
 3 ms per source on average.
 
+### Main-session review
+
+- The preregistration missed a deviation channel. Besides the anchor pass,
+  the line-based unit extractor reads the scope graph through
+  `exact_test_runner_call_names`, which decides which aliased runner calls
+  (`import { test as t } from "vitest"`) become `TestSuite`/`TestCase` units.
+  So a graph difference can change the unit set, and the differential cannot
+  see that change, because both of its sides take units from the same
+  extractor.
+- The harness therefore compares `jest_vitest::runner_call_names` of both
+  graphs per source (`runner_names_changed`). It is the extractor's only
+  dependency on the graph, so equal names mean equal units.
+  - Committed fixtures: 0 (the exact-count assertion holds).
+  - External: 0 of 943 sources, in a release test build over the five local
+    projects and their installed `zod` and `vitest` packages (3 skipped,
+    3 extractor panics, 11 degraded).
+  - That run's decision classes are again only `unknown_kind_changed` (50), and
+    its field counts are larger than the 882-source run's because the root
+    list differs.
+- Release timing on those 943 sources: 66 ms for the legacy reader and 653 ms
+  for the tree reader, 0.7 ms per source including the parse. Each TS/JS file
+  is analyzed twice: once for runner names in the extractor and once in the
+  anchor pass. Sharing one graph belongs to slice 3, which owns the extractor.
+- Residual risks:
+  - In a degraded file, an aliased runner call is no longer a unit at all, so
+    it is silently missing rather than carrying the degraded UNKNOWN. Calls to
+    `describe`, `it` and `test` are still units and are refused. The corpus
+    has no such file. Slice 3 should give these calls the UNKNOWN.
+  - Class method parameters (`method_definition`) are not counted as
+    shadowing names. The legacy reader also missed them (it searched for the
+    `function` keyword), so this is not a regression. A method parameter named
+    like a top-level receiver can still be read as that receiver.
+
 ### Decisions for the maintainer
 
 1. Accept `unknown_removed` (13 branch sources, each a legacy misreading) and
