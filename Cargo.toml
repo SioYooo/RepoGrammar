@@ -51,5 +51,7 @@ tree-sitter-php = "=0.25.1"
 # Production (ADR-0058): pinned Tree-sitter Ruby grammar for the Minitest frontend.
 tree-sitter-ruby = "=0.23.1"
 tree-sitter-rust = "0.24"
+# Production (ADR-0058): pinned Tree-sitter Swift grammar for the Swift XCTest frontend.
+tree-sitter-swift = "=0.7.4"
 # Production: native filesystem wakeup hints; ADR-0053 retains fingerprint fallback.
 notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }

@@ -1,7 +1,8 @@
-//! Bounded Swift lexer and recursive-descent parser for ADR-0048.
+//! Bounded Swift syntax layer for ADR-0048, reading declarations from the
+//! pinned Tree-sitter Swift grammar (ADR-0058).
 //!
-//! This module owns syntax only. It decides what the token stream *is*; it
-//! decides nothing about XCTest and names no framework. `xctest.rs` walks the
+//! This module owns syntax only. It decides what the source *is*; it decides
+//! nothing about XCTest and names no framework. `xctest.rs` walks the
 //! declarations this produces and applies the anchor rule. The separation is
 //! deliberate: a widened claim and a widened grammar are different decisions
 //! and must not be made in the same place.
@@ -13,18 +14,45 @@
 //! reads differently — the regex literal is the one that matters, because a
 //! `/` starts a literal only from Swift 5.7 and lexes as an operator before
 //! that — is refused rather than read under an assumed version. A keyword a
-//! later Swift release adds is equally refused: the parser does not guess at
+//! later Swift release adds is equally refused: the reader does not guess at
 //! it, so it cannot silently mis-nest.
 //!
-//! The parser abstains; it never recovers. Outside the admitted grammar it
-//! returns a typed [`Refusal`] for the whole file and yields no declaration,
-//! so a partial or recovered tree can never become an anchor. This discharges
-//! ADR-0025 D7's no-text-matching requirement the way ADR-0042 through
-//! ADR-0046 did for their lanes: with a real parse, not a scanner.
+//! The ADR-0048 lexer runs first as the lexical-subset gate and decides every
+//! lexical refusal (open literals, raw strings, non-ASCII code, regex
+//! position, conditional compilation) before the grammar is consulted. The
+//! grammar then supplies the declaration structure, and the ADR-0048 subset
+//! refusals (generics, attribute arguments, accessors, member and file
+//! shapes, single-line headers, brace balance, ceilings) are read off the tree
+//! and the token stream. As in a left-to-right parse the earliest refusal
+//! wins. The reader abstains; it never recovers: any `ERROR` or `MISSING`
+//! node refuses the file, so a partial or recovered tree can never become an
+//! anchor. This discharges ADR-0025 D7's no-text-matching requirement with a
+//! real parse, not a scanner.
 //!
 //! Nothing here invokes `swift`, `swiftc`, `swift-frontend`, `sourcekit-lsp`,
 //! SwiftPM, Xcode, `xcodebuild`, a macro, a plugin, a package script, a child
 //! process, or the network.
+
+use crate::ports::parser::ParseError;
+use tree_sitter::{Node, Parser};
+
+// Temporary ADR-0058 differential scaffolding: the legacy parser and its
+// comparison tests are deleted once the fixture-wide capture confirms the
+// migration.
+#[cfg(test)]
+#[path = "differential_tmp.rs"]
+mod differential;
+#[cfg(test)]
+#[path = "legacy_syntax.rs"]
+mod legacy;
+
+#[cfg(test)]
+thread_local! {
+    /// Routes `parse_file` to the legacy parser for the differential tests:
+    /// 0 reads the tree, 1 runs the legacy parser, 2 runs it with its
+    /// `init`/`deinit` head defect repaired.
+    static USE_LEGACY: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
 
 /// The bounded ceilings this parser works under. Repository input is
 /// untrusted, so the token stream, the interpolation nesting inside string
@@ -225,14 +253,14 @@ impl Token {
 }
 
 /// One `import` declaration, reduced to the module it binds.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ImportClause {
     /// The first component of the imported path: the module name.
     pub(crate) module: String,
 }
 
 /// A method-like declaration inside a class body.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MethodDecl {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -252,7 +280,7 @@ pub(crate) struct MethodDecl {
 }
 
 /// A class declaration and its direct members.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ClassDecl {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -265,7 +293,7 @@ pub(crate) struct ClassDecl {
 }
 
 /// Everything the frontend needs from one admitted file.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SwiftFile {
     pub(crate) imports: Vec<ImportClause>,
     pub(crate) classes: Vec<ClassDecl>,
@@ -276,23 +304,551 @@ pub(crate) struct SwiftFile {
 }
 
 /// Parse one Swift source file, or refuse it whole.
-pub(crate) fn parse_file(text: &str) -> Result<SwiftFile, Refusal> {
-    let tokens = lex(text)?;
-    let mut parser = Parser {
+///
+/// The outer `Result` reports a grammar that cannot load or a parse that did
+/// not complete; neither is a refusal of the file. The ADR-0048 lexer runs
+/// first as the lexical-subset gate, so every lexical refusal is decided
+/// before the grammar is consulted.
+pub(crate) fn parse_file(text: &str) -> Result<Result<SwiftFile, Refusal>, ParseError> {
+    #[cfg(test)]
+    match USE_LEGACY.with(std::cell::Cell::get) {
+        1 => return Ok(legacy::parse_file(text)),
+        2 => return Ok(legacy::parse_file_patched(text)),
+        _ => {}
+    }
+    let tokens = match lex(text) {
+        Ok(tokens) => tokens,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_swift::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load Swift grammar: {error}")))?;
+    let tree = parser
+        .parse(text, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter Swift parse failed".to_string()))?;
+    Ok(read_file(text, &tokens, tree.root_node()))
+}
+
+// ---------------------------------------------------------------------------
+// Tree reader
+// ---------------------------------------------------------------------------
+
+/// Where a declaration sits decides its modifier table and which refusal an
+/// unadmitted modifier or member carries.
+#[derive(Clone, Copy)]
+enum Site {
+    File,
+    Member,
+}
+
+impl Site {
+    fn modifiers(self) -> &'static [&'static str] {
+        match self {
+            Self::File => TYPE_MODIFIERS,
+            Self::Member => MEMBER_MODIFIERS,
+        }
+    }
+
+    fn shape(self) -> Refusal {
+        match self {
+            Self::File => Refusal::UnadmittedFileConstruct,
+            Self::Member => Refusal::UnadmittedMemberShape,
+        }
+    }
+}
+
+/// The attribute names and modifier words standing before a declaration
+/// keyword.
+#[derive(Default)]
+struct Prefix<'a> {
+    attributes: Vec<&'a str>,
+    modifiers: Vec<&'a str>,
+}
+
+struct Reader<'a> {
+    text: &'a str,
+    tokens: &'a [Token],
+    /// Refusals tagged with the source position a left-to-right parse would
+    /// reach them at; the earliest wins.
+    refusals: Vec<(usize, Refusal)>,
+    /// Refusals for a node kind the reader does not admit. Error recovery can
+    /// surface a misplaced node of any kind, so these count only in a tree
+    /// without an `ERROR` or `MISSING` node.
+    unadmitted: Vec<(usize, Refusal)>,
+    imports: Vec<ImportClause>,
+    free_test_function: bool,
+}
+
+/// Read the admitted declarations off the Tree-sitter tree and refuse the file
+/// on anything outside the ADR-0048 subset. As in a left-to-right parse the
+/// earliest refusal wins, and at one position a token-level refusal precedes a
+/// tree refusal. Any `ERROR` or `MISSING` node refuses the file, so a recovered
+/// tree never yields an anchor; error recovery decides where such a node sits,
+/// so it refuses as an unadmitted file construct only when no token or
+/// structural refusal applies.
+fn read_file(text: &str, tokens: &[Token], root: Node<'_>) -> Result<SwiftFile, Refusal> {
+    let mut reader = Reader {
         text,
-        tokens: &tokens,
-        index: 0,
-        depth: 0,
+        tokens,
+        refusals: brace_refusals(tokens),
+        unadmitted: Vec::new(),
         imports: Vec::new(),
-        classes: Vec::new(),
         free_test_function: false,
     };
-    parser.parse_file_body()?;
+    let mut classes = Vec::new();
+    let mut cursor = root.walk();
+    for node in root.named_children(&mut cursor) {
+        match node.kind() {
+            "comment" | "multiline_comment" | "ERROR" => {}
+            "import_declaration" => reader.import(node),
+            "class_declaration" if is_class_declaration(node) => {
+                classes.extend(reader.class(node, Site::File, 0));
+            }
+            "class_declaration" | "protocol_declaration" => reader.opaque_type(node),
+            "function_declaration" => {
+                if let Some(method) = reader.function(node, Site::File) {
+                    reader.free_test_function |=
+                        method.is_test_prefixed && method.empty_params && method.void_return;
+                }
+            }
+            "property_declaration" | "typealias_declaration" => {
+                reader.simple_head(node, Site::File);
+            }
+            _ if reader.starts_with_hash(node) => {}
+            _ => reader.unadmitted_node(node, Site::File),
+        }
+    }
+    if !root.has_error() {
+        reader.refusals.append(&mut reader.unadmitted);
+    }
+    // Stable: at one position the earlier-recorded token refusal wins.
+    reader.refusals.sort_by_key(|(position, _)| *position);
+    if let Some((_, refusal)) = reader.refusals.first() {
+        return Err(*refusal);
+    }
+    if root.has_error() {
+        return Err(Refusal::UnadmittedFileConstruct);
+    }
     Ok(SwiftFile {
-        imports: parser.imports,
-        classes: parser.classes,
-        free_test_function: parser.free_test_function,
+        imports: reader.imports,
+        classes,
+        free_test_function: reader.free_test_function,
     })
+}
+
+/// Brace balance over the whole token stream. A stray closer refuses at its
+/// own position; an unclosed opener refuses at end of input, because a
+/// left-to-right parse swallows the rest of the file into one unproven extent
+/// and every earlier refusal is still reached first.
+fn brace_refusals(tokens: &[Token]) -> Vec<(usize, Refusal)> {
+    let mut depth = 0usize;
+    for token in tokens {
+        if token.is_punct('{') {
+            depth += 1;
+        } else if token.is_punct('}') {
+            if depth == 0 {
+                return vec![(token.start, Refusal::UnbalancedBlockStructure)];
+            }
+            depth -= 1;
+        }
+    }
+    if depth > 0 {
+        vec![(usize::MAX, Refusal::UnbalancedBlockStructure)]
+    } else {
+        Vec::new()
+    }
+}
+
+fn is_class_declaration(node: Node<'_>) -> bool {
+    node.child_by_field_name("declaration_kind")
+        .is_some_and(|keyword| keyword.kind() == "class")
+}
+
+fn child_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .find(|child| child.kind() == kind);
+    found
+}
+
+impl<'a> Reader<'a> {
+    fn refuse(&mut self, position: usize, refusal: Refusal) {
+        self.refusals.push((position, refusal));
+    }
+
+    fn word(&self, node: Node<'_>) -> &'a str {
+        let text = self.text;
+        &text[node.byte_range()]
+    }
+
+    /// The tokens whose start lies in `start..end`.
+    fn tokens_in(&self, start: usize, end: usize) -> &'a [Token] {
+        let tokens = self.tokens;
+        let from = tokens.partition_point(|token| token.start < start);
+        let to = tokens.partition_point(|token| token.start < end);
+        &tokens[from..to]
+    }
+
+    fn tokens_from(&self, start: usize) -> &'a [Token] {
+        self.tokens_in(start, usize::MAX)
+    }
+
+    /// A `#name …` construct at file level: consumed opaquely, as the lexer
+    /// already refused `#if` and its family.
+    fn starts_with_hash(&self, node: Node<'_>) -> bool {
+        self.tokens_from(node.start_byte())
+            .first()
+            .is_some_and(|token| token.kind == TokenKind::HashWord)
+    }
+
+    /// Attributes and modifiers standing before the declaration keyword. An
+    /// attribute binds before the modifiers, so one that follows a modifier is
+    /// outside the admitted order; a non-empty attribute argument list and any
+    /// modifier outside the site's table refuse.
+    fn prefix(&mut self, declaration: Node<'a>, keyword: usize, site: Site) -> Prefix<'a> {
+        let mut nodes = Vec::new();
+        let mut cursor = declaration.walk();
+        for child in declaration.children(&mut cursor) {
+            if child.start_byte() >= keyword {
+                break;
+            }
+            match child.kind() {
+                "modifiers" => {
+                    let mut inner = child.walk();
+                    nodes.extend(child.children(&mut inner));
+                }
+                _ => nodes.push(child),
+            }
+        }
+        let mut prefix = Prefix::default();
+        for node in nodes {
+            match node.kind() {
+                "comment" | "multiline_comment" | "ERROR" => {}
+                "attribute" if prefix.modifiers.is_empty() => self.attribute(node, &mut prefix),
+                "attribute" => self.refuse(node.start_byte(), site.shape()),
+                _ => {
+                    let word = self.word(node);
+                    if !site.modifiers().contains(&word) {
+                        self.refuse(node.start_byte(), site.shape());
+                    }
+                    prefix.modifiers.push(word);
+                    if prefix.modifiers.len() > MAX_MODIFIERS {
+                        self.refuse(node.start_byte(), Refusal::ResourceLimit);
+                    }
+                }
+            }
+        }
+        prefix
+    }
+
+    fn attribute(&mut self, node: Node<'a>, prefix: &mut Prefix<'a>) {
+        let tokens = self.tokens_in(node.start_byte(), node.end_byte());
+        let Some(name) = tokens.get(1).filter(|token| token.kind == TokenKind::Word) else {
+            return;
+        };
+        if name.end - name.start > MAX_NAME_BYTES {
+            self.refuse(node.start_byte(), Refusal::ResourceLimit);
+        }
+        let text = self.text;
+        prefix.attributes.push(&text[name.start..name.end]);
+        if tokens.get(2).is_some_and(|token| token.is_punct('('))
+            && tokens.get(3).is_some_and(|token| !token.is_punct(')'))
+        {
+            self.refuse(node.start_byte(), Refusal::AttributeArgument);
+        }
+        if prefix.attributes.len() > MAX_MODIFIERS {
+            self.refuse(node.start_byte(), Refusal::ResourceLimit);
+        }
+    }
+
+    /// A node kind the reader does not admit. The legacy parse read the
+    /// attributes and modifiers before it looked at the keyword, so their
+    /// refusals still precede this one.
+    fn unadmitted_node(&mut self, node: Node<'a>, site: Site) {
+        let mut cursor = node.walk();
+        let boundary = node
+            .children(&mut cursor)
+            .find(|child| {
+                !(matches!(child.kind(), "modifiers" | "attribute")
+                    || child.kind().ends_with("_modifier"))
+            })
+            .map_or(node.end_byte(), |child| child.start_byte());
+        self.prefix(node, boundary, site);
+        self.unadmitted.push((node.start_byte(), site.shape()));
+    }
+
+    /// `import [kind] dotted.path` — the module is the first path component,
+    /// and only a bare or `@testable` import is admitted. The statement ends
+    /// the line.
+    fn import(&mut self, node: Node<'a>) {
+        let Some(keyword) = child_of_kind(node, "import") else {
+            return;
+        };
+        let prefix = self.prefix(node, keyword.start_byte(), Site::File);
+        if prefix.attributes.iter().any(|name| *name != "testable") || !prefix.modifiers.is_empty()
+        {
+            self.refuse(keyword.start_byte(), Refusal::UnadmittedFileConstruct);
+            return;
+        }
+        let Some(module) =
+            child_of_kind(node, "identifier").and_then(|identifier| identifier.named_child(0))
+        else {
+            return;
+        };
+        let module = self.word(module);
+        if module.len() > MAX_NAME_BYTES {
+            self.refuse(keyword.start_byte(), Refusal::ResourceLimit);
+        }
+        self.imports.push(ImportClause {
+            module: module.to_string(),
+        });
+        if let Some(next) = self.tokens_from(node.end_byte()).first() {
+            if next.kind != TokenKind::Newline && !next.is_punct(';') {
+                self.refuse(next.start, Refusal::UnbalancedBlockStructure);
+            }
+        }
+    }
+
+    /// A `class` declaration: header single-line, not generic, and its direct
+    /// members read from the class body.
+    fn class(&mut self, node: Node<'a>, site: Site, depth: usize) -> Option<ClassDecl> {
+        let keyword = node.child_by_field_name("declaration_kind")?;
+        self.prefix(node, keyword.start_byte(), site);
+        let name = node.child_by_field_name("name")?;
+        let body = node.child_by_field_name("body")?;
+        if !self.word(name).starts_with('`') {
+            if let Some(generics) = child_of_kind(node, "type_parameters") {
+                self.refuse(generics.start_byte(), Refusal::GenericDeclaration);
+            }
+        }
+        self.header_newline(name.end_byte(), body.start_byte(), true);
+        let mut derives_xctestcase = false;
+        let mut cursor = node.walk();
+        for entry in node
+            .children(&mut cursor)
+            .filter(|child| child.kind() == "inheritance_specifier")
+        {
+            if self.tokens_in(entry.start_byte(), entry.end_byte()).len() > MAX_HEADER_TOKENS {
+                self.refuse(entry.start_byte(), Refusal::ResourceLimit);
+            }
+            // The anchor claims the bare source-visible spelling: a qualified
+            // or generic entry is a different node text and never matches.
+            derives_xctestcase |= self.word(entry) == "XCTestCase";
+        }
+        if depth >= MAX_NESTING {
+            self.refuse(body.start_byte(), Refusal::ResourceLimit);
+            return None;
+        }
+        let mut methods = Vec::new();
+        let mut nested = Vec::new();
+        let mut members = body.walk();
+        for member in body.named_children(&mut members) {
+            match member.kind() {
+                "comment" | "multiline_comment" | "ERROR" => {}
+                "function_declaration" => methods.extend(self.function(member, Site::Member)),
+                "init_declaration" | "deinit_declaration" => {
+                    self.function(member, Site::Member);
+                }
+                "property_declaration" | "typealias_declaration" => {
+                    self.simple_head(member, Site::Member);
+                }
+                "class_declaration" if is_class_declaration(member) => {
+                    nested.extend(self.class(member, Site::Member, depth + 1));
+                }
+                _ => self.unadmitted_node(member, Site::Member),
+            }
+        }
+        Some(ClassDecl {
+            start: node.start_byte(),
+            end: node.end_byte(),
+            derives_xctestcase,
+            methods,
+            nested,
+        })
+    }
+
+    /// A file-level `struct`, `enum`, `actor`, `protocol`, or `extension`:
+    /// read for its prefix and bounded head only, never for members.
+    fn opaque_type(&mut self, node: Node<'a>) {
+        let Some(keyword) = node.child_by_field_name("declaration_kind") else {
+            return;
+        };
+        self.prefix(node, keyword.start_byte(), Site::File);
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        if self
+            .tokens_in(keyword.start_byte(), body.start_byte())
+            .len()
+            > MAX_HEADER_TOKENS
+        {
+            self.refuse(keyword.start_byte(), Refusal::ResourceLimit);
+        }
+    }
+
+    /// A `func`, `init`, or `deinit` and everything the anchor rule asks of
+    /// its head. Newlines are admitted inside the parameter parentheses only.
+    fn function(&mut self, node: Node<'a>, site: Site) -> Option<MethodDecl> {
+        let mut cursor = node.walk();
+        let keyword = node
+            .children(&mut cursor)
+            .find(|child| matches!(child.kind(), "func" | "init" | "deinit"))?;
+        let prefix = self.prefix(node, keyword.start_byte(), site);
+        let mut children = node.walk();
+        let broken = node
+            .children(&mut children)
+            .any(|child| child.kind() == "ERROR" || child.is_missing());
+        let body = node.child_by_field_name("body");
+        let Some(body) = body.filter(|_| !broken) else {
+            // Error recovery split or dropped the head; the token stream says
+            // whether the body ever opened on the head's line.
+            self.unbraced_head(keyword.end_byte());
+            return None;
+        };
+        let mut is_test_prefixed = false;
+        let mut name_end = keyword.end_byte();
+        if let Some(name) = node.child_by_field_name("name") {
+            name_end = name.end_byte();
+            let word = self.word(name);
+            if word.starts_with('`') {
+                if word.len() > MAX_NAME_BYTES {
+                    self.refuse(name.start_byte(), Refusal::ResourceLimit);
+                }
+            } else if word.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+                is_test_prefixed = is_test_method_name(word);
+            } else if !word.chars().all(|c| OPERATOR_NAME_CHARS.contains(&c)) {
+                self.refuse(name.start_byte(), Refusal::UnbalancedBlockStructure);
+            } else if word.len() > MAX_NAME_BYTES {
+                self.refuse(name.start_byte(), Refusal::ResourceLimit);
+            }
+        }
+        let mut empty_params = true;
+        let mut rethrows = false;
+        let mut parts = node.walk();
+        for child in node.children(&mut parts) {
+            match child.kind() {
+                "type_parameters" => {
+                    self.refuse(child.start_byte(), Refusal::GenericDeclaration);
+                }
+                // Typed throws and `where` clauses are Swift 6 and
+                // generic-context forms outside the declared 5.x subset.
+                "throws_clause" | "type_constraints" => {
+                    self.refuse(child.start_byte(), Refusal::UnbalancedBlockStructure);
+                }
+                "parameter" => empty_params = false,
+                "throws" => rethrows |= self.word(child).starts_with("rethrows"),
+                _ => {}
+            }
+        }
+        self.header_newline(name_end, body.start_byte(), false);
+        let void_return = node
+            .child_by_field_name("return_type")
+            .is_none_or(|ty| self.is_void_return(ty));
+        Some(MethodDecl {
+            start: node.start_byte(),
+            end: node.end_byte(),
+            is_static: prefix
+                .modifiers
+                .iter()
+                .any(|modifier| *modifier == "static" || *modifier == "class"),
+            is_test_prefixed,
+            empty_params,
+            void_return,
+            rethrows,
+        })
+    }
+
+    /// The return type is `Void`, `Swift.Void`, or `()` when its token run is
+    /// exactly one of those spellings.
+    fn is_void_return(&self, ty: Node<'_>) -> bool {
+        let tokens = self.tokens_in(ty.start_byte(), ty.end_byte());
+        let text = self.text;
+        let words: Vec<&str> = tokens
+            .iter()
+            .filter(|token| token.kind == TokenKind::Word)
+            .map(|token| &text[token.start..token.end])
+            .collect();
+        match (words.as_slice(), tokens.len()) {
+            ([word], 1) => *word == "Void",
+            ([first, last], 3) => *first == "Swift" && *last == "Void",
+            ([], 2) => tokens[0].is_punct('(') && tokens[1].is_punct(')'),
+            _ => false,
+        }
+    }
+
+    /// A newline outside parentheses (and, for a class header, angle
+    /// brackets) between the name and the body `{` continues the header past
+    /// the single line this frontend admits.
+    fn header_newline(&mut self, from: usize, to: usize, angles: bool) {
+        let mut depth = 0usize;
+        for token in self.tokens_in(from, to) {
+            match token.kind {
+                TokenKind::Punct('(') => depth += 1,
+                TokenKind::Punct(')') => depth = depth.saturating_sub(1),
+                TokenKind::Punct('<') if angles => depth += 1,
+                TokenKind::Punct('>') if angles => depth = depth.saturating_sub(1),
+                TokenKind::Newline if depth == 0 => {
+                    self.refuse(token.start, Refusal::UnadmittedDeclarationHeader);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A head whose grammar node has no body: the legacy reading of such a
+    /// head is a newline before any `{` (a header continued past its line) or
+    /// a head that never opens a body. Error recovery decides where the node
+    /// ends, so the token stream is the authority here.
+    fn unbraced_head(&mut self, from: usize) {
+        let mut depth = 0usize;
+        for token in self.tokens_from(from) {
+            match token.kind {
+                TokenKind::Punct('(') => depth += 1,
+                TokenKind::Punct(')') => depth = depth.saturating_sub(1),
+                TokenKind::Punct('{') if depth == 0 => return,
+                TokenKind::Newline if depth == 0 => {
+                    self.refuse(token.start, Refusal::UnadmittedDeclarationHeader);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.refuse(self.text.len(), Refusal::UnbalancedBlockStructure);
+    }
+
+    /// A `var`, `let`, or `typealias` head: bounded to one line at
+    /// parenthesis depth zero. A `{` at depth zero is a computed property, an
+    /// accessor block, or a stored closure.
+    fn simple_head(&mut self, node: Node<'a>, site: Site) {
+        let keyword = child_of_kind(node, "value_binding_pattern")
+            .or_else(|| child_of_kind(node, "typealias"));
+        let Some(keyword) = keyword else {
+            return;
+        };
+        self.prefix(node, keyword.start_byte(), site);
+        let mut depth = 0usize;
+        let mut count = 0usize;
+        for token in self.tokens_from(keyword.end_byte()) {
+            match token.kind {
+                TokenKind::Punct('(') => depth += 1,
+                TokenKind::Punct(')') => depth = depth.saturating_sub(1),
+                TokenKind::Punct('{') if depth == 0 => {
+                    self.refuse(token.start, Refusal::UnadmittedAccessor);
+                    return;
+                }
+                TokenKind::Punct(';') | TokenKind::Newline if depth == 0 => return,
+                _ => {}
+            }
+            count += 1;
+            if count > MAX_HEADER_TOKENS {
+                self.refuse(token.start, Refusal::ResourceLimit);
+                return;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -606,10 +1162,6 @@ fn scan_backtick_name(bytes: &[u8], start: usize) -> Result<usize, Refusal> {
     Err(Refusal::UnterminatedBacktickName)
 }
 
-// ---------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------
-
 /// Declaration modifiers this frontend knows. Anything else in modifier
 /// position is an unadmitted construct, so a keyword a later Swift release
 /// adds abstains rather than mis-nesting — the same release-difference answer
@@ -644,703 +1196,12 @@ const MEMBER_MODIFIERS: &[&str] = &[
     "nonisolated",
 ];
 
-/// The `import kind` words: `import class XCTest.XCTestCase` still binds the
-/// module named by the first path component.
-const IMPORT_KINDS: &[&str] = &[
-    "class",
-    "struct",
-    "enum",
-    "protocol",
-    "func",
-    "var",
-    "let",
-    "typealias",
-];
-
-/// File-level type declarations whose bodies are consumed for extent only.
-/// No anchor is claimed inside them: an `extension` cannot re-open a class
-/// this frontend admitted, and a test class nested in a value type is a
-/// shape ADR-0048 deliberately does not descend into.
-const OPAQUE_TYPE_KEYWORDS: &[&str] = &["struct", "enum", "actor", "protocol", "extension"];
-
-/// The words that may follow a `class` modifier, as opposed to a nested
-/// `class Name` declaration whose name can be any identifier.
-const MEMBER_DECLARATION_KEYWORDS: &[&str] = &["func", "init", "deinit", "var", "let", "typealias"];
-
 /// The characters an operator function name may be built from. `func ==`,
 /// `func <`, and custom operators are admitted declarations that never
 /// anchor; refusing them would abstain on every Equatable helper.
 const OPERATOR_NAME_CHARS: &[char] = &[
     '/', '=', '-', '+', '!', '*', '%', '<', '>', '&', '|', '^', '~', '?',
 ];
-
-struct Parser<'a> {
-    text: &'a str,
-    tokens: &'a [Token],
-    index: usize,
-    /// Class-body recursion depth, bounded because repository contents are
-    /// untrusted.
-    depth: usize,
-    imports: Vec<ImportClause>,
-    classes: Vec<ClassDecl>,
-    free_test_function: bool,
-}
-
-/// One declaration head, reduced to what the anchor rule asks of it.
-struct FuncHead {
-    start: usize,
-    is_test_prefixed: bool,
-    empty_params: bool,
-    void_return: bool,
-    rethrows: bool,
-}
-
-impl<'a> Parser<'a> {
-    fn peek(&self) -> Option<Token> {
-        self.tokens.get(self.index).copied()
-    }
-
-    fn peek_at(&self, offset: usize) -> Option<Token> {
-        self.tokens.get(self.index + offset).copied()
-    }
-
-    fn bump(&mut self) -> Option<Token> {
-        let token = self.tokens.get(self.index).copied();
-        self.index += 1;
-        token
-    }
-
-    fn word(&self, token: Token) -> &'a str {
-        let text = self.text;
-        &text[token.start..token.end]
-    }
-
-    fn peek_word(&self) -> Option<&'a str> {
-        let token = self.peek()?;
-        if token.kind != TokenKind::Word {
-            return None;
-        }
-        let text = self.text;
-        Some(&text[token.start..token.end])
-    }
-
-    fn skip_separators(&mut self) {
-        while self
-            .peek()
-            .is_some_and(|token| token.kind == TokenKind::Newline || token.is_punct(';'))
-        {
-            self.index += 1;
-        }
-    }
-
-    fn skip_newlines(&mut self) {
-        while self
-            .peek()
-            .is_some_and(|token| token.kind == TokenKind::Newline)
-        {
-            self.index += 1;
-        }
-    }
-
-    fn parse_file_body(&mut self) -> Result<(), Refusal> {
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Ok(());
-            };
-            if token.is_punct('}') {
-                return Err(Refusal::UnbalancedBlockStructure);
-            }
-            self.parse_file_member()?;
-        }
-    }
-
-    fn parse_file_member(&mut self) -> Result<(), Refusal> {
-        let start = self.peek().expect("caller checked a token exists").start;
-        let attributes = self.parse_attribute_lists()?;
-        let modifiers = self.parse_modifiers(TYPE_MODIFIERS)?;
-        self.skip_newlines();
-        let Some(token) = self.peek() else {
-            return Err(Refusal::UnbalancedBlockStructure);
-        };
-        if token.kind == TokenKind::HashWord {
-            return self.skip_hash_construct();
-        }
-        let keyword = match token.kind {
-            TokenKind::Word => self.word(token),
-            _ => return Err(Refusal::UnadmittedFileConstruct),
-        };
-        match keyword {
-            "import"
-                if attributes.iter().all(|name| *name == "testable") && modifiers.is_empty() =>
-            {
-                self.parse_import()
-            }
-            "class" => {
-                let class = self.parse_class(start)?;
-                self.classes.push(class);
-                Ok(())
-            }
-            "func" => {
-                let head = self.parse_func_head(start)?;
-                self.consume_body()?;
-                if head.is_test_prefixed && head.empty_params && head.void_return {
-                    self.free_test_function = true;
-                }
-                Ok(())
-            }
-            "var" | "let" | "typealias" => self.parse_simple_head(),
-            keyword if OPAQUE_TYPE_KEYWORDS.contains(&keyword) => self.skip_opaque_type_body(),
-            _ => Err(Refusal::UnadmittedFileConstruct),
-        }
-    }
-
-    /// `import [kind] dotted.path` — single line. The module is the first
-    /// path component, which is what an `XCTestCase` binding question needs.
-    fn parse_import(&mut self) -> Result<(), Refusal> {
-        self.bump();
-        if let Some(kind) = self.peek_word() {
-            if IMPORT_KINDS.contains(&kind) {
-                self.bump();
-            }
-        }
-        let mut module = String::new();
-        let mut components = 0usize;
-        loop {
-            let token = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-            match token.kind {
-                TokenKind::Word => {
-                    components += 1;
-                    if components == 1 {
-                        module = self.word(token).to_string();
-                        if module.len() > MAX_NAME_BYTES {
-                            return Err(Refusal::ResourceLimit);
-                        }
-                    }
-                    self.bump();
-                }
-                TokenKind::Punct('.') if components > 0 => {
-                    self.bump();
-                    if self.peek().is_none_or(|next| next.kind != TokenKind::Word) {
-                        return Err(Refusal::UnbalancedBlockStructure);
-                    }
-                }
-                _ => break,
-            }
-        }
-        if components == 0 {
-            return Err(Refusal::UnbalancedBlockStructure);
-        }
-        self.imports.push(ImportClause { module });
-        self.expect_statement_end()
-    }
-
-    /// `class Name: Super, Proto1, Proto2 {` — the header from the `class`
-    /// keyword to the `{` is required to sit on one physical line, which is
-    /// the bounded class-header shape ADR-0048 admits.
-    fn parse_class(&mut self, start: usize) -> Result<ClassDecl, Refusal> {
-        self.bump();
-        let name = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-        if name.kind != TokenKind::Word && name.kind != TokenKind::Backticked {
-            return Err(Refusal::UnbalancedBlockStructure);
-        }
-        self.bump();
-        if name.kind == TokenKind::Word && self.peek().is_some_and(|token| token.is_punct('<')) {
-            return Err(Refusal::GenericDeclaration);
-        }
-        let mut derives_xctestcase = false;
-        if self.peek().is_some_and(|token| token.is_punct(':')) {
-            self.bump();
-            derives_xctestcase = self.parse_inheritance_list()?;
-        }
-        self.expect_body_open()?;
-        let (methods, nested, end) = self.parse_class_body()?;
-        Ok(ClassDecl {
-            start,
-            end,
-            derives_xctestcase,
-            methods,
-            nested,
-        })
-    }
-
-    /// The `: Super, Proto` list. A top-level entry whose token run is
-    /// exactly one bare `XCTestCase` word marks the class; generic arguments
-    /// and qualified names in the list are consumed but never match, because
-    /// the anchor claims the bare source-visible spelling.
-    fn parse_inheritance_list(&mut self) -> Result<bool, Refusal> {
-        let mut derives = false;
-        let mut angle_depth = 0usize;
-        let mut paren_depth = 0usize;
-        let mut entry_tokens = 0usize;
-        let mut entry_is_bare_test_case = true;
-        loop {
-            let token = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-            if angle_depth == 0 && paren_depth == 0 {
-                match token.kind {
-                    TokenKind::Punct('{') => break,
-                    TokenKind::Newline => return Err(Refusal::UnadmittedDeclarationHeader),
-                    _ => {}
-                }
-            }
-            match token.kind {
-                TokenKind::Punct('<') => {
-                    angle_depth += 1;
-                    entry_is_bare_test_case = false;
-                }
-                TokenKind::Punct('(') => {
-                    paren_depth += 1;
-                    entry_is_bare_test_case = false;
-                }
-                TokenKind::Punct(')') => paren_depth = paren_depth.saturating_sub(1),
-                TokenKind::Punct('>') => angle_depth = angle_depth.saturating_sub(1),
-                TokenKind::Punct(',') if angle_depth == 0 && paren_depth == 0 => {
-                    if entry_is_bare_test_case && entry_tokens == 1 {
-                        derives = true;
-                    }
-                    entry_tokens = 0;
-                    entry_is_bare_test_case = true;
-                    self.bump();
-                    continue;
-                }
-                TokenKind::Word => {
-                    entry_tokens += 1;
-                    if !(entry_tokens == 1 && self.word(token) == "XCTestCase") {
-                        entry_is_bare_test_case = false;
-                    }
-                }
-                TokenKind::Punct('.') => {}
-                _ => {
-                    entry_tokens += 1;
-                    entry_is_bare_test_case = false;
-                }
-            }
-            if entry_tokens > MAX_HEADER_TOKENS {
-                return Err(Refusal::ResourceLimit);
-            }
-            self.bump();
-        }
-        if entry_is_bare_test_case && entry_tokens == 1 {
-            derives = true;
-        }
-        Ok(derives)
-    }
-
-    /// Members until the class's closing `}`.
-    fn parse_class_body(&mut self) -> Result<(Vec<MethodDecl>, Vec<ClassDecl>, usize), Refusal> {
-        if self.depth >= MAX_NESTING {
-            return Err(Refusal::ResourceLimit);
-        }
-        self.depth += 1;
-        let mut methods = Vec::new();
-        let mut nested = Vec::new();
-        let end;
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                self.depth -= 1;
-                return Err(Refusal::UnbalancedBlockStructure);
-            };
-            if token.is_punct('}') {
-                end = token.end;
-                self.bump();
-                break;
-            }
-            let start = token.start;
-            self.parse_attribute_lists()?;
-            let modifiers = self.parse_modifiers(MEMBER_MODIFIERS)?;
-            self.skip_newlines();
-            let Some(keyword) = self.peek() else {
-                self.depth -= 1;
-                return Err(Refusal::UnbalancedBlockStructure);
-            };
-            if keyword.kind != TokenKind::Word {
-                self.depth -= 1;
-                return Err(Refusal::UnadmittedMemberShape);
-            }
-            match self.word(keyword) {
-                "func" => {
-                    let head = self.parse_func_head(start)?;
-                    self.consume_body()?;
-                    let end = self
-                        .tokens
-                        .get(self.index - 1)
-                        .map(|token| token.end)
-                        .unwrap_or(head.start);
-                    methods.push(MethodDecl {
-                        start: head.start,
-                        end,
-                        is_static: modifiers
-                            .iter()
-                            .any(|modifier| *modifier == "static" || *modifier == "class"),
-                        is_test_prefixed: head.is_test_prefixed,
-                        empty_params: head.empty_params,
-                        void_return: head.void_return,
-                        rethrows: head.rethrows,
-                    });
-                }
-                "init" | "deinit" => {
-                    self.parse_func_head(start)?;
-                    self.consume_body()?;
-                }
-                "var" | "let" | "typealias" => {
-                    self.parse_simple_head()?;
-                }
-                "class" => {
-                    let class = self.parse_class(start)?;
-                    nested.push(class);
-                }
-                _ => {
-                    self.depth -= 1;
-                    return Err(Refusal::UnadmittedMemberShape);
-                }
-            }
-        }
-        self.depth -= 1;
-        Ok((methods, nested, end))
-    }
-
-    /// Zero or more attribute lists standing before a declaration.
-    ///
-    /// The attribute binds by grammar, not by line position, so an attribute
-    /// list may end its own line before the declaration continues. A bare
-    /// attribute or one with an exactly empty `()` argument list is admitted
-    /// and ignored; a non-empty argument list is outside the declared subset
-    /// and refuses the file, because its contents can change what the
-    /// declaration means.
-    fn parse_attribute_lists(&mut self) -> Result<Vec<&'a str>, Refusal> {
-        let mut attributes = Vec::new();
-        while self.peek().is_some_and(|token| token.is_punct('@')) {
-            self.bump();
-            let name = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-            if name.kind != TokenKind::Word {
-                return Err(Refusal::UnbalancedBlockStructure);
-            }
-            if name.end - name.start > MAX_NAME_BYTES {
-                return Err(Refusal::ResourceLimit);
-            }
-            let name = self.word(name);
-            self.bump();
-            if self.peek().is_some_and(|token| token.is_punct('(')) {
-                self.bump();
-                if self.peek().is_some_and(|token| !token.is_punct(')')) {
-                    return Err(Refusal::AttributeArgument);
-                }
-                self.skip_balanced('(', ')')?;
-            }
-            attributes.push(name);
-            if attributes.len() > MAX_MODIFIERS {
-                return Err(Refusal::ResourceLimit);
-            }
-            self.skip_newlines();
-        }
-        Ok(attributes)
-    }
-
-    fn parse_modifiers(&mut self, table: &'a [&'a str]) -> Result<Vec<&'a str>, Refusal> {
-        let mut modifiers = Vec::new();
-        while let Some(word) = self.peek_word() {
-            let Some(matched) = table.iter().find(|candidate| **candidate == word) else {
-                break;
-            };
-            // `class` is both a member modifier (`class func`) and the
-            // nested-class keyword. It is read as a modifier only when a
-            // declaration keyword or another modifier follows; otherwise a
-            // name follows and this is the declaration itself.
-            if *matched == "class" && !self.class_introduces_member() {
-                break;
-            }
-            modifiers.push(*matched);
-            self.bump();
-            if modifiers.len() > MAX_MODIFIERS {
-                return Err(Refusal::ResourceLimit);
-            }
-        }
-        Ok(modifiers)
-    }
-
-    /// True when the word after this `class` shows it is the modifier: a
-    /// member declaration keyword or another modifier. A bare identifier
-    /// names a nested class instead.
-    fn class_introduces_member(&self) -> bool {
-        let Some(next) = self.peek_at(1) else {
-            return false;
-        };
-        if next.kind != TokenKind::Word {
-            return false;
-        }
-        let text = self.text;
-        let word = &text[next.start..next.end];
-        MEMBER_DECLARATION_KEYWORDS.contains(&word) || MEMBER_MODIFIERS.contains(&word)
-    }
-
-    /// The head of a `func` (or an `init`/`deinit`) declaration, up to the
-    /// `{` that opens its body.
-    ///
-    /// Newlines are admitted inside the parameter parentheses — the wrapped
-    /// parameter-list case — and refused everywhere else before the `{`,
-    /// which keeps the head bounded while accepting the one continuation the
-    /// language itself encourages.
-    fn parse_func_head(&mut self, start: usize) -> Result<FuncHead, Refusal> {
-        self.bump();
-        let name = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-        let mut is_test_prefixed = false;
-        match name.kind {
-            TokenKind::Word => {
-                is_test_prefixed = is_test_method_name(self.word(name));
-                self.bump();
-                if self.peek().is_some_and(|token| token.is_punct('<')) {
-                    return Err(Refusal::GenericDeclaration);
-                }
-            }
-            TokenKind::Backticked => {
-                self.bump();
-                if name.end - name.start > MAX_NAME_BYTES {
-                    return Err(Refusal::ResourceLimit);
-                }
-            }
-            TokenKind::Punct(character) if OPERATOR_NAME_CHARS.contains(&character) => {
-                // An operator function: `func ==`, `func <`, custom operators.
-                // It is an admitted declaration that can never carry the
-                // anchor, because an operator has no bare identifier name.
-                let mut end = name.end;
-                while let Some(token) = self.peek() {
-                    match token.kind {
-                        TokenKind::Punct(character) if OPERATOR_NAME_CHARS.contains(&character) => {
-                            end = token.end;
-                            self.bump();
-                        }
-                        _ => break,
-                    }
-                }
-                if end - name.start > MAX_NAME_BYTES {
-                    return Err(Refusal::ResourceLimit);
-                }
-            }
-            _ => return Err(Refusal::UnbalancedBlockStructure),
-        }
-        // A failable initializer: `init?` / `init!`.
-        if self
-            .peek()
-            .is_some_and(|token| token.is_punct('?') || token.is_punct('!'))
-        {
-            self.bump();
-        }
-        let empty_params = if self.peek().is_some_and(|token| token.is_punct('(')) {
-            self.bump();
-            let empty = self.peek().is_some_and(|token| token.is_punct(')'));
-            self.skip_balanced('(', ')')?;
-            empty
-        } else {
-            // `deinit` carries no parameter list.
-            true
-        };
-        let mut rethrows = false;
-        let mut async_seen = false;
-        loop {
-            match self.peek_word() {
-                Some("async") if !async_seen => {
-                    async_seen = true;
-                    self.bump();
-                }
-                Some(effect @ ("throws" | "rethrows")) => {
-                    rethrows |= effect == "rethrows";
-                    self.bump();
-                }
-                _ => break,
-            }
-        }
-        let mut void_return = true;
-        if self.peek().is_some_and(|token| token.is_punct('-'))
-            && self.peek_at(1).is_some_and(|token| token.is_punct('>'))
-        {
-            self.bump();
-            self.bump();
-            void_return = self.parse_return_type()?;
-        }
-        self.expect_body_open()?;
-        Ok(FuncHead {
-            start,
-            is_test_prefixed,
-            empty_params,
-            void_return,
-            rethrows,
-        })
-    }
-
-    /// The return type, up to the `{`. `Void`, `Swift.Void`, and `()` are the
-    /// Void spellings; anything else parses but is not a Void return.
-    fn parse_return_type(&mut self) -> Result<bool, Refusal> {
-        let mut tokens = 0usize;
-        let mut words: Vec<&'a str> = Vec::new();
-        let mut first_punct: Option<char> = None;
-        let mut second_punct: Option<char> = None;
-        loop {
-            let token = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-            match token.kind {
-                TokenKind::Punct('{') => break,
-                TokenKind::Newline => return Err(Refusal::UnadmittedDeclarationHeader),
-                TokenKind::Word => words.push(self.word(token)),
-                TokenKind::Punct(character) => {
-                    if tokens == 0 {
-                        first_punct = Some(character);
-                    } else if tokens == 1 {
-                        second_punct = Some(character);
-                    }
-                }
-                _ => {}
-            }
-            tokens += 1;
-            if tokens > MAX_HEADER_TOKENS {
-                return Err(Refusal::ResourceLimit);
-            }
-            self.bump();
-        }
-        Ok(match (words.as_slice(), tokens) {
-            ([word], 1) => *word == "Void",
-            ([first, last], 3) => *first == "Swift" && *last == "Void",
-            ([], 2) => first_punct == Some('(') && second_punct == Some(')'),
-            _ => false,
-        })
-    }
-
-    /// A `var`, `let`, or `typealias` head: bounded to one line at bracket
-    /// depth zero. Reaching a `{` at depth zero is a computed property, an
-    /// accessor block, or a stored closure, and refuses the file.
-    fn parse_simple_head(&mut self) -> Result<(), Refusal> {
-        self.bump();
-        let mut paren_depth = 0usize;
-        let mut tokens = 0usize;
-        loop {
-            let token = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-            match token.kind {
-                TokenKind::Punct('(') => paren_depth += 1,
-                TokenKind::Punct(')') => paren_depth = paren_depth.saturating_sub(1),
-                TokenKind::Punct('{') if paren_depth == 0 => {
-                    return Err(Refusal::UnadmittedAccessor);
-                }
-                TokenKind::Punct(';') | TokenKind::Newline if paren_depth == 0 => {
-                    self.bump();
-                    return Ok(());
-                }
-                _ => {}
-            }
-            tokens += 1;
-            if tokens > MAX_HEADER_TOKENS {
-                return Err(Refusal::ResourceLimit);
-            }
-            self.bump();
-        }
-    }
-
-    /// A `#name …` construct outside a body: `#selector(…)`,
-    /// `#warning("…")`, and their peers are consumed opaquely with their
-    /// balanced argument group. `#if` and its family never reach the parser.
-    fn skip_hash_construct(&mut self) -> Result<(), Refusal> {
-        self.bump();
-        if self.peek().is_some_and(|token| token.is_punct('(')) {
-            self.bump();
-            self.skip_balanced('(', ')')?;
-        }
-        self.skip_to_statement_end()
-    }
-
-    fn skip_to_statement_end(&mut self) -> Result<(), Refusal> {
-        while let Some(token) = self.peek() {
-            if token.kind == TokenKind::Newline || token.is_punct(';') {
-                self.bump();
-                return Ok(());
-            }
-            self.bump();
-        }
-        Ok(())
-    }
-
-    /// The `{` that opens a declaration body. A newline first means the head
-    /// continued past the single line this frontend admits.
-    fn expect_body_open(&mut self) -> Result<(), Refusal> {
-        match self.peek() {
-            Some(token) if token.is_punct('{') => {
-                self.bump();
-                Ok(())
-            }
-            Some(token) if token.kind == TokenKind::Newline => {
-                Err(Refusal::UnadmittedDeclarationHeader)
-            }
-            _ => Err(Refusal::UnbalancedBlockStructure),
-        }
-    }
-
-    fn expect_statement_end(&mut self) -> Result<(), Refusal> {
-        match self.peek() {
-            Some(token) if token.kind == TokenKind::Newline || token.is_punct(';') => {
-                self.bump();
-                Ok(())
-            }
-            None => Ok(()),
-            _ => Err(Refusal::UnbalancedBlockStructure),
-        }
-    }
-
-    /// A file-level type whose body is consumed for extent only. Its head may
-    /// wrap across lines; no anchor inside it is claimed or read.
-    fn skip_opaque_type_body(&mut self) -> Result<(), Refusal> {
-        let mut tokens = 0usize;
-        loop {
-            let token = self.peek().ok_or(Refusal::UnbalancedBlockStructure)?;
-            if token.is_punct('{') {
-                self.bump();
-                return self.consume_body();
-            }
-            tokens += 1;
-            if tokens > MAX_HEADER_TOKENS {
-                return Err(Refusal::ResourceLimit);
-            }
-            self.bump();
-        }
-    }
-
-    /// One body whose opening `{` the caller already consumed. Statements
-    /// are never parsed: no anchor rests on what a statement means, only on
-    /// where the enclosing braces close, and strings and comments are already
-    /// single tokens.
-    fn consume_body(&mut self) -> Result<(), Refusal> {
-        let mut depth = 1usize;
-        while let Some(token) = self.peek() {
-            if token.is_punct('{') {
-                depth += 1;
-            } else if token.is_punct('}') {
-                depth -= 1;
-                if depth == 0 {
-                    self.bump();
-                    return Ok(());
-                }
-            }
-            self.bump();
-        }
-        Err(Refusal::UnbalancedBlockStructure)
-    }
-
-    /// Consume through the closing bracket of a group whose opening bracket
-    /// the caller already consumed. Nested groups of the same pair are
-    /// honoured; a stray closer or end of input is a structure failure.
-    fn skip_balanced(&mut self, open: char, close: char) -> Result<(), Refusal> {
-        let mut depth = 1usize;
-        while let Some(token) = self.peek() {
-            if token.is_punct(open) {
-                depth += 1;
-            } else if token.is_punct(close) {
-                depth -= 1;
-                if depth == 0 {
-                    self.bump();
-                    return Ok(());
-                }
-            }
-            self.bump();
-        }
-        Err(Refusal::UnbalancedBlockStructure)
-    }
-}
 
 /// The exact name rule from the XCTest contract, narrowed the way ADR-0025
 /// D6 and ADR-0048 state it: the bare source-visible name starts with the
@@ -1355,7 +1216,7 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> Result<SwiftFile, Refusal> {
-        parse_file(text)
+        parse_file(text).expect("the Swift grammar loads and parses")
     }
 
     fn test_class(source: &str) -> String {
