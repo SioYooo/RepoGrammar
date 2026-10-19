@@ -88,7 +88,7 @@ verdict, at `BLOCKED`, or after three rounds as `CLASSIFIED`.
   on C# first, under the byte-equivalence oracle, with a framework-specific
   plugin residue of at most 25%.
 - Optimization: a shared query helper, compiled-query caching and a measured
-  `Node::parent()` cost.
+  `Node::parent()` cost. Results are in [Optimization](#optimization).
 
 ## Baseline
 
@@ -115,3 +115,37 @@ Go evidence: capture `47ccdddb39ad17af0a7f0b686bf0a37b1e40784b979beb4349cfa74846
 The lexer stays as the lexical-subset gate; only the recursive-descent parser
 was removed. Details are in the
 [Go completion review](../reports/language-support/go-completion-review.md#adr-0058-frontend-change--2026-10-20).
+
+## Optimization
+
+Both changes are byte-equivalent under the lane oracle: 0 capture mismatches
+over 179 roots, `sync-equivalence` 14/14, `product-eval` equal, and identical
+parse snapshots of the Unity corpus and the C# fixtures.
+
+- Compiled-query caching (`6302f64`). Compiling the C# `nodes.scm` query took
+  about 3.5 ms per file in a release build; parsing a small fixture takes
+  about 44 µs. `CSharpSyntaxParser` now compiles it once per instance, in a
+  `OnceLock`.
+- Ancestor lookup. `Node::parent()` descends from the root on every call, so
+  the C# scanner's per-node ancestor walks (pre-order depth and inherited
+  context) were cubic in nesting depth. One cursor walk, `capture_ancestry`,
+  now records each captured node's depth and nearest `scope` or `class_like`
+  ancestor. A unit test checks it against the parent walks.
+
+Snapshot wall time, release build, single file of nested calls `F(F(…))`:
+
+| Nesting depth | Before | After |
+| --- | --- | --- |
+| 200 | 1.09 s | 0.08 s |
+| 400 | 2.57 s | 0.08 s |
+| 800 | 19.14 s | 0.07 s |
+
+The "after" times are mostly the test harness's start-up. On the 4,818-file
+Unity corpus the medians of three alternating runs were 5.51 s before and
+6.06 s after. Single runs ranged from 5.0 s to 7.2 s, so the difference is
+within run-to-run noise. Reading files from the external volume dominates that
+run.
+
+No other lane walks ancestors with `parent()`; the remaining calls read a
+single parent. The shared query helper is deferred: only the C# lane compiles
+a Tree-sitter query, and the others walk with a cursor.

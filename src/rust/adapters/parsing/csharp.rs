@@ -374,6 +374,7 @@ impl<'a> CSharpTreeScanner<'a> {
             });
         }
         let captures = node_captures(root, self.document.text, query)?;
+        let ancestry = capture_ancestry(root, &captures);
         // Receiver bindings are order-independent and must be complete before
         // any invocation is classified.
         for (capture, node) in &captures {
@@ -390,13 +391,17 @@ impl<'a> CSharpTreeScanner<'a> {
         ordered.sort_by(|(_, left), (_, right)| {
             (left.start_byte(), Reverse(left.end_byte()))
                 .cmp(&(right.start_byte(), Reverse(right.end_byte())))
-                .then_with(|| node_depth(*left).cmp(&node_depth(*right)))
+                .then_with(|| ancestry[&left.id()].0.cmp(&ancestry[&right.id()].0))
         });
         // Each node inherits the context of its nearest scope or class-like
         // ancestor.
-        let mut contexts = HashMap::new();
+        let mut contexts: HashMap<usize, VisitContext> = HashMap::new();
         for (capture, node) in ordered {
-            let context = inherited_context(node, &contexts);
+            let context = ancestry[&node.id()]
+                .1
+                .and_then(|owner| contexts.get(&owner))
+                .cloned()
+                .unwrap_or_default();
             match capture {
                 "scope" => {
                     let mut next = context.clone();
@@ -1307,25 +1312,43 @@ fn node_captures<'tree>(
     Ok(captures)
 }
 
-fn inherited_context(node: Node<'_>, contexts: &HashMap<usize, VisitContext>) -> VisitContext {
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        if let Some(context) = contexts.get(&current.id()) {
-            return context.clone();
+/// Depth and nearest `scope` or `class_like` ancestor of every captured node,
+/// from one cursor walk. `Node::parent` descends from the root on each call,
+/// so walking ancestors per node is cubic in nesting depth. Pre-order handling
+/// gives every such ancestor its context before any descendant reads it.
+fn capture_ancestry(
+    root: Node<'_>,
+    captures: &[(&'static str, Node<'_>)],
+) -> HashMap<usize, (usize, Option<usize>)> {
+    let captured = captures
+        .iter()
+        .map(|(capture, node)| (node.id(), *capture))
+        .collect::<HashMap<_, _>>();
+    let mut ancestry = HashMap::new();
+    let mut cursor = root.walk();
+    // The nearest context owner at or above each node on the current path.
+    let mut owners: Vec<Option<usize>> = Vec::new();
+    loop {
+        let node = cursor.node();
+        let owner = owners.last().copied().flatten();
+        let own = match captured.get(&node.id()) {
+            Some(capture) => {
+                ancestry.insert(node.id(), (owners.len(), owner));
+                matches!(*capture, "scope" | "class_like").then_some(node.id())
+            }
+            None => None,
+        };
+        if cursor.goto_first_child() {
+            owners.push(own.or(owner));
+            continue;
         }
-        ancestor = current.parent();
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return ancestry;
+            }
+            owners.pop();
+        }
     }
-    VisitContext::default()
-}
-
-fn node_depth(node: Node<'_>) -> usize {
-    let mut depth = 0;
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        depth += 1;
-        ancestor = current.parent();
-    }
-    depth
 }
 
 #[derive(Debug, Clone)]
@@ -2597,6 +2620,43 @@ public class BrokenAttributeTests
                 "xunit_member_data_ineligible_source".to_string(),
             )]
         );
+    }
+
+    #[test]
+    fn capture_ancestry_matches_parent_walks() {
+        let parser = CSharpSyntaxParser::default();
+        let query = parser.node_query().expect("compile node query");
+        for source in [
+            "using A;\nnamespace N { class Outer { class Inner { void M() { var x = F(G(1)); } } } record R(int X); }\n",
+            "namespace N;\npublic struct S { int P { get; } = H(); }\ninterface I { void M(); }\n",
+            "class Broken { void M( { F(G( } class Next { void N() { } }\n",
+        ] {
+            let mut tree_parser = Parser::new();
+            tree_parser
+                .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+                .expect("load C# grammar");
+            let tree = tree_parser.parse(source, None).expect("parse C#");
+            let captures = node_captures(tree.root_node(), source, query).expect("captures");
+            assert!(captures.len() >= 4, "{source}");
+            let ancestry = capture_ancestry(tree.root_node(), &captures);
+            for (_, node) in &captures {
+                let (mut depth, mut owner) = (0, None);
+                let mut ancestor = node.parent();
+                while let Some(current) = ancestor {
+                    depth += 1;
+                    if owner.is_none()
+                        && captures.iter().any(|(capture, captured)| {
+                            captured.id() == current.id()
+                                && matches!(*capture, "scope" | "class_like")
+                        })
+                    {
+                        owner = Some(current.id());
+                    }
+                    ancestor = current.parent();
+                }
+                assert_eq!(ancestry[&node.id()], (depth, owner), "{}", node.kind());
+            }
+        }
     }
 
     #[test]
