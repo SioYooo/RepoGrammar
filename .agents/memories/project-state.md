@@ -1,5 +1,37 @@
 # Project State
 
+## Tree-sitter frontend migration — 2026-10-20
+
+ADR-0058 (accepted) is implemented on the local branch
+`feat/tree-sitter-frontends`, which is not merged into `main` and not pushed.
+Lane results:
+
+- Go is `EQUIVALENT`.
+- Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R and Ada are `CLASSIFIED`. Their
+  legacy parsers stay under `cfg(test)` until the maintainer accepts each
+  classification; Delphi includes `anchor_changed` additions.
+- Assembly and SQL are `BLOCKED`, and their grammars were never added.
+- After every lane, the 179-root capture had 0 mismatches.
+
+The same branch also carries:
+
+- the shared binding engine (`adapters/parsing/binding.rs`, Phase 2a,
+  `QUALIFIED`);
+- C# role rows (Phase 2b, `QUALIFIED`): 6 of 9 C# roles are rows, and test
+  data shapes stay code;
+- a cached C# node query and a cursor-based capture ancestry, which removed a
+  cubic cost in nesting depth.
+
+The release binary grew from 22.3 MB to 38.6 MB, almost all grammar parse
+tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
+`adapters/parsing/tree_sitter.rs` still needs maintainer-approved deletion.
+
+TS/JS goes in slices under ADR-0059 (Proposed) on `feat/tsjs-tree-sitter`,
+starting with the shared `ScopeGraphLite`. Evidence:
+`docs/experiments/tree-sitter-frontend-migration.md` (lanes, decisions
+needed, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
+and `tsjs-scope-graph-tree.md`.
+
 ## Declarative language-pack spike — 2026-10-20
 
 The spike, merged into local `main` on 2026-10-20 and not pushed, moves C#
