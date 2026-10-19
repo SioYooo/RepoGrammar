@@ -34,6 +34,8 @@ libc = "0.2.186"
 # structural code-unit extraction without executing Cargo, rustc, build scripts,
 # or procedural macros.
 tree-sitter = "0.27"
+# Production (ADR-0058): pinned Tree-sitter Ada grammar for the AUnit frontend.
+tree-sitter-ada = "=0.1.0"
 tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"

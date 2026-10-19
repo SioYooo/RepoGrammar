@@ -5,6 +5,10 @@
 //! format remain inventory-only/UNKNOWN; no Ada or Alire tool is invoked.
 
 pub mod aunit;
+#[cfg(test)]
+mod differential;
+#[cfg(test)]
+mod legacy_syntax;
 mod lexer;
 mod syntax;
 

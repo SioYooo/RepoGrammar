@@ -307,6 +307,12 @@ fn lex_token(
     Err(Refusal::UnsupportedCharacter)
 }
 
+/// True for a word reserved in every edition of the declared set. The syntax
+/// layer uses it to refuse a reserved word the grammar accepted as a name.
+pub(crate) fn is_reserved_word(word: &str) -> bool {
+    classify_word(word) == TokenKind::Reserved
+}
+
 fn classify_word(word: &str) -> TokenKind {
     let folded = word.to_ascii_lowercase();
     if RESERVED_WORDS.contains(&folded.as_str()) {
