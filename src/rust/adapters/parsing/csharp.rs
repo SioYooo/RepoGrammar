@@ -7,6 +7,11 @@
 //! generated, or build-variant semantic that remains unresolved.
 
 use super::{ir_edges_for_units, ir_nodes_for_units};
+use crate::adapters::frameworks::csharp::{
+    ASPNET_MVC_NAMESPACE, CONVENTION_ROUTING_METHODS, EFCORE_NAMESPACE, FLUENTVALIDATION_NAMESPACE,
+    HTTP_ROUTE_ATTRIBUTES, KNOWN_CLASS_ATTRIBUTES, KNOWN_METHOD_ATTRIBUTES,
+    MINIMAL_API_MAP_METHODS, MSTEST_NAMESPACE, NUNIT_NAMESPACE, XUNIT_NAMESPACE,
+};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -15,9 +20,10 @@ use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
     SourceDocument, SourceParseOutput, SourceParser,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 mod project_config;
 mod test_data;
@@ -25,63 +31,8 @@ mod test_data;
 pub(crate) const CSHARP_ANCHOR_ENGINE: &str = "repogrammar-csharp-syntax";
 pub(crate) const CSHARP_ANCHOR_METHOD: &str = "tree_sitter_csharp_structural_anchors_v1";
 
-const ASPNET_MVC_NAMESPACE: &str = "Microsoft.AspNetCore.Mvc";
-const EFCORE_NAMESPACE: &str = "Microsoft.EntityFrameworkCore";
-const FLUENTVALIDATION_NAMESPACE: &str = "FluentValidation";
-const XUNIT_NAMESPACE: &str = "Xunit";
-const NUNIT_NAMESPACE: &str = "NUnit.Framework";
-const MSTEST_NAMESPACE: &str = "Microsoft.VisualStudio.TestTools.UnitTesting";
-
-/// `(attribute simple name, support target, HTTP method token)`.
-const HTTP_ROUTE_ATTRIBUTES: &[(&str, &str, &str)] = &[
-    ("HttpGet", "aspnetcore.mvc.HttpGet", "GET"),
-    ("HttpPost", "aspnetcore.mvc.HttpPost", "POST"),
-    ("HttpPut", "aspnetcore.mvc.HttpPut", "PUT"),
-    ("HttpDelete", "aspnetcore.mvc.HttpDelete", "DELETE"),
-    ("HttpPatch", "aspnetcore.mvc.HttpPatch", "PATCH"),
-    ("HttpHead", "aspnetcore.mvc.HttpHead", "HEAD"),
-    ("HttpOptions", "aspnetcore.mvc.HttpOptions", "OPTIONS"),
-];
-
-/// `(invocation name, support target, HTTP method token)`.
-const MINIMAL_API_MAP_METHODS: &[(&str, &str, &str)] = &[
-    ("MapGet", "aspnetcore.builder.MapGet", "GET"),
-    ("MapPost", "aspnetcore.builder.MapPost", "POST"),
-    ("MapPut", "aspnetcore.builder.MapPut", "PUT"),
-    ("MapDelete", "aspnetcore.builder.MapDelete", "DELETE"),
-    ("MapPatch", "aspnetcore.builder.MapPatch", "PATCH"),
-];
-
-/// Convention-based registration calls whose routing stays runtime-defined.
-const CONVENTION_ROUTING_METHODS: &[&str] = &["MapControllerRoute", "MapHub", "MapGrpcService"];
-
-/// Known attribute short names on class-like declarations; a lookalike without
-/// exact using/FQN evidence emits a blocking `csharp_attribute_binding` UNKNOWN.
-const KNOWN_CLASS_ATTRIBUTES: &[(&str, &str)] = &[
-    ("ApiController", ASPNET_MVC_NAMESPACE),
-    ("Route", ASPNET_MVC_NAMESPACE),
-    ("TestFixture", NUNIT_NAMESPACE),
-    ("TestClass", MSTEST_NAMESPACE),
-];
-
-/// Known attribute short names on methods; same lookalike rule as classes.
-const KNOWN_METHOD_ATTRIBUTES: &[(&str, &str)] = &[
-    ("HttpGet", ASPNET_MVC_NAMESPACE),
-    ("HttpPost", ASPNET_MVC_NAMESPACE),
-    ("HttpPut", ASPNET_MVC_NAMESPACE),
-    ("HttpDelete", ASPNET_MVC_NAMESPACE),
-    ("HttpPatch", ASPNET_MVC_NAMESPACE),
-    ("HttpHead", ASPNET_MVC_NAMESPACE),
-    ("HttpOptions", ASPNET_MVC_NAMESPACE),
-    ("Fact", XUNIT_NAMESPACE),
-    ("Theory", XUNIT_NAMESPACE),
-    ("InlineData", XUNIT_NAMESPACE),
-    ("MemberData", XUNIT_NAMESPACE),
-    ("Test", NUNIT_NAMESPACE),
-    ("TestCase", NUNIT_NAMESPACE),
-    ("TestMethod", MSTEST_NAMESPACE),
-    ("DataRow", MSTEST_NAMESPACE),
-];
+/// Tree-sitter query selecting every node the scanner handles.
+const NODE_QUERY: &str = include_str!("csharp/nodes.scm");
 
 #[derive(Debug, Default)]
 pub struct CSharpSyntaxParser;
@@ -218,32 +169,106 @@ impl<'a> CSharpTreeScanner<'a> {
                     .to_string(),
             });
         }
-        self.collect_receiver_bindings(root);
-        self.visit(root, VisitContext::default())?;
+        let captures = node_captures(root, self.document.text)?;
+        // Receiver bindings are order-independent and must be complete before
+        // any invocation is classified.
+        for (capture, node) in &captures {
+            if *capture == "binding" {
+                self.record_receiver_binding(*node);
+            }
+        }
+        // Pre-order: an ancestor precedes its descendants, including one that
+        // spans the identical byte range.
+        let mut ordered = captures
+            .into_iter()
+            .filter(|(capture, _)| *capture != "binding")
+            .collect::<Vec<_>>();
+        ordered.sort_by(|(_, left), (_, right)| {
+            (left.start_byte(), Reverse(left.end_byte()))
+                .cmp(&(right.start_byte(), Reverse(right.end_byte())))
+                .then_with(|| node_depth(*left).cmp(&node_depth(*right)))
+        });
+        // Each node inherits the context of its nearest scope or class-like
+        // ancestor.
+        let mut contexts = HashMap::new();
+        for (capture, node) in ordered {
+            let context = inherited_context(node, &contexts);
+            match capture {
+                "scope" => {
+                    let mut next = context.clone();
+                    next.usings = Arc::new(scope_using_context(
+                        self.document.text,
+                        node,
+                        Arc::clone(&context.usings),
+                    ));
+                    contexts.insert(node.id(), next);
+                }
+                "class_like" => {
+                    let next = self.scan_class_like(node, &context)?;
+                    contexts.insert(node.id(), next);
+                }
+                "method" => self.scan_method(node, &context)?,
+                "constructor" => {
+                    self.add_named_node_unit(node, CodeUnitKind::Method, "constructor")?;
+                }
+                "property" => self.scan_property(node, &context)?,
+                "invocation" => self.scan_invocation(node)?,
+                other => {
+                    return Err(ParseError::Internal(format!(
+                        "unexpected C# node capture {other}"
+                    )))
+                }
+            }
+        }
         Ok(())
     }
 
-    fn collect_receiver_bindings(&mut self, node: Node<'_>) {
-        if node.kind() == "variable_declarator" {
-            let name = node
-                .child_by_field_name("name")
-                .and_then(|child| node_text_checked(self.document.text, child))
-                .map(str::to_string);
-            let text = node_text(self.document.text, node);
-            let initializer = text
-                .split_once('=')
-                .map(|(_, initializer)| initializer.trim().to_string());
-            if let (Some(name), Some(initializer)) = (name, initializer) {
-                match self.receiver_bindings.get(&name) {
-                    None => {
-                        self.receiver_bindings.insert(name, Some(initializer));
-                    }
-                    Some(Some(existing)) if *existing == initializer => {}
-                    Some(_) => {
-                        self.receiver_bindings.insert(name, None);
-                    }
+    fn record_receiver_binding(&mut self, node: Node<'_>) {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|child| node_text_checked(self.document.text, child))
+            .map(str::to_string);
+        let text = node_text(self.document.text, node);
+        let initializer = text
+            .split_once('=')
+            .map(|(_, initializer)| initializer.trim().to_string());
+        if let (Some(name), Some(initializer)) = (name, initializer) {
+            match self.receiver_bindings.get(&name) {
+                None => {
+                    self.receiver_bindings.insert(name, Some(initializer));
+                }
+                Some(Some(existing)) if *existing == initializer => {}
+                Some(_) => {
+                    self.receiver_bindings.insert(name, None);
                 }
             }
+        }
+    }
+
+    /// The recursive traversal the node query replaced; kept for the migration
+    /// differential only.
+    #[cfg(test)]
+    fn scan_tree_legacy(&mut self, root: Node<'_>) -> Result<(), ParseError> {
+        let module_unit =
+            self.add_unit(CodeUnitKind::Module, "file", 0, self.document.text.len())?;
+        self.module_unit = Some(module_unit);
+        if root.has_error() {
+            self.diagnostics.push(ParseDiagnostic {
+                path: self.document.path.to_string(),
+                range: None,
+                severity: ParseDiagnosticSeverity::Warning,
+                message: "Tree-sitter C# parse contains syntax errors; extraction is structural"
+                    .to_string(),
+            });
+        }
+        self.collect_receiver_bindings(root);
+        self.visit(root, VisitContext::default())
+    }
+
+    #[cfg(test)]
+    fn collect_receiver_bindings(&mut self, node: Node<'_>) {
+        if node.kind() == "variable_declarator" {
+            self.record_receiver_binding(node);
         }
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
@@ -251,6 +276,7 @@ impl<'a> CSharpTreeScanner<'a> {
         }
     }
 
+    #[cfg(test)]
     fn visit(&mut self, node: Node<'_>, context: VisitContext) -> Result<(), ParseError> {
         let mut next_context = context.clone();
         match node.kind() {
@@ -1195,6 +1221,64 @@ impl<'a> CSharpTreeScanner<'a> {
             diagnostics: self.diagnostics,
         })
     }
+}
+
+fn node_captures<'tree>(
+    root: Node<'tree>,
+    source: &str,
+) -> Result<Vec<(&'static str, Node<'tree>)>, ParseError> {
+    let query = Query::new(&tree_sitter_c_sharp::LANGUAGE.into(), NODE_QUERY)
+        .map_err(|error| ParseError::Internal(format!("compile C# node query: {error}")))?;
+    let names = query.capture_names();
+    let mut cursor = QueryCursor::new();
+    let mut captures = Vec::new();
+    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    while let Some(found) = matches.next() {
+        for capture in found.captures() {
+            let name = match names[capture.index as usize] {
+                "binding" => "binding",
+                "scope" => "scope",
+                "class_like" => "class_like",
+                "method" => "method",
+                "constructor" => "constructor",
+                "property" => "property",
+                "invocation" => "invocation",
+                other => {
+                    return Err(ParseError::Internal(format!(
+                        "unexpected C# node capture {other}"
+                    )))
+                }
+            };
+            captures.push((name, capture.node));
+        }
+    }
+    if cursor.did_exceed_match_limit() {
+        return Err(ParseError::Internal(
+            "C# node query exceeded its match limit".to_string(),
+        ));
+    }
+    Ok(captures)
+}
+
+fn inherited_context(node: Node<'_>, contexts: &HashMap<usize, VisitContext>) -> VisitContext {
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if let Some(context) = contexts.get(&current.id()) {
+            return context.clone();
+        }
+        ancestor = current.parent();
+    }
+    VisitContext::default()
+}
+
+fn node_depth(node: Node<'_>) -> usize {
+    let mut depth = 0;
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        depth += 1;
+        ancestor = current.parent();
+    }
+    depth
 }
 
 #[derive(Debug, Clone)]
@@ -2717,5 +2801,105 @@ public partial class PartialController : ControllerBase
         assert!(anchor_targets(&report).contains(&"aspnetcore.mvc.HttpGet".to_string()));
         assert!(!claims.contains(&"csharp_attribute_binding".to_string()));
         assert!(!claims.contains(&"csharp_controller_identity".to_string()));
+    }
+
+    // Temporary migration differential: the query-driven scanner must produce
+    // exactly the legacy traversal's report. Removed with the legacy traversal
+    // (docs/experiments/declarative-language-pack-spike.md).
+    fn differential_document<'a>(path: &'a str, text: &'a str) -> SourceDocument<'a> {
+        SourceDocument {
+            path,
+            language: Language::CSharp,
+            content_hash: ContentHash::new(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
+            text,
+        }
+    }
+
+    fn legacy_report(path: &str, text: &str) -> Result<ParseReport, ParseError> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .map_err(|error| ParseError::Internal(format!("load C# grammar: {error}")))?;
+        let tree = parser
+            .parse(text, None)
+            .ok_or_else(|| ParseError::Internal("Tree-sitter C# parse failed".to_string()))?;
+        let mut scanner = CSharpTreeScanner::new(differential_document(path, text));
+        scanner.scan_tree_legacy(tree.root_node())?;
+        scanner.finish()
+    }
+
+    fn assert_matches_legacy(path: &str, text: &str) {
+        let current = CSharpSyntaxParser.parse(differential_document(path, text));
+        assert_eq!(current, legacy_report(path, text), "{path}");
+    }
+
+    fn csharp_sources(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        let mut entries = std::fs::read_dir(directory)
+            .expect("read corpus directory")
+            .map(|entry| entry.expect("corpus entry").path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        for entry in entries {
+            if entry.is_dir() {
+                csharp_sources(&entry, found);
+            } else if entry.extension().is_some_and(|extension| extension == "cs") {
+                found.push(entry);
+            }
+        }
+    }
+
+    #[test]
+    fn query_scanner_matches_legacy_traversal_on_fixtures_and_branch_corpus() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures");
+        let mut paths = Vec::new();
+        csharp_sources(&fixtures, &mut paths);
+        assert!(paths.len() >= 10, "fixture corpus shrank");
+        for path in &paths {
+            let text = std::fs::read_to_string(path).expect("read fixture");
+            assert_matches_legacy(&path.to_string_lossy(), &text);
+        }
+        let branches = [
+            "class OnlyClass{}",
+            "namespace Api;\nusing Microsoft.AspNetCore.Mvc;\n[ApiController]\npublic class A : ControllerBase { [HttpGet(\"x\")] public IActionResult Get() => Ok(); }",
+            "using Microsoft.AspNetCore.Mvc;\nnamespace Outer { using Xunit; namespace Inner { public class T { [Fact] public void F() {} [Theory] [MemberData(nameof(Rows))] public void G(int x) {} public static IEnumerable<object[]> Rows => null; class Nested { [Fact] public void H() {} } } } }",
+            "using Microsoft.AspNetCore.Mvc;\n[Route(\"api/[controller]\")]\npublic partial class C : Controller {\n#if DEBUG\n  [HttpPost] public dynamic Post() { dynamic d = 1; return d; }\n#endif\n  public C() {}\n}",
+            "var builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\napp.MapGet(\"/items\", () => 1).WithName(\"x\");\napp.MapPost(path, () => 2);\nother.MapPut(\"/y\", () => 3);\napp.MapControllerRoute(\"default\", \"{controller}\");\napp.Run();",
+            "var app = WebApplication.CreateBuilder(args).Build();\nvar app = Other();\napp.MapDelete(\"/z\", () => 1);",
+            "using Microsoft.EntityFrameworkCore;\npublic class Db : DbContext { public DbSet<Item> Items { get; set; } public DbSet<Order> Orders => Set<Order>(); public int Count { get; } }",
+            "using FluentValidation;\npublic class V : AbstractValidator<Item> { public V() { RuleFor(x => x.Name).NotEmpty(); } }\npublic partial class W : FluentValidation.AbstractValidator<Item> {}",
+            "using Microsoft.VisualStudio.TestTools.UnitTesting;\n[TestClass] public class M { [TestMethod] [DataRow(1)] public void A(int x) {} }\npublic class N { [TestMethod] public void B() {} }",
+            "using NUnit.Framework;\n[TestFixture] public class U { [Test] public void A() {} [TestCase(1)] public void B(int x) {} }\npublic record R(int X); public struct S { public void M() {} } public interface I { void N(); } public enum E { A }",
+            "// using Xunit;\npublic class Lookalike { [Fact] public void F() {} [HttpGet] public void G() {} }\n[ApiController] public class L {}",
+            "[JsonSerializable(typeof(Item))] partial class Ctx : JsonSerializerContext {}\n[GeneratedRegex(\"x\")] private static partial Regex R();",
+            "using Microsoft.AspNetCore.Mvc;\npublic class Broken : ControllerBase { [HttpGet] public IActionResult Get( { return Ok(); }\n class",
+            "using Xunit;\npublic class P { [Theory] [MemberData(nameof(Data), MemberType = typeof(P))] public void T(int x) {}\n#if NET8\n public static TheoryData<int> Data => new();\n#endif\n}",
+            "namespace A.B;\nusing Microsoft.AspNetCore.Mvc;\npublic class G<T> : Microsoft.AspNetCore.Mvc.ControllerBase { [Microsoft.AspNetCore.Mvc.HttpGet(\"{id}\")] public T Get<TKey>(TKey id) { void Local() { app.MapGet(\"/q\", () => 0); } return default; } }",
+        ];
+        for (index, text) in branches.iter().enumerate() {
+            assert_matches_legacy(&format!("branch/{index}.cs"), text);
+        }
+    }
+
+    #[test]
+    #[ignore = "set REPOGRAMMAR_CSHARP_DIFFERENTIAL_CORPUS to a read-only C# source directory"]
+    fn query_scanner_matches_legacy_traversal_on_external_corpus() {
+        let root = std::env::var("REPOGRAMMAR_CSHARP_DIFFERENTIAL_CORPUS")
+            .expect("REPOGRAMMAR_CSHARP_DIFFERENTIAL_CORPUS");
+        let mut paths = Vec::new();
+        csharp_sources(std::path::Path::new(&root), &mut paths);
+        let mut compared = 0;
+        for path in &paths {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            assert_matches_legacy(&path.to_string_lossy(), &text);
+            compared += 1;
+        }
+        eprintln!("compared {compared} of {} C# files", paths.len());
+        assert!(compared > 0);
     }
 }

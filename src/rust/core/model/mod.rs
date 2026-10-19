@@ -5,6 +5,7 @@ pub mod dependency;
 pub mod evidence;
 pub mod family;
 pub mod ir;
+mod language_pack;
 pub mod measurement;
 pub mod provenance;
 pub mod provider;
@@ -27,6 +28,7 @@ pub use family::{
 };
 pub(crate) use family::{ClaimImpact, ResolutionClass};
 pub use ir::{IrEdge, IrEdgeLabel, IrNode, IrNodeId, IrNodeKind};
+pub(crate) use language_pack::{LanguageFamilyPack, RoleFamilyPolicy};
 pub use measurement::{EstimatedPotentialTokenSavings, MeasurementKind, MetricReport};
 pub use provenance::{ContentHash, Provenance, RepositoryRevision};
 pub use provider::{provider_availability, ProviderAvailability, SemanticProviderSlot};

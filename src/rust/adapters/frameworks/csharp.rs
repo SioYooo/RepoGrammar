@@ -5,7 +5,8 @@
 //! generator output, runtime dependency-injection, assembly scanning,
 //! convention routing, or Razor semantics.
 
-use crate::core::model::CodeUnitKind;
+use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
+use crate::core::model::{CodeUnitKind, LanguageFamilyPack, RoleFamilyPolicy, UnknownReasonCode};
 
 pub(crate) const ROLE_ASPNET_CONTROLLER: &str = "framework:aspnetcore.controller";
 pub(crate) const ROLE_ASPNET_CONTROLLER_ACTION: &str = "framework:aspnetcore.controller_action";
@@ -23,22 +24,65 @@ pub(crate) const ASPNET_CONTROLLER_TARGETS: &[&str] = &[
     "aspnetcore.mvc.Controller",
 ];
 
-pub(crate) const ASPNET_CONTROLLER_ACTION_TARGETS: &[&str] = &[
-    "aspnetcore.mvc.HttpGet",
-    "aspnetcore.mvc.HttpPost",
-    "aspnetcore.mvc.HttpPut",
-    "aspnetcore.mvc.HttpDelete",
-    "aspnetcore.mvc.HttpPatch",
-    "aspnetcore.mvc.HttpHead",
-    "aspnetcore.mvc.HttpOptions",
+pub(crate) const ASPNET_MVC_NAMESPACE: &str = "Microsoft.AspNetCore.Mvc";
+pub(crate) const EFCORE_NAMESPACE: &str = "Microsoft.EntityFrameworkCore";
+pub(crate) const FLUENTVALIDATION_NAMESPACE: &str = "FluentValidation";
+pub(crate) const XUNIT_NAMESPACE: &str = "Xunit";
+pub(crate) const NUNIT_NAMESPACE: &str = "NUnit.Framework";
+pub(crate) const MSTEST_NAMESPACE: &str = "Microsoft.VisualStudio.TestTools.UnitTesting";
+
+/// `(attribute simple name, support target, HTTP method token)`; the targets are
+/// the controller-action role's support targets.
+pub(crate) const HTTP_ROUTE_ATTRIBUTES: &[(&str, &str, &str)] = &[
+    ("HttpGet", "aspnetcore.mvc.HttpGet", "GET"),
+    ("HttpPost", "aspnetcore.mvc.HttpPost", "POST"),
+    ("HttpPut", "aspnetcore.mvc.HttpPut", "PUT"),
+    ("HttpDelete", "aspnetcore.mvc.HttpDelete", "DELETE"),
+    ("HttpPatch", "aspnetcore.mvc.HttpPatch", "PATCH"),
+    ("HttpHead", "aspnetcore.mvc.HttpHead", "HEAD"),
+    ("HttpOptions", "aspnetcore.mvc.HttpOptions", "OPTIONS"),
 ];
 
-pub(crate) const ASPNET_MINIMAL_ROUTE_TARGETS: &[&str] = &[
-    "aspnetcore.builder.MapGet",
-    "aspnetcore.builder.MapPost",
-    "aspnetcore.builder.MapPut",
-    "aspnetcore.builder.MapDelete",
-    "aspnetcore.builder.MapPatch",
+/// `(invocation name, support target, HTTP method token)`; the targets are the
+/// minimal-route role's support targets.
+pub(crate) const MINIMAL_API_MAP_METHODS: &[(&str, &str, &str)] = &[
+    ("MapGet", "aspnetcore.builder.MapGet", "GET"),
+    ("MapPost", "aspnetcore.builder.MapPost", "POST"),
+    ("MapPut", "aspnetcore.builder.MapPut", "PUT"),
+    ("MapDelete", "aspnetcore.builder.MapDelete", "DELETE"),
+    ("MapPatch", "aspnetcore.builder.MapPatch", "PATCH"),
+];
+
+/// Convention-based registration calls whose routing stays runtime-defined.
+pub(crate) const CONVENTION_ROUTING_METHODS: &[&str] =
+    &["MapControllerRoute", "MapHub", "MapGrpcService"];
+
+/// Known attribute short names on class-like declarations; a lookalike without
+/// exact using/FQN evidence emits a blocking `csharp_attribute_binding` UNKNOWN.
+pub(crate) const KNOWN_CLASS_ATTRIBUTES: &[(&str, &str)] = &[
+    ("ApiController", ASPNET_MVC_NAMESPACE),
+    ("Route", ASPNET_MVC_NAMESPACE),
+    ("TestFixture", NUNIT_NAMESPACE),
+    ("TestClass", MSTEST_NAMESPACE),
+];
+
+/// Known attribute short names on methods; same lookalike rule as classes.
+pub(crate) const KNOWN_METHOD_ATTRIBUTES: &[(&str, &str)] = &[
+    ("HttpGet", ASPNET_MVC_NAMESPACE),
+    ("HttpPost", ASPNET_MVC_NAMESPACE),
+    ("HttpPut", ASPNET_MVC_NAMESPACE),
+    ("HttpDelete", ASPNET_MVC_NAMESPACE),
+    ("HttpPatch", ASPNET_MVC_NAMESPACE),
+    ("HttpHead", ASPNET_MVC_NAMESPACE),
+    ("HttpOptions", ASPNET_MVC_NAMESPACE),
+    ("Fact", XUNIT_NAMESPACE),
+    ("Theory", XUNIT_NAMESPACE),
+    ("InlineData", XUNIT_NAMESPACE),
+    ("MemberData", XUNIT_NAMESPACE),
+    ("Test", NUNIT_NAMESPACE),
+    ("TestCase", NUNIT_NAMESPACE),
+    ("TestMethod", MSTEST_NAMESPACE),
+    ("DataRow", MSTEST_NAMESPACE),
 ];
 
 pub(crate) const XUNIT_TEST_TARGETS: &[&str] = &["xunit.Fact", "xunit.Theory"];
@@ -124,8 +168,16 @@ pub(crate) fn support_target_is_role_compatible(
 ) -> Option<bool> {
     match framework_role {
         ROLE_ASPNET_CONTROLLER => Some(ASPNET_CONTROLLER_TARGETS.contains(&target)),
-        ROLE_ASPNET_CONTROLLER_ACTION => Some(ASPNET_CONTROLLER_ACTION_TARGETS.contains(&target)),
-        ROLE_ASPNET_MINIMAL_ROUTE => Some(ASPNET_MINIMAL_ROUTE_TARGETS.contains(&target)),
+        ROLE_ASPNET_CONTROLLER_ACTION => Some(
+            HTTP_ROUTE_ATTRIBUTES
+                .iter()
+                .any(|(_, anchor, _)| *anchor == target),
+        ),
+        ROLE_ASPNET_MINIMAL_ROUTE => Some(
+            MINIMAL_API_MAP_METHODS
+                .iter()
+                .any(|(_, anchor, _)| *anchor == target),
+        ),
         ROLE_EFCORE_DB_CONTEXT => Some(target == "efcore.DbContext"),
         ROLE_FLUENTVALIDATION_VALIDATOR => Some(target == "fluentvalidation.AbstractValidator"),
         ROLE_EFCORE_ENTITY_SET => Some(target == "efcore.DbSet"),
@@ -151,3 +203,176 @@ pub(crate) fn support_family(target: &str, framework_role: &str) -> String {
         _ => target.to_string(),
     }
 }
+
+const ACTION_VARIATION: &[(&str, &[&str])] = &[
+    ("csharp_aspnet_route_method", &["http_method:"]),
+    (
+        "csharp_aspnet_route_template_shape",
+        &["route_template_shape:", "class_route_template_shape:"],
+    ),
+    (
+        "csharp_aspnet_action_shape",
+        &["return_shape:", "parameter_shape:"],
+    ),
+];
+const MINIMAL_ROUTE_VARIATION: &[(&str, &[&str])] = &[
+    ("csharp_minimal_route_method", &["http_method:"]),
+    (
+        "csharp_minimal_route_template_shape",
+        &["route_template_shape:"],
+    ),
+];
+const EFCORE_VARIATION: &[(&str, &[&str])] = &[(
+    "csharp_efcore_member_shape",
+    &["efcore_entity_type_shape:", "class_shape:"],
+)];
+const TEST_VARIATION: &[(&str, &[&str])] = &[("csharp_test_data_shape", &["test_data_shape:"])];
+const SUPPORT_FAMILY: &[&str] = &["support_family:"];
+const TEST_ATTRIBUTE: &[&str] = &["test_attribute:"];
+
+const fn support_family_role(
+    role: &'static str,
+    feature: &'static str,
+    variation: &'static [(&'static str, &'static [&'static str])],
+) -> RoleFamilyPolicy {
+    RoleFamilyPolicy {
+        role,
+        feature,
+        variation,
+        equal: SUPPORT_FAMILY,
+        required_equal: &[],
+        characteristic: SUPPORT_FAMILY,
+    }
+}
+
+const fn test_role(role: &'static str, feature: &'static str) -> RoleFamilyPolicy {
+    RoleFamilyPolicy {
+        role,
+        feature,
+        variation: TEST_VARIATION,
+        equal: TEST_ATTRIBUTE,
+        required_equal: &[],
+        characteristic: TEST_ATTRIBUTE,
+    }
+}
+
+fn reason_may_block(reason: UnknownReasonCode) -> bool {
+    match reason {
+        UnknownReasonCode::UnresolvedImport
+        | UnknownReasonCode::MissingProjectConfig
+        | UnknownReasonCode::MissingDependency
+        | UnknownReasonCode::FrameworkMagic
+        | UnknownReasonCode::BuildVariantAmbiguity
+        | UnknownReasonCode::ConflictingFacts
+        | UnknownReasonCode::StaleEvidence => true,
+        UnknownReasonCode::RuntimeDependencyInjection
+        | UnknownReasonCode::DynamicImport
+        | UnknownReasonCode::MonkeyPatch
+        | UnknownReasonCode::PytestFixtureInjection
+        | UnknownReasonCode::MacroOrPreprocessor
+        | UnknownReasonCode::InsufficientSupport => false,
+    }
+}
+
+/// The C# family policy read by the language-neutral family builder.
+pub(crate) static FAMILY_PACK: LanguageFamilyPack = LanguageFamilyPack {
+    language: "csharp",
+    anchor_engine: CSHARP_ANCHOR_ENGINE,
+    anchor_method: CSHARP_ANCHOR_METHOD,
+    derived_support_engine: "repogrammar-csharp-derived",
+    derived_support_method: "bounded_tree_sitter_csharp_anchor_v1",
+    derived_from_anchor: "derived_from=tree_sitter_csharp_structural_anchors",
+    min_family_support: 3,
+    assumption_features: &[
+        ("csharp_anchor_kind=", "anchor_kind:"),
+        ("aspnet_attribute=", "aspnet_attribute:"),
+        ("http_method=", "http_method:"),
+        ("route_template_shape=", "route_template_shape:"),
+        ("class_route_template_shape=", "class_route_template_shape:"),
+        ("test_attribute=", "test_attribute:"),
+        ("test_data_shape=", "test_data_shape:"),
+        ("csharp_visibility_shape=", "visibility_shape:"),
+        ("csharp_class_shape=", "class_shape:"),
+        ("csharp_return_shape=", "return_shape:"),
+        ("csharp_parameter_shape=", "parameter_shape:"),
+        ("efcore_entity_type_shape=", "efcore_entity_type_shape:"),
+    ],
+    roles: &[
+        RoleFamilyPolicy {
+            role: ROLE_ASPNET_CONTROLLER_ACTION,
+            feature: "framework_aspnetcore_controller_action",
+            variation: ACTION_VARIATION,
+            equal: &["anchor_kind:", "aspnet_attribute:"],
+            required_equal: &["http_method:", "route_template_shape:"],
+            characteristic: &[
+                "anchor_kind:",
+                "aspnet_attribute:",
+                "http_method:",
+                "route_template_shape:",
+            ],
+        },
+        RoleFamilyPolicy {
+            role: ROLE_ASPNET_MINIMAL_ROUTE,
+            feature: "framework_aspnetcore_minimal_route",
+            variation: MINIMAL_ROUTE_VARIATION,
+            equal: &[],
+            required_equal: &["http_method:", "route_template_shape:"],
+            characteristic: &["http_method:", "route_template_shape:"],
+        },
+        RoleFamilyPolicy {
+            role: ROLE_ASPNET_CONTROLLER,
+            feature: "framework_aspnetcore_controller",
+            variation: &[("csharp_controller_class_shape", &["class_shape:"])],
+            equal: &["aspnet_attribute:", "class_shape:"],
+            required_equal: &[],
+            characteristic: &["aspnet_attribute:", "class_shape:"],
+        },
+        support_family_role(
+            ROLE_EFCORE_DB_CONTEXT,
+            "framework_efcore_db_context",
+            EFCORE_VARIATION,
+        ),
+        support_family_role(
+            ROLE_EFCORE_ENTITY_SET,
+            "framework_efcore_entity_set",
+            EFCORE_VARIATION,
+        ),
+        support_family_role(
+            ROLE_FLUENTVALIDATION_VALIDATOR,
+            "framework_fluentvalidation_validator",
+            &[],
+        ),
+        test_role(ROLE_XUNIT_TEST, "framework_xunit_test"),
+        test_role(ROLE_NUNIT_TEST, "framework_nunit_test"),
+        test_role(ROLE_MSTEST_TEST, "framework_mstest_test"),
+    ],
+    default_affected_claim: "csharp_family_membership",
+    recovery_scope: "C#",
+    reason_may_block,
+    blocking_claims: &[
+        "csharp_family_membership",
+        "csharp_attribute_binding",
+        "csharp_controller_identity",
+        "csharp_minimal_api_receiver",
+        "csharp_test_class_identity",
+        "csharp_build_variant",
+    ],
+    non_blocking_reasons: &[
+        UnknownReasonCode::RuntimeDependencyInjection,
+        UnknownReasonCode::FrameworkMagic,
+        UnknownReasonCode::MacroOrPreprocessor,
+    ],
+    non_blocking_claims: &[
+        "csharp_di_registration",
+        "csharp_aspnet_filter_pipeline",
+        "csharp_aspnet_route_template",
+        "csharp_aspnet_convention_routing",
+        "csharp_partial_external",
+        "csharp_generated_source",
+        "csharp_dynamic_binding",
+        "csharp_test_member_data",
+    ],
+    role_is_known: framework_role_is_known,
+    support_target_is_role_compatible,
+    support_family,
+};

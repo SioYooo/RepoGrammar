@@ -4,7 +4,6 @@ use crate::adapters::frameworks::rust_general::rust_support_target_is_role_compa
 use crate::adapters::frameworks::{cpp, csharp, java, tsjs};
 use crate::adapters::parsing::ada::aunit::{ADA_ANCHOR_ENGINE, ADA_ANCHOR_METHOD};
 use crate::adapters::parsing::cpp::{CPP_ANCHOR_ENGINE, CPP_ANCHOR_METHOD};
-use crate::adapters::parsing::csharp::{CSHARP_ANCHOR_ENGINE, CSHARP_ANCHOR_METHOD};
 use crate::adapters::parsing::delphi::dunitx::{DELPHI_ANCHOR_ENGINE, DELPHI_ANCHOR_METHOD};
 use crate::adapters::parsing::fortran::testdrive::{FORTRAN_ANCHOR_ENGINE, FORTRAN_ANCHOR_METHOD};
 use crate::adapters::parsing::go::testing::{GO_ANCHOR_ENGINE, GO_ANCHOR_METHOD};
@@ -23,18 +22,17 @@ use crate::adapters::parsing::tsjs::{TSJS_ANCHOR_ENGINE, TSJS_ANCHOR_METHOD};
 use crate::adapters::parsing::visual_basic::mstest::{VB_ANCHOR_ENGINE, VB_ANCHOR_METHOD};
 use crate::application::family::{
     ada_support_target_is_role_compatible, build_family_claims,
-    cpp_support_target_is_role_compatible, csharp_support_target_is_role_compatible,
-    delphi_support_target_is_role_compatible, family_constraint_profile_record,
-    family_eligible_kind, family_storage_records, family_unknown_blocks_claim,
-    fortran_support_target_is_role_compatible, go_support_target_is_role_compatible,
-    java_support_target_is_role_compatible, matlab_support_target_is_role_compatible,
-    min_family_support, php_support_target_is_role_compatible,
-    python_support_target_is_role_compatible, r_support_target_is_role_compatible,
-    ruby_support_target_is_role_compatible, sql_support_target_is_role_compatible,
-    swift_support_target_is_role_compatible, tsjs_support_target_is_role_compatible,
-    vb_support_target_is_role_compatible, ADA_DERIVED_SUPPORT_ENGINE, ADA_DERIVED_SUPPORT_METHOD,
-    CPP_DERIVED_SUPPORT_ENGINE, CPP_DERIVED_SUPPORT_METHOD, CSHARP_DERIVED_SUPPORT_ENGINE,
-    CSHARP_DERIVED_SUPPORT_METHOD, DELPHI_DERIVED_SUPPORT_ENGINE, DELPHI_DERIVED_SUPPORT_METHOD,
+    cpp_support_target_is_role_compatible, delphi_support_target_is_role_compatible,
+    family_constraint_profile_record, family_eligible_kind, family_storage_records,
+    family_unknown_blocks_claim, fortran_support_target_is_role_compatible,
+    go_support_target_is_role_compatible, java_support_target_is_role_compatible,
+    matlab_support_target_is_role_compatible, min_family_support,
+    php_support_target_is_role_compatible, python_support_target_is_role_compatible,
+    r_support_target_is_role_compatible, ruby_support_target_is_role_compatible,
+    sql_support_target_is_role_compatible, swift_support_target_is_role_compatible,
+    tsjs_support_target_is_role_compatible, vb_support_target_is_role_compatible,
+    ADA_DERIVED_SUPPORT_ENGINE, ADA_DERIVED_SUPPORT_METHOD, CPP_DERIVED_SUPPORT_ENGINE,
+    CPP_DERIVED_SUPPORT_METHOD, DELPHI_DERIVED_SUPPORT_ENGINE, DELPHI_DERIVED_SUPPORT_METHOD,
     FORTRAN_DERIVED_SUPPORT_ENGINE, FORTRAN_DERIVED_SUPPORT_METHOD, GO_DERIVED_SUPPORT_ENGINE,
     GO_DERIVED_SUPPORT_METHOD, JAVA_DERIVED_SUPPORT_ENGINE, JAVA_DERIVED_SUPPORT_METHOD,
     MATLAB_DERIVED_SUPPORT_ENGINE, MATLAB_DERIVED_SUPPORT_METHOD, PHP_DERIVED_SUPPORT_ENGINE,
@@ -1889,7 +1887,6 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
         "repogrammar-python-derived"
             | TSJS_DERIVED_SUPPORT_ENGINE
             | JAVA_DERIVED_SUPPORT_ENGINE
-            | CSHARP_DERIVED_SUPPORT_ENGINE
             | CPP_DERIVED_SUPPORT_ENGINE
             | RUST_DERIVED_SUPPORT_ENGINE
             | SQL_DERIVED_SUPPORT_ENGINE
@@ -1903,7 +1900,7 @@ fn is_local_derived_support_record(record: &IndexedSemanticFactRecord) -> bool {
             | RUBY_DERIVED_SUPPORT_ENGINE
             | GO_DERIVED_SUPPORT_ENGINE
             | FORTRAN_DERIVED_SUPPORT_ENGINE
-    )
+    ) || record.origin_engine == csharp::FAMILY_PACK.derived_support_engine
 }
 
 fn is_rust_provider_record(record: &IndexedSemanticFactRecord) -> bool {
@@ -4587,7 +4584,9 @@ fn derive_csharp_framework_support_facts(
         let Some(target) = fact.target.as_ref().map(SymbolId::as_str) else {
             continue;
         };
-        if csharp_support_target_is_role_compatible(target, framework_role) != Some(true) {
+        if (csharp::FAMILY_PACK.support_target_is_role_compatible)(target, framework_role)
+            != Some(true)
+        {
             continue;
         }
         if !seen.insert((unit.id.clone(), target.to_string())) {
@@ -4614,8 +4613,8 @@ fn is_csharp_structural_anchor_fact(fact: &SemanticFact) -> bool {
             | SemanticFactKind::Symbol
             | SemanticFactKind::Type
     ) && fact.certainty == FactCertainty::Structural
-        && fact.origin.engine == CSHARP_ANCHOR_ENGINE
-        && fact.origin.method == CSHARP_ANCHOR_METHOD
+        && fact.origin.engine == csharp::FAMILY_PACK.anchor_engine
+        && fact.origin.method == csharp::FAMILY_PACK.anchor_method
         && fact.target.is_some()
 }
 
@@ -4627,13 +4626,14 @@ fn derived_csharp_framework_support_fact(
     repository_revision: &RepositoryRevision,
     source_fact: &SemanticFact,
 ) -> Result<SemanticFact, RepoGrammarError> {
+    let pack = &csharp::FAMILY_PACK;
     let mut assumptions = vec![
         "provider_resolved=false".to_string(),
-        "derived_from=tree_sitter_csharp_structural_anchors".to_string(),
+        pack.derived_from_anchor.to_string(),
         format!("framework_role={framework_role}"),
         format!(
             "derived_from={}",
-            csharp::support_family(target, framework_role)
+            (pack.support_family)(target, framework_role)
         ),
     ];
     assumptions.extend(
@@ -4641,18 +4641,9 @@ fn derived_csharp_framework_support_fact(
             .assumptions
             .iter()
             .filter(|assumption| {
-                assumption.starts_with("csharp_anchor_kind=")
-                    || assumption.starts_with("aspnet_attribute=")
-                    || assumption.starts_with("http_method=")
-                    || assumption.starts_with("route_template_shape=")
-                    || assumption.starts_with("class_route_template_shape=")
-                    || assumption.starts_with("test_attribute=")
-                    || assumption.starts_with("test_data_shape=")
-                    || assumption.starts_with("csharp_visibility_shape=")
-                    || assumption.starts_with("csharp_class_shape=")
-                    || assumption.starts_with("csharp_return_shape=")
-                    || assumption.starts_with("csharp_parameter_shape=")
-                    || assumption.starts_with("efcore_entity_type_shape=")
+                pack.assumption_features
+                    .iter()
+                    .any(|(prefix, _)| assumption.starts_with(prefix))
             })
             .cloned(),
     );
@@ -4665,8 +4656,8 @@ fn derived_csharp_framework_support_fact(
         target,
         repository_revision,
         DerivedSupportSpec {
-            engine: CSHARP_DERIVED_SUPPORT_ENGINE,
-            method: CSHARP_DERIVED_SUPPORT_METHOD,
+            engine: pack.derived_support_engine,
+            method: pack.derived_support_method,
             note: "bounded C# framework structural role support",
             assumptions,
         },
@@ -11969,8 +11960,8 @@ mod tests {
             ),
             (
                 "csharp",
-                CSHARP_ANCHOR_ENGINE,
-                CSHARP_ANCHOR_METHOD,
+                csharp::FAMILY_PACK.anchor_engine,
+                csharp::FAMILY_PACK.anchor_method,
                 "framework:aspnetcore.controller_action",
                 UnknownReasonCode::UnresolvedImport,
                 "csharp_attribute_binding",
@@ -11978,8 +11969,8 @@ mod tests {
             ),
             (
                 "csharp",
-                CSHARP_ANCHOR_ENGINE,
-                CSHARP_ANCHOR_METHOD,
+                csharp::FAMILY_PACK.anchor_engine,
+                csharp::FAMILY_PACK.anchor_method,
                 "framework:aspnetcore.controller_action",
                 UnknownReasonCode::FrameworkMagic,
                 "csharp_aspnet_route_template",
@@ -12393,9 +12384,9 @@ mod tests {
             subject: unit.id.clone(),
             target: Some(SymbolId::new(target).expect("valid target")),
             origin: FactOrigin {
-                engine: CSHARP_ANCHOR_ENGINE.to_string(),
+                engine: csharp::FAMILY_PACK.anchor_engine.to_string(),
                 engine_version: env!("CARGO_PKG_VERSION").to_string(),
-                method: CSHARP_ANCHOR_METHOD.to_string(),
+                method: csharp::FAMILY_PACK.anchor_method.to_string(),
             },
             certainty: FactCertainty::Structural,
             evidence: Evidence::new(
@@ -12430,9 +12421,9 @@ mod tests {
             subject: unit.id.clone(),
             target: Some(SymbolId::new(reason.as_protocol_str()).expect("valid reason")),
             origin: FactOrigin {
-                engine: CSHARP_ANCHOR_ENGINE.to_string(),
+                engine: csharp::FAMILY_PACK.anchor_engine.to_string(),
                 engine_version: env!("CARGO_PKG_VERSION").to_string(),
-                method: CSHARP_ANCHOR_METHOD.to_string(),
+                method: csharp::FAMILY_PACK.anchor_method.to_string(),
             },
             certainty: FactCertainty::Unknown,
             evidence: Evidence::new(
@@ -12487,8 +12478,8 @@ mod tests {
         assert_eq!(derived.len(), 3);
         assert!(derived.iter().all(|fact| {
             fact.certainty == FactCertainty::DataflowDerived
-                && fact.origin.engine == CSHARP_DERIVED_SUPPORT_ENGINE
-                && fact.origin.method == CSHARP_DERIVED_SUPPORT_METHOD
+                && fact.origin.engine == csharp::FAMILY_PACK.derived_support_engine
+                && fact.origin.method == csharp::FAMILY_PACK.derived_support_method
                 && fact.assumptions.iter().any(|assumption| {
                     assumption == "derived_from=tree_sitter_csharp_structural_anchors"
                 })
