@@ -152,6 +152,82 @@ impl ImportScope {
     }
 }
 
+/// What binds a declaration to a framework role.
+#[derive(Debug)]
+pub(crate) enum RoleEvidence {
+    /// An exactly bound annotation (attribute, decorator).
+    Annotation {
+        name: &'static str,
+        namespace: &'static str,
+    },
+    /// An exactly bound base type.
+    BaseType {
+        name: &'static str,
+        namespace: &'static str,
+    },
+}
+
+impl RoleEvidence {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Annotation { name, .. } | Self::BaseType { name, .. } => name,
+        }
+    }
+}
+
+/// One framework role a declaration may take. Rows are tried in order and the
+/// first match wins, so row order is the lane's role precedence.
+#[derive(Debug)]
+pub(crate) struct RoleRow<R: 'static> {
+    /// The lane's description of the role (unit kind, assumptions, UNKNOWNs).
+    pub role: R,
+    /// Declaration node kinds the role applies to; empty means any.
+    pub declaration_kinds: &'static [&'static str],
+    /// Alternative evidence in precedence order, each with the target it proves.
+    pub evidence: &'static [(RoleEvidence, &'static str)],
+}
+
+/// The row a declaration matched, with the target and evidence name it proved.
+pub(crate) struct RoleMatch<'r, R: 'static> {
+    pub row: &'r RoleRow<R>,
+    pub target: &'static str,
+    pub evidence: &'static str,
+}
+
+impl ImportScope {
+    /// The first row whose evidence binds exactly on this declaration.
+    pub(crate) fn first_role<'r, R>(
+        &self,
+        rows: &'r [RoleRow<R>],
+        declaration_kind: &str,
+        annotations: (&BindingSpec, &[Annotation]),
+        base_types: (&BindingSpec, &[String]),
+    ) -> Option<RoleMatch<'r, R>> {
+        rows.iter()
+            .filter(|row| {
+                row.declaration_kinds.is_empty()
+                    || row.declaration_kinds.contains(&declaration_kind)
+            })
+            .find_map(|row| {
+                row.evidence.iter().find_map(|(evidence, target)| {
+                    let bound = match evidence {
+                        RoleEvidence::Annotation { name, namespace } => self
+                            .exact_annotation(annotations.0, annotations.1, name, namespace)
+                            .is_some(),
+                        RoleEvidence::BaseType { name, namespace } => {
+                            self.any_denotes(base_types.0, base_types.1, name, namespace)
+                        }
+                    };
+                    bound.then_some(RoleMatch {
+                        row,
+                        target,
+                        evidence: evidence.name(),
+                    })
+                })
+            })
+    }
+}
+
 /// How a lane writes a namespace-opening import directive.
 #[derive(Debug)]
 pub(crate) struct DirectiveSpec {
@@ -409,5 +485,73 @@ mod tests {
                 "{excluded}"
             );
         }
+    }
+
+    #[test]
+    fn the_first_bound_row_and_evidence_win() {
+        const ROWS: &[RoleRow<&str>] = &[
+            RoleRow {
+                role: "controller",
+                declaration_kinds: &[],
+                evidence: &[
+                    (
+                        RoleEvidence::Annotation {
+                            name: "ApiController",
+                            namespace: "Web.Mvc",
+                        },
+                        "api",
+                    ),
+                    (
+                        RoleEvidence::BaseType {
+                            name: "Controller",
+                            namespace: "Web.Mvc",
+                        },
+                        "base",
+                    ),
+                ],
+            },
+            RoleRow {
+                role: "context",
+                declaration_kinds: &["class_declaration"],
+                evidence: &[(
+                    RoleEvidence::BaseType {
+                        name: "DbContext",
+                        namespace: "Data",
+                    },
+                    "db",
+                )],
+            },
+        ];
+        let annotation = |name: &str| Annotation {
+            name: name.to_string(),
+            arguments: None,
+            parse_degraded: false,
+        };
+        let opened = scope_opening("Web.Mvc");
+        let role = |kind: &str, annotations: &[Annotation], bases: &[&str]| {
+            let bases = bases.iter().map(ToString::to_string).collect::<Vec<_>>();
+            opened
+                .first_role(ROWS, kind, (&DOTTED, annotations), (&TYPES, &bases))
+                .map(|found| (found.row.role, found.target, found.evidence))
+        };
+        let api = [annotation("ApiController")];
+        assert_eq!(
+            role(
+                "struct_declaration",
+                &api,
+                &["Controller", "Data.DbContext"]
+            ),
+            Some(("controller", "api", "ApiController"))
+        );
+        assert_eq!(
+            role("class_declaration", &[], &["Controller<T>"]),
+            Some(("controller", "base", "Controller"))
+        );
+        assert_eq!(
+            role("class_declaration", &[], &["Data.DbContext"]),
+            Some(("context", "db", "DbContext"))
+        );
+        assert_eq!(role("record_declaration", &[], &["Data.DbContext"]), None);
+        assert_eq!(role("class_declaration", &[], &["DbContext"]), None);
     }
 }

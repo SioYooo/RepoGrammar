@@ -6,7 +6,10 @@
 //! xUnit/NUnit/MSTest anchors, and typed UNKNOWN facts for every runtime,
 //! generated, or build-variant semantic that remains unresolved.
 
-use super::binding::{self, Annotation, AnnotationSpec, BindingSpec, DirectiveSpec, ImportScope};
+use super::binding::{
+    self, Annotation, AnnotationSpec, BindingSpec, DirectiveSpec, ImportScope, RoleEvidence,
+    RoleRow,
+};
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::adapters::frameworks::csharp::{
     ASPNET_MVC_NAMESPACE, CONVENTION_ROUTING_METHODS, EFCORE_NAMESPACE, FLUENTVALIDATION_NAMESPACE,
@@ -62,6 +65,186 @@ const ATTRIBUTE_LISTS: AnnotationSpec = AnnotationSpec {
     name_field: "name",
     arguments_kind: "attribute_argument_list",
 };
+
+/// What an anchored C# class role emits besides its unit kind.
+#[derive(Debug)]
+struct ClassRole {
+    kind: CodeUnitKind,
+    anchor_kind: &'static str,
+    note: &'static str,
+    /// Whether the anchor names its evidence and the class route template, as
+    /// ASP.NET Core controllers do.
+    names_route_evidence: bool,
+    unknowns: &'static [RoleUnknown],
+    context: ClassContext,
+}
+
+/// A typed UNKNOWN every anchor of a role carries.
+#[derive(Debug)]
+struct RoleUnknown {
+    reason: UnknownReasonCode,
+    claim: &'static str,
+    kind: &'static str,
+    note: &'static str,
+}
+
+/// The context a class role opens for its members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassContext {
+    AspNetController,
+    EfCoreDbContext,
+    Plain,
+}
+
+/// C# class roles in precedence order. One class never claims two roles: a
+/// unit holding two is dropped from family support silently instead of
+/// reporting a conflict.
+const CLASS_ROLES: &[RoleRow<ClassRole>] = &[
+    RoleRow {
+        role: ClassRole {
+            kind: CodeUnitKind::AspNetController,
+            anchor_kind: "aspnet_controller",
+            note: "bounded C# ASP.NET Core controller anchor",
+            names_route_evidence: true,
+            unknowns: &[
+                RoleUnknown {
+                    reason: UnknownReasonCode::RuntimeDependencyInjection,
+                    claim: "csharp_di_registration",
+                    kind: "aspnet_runtime_dependency_injection",
+                    note: "ASP.NET Core dependency injection and assembly scanning are runtime behavior",
+                },
+                RoleUnknown {
+                    reason: UnknownReasonCode::FrameworkMagic,
+                    claim: "csharp_aspnet_filter_pipeline",
+                    kind: "aspnet_filter_pipeline",
+                    note: "ASP.NET Core middleware and filter pipeline semantics are runtime behavior",
+                },
+            ],
+            context: ClassContext::AspNetController,
+        },
+        declaration_kinds: &[],
+        evidence: &[
+            (
+                RoleEvidence::Annotation {
+                    name: "ApiController",
+                    namespace: ASPNET_MVC_NAMESPACE,
+                },
+                "aspnetcore.mvc.ApiController",
+            ),
+            (
+                RoleEvidence::BaseType {
+                    name: "ControllerBase",
+                    namespace: ASPNET_MVC_NAMESPACE,
+                },
+                "aspnetcore.mvc.ControllerBase",
+            ),
+            (
+                RoleEvidence::BaseType {
+                    name: "Controller",
+                    namespace: ASPNET_MVC_NAMESPACE,
+                },
+                "aspnetcore.mvc.Controller",
+            ),
+        ],
+    },
+    RoleRow {
+        role: ClassRole {
+            kind: CodeUnitKind::EfCoreDbContext,
+            anchor_kind: "efcore_db_context",
+            note: "bounded C# EF Core DbContext anchor",
+            names_route_evidence: false,
+            unknowns: &[],
+            context: ClassContext::EfCoreDbContext,
+        },
+        declaration_kinds: &["class_declaration"],
+        evidence: &[(
+            RoleEvidence::BaseType {
+                name: "DbContext",
+                namespace: EFCORE_NAMESPACE,
+            },
+            "efcore.DbContext",
+        )],
+    },
+    RoleRow {
+        role: ClassRole {
+            kind: CodeUnitKind::FluentValidationValidator,
+            anchor_kind: "fluentvalidation_validator",
+            note: "bounded C# FluentValidation validator anchor",
+            names_route_evidence: false,
+            unknowns: &[RoleUnknown {
+                reason: UnknownReasonCode::FrameworkMagic,
+                claim: "csharp_fluentvalidation_rule_chain",
+                kind: "fluentvalidation_rule_chain",
+                note: "FluentValidation rule builder chains and validator resolution are runtime behavior",
+            }],
+            context: ClassContext::Plain,
+        },
+        declaration_kinds: &["class_declaration"],
+        evidence: &[(
+            RoleEvidence::BaseType {
+                name: "AbstractValidator",
+                namespace: FLUENTVALIDATION_NAMESPACE,
+            },
+            "fluentvalidation.AbstractValidator",
+        )],
+    },
+];
+
+/// C# test method roles in precedence order; within a row the first evidence
+/// wins, so `Theory` outranks `Fact` and `TestCase` outranks `Test`.
+const TEST_ROLES: &[RoleRow<CodeUnitKind>] = &[
+    RoleRow {
+        role: CodeUnitKind::XunitTestMethod,
+        declaration_kinds: &[],
+        evidence: &[
+            (
+                RoleEvidence::Annotation {
+                    name: "Theory",
+                    namespace: XUNIT_NAMESPACE,
+                },
+                "xunit.Theory",
+            ),
+            (
+                RoleEvidence::Annotation {
+                    name: "Fact",
+                    namespace: XUNIT_NAMESPACE,
+                },
+                "xunit.Fact",
+            ),
+        ],
+    },
+    RoleRow {
+        role: CodeUnitKind::NunitTestMethod,
+        declaration_kinds: &[],
+        evidence: &[
+            (
+                RoleEvidence::Annotation {
+                    name: "TestCase",
+                    namespace: NUNIT_NAMESPACE,
+                },
+                "nunit.framework.TestCase",
+            ),
+            (
+                RoleEvidence::Annotation {
+                    name: "Test",
+                    namespace: NUNIT_NAMESPACE,
+                },
+                "nunit.framework.Test",
+            ),
+        ],
+    },
+    RoleRow {
+        role: CodeUnitKind::MstestTestMethod,
+        declaration_kinds: &[],
+        evidence: &[(
+            RoleEvidence::Annotation {
+                name: "TestMethod",
+                namespace: MSTEST_NAMESPACE,
+            },
+            "mstest.unittesting.TestMethod",
+        )],
+    },
+];
 
 /// Tree-sitter query selecting every node the scanner handles.
 const NODE_QUERY: &str = include_str!("csharp/nodes.scm");
@@ -283,139 +466,52 @@ impl<'a> CSharpTreeScanner<'a> {
             .map(|attribute| route_template_shape(attribute.arguments.as_deref()))
             .unwrap_or("none");
 
-        let controller_target = if context
-            .usings
-            .exact_annotation(
-                &ATTRIBUTE_NAMES,
-                &attributes,
-                "ApiController",
-                ASPNET_MVC_NAMESPACE,
-            )
-            .is_some()
-        {
-            Some(("aspnetcore.mvc.ApiController", "ApiController"))
-        } else if context.usings.any_denotes(
-            &TYPE_NAMES,
-            &bases,
-            "ControllerBase",
-            ASPNET_MVC_NAMESPACE,
-        ) {
-            Some(("aspnetcore.mvc.ControllerBase", "ControllerBase"))
-        } else if context.usings.any_denotes(
-            &TYPE_NAMES,
-            &bases,
-            "Controller",
-            ASPNET_MVC_NAMESPACE,
-        ) {
-            Some(("aspnetcore.mvc.Controller", "Controller"))
-        } else {
-            None
-        };
-        let db_context = controller_target.is_none()
-            && node.kind() == "class_declaration"
-            && context
-                .usings
-                .any_denotes(&TYPE_NAMES, &bases, "DbContext", EFCORE_NAMESPACE);
-
-        // Ordered after the ASP.NET and EF Core arms so one class never claims
-        // two framework roles: a unit holding two is dropped from family
-        // support silently instead of reporting a conflict.
-        let fluent_validator = controller_target.is_none()
-            && !db_context
-            && node.kind() == "class_declaration"
-            && context.usings.any_denotes(
-                &TYPE_NAMES,
-                &bases,
-                "AbstractValidator",
-                FLUENTVALIDATION_NAMESPACE,
-            );
-
-        let kind = if controller_target.is_some() {
-            CodeUnitKind::AspNetController
-        } else if db_context {
-            CodeUnitKind::EfCoreDbContext
-        } else if fluent_validator {
-            CodeUnitKind::FluentValidationValidator
-        } else {
-            CodeUnitKind::Class
-        };
+        let role = context.usings.first_role(
+            CLASS_ROLES,
+            node.kind(),
+            (&ATTRIBUTE_NAMES, &attributes),
+            (&TYPE_NAMES, &bases),
+        );
+        let kind = role
+            .as_ref()
+            .map_or(CodeUnitKind::Class, |role| role.row.role.kind.clone());
         let unit = self.add_named_node_unit(node, kind, "class")?;
         let class_shape = csharp_class_shape(node.kind(), &modifiers);
         let visibility = csharp_visibility_shape(&modifiers);
 
-        if let Some((target, anchor_attribute)) = controller_target {
+        if let Some(role) = &role {
+            let class_role = &role.row.role;
+            let mut assumptions = vec![
+                "provider_resolved=false".to_string(),
+                format!("csharp_anchor_kind={}", class_role.anchor_kind),
+            ];
+            if class_role.names_route_evidence {
+                assumptions.push(format!("aspnet_attribute={}", role.evidence));
+                assumptions.push(format!(
+                    "class_route_template_shape={class_route_template_shape}"
+                ));
+            }
+            assumptions.push(format!("csharp_visibility_shape={visibility}"));
+            assumptions.push(format!("csharp_class_shape={class_shape}"));
             self.semantic_facts.push(structural_anchor_fact(
                 &self.document,
                 &unit,
                 SemanticFactKind::Type,
-                target,
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "csharp_anchor_kind=aspnet_controller".to_string(),
-                    format!("aspnet_attribute={anchor_attribute}"),
-                    format!("class_route_template_shape={class_route_template_shape}"),
-                    format!("csharp_visibility_shape={visibility}"),
-                    format!("csharp_class_shape={class_shape}"),
-                ],
-                "bounded C# ASP.NET Core controller anchor",
+                role.target,
+                assumptions,
+                class_role.note,
             )?);
-            self.semantic_facts.push(unknown_fact(
-                &self.document,
-                &unit,
-                UnknownReasonCode::RuntimeDependencyInjection,
-                "csharp_di_registration",
-                "aspnet_runtime_dependency_injection",
-                "ASP.NET Core dependency injection and assembly scanning are runtime behavior",
-                Vec::new(),
-            )?);
-            self.semantic_facts.push(unknown_fact(
-                &self.document,
-                &unit,
-                UnknownReasonCode::FrameworkMagic,
-                "csharp_aspnet_filter_pipeline",
-                "aspnet_filter_pipeline",
-                "ASP.NET Core middleware and filter pipeline semantics are runtime behavior",
-                Vec::new(),
-            )?);
-            self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
-        } else if db_context {
-            self.semantic_facts.push(structural_anchor_fact(
-                &self.document,
-                &unit,
-                SemanticFactKind::Type,
-                "efcore.DbContext",
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "csharp_anchor_kind=efcore_db_context".to_string(),
-                    format!("csharp_visibility_shape={visibility}"),
-                    format!("csharp_class_shape={class_shape}"),
-                ],
-                "bounded C# EF Core DbContext anchor",
-            )?);
-            self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
-        } else if fluent_validator {
-            self.semantic_facts.push(structural_anchor_fact(
-                &self.document,
-                &unit,
-                SemanticFactKind::Type,
-                "fluentvalidation.AbstractValidator",
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "csharp_anchor_kind=fluentvalidation_validator".to_string(),
-                    format!("csharp_visibility_shape={visibility}"),
-                    format!("csharp_class_shape={class_shape}"),
-                ],
-                "bounded C# FluentValidation validator anchor",
-            )?);
-            self.semantic_facts.push(unknown_fact(
-                &self.document,
-                &unit,
-                UnknownReasonCode::FrameworkMagic,
-                "csharp_fluentvalidation_rule_chain",
-                "fluentvalidation_rule_chain",
-                "FluentValidation rule builder chains and validator resolution are runtime behavior",
-                Vec::new(),
-            )?);
+            for unknown in class_role.unknowns {
+                self.semantic_facts.push(unknown_fact(
+                    &self.document,
+                    &unit,
+                    unknown.reason,
+                    unknown.claim,
+                    unknown.kind,
+                    unknown.note,
+                    Vec::new(),
+                )?);
+            }
             self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
         } else if context.usings.has_unbound_lookalike(
             &ATTRIBUTE_NAMES,
@@ -447,10 +543,11 @@ impl<'a> CSharpTreeScanner<'a> {
             )?);
         }
 
+        let context_role = role.as_ref().map(|role| role.row.role.context);
         Ok(VisitContext {
-            in_aspnet_controller: controller_target.is_some(),
+            in_aspnet_controller: context_role == Some(ClassContext::AspNetController),
             class_route_template_shape,
-            in_efcore_db_context: db_context,
+            in_efcore_db_context: context_role == Some(ClassContext::EfCoreDbContext),
             in_mstest_test_class: context
                 .usings
                 .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "TestClass", MSTEST_NAMESPACE)
@@ -484,7 +581,7 @@ impl<'a> CSharpTreeScanner<'a> {
                     })
             });
         let test = if route.is_none() {
-            self.test_method_anchor(&attributes, context)
+            self.test_method_anchor(node.kind(), &attributes, context)
         } else {
             None
         };
@@ -630,114 +727,113 @@ impl<'a> CSharpTreeScanner<'a> {
 
     fn test_method_anchor(
         &self,
+        declaration_kind: &str,
         attributes: &[Annotation],
         context: &VisitContext,
     ) -> Option<TestMethodAnchor> {
+        let role = context.usings.first_role(
+            TEST_ROLES,
+            declaration_kind,
+            (&ATTRIBUTE_NAMES, attributes),
+            (&TYPE_NAMES, &[]),
+        )?;
         let exact = |simple: &str, namespace: &str| {
             context
                 .usings
                 .exact_annotation(&ATTRIBUTE_NAMES, attributes, simple, namespace)
                 .is_some()
         };
-        if exact("Fact", XUNIT_NAMESPACE) || exact("Theory", XUNIT_NAMESPACE) {
-            let theory = exact("Theory", XUNIT_NAMESPACE);
-            let member_data_attributes = attributes
-                .iter()
-                .filter(|attribute| {
-                    context.usings.annotation_is_exact(
-                        &ATTRIBUTE_NAMES,
-                        attribute,
-                        "MemberData",
-                        XUNIT_NAMESPACE,
-                    )
-                })
-                .collect::<Vec<_>>();
-            let has_non_exact_member_data = attributes.iter().any(|attribute| {
-                ATTRIBUTE_NAMES.looks_like(&attribute.name, "MemberData")
-                    && !context.usings.annotation_is_exact(
-                        &ATTRIBUTE_NAMES,
-                        attribute,
-                        "MemberData",
-                        XUNIT_NAMESPACE,
-                    )
-            });
-            let member_data = if theory {
-                if has_non_exact_member_data {
-                    test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
-                        kind: "xunit_member_data_unresolved_attribute",
-                        note: "A MemberData-like attribute lacks an exact same-file using or FQN",
+        let (data_shape, member_data, blocked_claim) = match role.row.role {
+            CodeUnitKind::XunitTestMethod => {
+                let theory = role.evidence == "Theory";
+                let member_data_attributes = attributes
+                    .iter()
+                    .filter(|attribute| {
+                        context.usings.annotation_is_exact(
+                            &ATTRIBUTE_NAMES,
+                            attribute,
+                            "MemberData",
+                            XUNIT_NAMESPACE,
+                        )
                     })
+                    .collect::<Vec<_>>();
+                let has_non_exact_member_data = attributes.iter().any(|attribute| {
+                    ATTRIBUTE_NAMES.looks_like(&attribute.name, "MemberData")
+                        && !context.usings.annotation_is_exact(
+                            &ATTRIBUTE_NAMES,
+                            attribute,
+                            "MemberData",
+                            XUNIT_NAMESPACE,
+                        )
+                });
+                let member_data = if theory {
+                    if has_non_exact_member_data {
+                        test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
+                            kind: "xunit_member_data_unresolved_attribute",
+                            note:
+                                "A MemberData-like attribute lacks an exact same-file using or FQN",
+                        })
+                    } else {
+                        test_data::resolve(
+                            member_data_attributes
+                                .iter()
+                                .map(|attribute| attribute.arguments.as_deref()),
+                            context.xunit_member_data_scope.as_ref(),
+                        )
+                    }
+                } else if member_data_attributes.is_empty() && !has_non_exact_member_data {
+                    test_data::MemberDataResolution::Absent
                 } else {
-                    test_data::resolve(
-                        member_data_attributes
-                            .iter()
-                            .map(|attribute| attribute.arguments.as_deref()),
-                        context.xunit_member_data_scope.as_ref(),
-                    )
-                }
-            } else if member_data_attributes.is_empty() && !has_non_exact_member_data {
-                test_data::MemberDataResolution::Absent
-            } else {
-                test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
-                    kind: "xunit_member_data_requires_theory",
-                    note: "xUnit MemberData is only valid on a Theory test",
-                })
-            };
-            return Some(TestMethodAnchor {
-                unit_kind: CodeUnitKind::XunitTestMethod,
-                target: if theory { "xunit.Theory" } else { "xunit.Fact" },
-                attribute: if theory { "Theory" } else { "Fact" },
-                data_shape: if theory {
+                    test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
+                        kind: "xunit_member_data_requires_theory",
+                        note: "xUnit MemberData is only valid on a Theory test",
+                    })
+                };
+                let data_shape = if theory {
                     member_data.data_shape()
                 } else {
                     "fact"
-                },
-                member_data,
-                blocked_claim: None,
-            });
-        }
-        if exact("Test", NUNIT_NAMESPACE) || exact("TestCase", NUNIT_NAMESPACE) {
-            let test_case = exact("TestCase", NUNIT_NAMESPACE);
-            return Some(TestMethodAnchor {
-                unit_kind: CodeUnitKind::NunitTestMethod,
-                target: if test_case {
-                    "nunit.framework.TestCase"
-                } else {
-                    "nunit.framework.Test"
-                },
-                attribute: if test_case { "TestCase" } else { "Test" },
-                data_shape: if test_case { "test_case" } else { "test" },
-                member_data: test_data::MemberDataResolution::Absent,
-                blocked_claim: None,
-            });
-        }
-        if exact("TestMethod", MSTEST_NAMESPACE) {
-            if !context.in_mstest_test_class {
-                return Some(TestMethodAnchor {
-                    unit_kind: CodeUnitKind::MstestTestMethod,
-                    target: "mstest.unittesting.TestMethod",
-                    attribute: "TestMethod",
-                    data_shape: "none",
-                    member_data: test_data::MemberDataResolution::Absent,
-                    blocked_claim: Some((
-                        UnknownReasonCode::FrameworkMagic,
-                        "csharp_test_class_identity",
-                        "mstest_method_without_test_class",
-                        "MSTest [TestMethod] appeared outside an exact [TestClass] class",
-                    )),
-                });
+                };
+                (data_shape, member_data, None)
             }
-            let data_row = exact("DataRow", MSTEST_NAMESPACE);
-            return Some(TestMethodAnchor {
-                unit_kind: CodeUnitKind::MstestTestMethod,
-                target: "mstest.unittesting.TestMethod",
-                attribute: "TestMethod",
-                data_shape: if data_row { "data_row" } else { "none" },
-                member_data: test_data::MemberDataResolution::Absent,
-                blocked_claim: None,
-            });
-        }
-        None
+            CodeUnitKind::NunitTestMethod => (
+                if role.evidence == "TestCase" {
+                    "test_case"
+                } else {
+                    "test"
+                },
+                test_data::MemberDataResolution::Absent,
+                None,
+            ),
+            CodeUnitKind::MstestTestMethod if !context.in_mstest_test_class => (
+                "none",
+                test_data::MemberDataResolution::Absent,
+                Some((
+                    UnknownReasonCode::FrameworkMagic,
+                    "csharp_test_class_identity",
+                    "mstest_method_without_test_class",
+                    "MSTest [TestMethod] appeared outside an exact [TestClass] class",
+                )),
+            ),
+            CodeUnitKind::MstestTestMethod => (
+                if exact("DataRow", MSTEST_NAMESPACE) {
+                    "data_row"
+                } else {
+                    "none"
+                },
+                test_data::MemberDataResolution::Absent,
+                None,
+            ),
+            _ => return None,
+        };
+        Some(TestMethodAnchor {
+            unit_kind: role.row.role.clone(),
+            target: role.target,
+            attribute: role.evidence,
+            data_shape,
+            member_data,
+            blocked_claim,
+        })
     }
 
     fn xunit_member_data_scope(
