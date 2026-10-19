@@ -14,6 +14,10 @@
 //! processor, repository code, or a child process. ADR-0034's execution
 //! prohibitions all name running Fortran tooling, and nothing runs.
 //!
+//! The declaration structure is read from the pinned Tree-sitter Fortran
+//! grammar (ADR-0058); the ADR-0051 lexer stays the lexical-subset gate and
+//! every refusal class is reproduced from the token stream or the tree.
+//!
 //! Outside the declared subset the parser abstains for the whole file: it
 //! never guesses, never recovers, and never resynchronizes past a refusal.
 //! Input is untrusted, so bytes, block depth, module nesting, and unit counts
@@ -28,7 +32,9 @@
 //! replacement fact discharges the same obligation.
 
 use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
-use super::free_form::{self, ident_is, lower, LexAbstention, Token, TokenKind};
+#[cfg(test)]
+use super::free_form::lower;
+use super::free_form::{self, ident_is, LexAbstention, Token, TokenKind};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -39,6 +45,7 @@ use crate::ports::parser::{
     SourceDocument, SourceParseOutput, SourceParser,
 };
 use std::collections::BTreeMap;
+use tree_sitter::{Node, Parser as TsParser};
 
 pub const FORTRAN_ANCHOR_ENGINE: &str = "repogrammar-fortran-testdrive-parser";
 pub const FORTRAN_ANCHOR_METHOD: &str = "bounded_fortran_testdrive_v1";
@@ -270,6 +277,15 @@ impl SourceParser for FortranTestDriveParser {
 }
 
 pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError> {
+    parse_output_with(document, parse_tokens)
+}
+
+/// The syntax layer is injected so the ADR-0058 differential can run the
+/// retained legacy parser through the identical lexical gate and fact builder.
+fn parse_output_with(
+    document: SourceDocument<'_>,
+    parse_syntax: fn(&str, &[Token]) -> Result<FileParse, ParseError>,
+) -> Result<SourceParseOutput, ParseError> {
     if document.language != Language::Fortran || !is_free_form_fortran_path(document.path) {
         return Err(ParseError::UnsupportedLanguage);
     }
@@ -327,7 +343,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             }),
             ..FileParse::default()
         },
-        None => parse_tokens(document.text, &tokens),
+        None => parse_syntax(document.text, &tokens)?,
     };
 
     if let Some(kind) = parsed.abstention {
@@ -524,6 +540,7 @@ impl AbstainKind {
     }
 }
 
+#[cfg(test)]
 type Parsed<T> = Result<T, AbstainKind>;
 
 /// The scoping unit a subroutine is declared in. Only module subprograms and
@@ -546,25 +563,16 @@ struct DeclInfo {
     other_attr: bool,
 }
 
-struct Parser<'a> {
-    text: &'a str,
-    tokens: Vec<Token>,
-    position: usize,
-}
-
-fn parse_tokens(text: &str, tokens: &[Token]) -> FileParse {
-    let mut parser = Parser {
-        text,
-        tokens: tokens.to_vec(),
-        position: 0,
-    };
-    let mut result = FileParse::default();
-    if let Err(kind) = parser.parse_program_units(&mut result) {
-        result.anchors.clear();
-        result.test_shape_without_use = false;
-        result.abstention = Some(kind);
-    }
-    result
+fn parse_tokens(text: &str, tokens: &[Token]) -> Result<FileParse, ParseError> {
+    let source = grammar_source(text, tokens);
+    let mut parser = TsParser::new();
+    parser
+        .set_language(&tree_sitter_fortran::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load Fortran grammar: {error}")))?;
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter Fortran parse failed".to_string()))?;
+    Ok(read_file(&source, tokens, tree.root_node()))
 }
 
 /// Statement keywords that open a block construct and therefore mark the start
@@ -580,7 +588,824 @@ const BODY_OPENER_KEYWORDS: [&str; 8] = [
     "critical",
 ];
 
-impl<'a> Parser<'a> {
+/// Tree node kinds that open a nested construct counted against
+/// [`MAX_BLOCK_DEPTH`]. `if`, `where`, and `forall` count only in their block
+/// form, which is the form that owns an `end_*_statement` child.
+const BLOCK_NODE_KINDS: [&str; 10] = [
+    "subroutine",
+    "function",
+    "interface",
+    "derived_type_definition",
+    "do_loop",
+    "select_case_statement",
+    "select_type_statement",
+    "associate_statement",
+    "block_construct",
+    "coarray_critical_statement",
+];
+const BLOCK_FORM_KINDS: [&str; 3] = ["if_statement", "where_statement", "forall_statement"];
+
+/// True for each token that begins a statement: the first token, and the token
+/// after a newline or `;` at parenthesis depth zero.
+fn statement_starts(tokens: &[Token]) -> Vec<bool> {
+    let mut starts = Vec::with_capacity(tokens.len());
+    let mut at_start = true;
+    let mut paren_depth = 0usize;
+    for token in tokens {
+        starts.push(at_start);
+        match token.kind {
+            TokenKind::Newline | TokenKind::Semicolon if paren_depth == 0 => at_start = true,
+            TokenKind::LParen => {
+                paren_depth += 1;
+                at_start = false;
+            }
+            TokenKind::RParen => {
+                paren_depth = paren_depth.saturating_sub(1);
+                at_start = false;
+            }
+            _ => at_start = false,
+        }
+    }
+    starts
+}
+
+/// Same-length text handed to the grammar. The grammar cannot read three
+/// spellings the ADR-0051 lexical subset admits, so each is rewritten in place
+/// without moving any byte offset: a name or number split across a `&`
+/// continuation is glued into one token, an unterminated quoted literal is
+/// closed at its line end, and the `abstract` of `abstract interface` is
+/// blanked. Fact ranges always come from the lexer tokens, never from here.
+fn grammar_source(text: &str, tokens: &[Token]) -> String {
+    let bytes = text.as_bytes();
+    let mut out = bytes.to_vec();
+    let starts = statement_starts(tokens);
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            TokenKind::Ident | TokenKind::Number
+                if bytes[token.start..token.end].contains(&b'&') =>
+            {
+                let mut glued = Vec::with_capacity(token.end - token.start);
+                let mut cursor = token.start;
+                while cursor < token.end {
+                    match free_form::continuation_end(bytes, cursor) {
+                        Some(resume) if bytes[cursor] == b'&' => cursor = resume,
+                        _ => {
+                            glued.push(bytes[cursor]);
+                            cursor += 1;
+                        }
+                    }
+                }
+                glued.resize(token.end - token.start, b' ');
+                out[token.start..token.end].copy_from_slice(&glued);
+            }
+            TokenKind::Str if !free_form::string_end(bytes, token.start).1 => {
+                if token.end - token.start >= 2 {
+                    out[token.start + 1..token.end - 1].fill(b' ');
+                    out[token.end - 1] = bytes[token.start];
+                } else {
+                    // A lone quote cannot be closed in place; any operand
+                    // keeps the statement well-formed.
+                    out[token.start] = b'0';
+                }
+            }
+            TokenKind::Ident
+                if starts[index]
+                    && ident_is(text, *token, "abstract")
+                    && tokens
+                        .get(index + 1)
+                        .is_some_and(|next| ident_is(text, *next, "interface")) =>
+            {
+                out[token.start..token.end].fill(b' ');
+            }
+            _ => {}
+        }
+    }
+    // Only ASCII bytes inside tokens are rewritten, and the lexer admits no
+    // non-ASCII byte in code position; a rewritten string literal keeps its
+    // multi-byte content out of the replaced range only when it is blanked.
+    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+}
+
+/// Index of the first token that starts at or after `byte`.
+fn token_at(tokens: &[Token], byte: usize) -> usize {
+    tokens.partition_point(|token| token.start < byte)
+}
+
+struct Reader<'a> {
+    /// The grammar-normalized text, so node ranges index it; token ranges
+    /// index the original text, which has identical offsets.
+    source: &'a str,
+    tokens: &'a [Token],
+    /// Refusals as `(position, kind)`; the earliest position wins and, at one
+    /// position, the earlier-recorded token refusal wins.
+    refusals: Vec<(usize, AbstainKind)>,
+    result: FileParse,
+}
+
+/// Declarations are read off the tree; every ADR-0051 refusal is reproduced
+/// from the token stream and the tree. As in a left-to-right parse the earliest
+/// refusal wins, and a bare `ERROR` or `MISSING` node refuses the file as the
+/// generic unadmitted class only when no more specific refusal applies.
+fn read_file(source: &str, tokens: &[Token], root: Node<'_>) -> FileParse {
+    let mut reader = Reader {
+        source,
+        tokens,
+        refusals: Vec::new(),
+        result: FileParse::default(),
+    };
+    reader.token_refusals(root);
+    reader.depth_refusal(root);
+    for child in reader.children(root) {
+        match child.kind() {
+            "module" => reader.module(child),
+            "program" => reader.program(child),
+            "subroutine" => reader.subroutine(child, Scope::TopLevel, false),
+            "function" => reader.generic_procedure(child),
+            _ => reader.refuse(child.start_byte(), AbstainKind::Unadmitted),
+        }
+    }
+    reader.refusals.sort_by_key(|(position, _)| *position);
+    let abstention = match reader.refusals.first() {
+        Some((_, kind)) => Some(*kind),
+        None => first_error(root).map(|_| AbstainKind::Unadmitted),
+    };
+    let mut result = reader.result;
+    if abstention.is_some() {
+        result.anchors.clear();
+        result.test_shape_without_use = false;
+        result.abstention = abstention;
+    }
+    result
+}
+
+/// The first `ERROR` or `MISSING` node in document order.
+fn first_error(root: Node<'_>) -> Option<usize> {
+    if !root.has_error() {
+        return None;
+    }
+    let mut cursor = root.walk();
+    let mut node = root;
+    loop {
+        if node.is_error() || node.is_missing() {
+            return Some(node.start_byte());
+        }
+        let mut next = None;
+        for child in node.children(&mut cursor) {
+            if child.has_error() {
+                next = Some(child);
+                break;
+            }
+        }
+        match next {
+            Some(child) => node = child,
+            None => return Some(node.start_byte()),
+        }
+    }
+}
+
+impl<'a> Reader<'a> {
+    fn refuse(&mut self, position: usize, kind: AbstainKind) {
+        self.refusals.push((position, kind));
+    }
+
+    /// Named children without comments, which the grammar parses as nodes.
+    fn children<'t>(&self, node: Node<'t>) -> Vec<Node<'t>> {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .filter(|child| child.kind() != "comment")
+            .collect()
+    }
+
+    fn node_text(&self, node: Node<'_>) -> String {
+        self.source[node.byte_range()]
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    }
+
+    /// Lowercased text of a node's `name`-like child, when present.
+    fn name_of(&self, node: Node<'_>, kind: &str) -> Option<String> {
+        self.children(node)
+            .into_iter()
+            .find(|child| child.kind() == kind)
+            .map(|name| self.node_text(name))
+    }
+
+    fn first_token(&self, node: Node<'_>) -> Option<Token> {
+        self.tokens
+            .get(token_at(self.tokens, node.start_byte()))
+            .copied()
+    }
+
+    // -- token-stream refusals ------------------------------------------------
+
+    /// `include 'file'` and a labeled `do` at a statement start, found in the
+    /// token stream so tree error recovery cannot move them.
+    fn token_refusals(&mut self, root: Node<'_>) {
+        let starts = statement_starts(self.tokens);
+        for (index, token) in self.tokens.iter().enumerate() {
+            if !starts[index] || token.kind != TokenKind::Ident {
+                continue;
+            }
+            let next = self.tokens.get(index + 1).map(|next| next.kind);
+            let text = self.source_text_of(*token);
+            if text.eq_ignore_ascii_case("include") && next == Some(TokenKind::Str) {
+                let kind = include_refusal_kind(root, token.start);
+                self.refuse(token.start, kind);
+            } else if text.eq_ignore_ascii_case("do") && next == Some(TokenKind::Number) {
+                // A labeled DO terminates at its label rather than an
+                // `end do`, which this frontend does not track.
+                self.refuse(token.start, AbstainKind::Unadmitted);
+            }
+        }
+    }
+
+    fn source_text_of(&self, token: Token) -> String {
+        self.source[token.start..token.end]
+            .chars()
+            .filter(|character| !matches!(character, '&' | ' ' | '\t' | '\r' | '\n'))
+            .collect()
+    }
+
+    /// Nesting depth of constructs, counted from the outermost procedure,
+    /// interface, or type body as the legacy skipper did.
+    fn depth_refusal(&mut self, root: Node<'_>) {
+        let mut stack = vec![(root, 0usize, 0usize)];
+        while let Some((node, count, offset)) = stack.pop() {
+            let mut count = count;
+            let mut offset = offset;
+            let counts = BLOCK_NODE_KINDS.contains(&node.kind())
+                || (BLOCK_FORM_KINDS.contains(&node.kind())
+                    && self
+                        .children(node)
+                        .iter()
+                        .any(|child| child.kind().starts_with("end_")));
+            if counts {
+                count += 1;
+                if count == 1 {
+                    offset = usize::from(BLOCK_NODE_KINDS[..4].contains(&node.kind()));
+                }
+                if count - offset > MAX_BLOCK_DEPTH {
+                    self.refuse(node.start_byte(), AbstainKind::DepthLimit);
+                    return;
+                }
+            }
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.named_children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                stack.push((child, count, offset));
+            }
+        }
+    }
+
+    // -- program units ----------------------------------------------------
+
+    /// A procedure's first token must be `subroutine`/`function` after only
+    /// `pure`/`impure`/`elemental`/`recursive` prefixes; a typed function or a
+    /// `module` prefix is outside the subset.
+    fn procedure_prefix_is_admitted(&self, node: Node<'_>) -> bool {
+        let mut index = token_at(self.tokens, node.start_byte());
+        while let Some(token) = self.tokens.get(index) {
+            if token.kind != TokenKind::Ident {
+                return false;
+            }
+            let word = self.source_text_of(*token).to_ascii_lowercase();
+            match word.as_str() {
+                "pure" | "impure" | "elemental" | "recursive" => index += 1,
+                "subroutine" | "function" => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// The closing `end` statement of a unit or spec construct, if the grammar
+    /// found one.
+    fn end_statement<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        self.children(node)
+            .into_iter()
+            .rev()
+            .find(|child| child.kind().starts_with("end_"))
+    }
+
+    /// Reproduce the legacy closing-`end` rule: after `end`, a qualifier from
+    /// `qualifiers` (with any trailing name), or the construct's own name.
+    fn check_end(&mut self, node: Node<'_>, qualifiers: &[&str], name: Option<&str>) {
+        let Some(end) = self.end_statement(node) else {
+            return;
+        };
+        let index = token_at(self.tokens, end.start_byte());
+        let Some(next) = self.tokens.get(index + 1).copied() else {
+            return;
+        };
+        if next.kind != TokenKind::Ident {
+            return;
+        }
+        let qualifier = self.source_text_of(next).to_ascii_lowercase();
+        if !qualifiers.contains(&qualifier.as_str()) && Some(qualifier.as_str()) != name {
+            self.refuse(next.start, AbstainKind::Unadmitted);
+        }
+    }
+
+    /// Byte offset just past the closing `end` statement's last token.
+    fn end_offset(&self, node: Node<'_>) -> Option<usize> {
+        let end = self.end_statement(node)?;
+        let mut index = token_at(self.tokens, end.start_byte());
+        let mut paren_depth = 0usize;
+        let mut last = self.tokens.get(index)?.end;
+        while let Some(token) = self.tokens.get(index) {
+            match token.kind {
+                TokenKind::LParen => paren_depth += 1,
+                TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
+                TokenKind::Newline | TokenKind::Semicolon if paren_depth == 0 => break,
+                _ => {}
+            }
+            last = token.end;
+            index += 1;
+        }
+        Some(last)
+    }
+
+    fn module(&mut self, node: Node<'_>) {
+        let name = self.name_of_statement(node, "module_statement");
+        let children = self.children(node);
+        let mut use_proven = false;
+        for child in &children {
+            if child.kind() == "use_statement" && self.use_proves(*child) {
+                use_proven = true;
+            }
+        }
+        for child in children {
+            match child.kind() {
+                "module_statement" => {}
+                "end_module_statement" => {}
+                "internal_procedures" => {
+                    for procedure in self.children(child) {
+                        match procedure.kind() {
+                            "contains_statement" => {}
+                            "subroutine" => {
+                                self.subroutine(procedure, Scope::Module, use_proven);
+                            }
+                            "function" => self.generic_procedure(procedure),
+                            _ => self.refuse(procedure.start_byte(), AbstainKind::Unadmitted),
+                        }
+                    }
+                }
+                "module" => self.refuse(child.start_byte(), AbstainKind::Unadmitted),
+                _ => self.spec_statement(child, true),
+            }
+        }
+        self.check_end(node, &["module"], name.as_deref());
+    }
+
+    fn program(&mut self, node: Node<'_>) {
+        let mut in_spec = true;
+        for child in self.children(node) {
+            match child.kind() {
+                "program_statement" | "end_program_statement" => {}
+                "internal_procedures" => {
+                    in_spec = false;
+                    for procedure in self.children(child) {
+                        match procedure.kind() {
+                            "contains_statement" => {}
+                            "subroutine" | "function" => self.generic_procedure(procedure),
+                            _ => self.refuse(procedure.start_byte(), AbstainKind::Unadmitted),
+                        }
+                    }
+                }
+                _ if !in_spec => {}
+                _ => {
+                    if self.starts_body(child) {
+                        in_spec = false;
+                    } else {
+                        self.spec_statement(child, true);
+                    }
+                }
+            }
+        }
+        self.check_end(node, &["program"], None);
+    }
+
+    fn starts_body(&self, node: Node<'_>) -> bool {
+        self.first_token(node).is_some_and(|token| {
+            token.kind == TokenKind::Ident
+                && BODY_OPENER_KEYWORDS
+                    .contains(&self.source_text_of(token).to_ascii_lowercase().as_str())
+        })
+    }
+
+    /// A spec-part statement that is not analysed for declarations: a
+    /// non-keyword first token refuses in module and program scope, and an
+    /// `interface` or type definition must close with its own `end`.
+    fn spec_statement(&mut self, node: Node<'_>, refuse_non_keyword: bool) {
+        match node.kind() {
+            "interface" => self.check_end(node, &["interface"], None),
+            "derived_type_definition" => self.check_end(node, &["type"], None),
+            _ => {
+                if refuse_non_keyword
+                    && self
+                        .first_token(node)
+                        .is_some_and(|token| token.kind != TokenKind::Ident)
+                {
+                    self.refuse(node.start_byte(), AbstainKind::Unadmitted);
+                }
+            }
+        }
+    }
+
+    fn name_of_statement(&self, unit: Node<'_>, statement_kind: &str) -> Option<String> {
+        self.children(unit)
+            .into_iter()
+            .find(|child| child.kind() == statement_kind)
+            .and_then(|statement| self.name_of(statement, "name"))
+    }
+
+    fn generic_procedure(&mut self, node: Node<'_>) {
+        if !self.procedure_prefix_is_admitted(node) {
+            self.refuse(node.start_byte(), AbstainKind::Unadmitted);
+            return;
+        }
+        let statement_kind = if node.kind() == "function" {
+            "function_statement"
+        } else {
+            "subroutine_statement"
+        };
+        let name = self.name_of_statement(node, statement_kind);
+        self.check_end(node, &["subroutine", "function"], name.as_deref());
+    }
+
+    /// One subroutine at module or top-level scope: decide the ADR-0051 D2
+    /// anchor from its dummy list, its declarations, and its `use` proof.
+    fn subroutine(&mut self, node: Node<'_>, scope: Scope, module_use_proven: bool) {
+        if !self.procedure_prefix_is_admitted(node) {
+            self.refuse(node.start_byte(), AbstainKind::Unadmitted);
+            return;
+        }
+        let children = self.children(node);
+        let Some(statement) = children
+            .iter()
+            .find(|child| child.kind() == "subroutine_statement")
+        else {
+            return;
+        };
+        let name = self.name_of(*statement, "name").unwrap_or_default();
+        let dummies = self.dummy_list(*statement);
+        let mut own_use_proven = false;
+        let mut declarations = BTreeMap::<String, DeclInfo>::new();
+        for child in &children {
+            match child.kind() {
+                "subroutine_statement" => continue,
+                "internal_procedures" => break,
+                kind if kind.starts_with("end_") => break,
+                _ => {}
+            }
+            // A non-keyword first token or a block opener ends the declaration
+            // part; the rest of the body is skipped.
+            let Some(first) = self.first_token(*child) else {
+                break;
+            };
+            if first.kind != TokenKind::Ident || self.starts_body(*child) {
+                break;
+            }
+            match child.kind() {
+                "use_statement" => {
+                    if self.use_proves(*child) {
+                        own_use_proven = true;
+                    }
+                }
+                "interface" | "derived_type_definition" => self.spec_statement(*child, false),
+                "include_statement" => {}
+                "variable_declaration" if self.is_type_declaration(*child) => {
+                    self.type_declaration(*child, &mut declarations);
+                }
+                _ => self.generic_declaration(*child, &mut declarations),
+            }
+        }
+        self.check_end(node, &["subroutine"], Some(name.as_str()));
+
+        let Some(first_dummy) = dummies.first() else {
+            return;
+        };
+        if !name.starts_with("test_") {
+            return;
+        }
+        let Some(decl) = declarations.get(first_dummy) else {
+            return;
+        };
+        if !(decl.error_interface && decl.intent_out && !decl.other_attr) {
+            return;
+        }
+        if own_use_proven || (scope == Scope::Module && module_use_proven) {
+            let (Some(first), Some(end)) = (self.first_token(node), self.end_offset(node)) else {
+                return;
+            };
+            self.result.anchors.push(Anchor {
+                start: first.start,
+                end,
+            });
+        } else {
+            self.result.test_shape_without_use = true;
+        }
+    }
+
+    /// The dummy-argument names of a procedure statement; empty when the list
+    /// is absent, empty, or outside the admitted all-identifier shape.
+    fn dummy_list(&self, statement: Node<'_>) -> Vec<String> {
+        let Some(parameters) = self
+            .children(statement)
+            .into_iter()
+            .find(|child| child.kind() == "parameters")
+        else {
+            return Vec::new();
+        };
+        let mut dummies = Vec::new();
+        let mut cursor = parameters.walk();
+        for child in parameters.children(&mut cursor) {
+            match child.kind() {
+                "identifier" => dummies.push(self.node_text(child)),
+                "(" | ")" | "," | "comment" => {}
+                _ => return Vec::new(),
+            }
+        }
+        dummies
+    }
+
+    // -- use statements and declarations ---------------------------------------
+
+    /// True when a `use` statement proves `error_type` accessible from the
+    /// `testdrive` module: a plain `use testdrive`, or an `only` list naming
+    /// `error_type` bare and never renamed. Intrinsic, renamed-without-`only`,
+    /// and other-module forms prove nothing.
+    fn use_proves(&self, node: Node<'_>) -> bool {
+        let children = self.children(node);
+        let Some(module) = children.iter().find(|child| child.kind() == "module_name") else {
+            return false;
+        };
+        if self.node_text(*module) != TESTDRIVE_MODULE {
+            return false;
+        }
+        let index = token_at(self.tokens, node.start_byte());
+        if self.tokens.get(index + 1).map(|token| token.kind) == Some(TokenKind::Comma) {
+            let attribute = self
+                .tokens
+                .get(index + 2)
+                .map(|token| self.source_text_of(*token).to_ascii_lowercase());
+            // `use, intrinsic ::` never reaches the test-drive module, and an
+            // unknown attribute is unmodelled; only `non_intrinsic` may prove.
+            if attribute.as_deref() != Some("non_intrinsic") {
+                return false;
+            }
+        }
+        let only = children
+            .iter()
+            .find(|child| child.kind() == "included_items")
+            .filter(|items| {
+                self.first_token(**items)
+                    .and_then(|comma| self.tokens.get(token_at(self.tokens, comma.end)))
+                    .is_some_and(|token| self.source_text_of(*token).eq_ignore_ascii_case("only"))
+            });
+        let renames = children.iter().any(|child| child.kind() == "use_alias");
+        match only {
+            Some(items) => {
+                let mut bare = false;
+                let mut renamed = renames;
+                for item in self.children(*items) {
+                    match item.kind() {
+                        "identifier" => bare |= self.node_text(item) == ERROR_TYPE_NAME,
+                        "use_alias" => {
+                            renamed |= self.children(item).iter().any(|part| {
+                                part.kind() == "identifier"
+                                    && self.node_text(*part) == ERROR_TYPE_NAME
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                bare && !renamed
+            }
+            // A rename list without `only:` depends on rename details this
+            // frontend does not model.
+            None => !renames,
+        }
+    }
+
+    /// A `type(...)` declaration, as opposed to `class(...)` or an intrinsic
+    /// type, which the grammar also parses as `variable_declaration`.
+    fn is_type_declaration(&self, node: Node<'_>) -> bool {
+        self.children(node).first().is_some_and(|spec| {
+            spec.kind() == "derived_type"
+                && self
+                    .first_token(*spec)
+                    .is_some_and(|token| self.source_text_of(token).eq_ignore_ascii_case("type"))
+        })
+    }
+
+    /// Record a `type(...)` declaration. Only the exact ADR-0051 interface
+    /// shape sets `error_interface`; every other spelling records an ordinary
+    /// declaration so a first dummy declared elsewhere disqualifies it.
+    fn type_declaration(&self, node: Node<'_>, declarations: &mut BTreeMap<String, DeclInfo>) {
+        let children = self.children(node);
+        let spec = children[0];
+        let names_in_spec: Vec<String> = self.tokens[token_at(self.tokens, spec.start_byte())..]
+            .iter()
+            .take_while(|token| token.start < spec.end_byte())
+            .filter(|token| token.kind == TokenKind::Ident)
+            .skip(1)
+            .map(|token| self.source_text_of(*token).to_ascii_lowercase())
+            .collect();
+        let mut info = DeclInfo {
+            error_interface: names_in_spec == [ERROR_TYPE_NAME],
+            ..DeclInfo::default()
+        };
+        for child in &children[1..] {
+            if child.kind() == "type_qualifier" {
+                self.apply_qualifier(*child, &mut info);
+            }
+        }
+        for child in &children[1..] {
+            let name = match child.kind() {
+                "type_qualifier" => continue,
+                "identifier" => Some(self.node_text(*child)),
+                _ => self
+                    .children(*child)
+                    .into_iter()
+                    .find(|part| part.kind() == "identifier")
+                    .map(|part| self.node_text(part)),
+            };
+            if let Some(name) = name {
+                record_name(declarations, name, info);
+            }
+        }
+    }
+
+    fn apply_qualifier(&self, qualifier: Node<'_>, info: &mut DeclInfo) {
+        let index = token_at(self.tokens, qualifier.start_byte());
+        let word = self
+            .tokens
+            .get(index)
+            .map(|token| self.source_text_of(*token).to_ascii_lowercase())
+            .unwrap_or_default();
+        match word.as_str() {
+            "intent" => {
+                if self.tokens.get(index + 1).map(|token| token.kind) == Some(TokenKind::LParen) {
+                    if let Some(value) = self
+                        .tokens
+                        .get(index + 2)
+                        .filter(|token| token.kind == TokenKind::Ident)
+                    {
+                        info.intent_out |= self.source_text_of(*value).eq_ignore_ascii_case("out");
+                    }
+                } else {
+                    info.other_attr = true;
+                }
+            }
+            "allocatable" => info.allocatable = true,
+            _ => info.other_attr = true,
+        }
+    }
+
+    /// A specification statement other than a `type(...)` declaration: when it
+    /// carries a `::` at parenthesis depth zero, its entity names are declared
+    /// with some other type and disqualify a first dummy.
+    fn generic_declaration(&self, node: Node<'_>, declarations: &mut BTreeMap<String, DeclInfo>) {
+        let first = token_at(self.tokens, node.start_byte());
+        let keyword = self
+            .tokens
+            .get(first)
+            .map(|token| self.source_text_of(*token).to_ascii_lowercase())
+            .unwrap_or_default();
+        if matches!(
+            keyword.as_str(),
+            "implicit" | "public" | "private" | "import"
+        ) {
+            return;
+        }
+        let mut paren_depth = 0usize;
+        let mut index = first;
+        while let Some(token) = self.tokens.get(index) {
+            match token.kind {
+                TokenKind::LParen => paren_depth += 1,
+                TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
+                TokenKind::DoubleColon if paren_depth == 0 => {
+                    self.record_names_from(index + 1, declarations);
+                    return;
+                }
+                TokenKind::Newline | TokenKind::Semicolon => return,
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+
+    fn record_names_from(&self, mut index: usize, declarations: &mut BTreeMap<String, DeclInfo>) {
+        while let Some(token) = self.tokens.get(index) {
+            match token.kind {
+                TokenKind::Ident => {
+                    record_name(
+                        declarations,
+                        self.source_text_of(*token).to_ascii_lowercase(),
+                        DeclInfo::default(),
+                    );
+                    index += 1;
+                    if self.tokens.get(index).map(|next| next.kind) == Some(TokenKind::LParen) {
+                        let mut paren_depth = 0usize;
+                        while let Some(inner) = self.tokens.get(index) {
+                            index += 1;
+                            match inner.kind {
+                                TokenKind::LParen => paren_depth += 1,
+                                TokenKind::RParen => {
+                                    paren_depth = paren_depth.saturating_sub(1);
+                                    if paren_depth == 0 {
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                TokenKind::Comma => index += 1,
+                _ => return,
+            }
+        }
+    }
+}
+
+/// A name declared twice is illegal Fortran; the conflict disqualifies rather
+/// than deciding which declaration wins.
+fn record_name(declarations: &mut BTreeMap<String, DeclInfo>, name: String, info: DeclInfo) {
+    match declarations.get(&name) {
+        Some(_) => {
+            declarations.insert(name, DeclInfo::default());
+        }
+        None => {
+            declarations.insert(name, info);
+        }
+    }
+}
+
+/// An `include` is a file-inclusion refusal wherever the legacy parse walked
+/// statements, and a plain unadmitted construct at program-unit level and
+/// among a module's or program's contained procedures.
+fn include_refusal_kind(root: Node<'_>, position: usize) -> AbstainKind {
+    let mut node = root
+        .descendant_for_byte_range(position, position + 1)
+        .unwrap_or(root);
+    loop {
+        match node.kind() {
+            "translation_unit" => return AbstainKind::Unadmitted,
+            "internal_procedures"
+                if matches!(
+                    node.parent().map(|parent| parent.kind()),
+                    Some("module") | Some("program")
+                ) =>
+            {
+                return AbstainKind::Unadmitted;
+            }
+            "module"
+            | "program"
+            | "subroutine"
+            | "function"
+            | "interface"
+            | "derived_type_definition"
+            | "internal_procedures" => {
+                return AbstainKind::IncludeStatement;
+            }
+            _ => {}
+        }
+        match node.parent() {
+            Some(parent) => node = parent,
+            None => return AbstainKind::Unadmitted,
+        }
+    }
+}
+
+#[cfg(test)]
+struct LegacyParser<'a> {
+    text: &'a str,
+    tokens: Vec<Token>,
+    position: usize,
+}
+
+#[cfg(test)]
+fn legacy_parse_tokens(text: &str, tokens: &[Token]) -> FileParse {
+    let mut parser = LegacyParser {
+        text,
+        tokens: tokens.to_vec(),
+        position: 0,
+    };
+    let mut result = FileParse::default();
+    if let Err(kind) = parser.parse_program_units(&mut result) {
+        result.anchors.clear();
+        result.test_shape_without_use = false;
+        result.abstention = Some(kind);
+    }
+    result
+}
+
+#[cfg(test)]
+impl<'a> LegacyParser<'a> {
     fn peek(&self) -> Option<Token> {
         self.tokens.get(self.position).copied()
     }
@@ -1604,6 +2429,7 @@ impl<'a> Parser<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct UseProof {
     proves: bool,
@@ -2083,6 +2909,981 @@ end subroutine test_third
                     .parse_with_context_output(source, &ParserProjectContext::default()),
                 Err(ParseError::UnsupportedLanguage),
                 "{path}"
+            );
+        }
+    }
+
+    // -- ADR-0058 differential: retained legacy parser vs Tree-sitter reader ----
+
+    fn legacy_output(path: &str, text: &str) -> SourceParseOutput {
+        parse_output_with(document(path, text), |text, tokens| {
+            Ok(legacy_parse_tokens(text, tokens))
+        })
+        .expect("legacy parse")
+    }
+
+    fn digest(parsed: &SourceParseOutput) -> String {
+        let anchors = anchor_units(parsed)
+            .iter()
+            .map(|unit| (unit.range.start_byte, unit.range.end_byte))
+            .collect::<Vec<_>>();
+        format!(
+            "anchors={anchors:?} unknowns={:?} diagnostics={}",
+            unknown_kinds(parsed),
+            parsed.report.diagnostics.len()
+        )
+    }
+
+    #[test]
+    fn differential_every_fixture_source_matches_the_legacy_parser() {
+        let mut compared = 0;
+        let mut stack = vec![std::path::PathBuf::from(FIXTURE_ROOT)];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).expect("fixture directory") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.to_str().is_some_and(is_free_form_fortran_path) {
+                    let text = std::fs::read_to_string(&path).expect("fixture text");
+                    let path = path.to_str().expect("utf8 path");
+                    let legacy = legacy_output(path, &text);
+                    let current = parse_output(document(path, &text)).expect("parse");
+                    assert!(
+                        legacy == current,
+                        "{path}: legacy {} != tree-sitter {}",
+                        digest(&legacy),
+                        digest(&current)
+                    );
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 9, "every committed Fortran fixture source");
+    }
+
+    const TEST_SUB: &str = "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n";
+
+    fn in_module(use_line: &str, body: &str) -> String {
+        format!("module m\n  {use_line}\n  implicit none\ncontains\n{body}end module m\n")
+    }
+
+    fn top_level(use_line: &str, declarations: &str, body: &str) -> String {
+        format!(
+            "subroutine test_x(error)\n  {use_line}\n{declarations}{body}end subroutine test_x\n"
+        )
+    }
+
+    /// Inputs both parsers must read identically: every anchor variation, every
+    /// refusal class, and near-misses. Nothing here is a syntax error inside a
+    /// region the legacy parser skipped, which is the declared divergence.
+    fn branch_corpus() -> Vec<(String, String)> {
+        let mut corpus: Vec<(String, String)> = Vec::new();
+        let mut add = |name: &str, text: String| corpus.push((name.to_string(), text));
+        let decl = "  type(error_type), allocatable, intent(out) :: error\n";
+
+        // Admitted shapes and `use` proofs.
+        add("canonical", CANONICAL_SUITE.to_string());
+        add("top_level_tests", TOP_LEVEL_TESTS.to_string());
+        add("empty", String::new());
+        add("blank_and_comments", "\n! only a comment\n\n".to_string());
+        for (name, use_line) in [
+            ("use_plain", "use testdrive"),
+            ("use_colon", "use :: testdrive"),
+            ("use_only_bare", "use testdrive, only : error_type"),
+            (
+                "use_only_many",
+                "use testdrive, only : check, error_type, new_unittest",
+            ),
+            ("use_only_without_error_type", "use testdrive, only : check"),
+            ("use_only_empty", "use testdrive, only :"),
+            (
+                "use_only_rename_target",
+                "use testdrive, only : e => error_type",
+            ),
+            (
+                "use_only_rename_and_bare",
+                "use testdrive, only : error_type, e => error_type",
+            ),
+            (
+                "use_only_rename_other",
+                "use testdrive, only : error_type, c => check",
+            ),
+            (
+                "use_only_operator",
+                "use testdrive, only : operator(+), error_type",
+            ),
+            ("use_rename_no_only", "use testdrive, e => error_type"),
+            ("use_intrinsic", "use, intrinsic :: testdrive"),
+            ("use_non_intrinsic", "use, non_intrinsic :: testdrive"),
+            ("use_other_module", "use other_mod"),
+            ("use_other_module_only", "use other_mod, only : error_type"),
+            ("use_uppercase", "USE TESTDRIVE, ONLY : ERROR_TYPE"),
+            ("use_two_statements", "use other_mod\n  use testdrive"),
+        ] {
+            add(&format!("module_{name}"), in_module(use_line, TEST_SUB));
+            add(&format!("own_{name}"), top_level(use_line, decl, ""));
+        }
+        add(
+            "own_use_inside_module_subroutine",
+            in_module(
+                "implicit none",
+                "  subroutine test_x(error)\n    use testdrive\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n",
+            ),
+        );
+        add(
+            "module_use_skipped_when_own_use_present",
+            in_module("use other_mod", "  subroutine test_x(error)\n    use testdrive, only : error_type\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+        );
+
+        // Prefixes, casing, spacing, and name shapes.
+        for prefix in [
+            "pure ",
+            "elemental ",
+            "recursive ",
+            "impure ",
+            "pure elemental ",
+            "impure elemental recursive ",
+        ] {
+            add(
+                &format!("prefix_{}", prefix.trim().replace(' ', "_")),
+                in_module(
+                    "use testdrive",
+                    &format!(
+                        "  {prefix}subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"
+                    ),
+                ),
+            );
+        }
+        add(
+            "uppercase_everything",
+            "MODULE M\n  USE TESTDRIVE\nCONTAINS\n  SUBROUTINE TEST_UP(ERROR)\n    TYPE(ERROR_TYPE), ALLOCATABLE, INTENT(OUT) :: ERROR\n  END SUBROUTINE TEST_UP\nEND MODULE M\n".to_string(),
+        );
+        add(
+            "mixed_case_name",
+            in_module("use testdrive", "  subroutine Test_Mixed(Error)\n    type(Error_Type), allocatable, intent(OUT) :: error\n  end subroutine\n"),
+        );
+        add(
+            "end_without_qualifier",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end\n"),
+        );
+        add(
+            "end_with_trailing_comment",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x ! done\n"),
+        );
+        add(
+            "end_followed_by_semicolon_statement",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x; \n"),
+        );
+        add(
+            "spaces_in_intent",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type( error_type ) , allocatable , intent( out ) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "attribute_order_swapped",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), intent(out), allocatable :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "no_allocatable",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), intent(out) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "extra_dummies_declared_after",
+            in_module("use testdrive", "  subroutine test_x(error, first, last)\n    type(error_type), allocatable, intent(out) :: error\n    integer, intent(in) :: first, last\n  end subroutine test_x\n"),
+        );
+        add(
+            "first_dummy_declared_last",
+            in_module("use testdrive", "  subroutine test_x(error, first)\n    integer, intent(in) :: first\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "dummy_declared_in_entity_list",
+            in_module("use testdrive", "  subroutine test_x(error, other)\n    type(error_type), allocatable, intent(out) :: error, other\n  end subroutine test_x\n"),
+        );
+        add(
+            "sized_error_entity",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error(:)\n  end subroutine test_x\n"),
+        );
+        add(
+            "old_style_declaration",
+            in_module(
+                "use testdrive",
+                "  subroutine test_x(error)\n    type(error_type) error\n  end subroutine test_x\n",
+            ),
+        );
+        add(
+            "only_public_statement_names_error",
+            in_module("use testdrive", "  subroutine test_x(error)\n    public :: error\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "implicit_none_and_other_decls_first",
+            in_module("use testdrive", "  subroutine test_x(error)\n    implicit none\n    integer :: i, j(3)\n    real, parameter :: x = 1.0\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+        );
+
+        // Near-misses that must never anchor.
+        for (name, body) in [
+            ("class_dummy", "  subroutine test_x(error)\n    class(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+            ("intent_inout", "  subroutine test_x(error)\n    type(error_type), intent(inout) :: error\n  end subroutine test_x\n"),
+            ("intent_in", "  subroutine test_x(error)\n    type(error_type), intent(in) :: error\n  end subroutine test_x\n"),
+            ("no_intent", "  subroutine test_x(error)\n    type(error_type), allocatable :: error\n  end subroutine test_x\n"),
+            ("extra_target_attribute", "  subroutine test_x(error)\n    type(error_type), intent(out), target :: error\n  end subroutine test_x\n"),
+            ("extra_optional_attribute", "  subroutine test_x(error)\n    type(error_type), intent(out), optional :: error\n  end subroutine test_x\n"),
+            ("pointer_attribute", "  subroutine test_x(error)\n    type(error_type), intent(out), pointer :: error\n  end subroutine test_x\n"),
+            ("other_type", "  subroutine test_x(error)\n    type(other_type), intent(out) :: error\n  end subroutine test_x\n"),
+            ("integer_dummy", "  subroutine test_x(error)\n    integer, intent(out) :: error\n  end subroutine test_x\n"),
+            ("declared_twice", "  subroutine test_x(error)\n    type(error_type), intent(out) :: error\n    integer :: error\n  end subroutine test_x\n"),
+            ("not_declared", "  subroutine test_x(error)\n    integer :: i\n  end subroutine test_x\n"),
+            ("no_dummies", "  subroutine test_x()\n  end subroutine test_x\n"),
+            ("no_parens", "  subroutine test_x\n  end subroutine test_x\n"),
+            ("not_test_prefix", "  subroutine check_x(error)\n    type(error_type), intent(out) :: error\n  end subroutine check_x\n"),
+            ("bare_test_name", "  subroutine test(error)\n    type(error_type), intent(out) :: error\n  end subroutine test\n"),
+            ("test_prefix_uppercase_only", "  subroutine TEST_ONLY(error)\n    type(error_type), intent(out) :: error\n  end subroutine\n"),
+            ("function_named_test", "  function test_f(error)\n    type(error_type), intent(out) :: error\n  end function test_f\n"),
+            ("function_with_result", "  function test_f(error) result(r)\n    type(error_type), intent(out) :: error\n    integer :: r\n  end function test_f\n"),
+            ("pure_function", "  pure function g(x) result(r)\n    integer, intent(in) :: x\n    integer :: r\n  end function g\n"),
+            ("bind_c_suffix", "  subroutine test_x(error) bind(c)\n    type(error_type), intent(out) :: error\n  end subroutine test_x\n"),
+        ] {
+            add(&format!("near_miss_{name}"), in_module("use testdrive", body));
+        }
+
+        // Scoping units that never anchor.
+        add(
+            "internal_procedure_in_subroutine",
+            in_module("use testdrive", "  subroutine outer(x)\n    integer :: x\n  contains\n    subroutine test_inner(error)\n      type(error_type), intent(out) :: error\n    end subroutine test_inner\n  end subroutine outer\n"),
+        );
+        add(
+            "internal_procedure_after_anchor",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    call helper()\n  contains\n    subroutine helper()\n    end subroutine helper\n  end subroutine test_x\n"),
+        );
+        add(
+            "program_internal_procedures",
+            "program p\n  use testdrive\n  implicit none\n  call s()\ncontains\n  subroutine test_p(error)\n    type(error_type), intent(out) :: error\n  end subroutine test_p\n  function f() result(r)\n    integer :: r\n  end function f\nend program p\n".to_string(),
+        );
+        add(
+            "program_then_anchor",
+            format!("program p\n  call s()\nend program p\n\nsubroutine test_y(error)\n  use testdrive\n{decl}end subroutine test_y\n"),
+        );
+        add(
+            "interface_body_in_module",
+            "module m\n  use testdrive\n  interface\n    subroutine test_i(error)\n      type(error_type), intent(out) :: error\n    end subroutine test_i\n  end interface\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string(),
+        );
+        add(
+            "abstract_interface_in_module",
+            "module m\n  use testdrive\n  abstract interface\n    subroutine cb(error)\n      type(error_type), intent(out) :: error\n    end subroutine cb\n  end interface\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string(),
+        );
+        add(
+            "interface_in_subroutine_spec",
+            "subroutine test_x(error)\n  use testdrive\n  interface\n    subroutine cb(i)\n      integer :: i\n    end subroutine cb\n  end interface\n  type(error_type), allocatable, intent(out) :: error\nend subroutine test_x\n".to_string(),
+        );
+        add(
+            "derived_type_with_type_bound_procedures",
+            "module m\n  use testdrive\n  type :: t\n    integer :: x\n  contains\n    procedure :: p\n  end type t\n  type u\n    real :: y\n  end type\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string(),
+        );
+        add(
+            "type_definition_inside_subroutine_spec",
+            "subroutine test_x(error)\n  use testdrive\n  type :: local\n    integer :: i\n  end type local\n  type(error_type), allocatable, intent(out) :: error\nend subroutine test_x\n".to_string(),
+        );
+        add(
+            "module_without_contains",
+            "module m\n  use testdrive\n  integer :: x\nend module m\n".to_string(),
+        );
+        add(
+            "module_with_contains_only",
+            "module m\ncontains\nend module m\n".to_string(),
+        );
+        add(
+            "two_modules_one_with_use",
+            "module a\n  use testdrive\ncontains\n  subroutine test_a(error)\n    type(error_type), intent(out) :: error\n  end subroutine test_a\nend module a\nmodule b\ncontains\n  subroutine test_b(error)\n    type(error_type), intent(out) :: error\n  end subroutine test_b\nend module b\n".to_string(),
+        );
+        add(
+            "anchor_and_missing_use_together",
+            "module m\ncontains\n  subroutine test_x(error)\n    type(error_type), intent(out) :: error\n  end subroutine test_x\nend module m\nsubroutine test_y(error)\n  use testdrive\n  type(error_type), intent(out) :: error\nend subroutine test_y\n".to_string(),
+        );
+        add(
+            "module_with_function_and_subroutines",
+            in_module("use testdrive", "  function f(x) result(y)\n    integer :: x, y\n    y = x\n  end function f\n  subroutine helper()\n  end subroutine helper\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "mismatched_module_name_after_qualifier_is_accepted",
+            "module m\n  use testdrive\ncontains\n  subroutine test_x(error)\n    type(error_type), intent(out) :: error\n  end subroutine other_name\nend module different\n".to_string(),
+        );
+
+        // Bodies: constructs, labels, continuation, literals.
+        let body = |statements: &str| -> String {
+            in_module("use testdrive", &format!("  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    integer :: i\n{statements}  end subroutine test_x\n"))
+        };
+        for (name, statements) in [
+            ("call_statements", "    call check(error, 1 + 2 == 3)\n    if (allocated(error)) return\n"),
+            ("block_if_else", "    if (i > 0) then\n      call a()\n    else\n      call b()\n    end if\n"),
+            ("one_line_if", "    if (i > 0) call a()\n"),
+            ("do_loop", "    do i = 1, 3\n      cycle\n    end do\n"),
+            ("do_while", "    do while (i < 3)\n      i = i + 1\n    end do\n"),
+            ("select_case", "    select case (i)\n    case (1)\n      call a()\n    case default\n      call b()\n    end select\n"),
+            ("where_construct", "    where (a > 0)\n      b = 1\n    elsewhere\n      b = 2\n    end where\n"),
+            ("where_statement", "    where (a > 0) b = 1\n"),
+            ("forall_construct", "    forall (i = 1:3)\n      a(i) = i\n    end forall\n"),
+            ("forall_statement", "    forall (i = 1:3) a(i) = i\n"),
+            ("associate_construct", "    associate (z => i)\n      call a(z)\n    end associate\n"),
+            ("block_construct", "    block\n      integer :: j\n      j = 1\n    end block\n"),
+            ("nested_constructs", "    do i = 1, 3\n      if (i > 1) then\n        select case (i)\n        case (2)\n          call a()\n        end select\n      end if\n    end do\n"),
+            ("statement_label_continue", "    goto 10\n10  continue\n"),
+            ("semicolons", "    i = 1; i = 2; call a()\n"),
+            ("string_with_bang_and_quotes", "    s = 'it''s ! not a comment'\n    t = \"say \"\"hi\"\"\"\n"),
+            ("continuation_between_tokens", "    i = 1 + &\n      2\n"),
+            ("continuation_with_comment", "    i = 1 + & ! comment\n      & 2\n"),
+            ("array_constructor_continuation", "    a = [ &\n      1, &\n      2 &\n    ]\n"),
+            ("string_continuation", "    s = 'abc&\n         &def'\n"),
+            ("inline_comment", "    i = 1 ! trailing\n"),
+            ("print_statement", "    print *, 'hello', i\n"),
+            ("write_statement", "    write (*, '(a)') 'x'\n"),
+            ("format_label", "    write (*, 100) i\n100 format (i5)\n"),
+            ("stop_statement", "    stop 1\n"),
+            ("allocate_statements", "    allocate (a(10))\n    deallocate (a)\n"),
+            ("function_call_expression", "    i = f(1, g(2, 3))\n"),
+            ("derived_type_component", "    x%y = 1\n"),
+            ("array_section", "    b(1:3) = a(2:4)\n"),
+            ("logical_operators", "    if (a .and. .not. b .or. c) i = 1\n"),
+            ("exponent_numbers", "    x = 1.0e-3 + 2.5d0\n"),
+            ("character_concat", "    s = 'a' // 'b'\n"),
+        ] {
+            add(&format!("body_{name}"), body(statements));
+        }
+        // Executable statements before a use proof, and a declaration after.
+        add(
+            "continuation_split_subroutine_name",
+            in_module("use testdrive", "  subroutine test_va&\n    &lid(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_va&\n    &lid\n"),
+        );
+        add(
+            "continuation_split_use_item",
+            in_module("use testdrive, only : &\n    error_&\n    &type", TEST_SUB),
+        );
+        add(
+            "continuation_split_attribute_list",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), &\n      allocatable, &\n      intent(out) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "continuation_split_keyword",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(o&\n    &ut) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "semicolon_separated_declarations",
+            in_module("use testdrive", "  subroutine test_x(error)\n    integer :: i; type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n"),
+        );
+        add(
+            "crlf_line_endings",
+            "module m\r\n  use testdrive\r\ncontains\r\n  subroutine test_x(error)\r\n    type(error_type), allocatable, intent(out) :: error\r\n  end subroutine test_x\r\nend module m\r\n".to_string(),
+        );
+        add(
+            "tabs_for_indent",
+            "module m\n\tuse testdrive\ncontains\n\tsubroutine test_x(error)\n\t\ttype(error_type), allocatable, intent(out) :: error\n\tend subroutine test_x\nend module m\n".to_string(),
+        );
+        add(
+            "no_trailing_newline",
+            "module m\n  use testdrive\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m".to_string(),
+        );
+        add(
+            "unterminated_string_degrades_only",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    s = 'unterminated\n    i = 1\n  end subroutine test_x\n"),
+        );
+        add(
+            "unterminated_string_in_comment_free_statement",
+            in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    print *, \"open\n  end subroutine test_x\n"),
+        );
+
+        // Refusal classes.
+        add(
+            "refuse_preprocessor_top",
+            "#ifdef X\nmodule m\nend module m\n#endif\n".to_string(),
+        );
+        add(
+            "refuse_preprocessor_inside",
+            "module m\n  #include \"c.f90\"\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_preprocessor_indented",
+            "module m\n    #define N 3\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_fixed_form_column_six",
+            "      subroutine test_f(a)\n     1real a\n      end\n".to_string(),
+        );
+        add(
+            "refuse_fixed_form_star_comment",
+            "* comment\nsubroutine s()\nend subroutine s\n".to_string(),
+        );
+        add(
+            "refuse_fixed_form_after_free_form",
+            "module m\ncontains\nend module m\n      x\n     +y\n".to_string(),
+        );
+        add(
+            "refuse_lone_ampersand",
+            "module m\n  x = 1 & 2\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_include_in_module_spec",
+            "module m\n  use testdrive\n  include 'x.f90'\ncontains\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_include_in_subroutine_spec",
+            top_level(
+                "use testdrive",
+                "  include 'h.f90'\n  type(error_type), allocatable, intent(out) :: error\n",
+                "",
+            ),
+        );
+        add(
+            "refuse_include_in_subroutine_body",
+            top_level("use testdrive", decl, "  call a()\n  include 'h.f90'\n"),
+        );
+        add(
+            "refuse_include_inside_if_body",
+            top_level(
+                "use testdrive",
+                decl,
+                "  if (a) then\n    include 'h.f90'\n  end if\n",
+            ),
+        );
+        add(
+            "refuse_include_in_program_body",
+            "program p\n  include 'h.f90'\nend program p\n".to_string(),
+        );
+        add(
+            "refuse_include_at_top_level",
+            "include 'h.f90'\nmodule m\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_include_between_module_subprograms",
+            "module m\ncontains\n  include 'h.f90'\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_include_in_program_internal_procedures",
+            "program p\ncontains\n  include 'h.f90'\nend program p\n".to_string(),
+        );
+        add(
+            "refuse_include_in_interface",
+            "module m\n  interface\n    include 'h.f90'\n  end interface\nend module m\n"
+                .to_string(),
+        );
+        add(
+            "refuse_include_in_derived_type",
+            "module m\n  type t\n    include 'h.f90'\n  end type t\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_include_after_continue_statement",
+            top_level("use testdrive", decl, "  i = 1; include 'h.f90'\n"),
+        );
+        add(
+            "near_miss_include_as_variable",
+            top_level("use testdrive", decl, "  include = 3\n"),
+        );
+        add(
+            "near_miss_include_not_followed_by_string",
+            top_level("use testdrive", decl, "  include(1) = 3\n"),
+        );
+        add(
+            "refuse_submodule",
+            "submodule (parent) child\nend submodule child\n".to_string(),
+        );
+        add(
+            "refuse_block_data",
+            "block data\nend block data\n".to_string(),
+        );
+        add(
+            "refuse_top_level_use",
+            "use testdrive\nsubroutine test_x(error)\nend subroutine\n".to_string(),
+        );
+        add("refuse_top_level_statement", "x = 1\n".to_string());
+        add("refuse_top_level_number", "10 continue\n".to_string());
+        add(
+            "refuse_nested_module",
+            "module outer\ncontains\nmodule inner\nend module inner\nend module outer\n"
+                .to_string(),
+        );
+        add(
+            "refuse_module_procedure_top",
+            "module procedure p\nend procedure\n".to_string(),
+        );
+        add(
+            "refuse_module_subroutine_prefix",
+            "module subroutine s()\nend subroutine s\n".to_string(),
+        );
+        add(
+            "refuse_module_subroutine_prefix_in_module",
+            "module m\ncontains\n  module subroutine s()\n  end subroutine s\nend module m\n"
+                .to_string(),
+        );
+        add(
+            "refuse_typed_function_in_module",
+            "module m\ncontains\n  integer function f(x)\n    integer :: x\n    f = x\n  end function f\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_typed_function_top",
+            "real function f(x)\n  real :: x\n  f = x\nend function f\n".to_string(),
+        );
+        add(
+            "refuse_prefix_then_typed_function",
+            "module m\ncontains\n  pure real function f(x)\n    real, intent(in) :: x\n    f = x\n  end function f\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_prefix_without_procedure",
+            "pure\nsubroutine s()\nend subroutine s\n".to_string(),
+        );
+        add(
+            "refuse_statement_after_module_contains",
+            "module m\ncontains\n  use testdrive\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_type_after_module_contains",
+            "module m\ncontains\n  type t\n  end type t\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_statement_after_program_contains",
+            "program p\ncontains\n  integer :: i\nend program p\n".to_string(),
+        );
+        add(
+            "refuse_label_in_module_spec",
+            "module m\n10 continue\ncontains\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_label_in_program_spec",
+            "program p\n10 continue\nend program p\n".to_string(),
+        );
+        add(
+            "near_miss_label_after_program_body_started",
+            "program p\n  if (a) then\n  end if\n10 continue\nend program p\n".to_string(),
+        );
+        add(
+            "refuse_labeled_do_in_subroutine",
+            top_level("use testdrive", decl, "  do 10 i = 1, 3\n10  continue\n"),
+        );
+        add(
+            "refuse_labeled_do_after_declarations_in_program",
+            "program p\n  integer :: i\n  do 20 i = 1, 3\n20 continue\nend program p\n".to_string(),
+        );
+        add(
+            "near_miss_do_with_number_in_name",
+            top_level("use testdrive", decl, "  do i = 1, 10\n  end do\n"),
+        );
+        add(
+            "refuse_end_subroutine_closing_function",
+            "module m\ncontains\n  subroutine s()\n  end function s\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_end_function_closing_subroutine_top",
+            "subroutine s()\nend function s\n".to_string(),
+        );
+        add(
+            "refuse_end_with_wrong_name",
+            "subroutine s()\nend wrong\n".to_string(),
+        );
+        add(
+            "refuse_end_module_with_wrong_name_only",
+            "module m\nend wrong\n".to_string(),
+        );
+        add(
+            "refuse_end_program_with_name_only",
+            "program p\nend p\n".to_string(),
+        );
+        add(
+            "refuse_end_interface_with_wrong_word",
+            "module m\n  interface\n  end wrong\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_end_type_with_wrong_word",
+            "module m\n  type t\n  end wrong\nend module m\n".to_string(),
+        );
+        add(
+            "accept_end_interface_with_generic_name",
+            "module m\n  interface g\n    module procedure a\n  end interface g\nend module m\n"
+                .to_string(),
+        );
+        add(
+            "accept_end_type_with_own_name",
+            "module m\n  type t\n    integer :: x\n  end type t\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_missing_end_module",
+            "module m\ncontains\n  subroutine s()\n  end subroutine s\n".to_string(),
+        );
+        add(
+            "refuse_missing_end_subroutine",
+            "subroutine s()\n  x = 1\n".to_string(),
+        );
+        add(
+            "refuse_missing_end_program",
+            "program p\n  x = 1\n".to_string(),
+        );
+        add(
+            "refuse_unclosed_if_in_body",
+            "subroutine s()\n  if (a) then\nend subroutine s\n".to_string(),
+        );
+        add(
+            "refuse_missing_end_interface",
+            "module m\n  interface\n    subroutine s()\n    end subroutine s\nend module m\n"
+                .to_string(),
+        );
+        add(
+            "refuse_stray_end_after_unit",
+            "subroutine s()\nend subroutine s\nend subroutine s\n".to_string(),
+        );
+        add(
+            "refuse_end_inside_module_spec_wrong_kind",
+            "module m\n  x = 1\nend subroutine\n".to_string(),
+        );
+        add(
+            "refuse_text_before_module",
+            "garbage\nmodule m\nend module m\n".to_string(),
+        );
+        add(
+            "refuse_text_after_module",
+            "module m\nend module m\ngarbage here\n".to_string(),
+        );
+        add("refuse_text_only", "just some words\n".to_string());
+
+        // Further constructs read identically (second differential round).
+        add("extra_comment_after_contains", "module m\n  use testdrive\ncontains ! c\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string());
+        add("extra_two_contains_like_text", "module m\n  use testdrive\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n  subroutine test_y(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_y\nend module m\n".to_string());
+        add("extra_program_with_spec", "program p\n  use testdrive\n  implicit none\n  integer :: i\n  type(error_type) :: e\n  i = 1\n  print *, i\nend program p\n".to_string());
+        add(
+            "extra_program_end_with_name",
+            "program p\n  stop\nend program p\n".to_string(),
+        );
+        add(
+            "extra_program_no_name_end",
+            "program p\n  stop\nend\n".to_string(),
+        );
+        add("extra_interface_operator", "module m\n  use testdrive\n  interface operator(+)\n    module procedure add\n  end interface\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string());
+        add("extra_generic_interface_functions", "module m\n  use testdrive\n  interface g\n    module procedure a, b\n  end interface g\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string());
+        add("extra_private_public_stmts", "module m\n  use testdrive\n  private\n  public :: test_x\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string());
+        add("extra_parameter_decl_in_module", "module m\n  use testdrive\n  integer, parameter :: n = 3\n  real :: x(n) = 0.0\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string());
+        add("extra_data_and_common", "module m\n  use testdrive\n  integer :: a\n  common /blk/ a\n  data a /1/\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\nend module m\n".to_string());
+        add("extra_select_type_in_body", "subroutine s(x)\n  class(*) :: x\n  select type (x)\n  type is (integer)\n    call a()\n  class default\n    call b()\n  end select\nend subroutine s\n".to_string());
+        add("extra_function_with_internal", "module m\ncontains\n  function f(x) result(y)\n    integer :: x, y\n    y = g(x)\n  contains\n    function g(z)\n      integer :: z, g\n      g = z\n    end function g\n  end function f\nend module m\n".to_string());
+        add("extra_subroutine_with_semicolon_end", "subroutine test_x(error)\n  use testdrive\n  type(error_type), allocatable, intent(out) :: error\nend subroutine test_x ; \n".to_string());
+        add("extra_two_statements_after_end_line", "subroutine test_x(error)\n  use testdrive\n  type(error_type), allocatable, intent(out) :: error\nend subroutine test_x; subroutine test_y(error); end subroutine\n".to_string());
+        add(
+            "extra_interface_with_semicolons",
+            "module m\n  interface; subroutine a(); end subroutine; end interface\nend module m\n"
+                .to_string(),
+        );
+        add("extra_where_elsewhere_nested", "subroutine s()\n  where (a > 0)\n    where (b > 0)\n      c = 1\n    end where\n  end where\nend subroutine s\n".to_string());
+        add("extra_forall_block", "subroutine s()\n  forall (i = 1:3, j = 1:3)\n    a(i, j) = 0\n  end forall\nend subroutine s\n".to_string());
+        add("extra_omp_comment_directive", "subroutine s()\n  !$omp parallel do\n  do i = 1, 3\n  end do\n  !$omp end parallel do\nend subroutine s\n".to_string());
+        add(
+            "extra_lone_quote",
+            "subroutine s()\n  x = '\n  y = 1\nend subroutine s\n".to_string(),
+        );
+        add("extra_lone_quote_in_module_test", "module m\n  use testdrive\ncontains\n  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    x = '\n  end subroutine test_x\nend module m\n".to_string());
+        add(
+            "extra_dbl_colon_in_array_constructor",
+            "subroutine s()\n  a = [integer :: 1, 2]\nend subroutine s\n".to_string(),
+        );
+        add("extra_type_guard_class_is", "subroutine s(x)\n  class(*) :: x\n  select type (x)\n  class is (integer)\n  end select\nend subroutine s\n".to_string());
+        add("extra_block_with_declarations", "subroutine s()\n  block\n    integer :: j\n    do j = 1, 2\n    end do\n  end block\nend subroutine s\n".to_string());
+        add(
+            "extra_pointer_assignment",
+            "subroutine s()\n  p => t\n  q(1:2) => t\nend subroutine s\n".to_string(),
+        );
+        add(
+            "extra_do_concurrent",
+            "subroutine s()\n  do concurrent (i = 1:3)\n    a(i) = 0\n  end do\nend subroutine s\n"
+                .to_string(),
+        );
+        add(
+            "extra_coarray",
+            "subroutine s()\n  integer :: a[*]\n  sync all\nend subroutine s\n".to_string(),
+        );
+        add(
+            "extra_submodule_procedure",
+            "submodule (m) sm\ncontains\n  module procedure p\n  end procedure\nend submodule sm\n"
+                .to_string(),
+        );
+        add(
+            "extra_entry_statement",
+            "subroutine s()\n  entry t()\nend subroutine s\n".to_string(),
+        );
+        add(
+            "extra_implicit_typing_decl",
+            "subroutine s(a)\n  implicit real (a-h, o-z)\n  dimension a(3)\nend subroutine s\n"
+                .to_string(),
+        );
+        add(
+            "extra_save_equivalence",
+            "subroutine s()\n  real :: a, b\n  equivalence (a, b)\n  save a\nend subroutine s\n"
+                .to_string(),
+        );
+        add(
+            "extra_namelist_stmt",
+            "subroutine s()\n  namelist /nl/ a, b\nend subroutine s\n".to_string(),
+        );
+        add("extra_interface_with_import", "module m\n  interface\n    subroutine a(x)\n      import :: t\n      type(t) :: x\n    end subroutine a\n  end interface\nend module m\n".to_string());
+        add(
+            "extra_procedure_pointer_decl",
+            "module m\n  procedure(a), pointer :: p\nend module m\n".to_string(),
+        );
+        add("extra_function_prefix_result_bind", "module m\ncontains\n  function f() result(r) bind(c)\n    integer :: r\n  end function f\nend module m\n".to_string());
+        add(
+            "extra_recursive_subroutine_top",
+            "recursive subroutine s()\nend subroutine s\n".to_string(),
+        );
+        add("extra_elemental_function_module", "module m\ncontains\n  elemental function f(x)\n    real :: f, x\n  end function f\nend module m\n".to_string());
+        add(
+            "extra_class_default_in_subroutine_spec",
+            "subroutine s(x)\n  class(t), intent(in) :: x\nend subroutine s\n".to_string(),
+        );
+        add("extra_long_name_with_continuation_everywhere", "module m\n  use testdrive\ncontains\n  subroutine test_&\n    &long_&\n    &name(error)\n    type(error_type), allocatable, &\n      intent(out) :: error\n  end &\n    subroutine test_long_name\nend module m\n".to_string());
+        add(
+            "extra_end_do_label_loop",
+            "subroutine s()\n  do i = 1, 3\n  end do\nend subroutine s\n".to_string(),
+        );
+        add("extra_if_then_on_continuation", "subroutine s()\n  if (a .and. &\n      b) then\n    c = 1\n  end if\nend subroutine s\n".to_string());
+        add("extra_select_case_nested_in_do", "subroutine s()\n  do i = 1, 3\n    select case (i)\n    case (1)\n      cycle\n    end select\n  end do\nend subroutine s\n".to_string());
+
+        // Depth limit: 256 nested constructs read, the 257th refuses.
+        for (count, name) in [
+            (255usize, "depth_255"),
+            (256, "depth_256"),
+            (257, "depth_257"),
+            (300, "depth_300"),
+        ] {
+            let opens = "if (a) then\n".repeat(count);
+            let closes = "end if\n".repeat(count);
+            add(
+                &format!("module_subroutine_{name}"),
+                in_module("use testdrive", &format!("  subroutine test_x(error)\n    type(error_type), intent(out) :: error\n{opens}{closes}  end subroutine test_x\n")),
+            );
+            add(
+                &format!("program_{name}"),
+                format!("program p\n{opens}{closes}end program p\n"),
+            );
+            let dos = "do i = 1, 2\n".repeat(count);
+            let end_dos = "end do\n".repeat(count);
+            add(
+                &format!("top_level_do_{name}"),
+                format!("subroutine s()\n{dos}{end_dos}end subroutine s\n"),
+            );
+        }
+        corpus
+    }
+
+    #[test]
+    fn differential_branch_corpus_matches_the_legacy_parser() {
+        let corpus = branch_corpus();
+        eprintln!("branch corpus sources: {}", corpus.len());
+        assert!(corpus.len() > 150, "branch corpus size {}", corpus.len());
+        let mut failures = Vec::new();
+        for (name, text) in &corpus {
+            let legacy = legacy_output("test/main.f90", text);
+            let current = output(text);
+            if legacy != current {
+                failures.push(format!(
+                    "{name}: legacy {} != tree-sitter {}",
+                    digest(&legacy),
+                    digest(&current)
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} differ:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    /// Reads every `.f90` file below `REPOGRAMMAR_FORTRAN_DIFFERENTIAL_CORPUS`
+    /// with both parsers, catching legacy panics, and prints one line per
+    /// differing file. Differences are reported, never failed on.
+    #[test]
+    #[ignore = "reads REPOGRAMMAR_FORTRAN_DIFFERENTIAL_CORPUS, an external read-only directory"]
+    fn differential_external_corpus_report() {
+        let Ok(root) = std::env::var("REPOGRAMMAR_FORTRAN_DIFFERENTIAL_CORPUS") else {
+            eprintln!("REPOGRAMMAR_FORTRAN_DIFFERENTIAL_CORPUS is not set");
+            return;
+        };
+        let mut files = Vec::new();
+        let mut stack = vec![std::path::PathBuf::from(root)];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.to_str().is_some_and(is_free_form_fortran_path) {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        let (mut compared, mut differing, mut legacy_panics) = (0usize, 0usize, 0usize);
+        let (mut both_refuse, mut both_read) = (0usize, 0usize);
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let name = path.to_string_lossy().into_owned();
+            let legacy = std::panic::catch_unwind(|| legacy_output("test/main.f90", &text));
+            let current = output(&text);
+            compared += 1;
+            match legacy {
+                Err(_) => {
+                    legacy_panics += 1;
+                    eprintln!("DIFF legacy-panic {name} new: {}", digest(&current));
+                }
+                Ok(legacy) if legacy != current => {
+                    differing += 1;
+                    eprintln!(
+                        "DIFF {name}\n  legacy: {}\n  new:    {}",
+                        digest(&legacy),
+                        digest(&current)
+                    );
+                }
+                Ok(_) => {
+                    if unknown_kinds(&current).iter().any(|kind| {
+                        !matches!(
+                            *kind,
+                            "testdrive_module_binding" | "test_registration_unproven"
+                        )
+                    }) {
+                        both_refuse += 1;
+                    } else {
+                        both_read += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "SUMMARY compared={compared} differing={differing} legacy_panics={legacy_panics} identical_refused={both_refuse} identical_read={both_read}"
+        );
+    }
+
+    /// Inputs where the Tree-sitter reader and the legacy parser legitimately
+    /// differ: `(name, text, anchors, refusal, class)`. `refusal` is the typed
+    /// unknown the new reader emits, if any.
+    fn divergence_corpus() -> Vec<(
+        &'static str,
+        String,
+        usize,
+        Option<&'static str>,
+        &'static str,
+    )> {
+        let sub = |statements: &str| {
+            in_module(
+                "use testdrive",
+                &format!("  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    integer :: i\n{statements}  end subroutine test_x\n{TEST_SUB}"),
+            )
+        };
+        let unadmitted = Some("unadmitted_fortran_construct");
+        vec![
+            // Legacy misparses the grammar reads correctly (unknown_removed).
+            (
+                "else_if_chain",
+                sub("    if (i > 0) then\n      i = 1\n    else if (i < 0) then\n      i = 2\n    else\n      i = 3\n    end if\n"),
+                2,
+                None,
+                "legacy counted `else if (...) then` as a block opener",
+            ),
+            (
+                "named_do",
+                sub("    outer: do i = 1, 3\n      exit outer\n    end do outer\n"),
+                2,
+                None,
+                "legacy did not see a named construct's opener",
+            ),
+            (
+                "named_if",
+                sub("    chk: if (i > 0) then\n      i = 1\n    end if chk\n"),
+                2,
+                None,
+                "legacy did not see a named construct's opener",
+            ),
+            (
+                "variable_named_end",
+                sub("    end = 3\n"),
+                2,
+                None,
+                "legacy closed the unit at an assignment to a variable named end",
+            ),
+            (
+                "derived_type_with_attributes",
+                "module m\n  use testdrive\n  type, private, bind(c) :: a\n    integer :: i\n  end type a\ncontains\n".to_string() + TEST_SUB + "end module m\n",
+                1,
+                None,
+                "legacy read `type, attr :: name` as an ordinary statement",
+            ),
+            (
+                "typed_function_in_interface",
+                "module m\n  use testdrive\n  interface\n    type(c_ptr) function acc_malloc(bytes) bind(C)\n      integer :: bytes\n    end function\n  end interface\ncontains\n".to_string() + TEST_SUB + "end module m\n",
+                1,
+                None,
+                "legacy did not see a typed function statement as a procedure opener",
+            ),
+            (
+                "enum_block",
+                "module m\n  use testdrive\n  enum, bind(c)\n    enumerator :: a = 1\n  end enum\ncontains\n".to_string() + TEST_SUB + "end module m\n",
+                1,
+                None,
+                "legacy did not see an enum block's opener",
+            ),
+            // Syntax the grammar rejects where the legacy parser skipped the
+            // statement unread (unknown_added).
+            (
+                "syntax_error_in_skipped_body",
+                sub("    x = = 1\n"),
+                0,
+                unadmitted,
+                "syntax_error_in_skipped_region",
+            ),
+            (
+                "end_followed_by_the_unit_name_only",
+                in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end test_x\n"),
+                0,
+                unadmitted,
+                "syntax_error_in_skipped_region",
+            ),
+            (
+                "alternate_return_dummy",
+                in_module("use testdrive", "  subroutine test_x(error, *)\n    type(error_type), intent(out) :: error\n  end subroutine test_x\n"),
+                0,
+                unadmitted,
+                "grammar gap: alternate return",
+            ),
+            (
+                "non_ascii_identifier",
+                "module m\n  integer :: caf\u{e9}\nend module m\n".to_string(),
+                0,
+                unadmitted,
+                "syntax_error_in_skipped_region",
+            ),
+        ]
+    }
+
+    #[test]
+    fn tree_sitter_reader_pins_the_inputs_the_legacy_parser_misread_or_skipped() {
+        for (name, text, anchors, refusal, _) in divergence_corpus() {
+            let current = output(&text);
+            assert_eq!(anchor_units(&current).len(), anchors, "{name}");
+            let kinds = unknown_kinds(&current);
+            match refusal {
+                Some(kind) => assert_eq!(kinds, vec![kind], "{name}"),
+                None => assert!(
+                    kinds.iter().all(|kind| matches!(
+                        *kind,
+                        "testdrive_module_binding" | "test_registration_unproven"
+                    )),
+                    "{name}: {kinds:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn differential_declared_divergences_really_differ_from_the_legacy_parser() {
+        for (name, text, _, _, class) in divergence_corpus() {
+            assert_ne!(
+                legacy_output("test/main.f90", &text),
+                output(&text),
+                "{name} ({class})"
             );
         }
     }

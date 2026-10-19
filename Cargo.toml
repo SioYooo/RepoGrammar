@@ -37,6 +37,8 @@ tree-sitter = "0.27"
 tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
+# Production (ADR-0058): pinned Tree-sitter Fortran grammar for the test-drive frontend.
+tree-sitter-fortran = "=0.6.0"
 # Production (ADR-0058): pinned Tree-sitter Go grammar for the Go testing frontend.
 tree-sitter-go = "=0.25.0"
 tree-sitter-java = "0.23"
