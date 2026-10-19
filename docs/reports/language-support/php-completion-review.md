@@ -292,3 +292,86 @@ the test, or that the file is in any suite; the Composer inventory proves
 static declarations and lock entries, not installation, autoloading, or
 runtime selection; and nothing here proves PHP language support beyond the
 declared subset of ADR-0047 D4.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The PHPUnit frontend now reads declarations from the pinned
+`tree-sitter-php` 0.25.1 grammar (`LANGUAGE_PHP`, the full-file grammar: the
+prologue gate admits only files that open with `<?php`, so the tag is part of
+every parsed file, and the grammar tolerates the optional BOM without byte
+slicing). The ADR-0047 lexer stays the lexical-subset gate and runs first, so
+every lexical refusal (`unterminated_literal`, `attribute_spanning_lines`,
+`?>` and non-ASCII code bytes) is unchanged and still wins over any tree
+refusal. The anchor shape, obligation registry and family claim are unchanged;
+`php.rs` (Composer and PHPUnit XML inventory) is untouched. The open ADR-0047 D1
+admission-contract mismatch recorded above is not addressed here and its
+behaviour is preserved exactly.
+
+The grammar supplies the declaration structure and the ADR-0047 subset is
+applied over the tree and the token stream: top-level `declare`, `namespace`,
+`use` (single clause only), `const`, free functions and non-`readonly` classes
+with at most one `extends` name; class members `use` (no adaptation block),
+`const`, properties (no hook list) and methods; the bounded return-type
+vocabulary (an optional `?` and one name, so union, intersection and DNF types
+refuse); same-line uppercase-first attribute spelling; and the 256-deep body
+brace bound, counted over the token stream. Refusals are collected with their
+byte position and the earliest wins, as in a left-to-right parse. An `ERROR`
+or `MISSING` node refuses the file only as the generic
+`unadmitted_php_construct`, and only when no more specific refusal applies: a
+root that is itself an `ERROR` node is not walked as top-level declarations,
+and a method with neither body nor `;` is left to the generic class. Two
+legacy quirks of the member reader are reproduced because they are
+header-position refusals: a block comment inside a declaration header (outside
+the parameter list) refuses, and a method whose modifier run is broken by a
+block comment or a `readonly`/`var` modifier is read as a property extent
+(refused if it has a body, silently dropped if it does not). The doc-comment
+and attribute prefix of a member is read off the token stream, so it is
+independent of where the grammar attaches comment nodes.
+
+Verdict `CLASSIFIED`. The in-process differential against the legacy parser
+(full `ParseReport`/`SourceParseOutput` equality) matched on all 7 committed
+fixture sources and on a 195-source branch corpus that covers every refusal
+class, every anchor variation (doc, attribute, name, shape, provider,
+ancestry, trait) and near-misses (comments in each header position, depth at
+255/256/299 closed and 512 unclosed, BOM, CRLF).
+
+The machine holds no real-world PHPUnit corpus: the 21 files containing
+`extends TestCase` are copies of the repository's own fixtures in other
+checkouts. The external run compared 33 `.php` files (those 21 plus 12 unrelated
+files such as gettext and pygments examples) and all 33 were identical, which
+is weak evidence by itself. To widen it a mutation differential rewrote every
+fixture and branch source (drop a line, drop a token, insert a block comment
+before a token, truncate after a token): 23,195 mutants, 822 differing, all
+explained by three classes:
+
+- 419 `unknown_added`: the mutant is not valid PHP and the legacy parser
+  admitted it because it skipped the broken region (body, parameter list,
+  property default, constant value, an unrecognized class-member head, a
+  trailing attribute at end of file, a `|` or `&` return type). This is the
+  declared `syntax_error_in_skipped_region` divergence; the new behaviour is
+  pinned by `a_syntax_error_in_a_skipped_region_refuses_the_whole_file`.
+- 401 `refusal_class_changed`: all come from the inputs that nest more than 256
+  braces. Legacy refused structurally (`unadmitted_php_construct`) because of a
+  mutation earlier in the file; the new reader cannot see a body inside a
+  recovered `ERROR` tree and reports `parser_depth_limit` from a token-level
+  depth count (a global depth above the bound plus one). Both refuse the whole
+  file; only the class differs, and only for a file that is both broken and
+  nested past the bound.
+- 2 `unknown_removed`: `\\Name` (a doubled backslash) is accepted by the
+  grammar and was refused by the legacy name reader.
+
+Three further divergences are pinned by `declared_divergences_are_pinned`
+because the legacy parser admitted source that is not PHP or that the grammar
+cannot read: a bodiless free function, a stray `;` in a class body, and a
+`declare` directive list (`declare(strict_types=1, ticks=1)`), which PHP
+admits but grammar 0.25.1 reads as an error. `?>` inside a `//` comment ends
+PHP mode in PHP and in the grammar but was comment text to the legacy lexer,
+so such a file now refuses. The `declare` list is the only valid-PHP
+regression found; it costs recall on a file that uses it, never a false anchor.
+
+Non-test lines of the lane: 1,802 before (`lexer.rs` 421, `syntax.rs` 712,
+`phpunit.rs` 669), 1,729 after with the legacy parser excluded (`syntax.rs`
+625 of which the reader is 475 against a 564-line parser, `phpunit.rs` 683).
+The legacy parser stays under `#[cfg(test)]` until the fixture-wide capture is
+done. Gate 2 evidence must be re-checked against ADR-0058 before any
+completion promotion; the status above is unchanged.

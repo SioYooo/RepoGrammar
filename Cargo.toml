@@ -40,6 +40,8 @@ tree-sitter-cpp = "0.23"
 # Production (ADR-0058): pinned Tree-sitter Go grammar for the Go testing frontend.
 tree-sitter-go = "=0.25.0"
 tree-sitter-java = "0.23"
+# Production (ADR-0058): pinned Tree-sitter PHP grammar for the PHPUnit frontend.
+tree-sitter-php = "=0.25.1"
 # Production (ADR-0058): pinned Tree-sitter Ruby grammar for the Minitest frontend.
 tree-sitter-ruby = "=0.23.1"
 tree-sitter-rust = "0.24"

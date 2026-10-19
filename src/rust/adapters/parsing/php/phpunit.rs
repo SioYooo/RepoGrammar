@@ -5,12 +5,14 @@
 //! prohibitions all name running PHP or Composer and are unreached: nothing
 //! runs.
 //!
-//! This is a hand-written lexer and recursive-descent parser over the declared
-//! PHP subset of ADR-0047 D4, not a text scan. It reads only files whose bytes
-//! begin with the `<?php` prologue; every other `.php` file is HTML output
-//! with no PHP code region and never crosses the source-store boundary. The
-//! anchor is a question about the parsed declaration structure: a named,
-//! non-abstract class whose in-file `extends` chain terminates at a
+//! Declarations come from the pinned Tree-sitter PHP grammar (ADR-0058), with
+//! the declared PHP subset of ADR-0047 D4 applied over the tree and the
+//! subset's own lexer kept as the lexical gate; it is not a text scan. A tree
+//! that needed error recovery refuses the file. It reads only files whose
+//! bytes begin with the `<?php` prologue; every other `.php` file is HTML
+//! output with no PHP code region and never crosses the source-store
+//! boundary. The anchor is a question about the parsed declaration structure:
+//! a named, non-abstract class whose in-file `extends` chain terminates at a
 //! `TestCase`-suffixed name, and a directly declared `public`, non-static,
 //! non-abstract, zero-parameter method named `test*` or marked `@test` or
 //! `#[Test]`.
@@ -285,6 +287,18 @@ impl SourceParser for PhpPHPUnitParser {
 }
 
 pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError> {
+    parse_output_with(document, syntax::parse)
+}
+
+/// The syntax layer a parse runs: the ADR-0058 Tree-sitter reader, or in
+/// tests the legacy parser it replaced, so a differential can run both.
+type SyntaxReader =
+    for<'a> fn(&'a str, &[lexer::Token]) -> Result<syntax::FileParse<'a>, ParseError>;
+
+fn parse_output_with(
+    document: SourceDocument<'_>,
+    read_syntax: SyntaxReader,
+) -> Result<SourceParseOutput, ParseError> {
     if document.language != Language::Php || !is_phpunit_source_path(document.path) {
         return Err(ParseError::UnsupportedLanguage);
     }
@@ -337,7 +351,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         token.start += code_start;
         token.end += code_start;
     }
-    let parsed = syntax::parse(document.text, &lexed);
+    let parsed = read_syntax(document.text, &lexed)?;
     if let Some(abstention) = parsed.abstention {
         return abstain(module, units, abstention, document.path);
     }
@@ -951,6 +965,33 @@ mod tests {
     }
 
     #[test]
+    fn a_syntax_error_in_a_skipped_region_refuses_the_whole_file() {
+        // ADR-0058: an `ERROR` or `MISSING` node anywhere refuses the file as
+        // the generic unadmitted class, including in a body, parameter list,
+        // property default, or constant value that the declared subset only
+        // admits for its extent. Such source is not PHP, and a recovered
+        // anchor cannot be told apart from a real one.
+        for (region, member) in [
+            ("body", "public function testB(): void { $x = := 1; }"),
+            ("parameters", "public function testB(int $x = ): void {}"),
+            ("property default", "public $x = := 1;"),
+            ("constant value", "const X = := 1;"),
+        ] {
+            let source = format!(
+                "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class ATest extends TestCase\n{{\n    public function testA(): void {{}}\n    {member}\n}}\n"
+            );
+            let parsed = output("tests/ATest.php", &source);
+            assert_eq!(test_methods(&parsed), 0, "{region}");
+            assert_eq!(
+                unknown_kinds(&parsed),
+                vec!["unadmitted_php_construct".to_string()],
+                "{region}"
+            );
+            assert_eq!(parsed.report.units.len(), 1, "{region}");
+        }
+    }
+
+    #[test]
     fn anchors_inside_strings_comments_and_heredocs_never_form() {
         let parsed = output(
             "tests/LiteralsTest.php",
@@ -1341,5 +1382,622 @@ mod tests {
                 "framework:phpunit.test_method"
             ]
         );
+    }
+}
+
+/// Temporary ADR-0058 differential harness: the Tree-sitter reader against the
+/// legacy parser it replaces. Removed by the coordinator with the legacy
+/// parser once the fixture-wide capture is done.
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+    use crate::core::model::{ContentHash, RepositoryRevision};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::path::{Path, PathBuf};
+
+    const HASH: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    type Outcome = Result<SourceParseOutput, ParseError>;
+
+    fn document<'a>(path: &'a str, text: &'a str) -> SourceDocument<'a> {
+        SourceDocument {
+            path,
+            language: Language::Php,
+            content_hash: ContentHash::new(HASH).expect("hash"),
+            repository_revision: RepositoryRevision::new("UNKNOWN").expect("revision"),
+            text,
+        }
+    }
+
+    fn new_outcome(path: &str, text: &str) -> Outcome {
+        parse_output_with(document(path, text), syntax::parse)
+    }
+
+    fn legacy_outcome(path: &str, text: &str) -> Outcome {
+        parse_output_with(document(path, text), syntax::legacy::parse)
+    }
+
+    fn assert_equivalent(name: &str, text: &str) {
+        let path = "tests/DifferentialTest.php";
+        let old = legacy_outcome(path, text);
+        let new = new_outcome(path, text);
+        assert_eq!(
+            format!("{old:?}"),
+            format!("{new:?}"),
+            "legacy and Tree-sitter outputs differ for corpus entry {name}: {text}"
+        );
+    }
+
+    fn unknowns(outcome: &Outcome) -> Vec<String> {
+        match outcome {
+            Ok(output) => output
+                .report
+                .semantic_facts
+                .iter()
+                .flat_map(|fact| fact.assumptions.iter())
+                .filter_map(|assumption| assumption.strip_prefix("php_unknown_kind="))
+                .map(String::from)
+                .collect(),
+            Err(error) => vec![format!("{error:?}")],
+        }
+    }
+
+    fn php_files(root: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        let mut entries: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                php_files(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "php") {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn every_committed_fixture_source_is_identical() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/php");
+        let mut files = Vec::new();
+        php_files(&root, &mut files);
+        assert!(files.len() >= 6, "fixture sources found: {}", files.len());
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("fixture");
+            assert_equivalent(&file.display().to_string(), &text);
+        }
+    }
+
+    fn wrap(body: &str) -> String {
+        format!(
+            "<?php\nuse PHPUnit\\Framework\\TestCase;\nclass ATest extends TestCase\n{{\n{body}\n}}\n"
+        )
+    }
+
+    fn corpus() -> Vec<(String, String)> {
+        let mut entries: Vec<(String, String)> = Vec::new();
+        let mut add = |name: &str, text: String| entries.push((name.to_string(), text));
+        // Anchor shapes and markers.
+        add("prefix_class", PREFIX.to_string());
+        add("empty_php", "<?php".to_string());
+        add("empty_php_newline", "<?php\n".to_string());
+        add("bom_prefix", format!("\u{feff}{PREFIX}"));
+        add("crlf", PREFIX.replace('\n', "\r\n"));
+        for (name, body) in [
+            ("doc_test", "/** @test */\npublic function loads(): void {}"),
+            ("doc_tests_not_marker", "/** @tests */\npublic function loads(): void {}"),
+            ("doc_email_not_marker", "/** my@test */\npublic function loads(): void {}"),
+            ("doc_multi_tag", "/**\n * Docs.\n * @group slow\n * @test\n */\npublic function loads(): void {}"),
+            ("doc_then_plain", "/** @test */\n/* plain */\npublic function loads(): void {}"),
+            ("plain_then_doc", "/* plain */\n/** @test */\npublic function loads(): void {}"),
+            ("two_docs_last_wins", "/** @test */\n/** other */\npublic function loads(): void {}"),
+            ("empty_doc_masks", "/** @test */\n/**/\npublic function loads(): void {}"),
+            ("doc_with_line_comment_between", "/** @test */\n// note\npublic function loads(): void {}"),
+            ("doc_with_hash_comment_between", "/** @test */\n# note\npublic function loads(): void {}"),
+            ("doc_before_stray_semicolon_member", "/** @test */\npublic $x;\npublic function loads(): void {}"),
+            ("attr_test", "#[Test]\npublic function loads(): void {}"),
+            ("attr_test_args_not_marker", "#[Test()]\npublic function loads(): void {}"),
+            ("attr_test_then_doc", "#[Test]\n/** doc */\npublic function loads(): void {}"),
+            ("attr_same_line", "#[Test] public function loads(): void {}"),
+            ("attr_two_lines", "#[Test]\n#[Group('a')]\npublic function loads(): void {}"),
+            ("attr_two_same_line", "#[Test] #[Group('a')] public function loads(): void {}"),
+            ("attr_with_array_arg", "#[TestWith([1, 2])]\npublic function loads(): void {}"),
+            ("attr_data_provider", "#[DataProvider('p')]\npublic function testLoads(): void {}"),
+            ("attr_data_provider_marker", "#[Test]\n#[DataProvider('p')]\npublic function loads(): void {}"),
+            ("attr_string_with_bracket", "#[CoversClass('a]b')]\n#[Test]\npublic function loads(): void {}"),
+            ("doc_data_provider", "/** @dataProvider p */\npublic function testLoads(): void {}"),
+            ("doc_data_provider_and_test", "/**\n * @test\n * @dataProvider p\n */\npublic function loads(): void {}"),
+            ("name_prefix_test", "public function testLoads(): void {}"),
+            ("name_prefix_Test_capital_not_marker", "public function TestLoads(): void {}"),
+            ("name_prefix_testing", "public function testing(): void {}"),
+            ("name_not_test", "public function helper(): void {}"),
+            ("implicit_public", "function testLoads(): void {}"),
+            ("private", "private function testLoads(): void {}"),
+            ("protected", "protected function testLoads(): void {}"),
+            ("static", "public static function testLoads(): void {}"),
+            ("final_public", "final public function testLoads(): void {}"),
+            ("public_final", "public final function testLoads(): void {}"),
+            ("uppercase_keywords", "PUBLIC STATIC FUNCTION testLoads(): VOID {}"),
+            ("uppercase_public", "PUBLIC FUNCTION testLoads(): VOID {}"),
+            ("abstract_method", "abstract public function testLoads(): void;"),
+            ("with_param", "public function testLoads(int $x): void {}"),
+            ("with_param_default_array", "public function testLoads(array $x = [1, 2]): void {}"),
+            ("with_variadic", "public function testLoads(...$xs): void {}"),
+            ("with_comment_param", "public function testLoads(/* nothing */): void {}"),
+            ("with_line_comment_param", "public function testLoads(// nothing\n): void {}"),
+            ("with_attr_param", "public function testLoads(#[Foo] $x): void {}"),
+            ("no_return_type", "public function testLoads() {}"),
+            ("nullable_return", "public function testLoads(): ?int {}"),
+            ("qualified_return", "public function testLoads(): \\Foo\\Bar {}"),
+            ("relative_return", "public function testLoads(): namespace\\Bar {}"),
+            ("static_return", "public function testLoads(): static {}"),
+            ("never_return", "public function testLoads(): never {}"),
+            ("union_return", "public function testLoads(): int|string {}"),
+            ("nullable_union_return", "public function testLoads(): ?int|string {}"),
+            ("intersection_return", "public function testLoads(): A&B {}"),
+            ("dnf_return", "public function testLoads(): (A&B)|null {}"),
+            ("by_ref_return", "public function &testLoads(): array {}"),
+            ("keyword_method_name", "public function list(): void {}\npublic function testClass(): void {}"),
+            ("method_named_class", "public function class(): void {}\npublic function testIf(): void {}"),
+            ("trait_use", "use Helpers;\npublic function testLoads(): void {}"),
+            ("trait_use_multi", "use A, B\\C;\npublic function testLoads(): void {}"),
+            ("trait_use_block", "use A { a as b; }\npublic function testLoads(): void {}"),
+            ("class_const", "const X = 1;\npublic const Y = [1, 2];\npublic function testLoads(): void {}"),
+            ("final_class_const", "final public const X = 1;\npublic function testLoads(): void {}"),
+            ("typed_const", "public const int X = 1;\npublic function testLoads(): void {}"),
+            ("property_plain", "public $a;\nprotected $b = [1, 'x' => 2];\nprivate static $c = null;\npublic function testLoads(): void {}"),
+            ("property_typed", "public ?int $a = null;\nprivate array $b = [];\npublic function testLoads(): void {}"),
+            ("property_var", "var $a;\npublic function testLoads(): void {}"),
+            ("property_readonly", "public readonly string $a;\npublic function testLoads(): void {}"),
+            ("property_attr", "#[Foo]\npublic $a;\npublic function testLoads(): void {}"),
+            ("property_attr_lowercase", "#[foo]\npublic $a;\npublic function testLoads(): void {}"),
+            ("property_hook", "public $a { get => 1; }\npublic function testLoads(): void {}"),
+            ("promoted_constructor", "public function __construct(private int $a = 1) {}\npublic function testLoads(): void {}"),
+            ("constructor_and_setup", "protected function setUp(): void { parent::setUp(); }\npublic function testLoads(): void {}"),
+            ("body_with_closure_and_match", "public function testLoads(): void {\n    $f = function () { return 1; };\n    $g = fn($x) => $x;\n    $r = match (1) { 1 => 'a', default => 'b' };\n    foreach ([1] as $v) { if ($v) { echo $v; } }\n}"),
+            ("body_with_string_braces", "public function testLoads(): void {\n    $a = 'not } a brace';\n    $b = \"interp {$c->m()} end\";\n    $d = <<<EOT\nheredoc } body #[Test]\nEOT;\n    $e = <<<'NOW'\nnow } {\nNOW;\n    if ($a === $b) { echo \"} } {\"; }\n}"),
+            ("body_with_anonymous_class", "public function testLoads(): void {\n    $o = new class { public function testInner(): void {} };\n}"),
+            ("body_with_attribute_closure", "public function testLoads(): void {\n    $f = #[Pure] fn() => 1;\n}"),
+            ("body_with_comments", "public function testLoads(): void {\n    // } brace in comment\n    # } another\n    /* } block */\n}"),
+            ("nested_declarations_in_strings", "public function testLoads(): void {\n    $a = 'public function testFake(): void {}';\n    $b = \"class FakeTest extends TestCase\";\n}"),
+            ("static_closure_in_body", "public function testLoads(): void {\n    $f = static function () {};\n}"),
+            ("multiple_methods_mixed", "/** @test */ public function a(): void {}\n#[Test] public function b(): void {}\npublic function testC(): void {}\nprivate function testD(): void {}\npublic static function testE(): void {}"),
+        ] {
+            add(name, wrap(body));
+        }
+
+        // Class and file shape.
+        for (name, text) in [
+            ("in_file_chain", "<?php\nclass Base extends TestCase\n{\n    protected function make(): int {}\n}\nfinal class T extends Base\n{\n    public function testA(): void {}\n}\n"),
+            ("chain_reverse_order", "<?php\nfinal class T extends Base\n{\n    public function testA(): void {}\n}\nclass Base extends TestCase\n{\n}\n"),
+            ("chain_cycle", "<?php\nclass A extends B { public function testA(): void {} }\nclass B extends A { public function testB(): void {} }\n"),
+            ("unresolved_base", "<?php\nclass A extends Unknown { public function testA(): void {} }\n"),
+            ("no_extends", "<?php\nclass A { public function testA(): void {} }\n"),
+            ("abstract_base", "<?php\nabstract class Base extends TestCase { public function testA(): void {} }\nfinal class T extends Base { public function testB(): void {} }\n"),
+            ("final_abstract_order", "<?php\nfinal abstract class A extends TestCase { public function testA(): void {} }\n"),
+            ("abstract_final_order", "<?php\nabstract final class A extends TestCase { public function testA(): void {} }\n"),
+            ("fqn_extends", "<?php\nclass A extends \\PHPUnit\\Framework\\TestCase { public function testA(): void {} }\n"),
+            ("relative_extends", "<?php\nclass A extends namespace\\TestCase { public function testA(): void {} }\n"),
+            ("implements_list", "<?php\nclass A extends TestCase implements \\I, J\\K { public function testA(): void {} }\n"),
+            ("implements_only", "<?php\nclass A implements I { public function testA(): void {} }\n"),
+            ("extends_comma_list", "<?php\nclass A extends B, C { }\n"),
+            ("namespace_use_alias", "<?php\nnamespace App\\Tests;\nuse PHPUnit\\Framework\\TestCase as BaseCase;\nuse function Foo\\bar;\nuse const Foo\\BAZ;\nuse \\Leading\\Backslash;\nclass A extends BaseCase { public function testA(): void {} }\n"),
+            ("declare_strict", "<?php\ndeclare(strict_types=1);\nclass A extends TestCase { public function testA(): void {} }\n"),
+            ("declare_block", "<?php\ndeclare(ticks=1) { }\n"),
+            ("declare_alt", "<?php\ndeclare(ticks=1):\nenddeclare;\n"),
+            ("namespace_braced", "<?php\nnamespace App {\n}\n"),
+            ("namespace_unnamed_braced", "<?php\nnamespace {\n}\n"),
+            ("use_group", "<?php\nuse PHPUnit\\Framework\\{TestCase, Attributes\\Test};\nclass A extends TestCase {}\n"),
+            ("use_comma_list", "<?php\nuse A\\B, C\\D;\nclass A extends TestCase {}\n"),
+            ("use_function_comma", "<?php\nuse function A\\b, C\\d;\n"),
+            ("interface_decl", "<?php\ninterface Runnable {}\n"),
+            ("trait_decl", "<?php\ntrait T { public function testA(): void {} }\n"),
+            ("enum_decl", "<?php\nenum Suit {\n    case Hearts;\n}\n"),
+            ("readonly_class", "<?php\nreadonly class A extends TestCase {}\n"),
+            ("final_readonly_class", "<?php\nfinal readonly class A extends TestCase {}\n"),
+            ("anonymous_class_toplevel", "<?php\n$x = new class {};\n"),
+            ("toplevel_if", "<?php\nif (PHP_VERSION_ID >= 80100) {\n    class A extends TestCase {}\n}\n"),
+            ("toplevel_echo", "<?php\necho 1;\n"),
+            ("toplevel_assignment", "<?php\n$x = 1;\nclass A extends TestCase { public function testA(): void {} }\n"),
+            ("toplevel_call", "<?php\nrequire_once 'x.php';\nclass A extends TestCase {}\n"),
+            ("toplevel_closure", "<?php\nfunction () {};\n"),
+            ("free_function", "<?php\nfunction helper(int $a, $b = [1]): int { return 1; }\nclass A extends TestCase { public function testA(): void {} }\n"),
+            ("free_function_ref", "<?php\nfunction &helper(): array { static $a = []; return $a; }\n"),
+            ("free_function_union", "<?php\nfunction helper(): int|string {}\n"),
+            ("free_const", "<?php\nconst A = 1, B = [1, 2];\nclass T extends TestCase { public function testA(): void {} }\n"),
+            ("free_define", "<?php\ndefine('A', 1);\n"),
+            ("stray_semicolons_toplevel", "<?php\n;;\nclass A extends TestCase { public function testA(): void {} };\n;\n"),
+            ("two_classes", "<?php\nclass A extends TestCase { public function testA(): void {} }\nclass B extends TestCase { public function testB(): void {} }\n"),
+            ("class_attr_top", "<?php\n#[CoversClass(Foo::class)]\nfinal class A extends TestCase { public function testA(): void {} }\n"),
+            ("class_attr_top_doc", "<?php\n/** doc */\n#[Foo]\n/** doc2 */\nfinal class A extends TestCase { public function testA(): void {} }\n"),
+            ("class_attr_lowercase", "<?php\n#[test]\nclass A extends TestCase {}\n"),
+            ("class_attr_two_in_one", "<?php\n#[Foo, Bar]\nclass A extends TestCase {}\n"),
+            ("class_attr_qualified", "<?php\n#[Foo\\Bar]\nclass A extends TestCase {}\n"),
+            ("class_attr_leading_backslash", "<?php\n#[\\Foo]\nclass A extends TestCase {}\n"),
+            ("class_attr_junk_after_name", "<?php\n#[Foo bar]\nclass A extends TestCase {}\n"),
+            ("method_attr_lowercase", "<?php\nclass A extends TestCase {\n    #[test]\n    public function testA(): void {}\n}\n"),
+            ("method_attr_two_in_one", "<?php\nclass A extends TestCase {\n    #[Test, Group('x')]\n    public function testA(): void {}\n}\n"),
+            ("method_attr_with_space", "<?php\nclass A extends TestCase {\n    #[ Test ]\n    public function testA(): void {}\n}\n"),
+            ("const_attr_lowercase", "<?php\nclass A extends TestCase {\n    #[foo]\n    const X = 1;\n}\n"),
+            ("class_name_keyword_like", "<?php\nclass Enum extends TestCase { public function testA(): void {} }\n"),
+            ("only_comments_after_tag", "<?php\n// nothing\n/* nothing */\n# nothing\n"),
+            ("class_with_nothing", "<?php\nclass A extends TestCase {}\n"),
+            ("class_with_comments_only", "<?php\nclass A extends TestCase {\n    // c\n    /* d */\n    /** e */\n}\n"),
+            ("line_comments_between_members", "<?php\nclass A extends TestCase {\n    // c\n    public function testA(): void {}\n    # h\n    public function testB(): void {}\n}\n"),
+            ("block_comment_between_members", "<?php\nclass A extends TestCase {\n    public function testA(): void {}\n    /* c */\n    public function testB(): void {}\n}\n"),
+        ] {
+            add(name, text.to_string());
+        }
+
+        // Block comments inside declaration headers.
+        for (name, text) in [
+            ("comment_class_header_after_name", "<?php\nclass A /* c */ extends TestCase {}\n"),
+            ("comment_class_header_before_brace", "<?php\nclass A extends TestCase /* c */ {}\n"),
+            ("comment_class_header_before_name", "<?php\nclass /* c */ A extends TestCase {}\n"),
+            ("comment_between_class_modifiers", "<?php\nfinal /* c */ class A extends TestCase {}\n"),
+            ("comment_before_class_modifiers", "<?php\n/* c */ final class A extends TestCase { public function testA(): void {} }\n"),
+            ("comment_method_before_name", "<?php\nclass A extends TestCase {\n    public function /* c */ testA(): void {}\n}\n"),
+            ("comment_method_after_name", "<?php\nclass A extends TestCase {\n    public function testA /* c */ (): void {}\n}\n"),
+            ("comment_method_before_colon", "<?php\nclass A extends TestCase {\n    public function testA() /* c */ : void {}\n}\n"),
+            ("comment_method_before_type", "<?php\nclass A extends TestCase {\n    public function testA(): /* c */ void {}\n}\n"),
+            ("comment_method_before_body", "<?php\nclass A extends TestCase {\n    public function testA(): void /* c */ {}\n}\n"),
+            ("comment_method_inside_params", "<?php\nclass A extends TestCase {\n    public function testA(/* c */): void {}\n}\n"),
+            ("comment_method_in_body", "<?php\nclass A extends TestCase {\n    public function testA(): void { /* c */ }\n}\n"),
+            ("comment_after_function_keyword_abstract", "<?php\nabstract class A extends TestCase {\n    abstract public function /* c */ testA(): void;\n}\n"),
+            ("comment_between_modifiers_with_body", "<?php\nclass A extends TestCase {\n    public /* c */ function testA(): void {}\n}\n"),
+            ("comment_between_modifiers_abstract", "<?php\nabstract class A extends TestCase {\n    abstract public /* c */ function testA(): void;\n    public function testB(): void {}\n}\n"),
+            ("comment_between_attr_and_modifier", "<?php\nclass A extends TestCase {\n    #[Test] /* c */ public function a(): void {}\n}\n"),
+            ("comment_in_property", "<?php\nclass A extends TestCase {\n    public /* c */ $x = 1;\n    public function testA(): void {}\n}\n"),
+            ("comment_in_const", "<?php\nclass A extends TestCase {\n    const /* c */ X = 1;\n    public function testA(): void {}\n}\n"),
+            ("comment_in_trait_use", "<?php\nclass A extends TestCase {\n    use /* c */ T;\n    public function testA(): void {}\n}\n"),
+            ("comment_in_namespace", "<?php\nnamespace A /* c */ ;\n"),
+            ("comment_in_use", "<?php\nuse A /* c */ \\B;\n"),
+            ("comment_in_declare_parens", "<?php\ndeclare(/* c */ strict_types=1);\n"),
+            ("comment_in_declare_header", "<?php\ndeclare /* c */ (strict_types=1);\n"),
+            ("comment_in_free_function_header", "<?php\nfunction /* c */ f() {}\n"),
+            ("comment_in_free_function_params", "<?php\nfunction f(/* c */) {}\n"),
+            ("comment_in_toplevel_const", "<?php\nconst /* c */ A = 1;\n"),
+            ("doc_in_class_extends", "<?php\nclass A extends /** d */ TestCase {}\n"),
+        ] {
+            add(name, text.to_string());
+        }
+
+        // Lexical refusals and bounds.
+        for (name, text) in [
+            ("unterminated_single", "<?php\n$x = 'never closed;\nclass A extends TestCase {}\n"),
+            ("unterminated_double", "<?php\n$x = \"never closed;\n"),
+            ("unterminated_block_comment", "<?php\n/* never closed\n"),
+            ("unterminated_heredoc", "<?php\n$x = <<<EOT\nnever closed\n"),
+            ("heredoc_marker_prefix", "<?php\n$x = <<<EOT\nbody\nEOTENSION;\n"),
+            ("heredoc_missing_name", "<?php\n$x = <<<\n"),
+            ("attribute_spanning", "<?php\n#[TestWith([\n    1,\n])]\nfunction f() {}\n"),
+            ("attribute_unclosed_eof", "<?php\n#[Test"),
+            ("attribute_spanning_in_class", "<?php\nclass A extends TestCase {\n    #[TestWith([\n 1])]\n    public function testA(): void {}\n}\n"),
+            ("close_tag_end", "<?php\nclass A extends TestCase {}\n?>\n<p>html</p>\n"),
+            ("close_tag_early", "<?php\n?>\n<p>inline html</p>\n"),
+            ("non_ascii_identifier", "<?php\n$ünicode = 1;\n"),
+            ("non_ascii_class_name", "<?php\nclass Ünï extends TestCase {}\n"),
+            ("non_ascii_in_string_and_comment", "<?php\nclass A extends TestCase {\n    // ü\n    public function testA(): void { $x = 'ü'; }\n}\n"),
+            ("unterminated_before_unadmitted", "<?php\nenum E {}\n$x = 'open;\n"),
+            ("lexical_after_unadmitted_wins", "<?php\ninterface I {}\n?>\n"),
+            ("unclosed_class_body", "<?php\nclass A extends TestCase\n{\n    public function testOpen(): void\n    {\n"),
+            ("unclosed_class_only", "<?php\nclass A extends TestCase\n{\n    public function testOk(): void {}\n"),
+            ("missing_method_body_semicolon", "<?php\nclass A extends TestCase {\n    public function testA(): void\n}\n"),
+            ("eof_after_class_keyword", "<?php\nclass"),
+            ("eof_after_function", "<?php\nclass A extends TestCase {\n    public function"),
+            ("depth_closed_256", &deep_body(255, true)),
+            ("depth_closed_257", &deep_body(256, true)),
+            ("depth_closed_300", &deep_body(299, true)),
+            ("depth_unclosed_512", &deep_body(512, false)),
+            ("depth_in_string_is_free", &format!("<?php\nclass A extends TestCase {{\n    public function testA(): void {{\n        $x = '{}';\n    }}\n}}\n", "{".repeat(600))),
+            ("depth_then_unadmitted_later", &format!("{}enum E {{}}\n", deep_body(299, true))),
+            ("unadmitted_then_depth_later", &format!("<?php\nenum E {{}}\n{}", &deep_body(299, true)["<?php\n".len()..])),
+        ] {
+            add(name, text.to_string());
+        }
+        entries
+    }
+
+    /// Inputs where the grammar and the legacy parser disagree by design:
+    /// the legacy parser skipped the region without reading it. The new
+    /// behaviour is pinned here; these are not in the equality corpus.
+    #[test]
+    fn declared_divergences_are_pinned() {
+        let anchor = "class A extends TestCase\n{\n    public function testA(): void {}\n}\n";
+        for (name, prefix_or_body) in [
+            // ADR-0058 syntax_error_in_skipped_region: a body the legacy
+            // parser skipped by brace balance.
+            (
+                "body_syntax_error",
+                "<?php\nclass A extends TestCase\n{\n    public function testA(): void { $x = := 1; }\n}\n".to_string(),
+            ),
+            (
+                "parameter_syntax_error",
+                "<?php\nclass A extends TestCase\n{\n    public function testA(int $x = ): void {}\n}\n".to_string(),
+            ),
+            (
+                "property_default_syntax_error",
+                "<?php\nclass A extends TestCase\n{\n    public $x = := 1;\n    public function testA(): void {}\n}\n".to_string(),
+            ),
+            (
+                "constant_syntax_error",
+                format!("<?php\nconst A = := 1;\n{anchor}"),
+            ),
+            // Grammar 0.25.1 reads only one `declare` directive, though PHP
+            // admits a list; the list sits in a region the legacy parser
+            // skipped.
+            (
+                "declare_directive_list",
+                format!("<?php\ndeclare(strict_types=1, ticks=1);\n{anchor}"),
+            ),
+            // A bodiless free function is not PHP; the legacy parser admitted
+            // it as an extent.
+            ("bodiless_free_function", format!("<?php\nfunction helper();\n{anchor}")),
+            // A stray `;` in a class body is not PHP either.
+            (
+                "stray_semicolon_in_class_body",
+                "<?php\nclass A extends TestCase\n{\n    ;\n    public function testA(): void {}\n}\n".to_string(),
+            ),
+            // `?>` inside a line comment ends PHP mode; the legacy lexer read
+            // it as comment text.
+            (
+                "close_tag_in_line_comment",
+                format!("<?php\n// ends php mode ?>\n{anchor}"),
+            ),
+        ] {
+            let path = "tests/DivergenceTest.php";
+            let new = new_outcome(path, &prefix_or_body).expect("parse");
+            assert!(
+                !new.report.diagnostics.is_empty(),
+                "{name}: the grammar must refuse the whole file"
+            );
+            assert_eq!(unknowns(&Ok(new)), vec!["unadmitted_php_construct"], "{name}");
+            let old = legacy_outcome(path, &prefix_or_body).expect("legacy parse");
+            assert!(
+                old.report.diagnostics.is_empty(),
+                "{name}: documents that the legacy parser admitted it"
+            );
+        }
+    }
+
+    fn deep_body(nesting: usize, closed: bool) -> String {
+        let close = if closed {
+            "}".repeat(nesting)
+        } else {
+            String::new()
+        };
+        format!(
+            "<?php\nclass A extends TestCase\n{{\n    public function testDeep(): void\n    {{\n        {}{close}\n    }}\n}}\n",
+            "{".repeat(nesting)
+        )
+    }
+
+    const PREFIX: &str = "<?php\n\nnamespace Acme\\Catalog\\Tests;\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class CatalogTest extends TestCase\n{\n    public function testLoadsTheCatalog(): void\n    {\n        self::assertTrue(true);\n    }\n\n    public function testFiltersByCategory(): void\n    {\n        self::assertTrue(true);\n    }\n}\n";
+
+    #[test]
+    fn the_branch_corpus_is_identical() {
+        let entries = corpus();
+        assert!(entries.len() > 150, "corpus size {}", entries.len());
+        let mut failures = Vec::new();
+        for (name, text) in &entries {
+            let path = "tests/DifferentialTest.php";
+            let old = format!("{:?}", legacy_outcome(path, text));
+            let new = format!("{:?}", new_outcome(path, text));
+            if old != new {
+                failures.push(format!(
+                    "{name}: legacy {:?} vs tree-sitter {:?}",
+                    unknowns(&legacy_outcome(path, text)),
+                    unknowns(&new_outcome(path, text))
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {} differ:\n{}",
+            failures.len(),
+            entries.len(),
+            failures.join("\n")
+        );
+    }
+
+    /// Reads the external corpus named by `REPOGRAMMAR_PHP_DIFFERENTIAL_CORPUS`
+    /// (a directory, or a newline-separated list file) and prints one line per
+    /// differing file. It never fails on a difference.
+    #[test]
+    #[ignore = "external corpus; set REPOGRAMMAR_PHP_DIFFERENTIAL_CORPUS"]
+    fn external_corpus_differential() {
+        let Ok(root) = std::env::var("REPOGRAMMAR_PHP_DIFFERENTIAL_CORPUS") else {
+            eprintln!("REPOGRAMMAR_PHP_DIFFERENTIAL_CORPUS is not set");
+            return;
+        };
+        let mut files = Vec::new();
+        let root = PathBuf::from(root);
+        if root.is_file() {
+            let list = std::fs::read_to_string(&root).expect("file list");
+            files.extend(
+                list.lines()
+                    .filter(|line| !line.is_empty())
+                    .map(PathBuf::from),
+            );
+        } else {
+            php_files(&root, &mut files);
+        }
+        let (mut compared, mut identical, mut skipped) = (0usize, 0usize, 0usize);
+        let mut classes: std::collections::BTreeMap<String, usize> = Default::default();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                skipped += 1;
+                continue;
+            };
+            let path = file.display().to_string();
+            let old = catch_unwind(AssertUnwindSafe(|| legacy_outcome(&path, &text)));
+            let new = catch_unwind(AssertUnwindSafe(|| new_outcome(&path, &text)));
+            compared += 1;
+            let (old, new) = match (old, new) {
+                (Ok(old), Ok(new)) => (old, new),
+                (old, new) => {
+                    let class = format!("panic(legacy={}, new={})", old.is_err(), new.is_err());
+                    println!("DIFF {class} {path}");
+                    *classes.entry(class).or_default() += 1;
+                    continue;
+                }
+            };
+            if format!("{old:?}") == format!("{new:?}") {
+                identical += 1;
+                continue;
+            }
+            let class = classify(&old, &new);
+            println!(
+                "DIFF {class} legacy={:?} new={:?} {path}",
+                unknowns(&old),
+                unknowns(&new)
+            );
+            *classes.entry(class).or_default() += 1;
+        }
+        println!(
+            "SUMMARY compared={compared} identical={identical} skipped_unreadable={skipped} differing={}",
+            compared - identical
+        );
+        for (class, count) in classes {
+            println!("CLASS {class} {count}");
+        }
+    }
+
+    /// Mutates every committed PHP source (drop a line, drop a token, insert a
+    /// block comment before a token, truncate after a token) and groups the
+    /// legacy-versus-Tree-sitter differences by refusal pair, with one example
+    /// each. Prints; never fails on a difference.
+    #[test]
+    #[ignore = "mutation differential; run with --nocapture"]
+    fn mutation_differential() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/php");
+        let mut files = Vec::new();
+        php_files(&root, &mut files);
+        let mut sources: Vec<String> = files
+            .iter()
+            .map(|file| std::fs::read_to_string(file).expect("fixture"))
+            .collect();
+        sources.extend(corpus().into_iter().map(|(_, text)| text));
+        let mut groups: std::collections::BTreeMap<String, (usize, Vec<String>)> =
+            Default::default();
+        let (mut total, mut differing) = (0usize, 0usize);
+        for source in &sources {
+            let Some(start) = lexer::prologue_code_start(source) else {
+                continue;
+            };
+            let Ok(tokens) = lexer::lex(&source[start..]) else {
+                continue;
+            };
+            let mut mutants: Vec<(String, String)> = Vec::new();
+            for (index, line) in source.split_inclusive('\n').enumerate() {
+                if index == 0 {
+                    continue;
+                }
+                let kept: String = source
+                    .split_inclusive('\n')
+                    .enumerate()
+                    .filter(|(at, _)| *at != index)
+                    .map(|(_, line)| line)
+                    .collect();
+                mutants.push((format!("drop line {index}: {}", line.trim()), kept));
+            }
+            for token in &tokens {
+                let (from, to) = (token.start + start, token.end + start);
+                let shown = source[from..to].chars().take(20).collect::<String>();
+                mutants.push((
+                    format!("drop token {shown:?}@{from}"),
+                    format!("{}{}", &source[..from], &source[to..]),
+                ));
+                mutants.push((
+                    format!("comment before {shown:?}@{from}"),
+                    format!("{}/* c */ {}", &source[..from], &source[from..]),
+                ));
+                mutants.push((
+                    format!("truncate after {shown:?}@{to}"),
+                    source[..to].to_string(),
+                ));
+            }
+            for (description, text) in mutants {
+                total += 1;
+                let path = "tests/MutantTest.php";
+                let old = catch_unwind(AssertUnwindSafe(|| legacy_outcome(path, &text)));
+                let new = catch_unwind(AssertUnwindSafe(|| new_outcome(path, &text)));
+                let (Ok(old), Ok(new)) = (old, new) else {
+                    differing += 1;
+                    groups
+                        .entry("panic".to_string())
+                        .or_insert((0, vec![description]))
+                        .0 += 1;
+                    continue;
+                };
+                if format!("{old:?}") == format!("{new:?}") {
+                    continue;
+                }
+                differing += 1;
+                let key = format!(
+                    "{} legacy={:?} new={:?}",
+                    classify(&old, &new),
+                    unknowns(&old)
+                        .into_iter()
+                        .filter(|kind| kind.contains("_") && !kind.starts_with("test"))
+                        .collect::<Vec<_>>(),
+                    unknowns(&new)
+                        .into_iter()
+                        .filter(|kind| kind.contains("_") && !kind.starts_with("test"))
+                        .collect::<Vec<_>>()
+                );
+                let group = groups.entry(key).or_insert((0, Vec::new()));
+                group.0 += 1;
+                if group.1.len() < 400 {
+                    group
+                        .1
+                        .push(format!("{description} => {}", text.replace('\n', "\\n")));
+                }
+            }
+        }
+        println!("MUTATION total={total} differing={differing}");
+        for (key, (count, examples)) in groups {
+            println!("GROUP {count} {key}");
+            for example in examples {
+                println!("  EX {example}");
+            }
+        }
+    }
+
+    fn classify(old: &Outcome, new: &Outcome) -> String {
+        let (Ok(old_output), Ok(new_output)) = (old, new) else {
+            return "result_kind_changed".to_string();
+        };
+        let refused = |output: &SourceParseOutput| !output.report.diagnostics.is_empty();
+        let units = |output: &SourceParseOutput| {
+            output
+                .report
+                .units
+                .iter()
+                .map(|unit| (format!("{:?}", unit.kind), unit.range.clone()))
+                .collect::<Vec<_>>()
+        };
+        match (refused(old_output), refused(new_output)) {
+            (true, true) => "refusal_class_changed".to_string(),
+            (true, false) => "unknown_removed".to_string(),
+            (false, true) => "unknown_added".to_string(),
+            (false, false) => {
+                let (old_units, new_units) = (units(old_output), units(new_output));
+                let kinds = |units: &[(String, SourceRange)]| {
+                    units
+                        .iter()
+                        .map(|(kind, _)| kind.clone())
+                        .collect::<Vec<_>>()
+                };
+                if kinds(&old_units) != kinds(&new_units) {
+                    "anchor_changed".to_string()
+                } else if old_units != new_units {
+                    "range_shift".to_string()
+                } else {
+                    "unknown_facts_changed".to_string()
+                }
+            }
+        }
     }
 }
