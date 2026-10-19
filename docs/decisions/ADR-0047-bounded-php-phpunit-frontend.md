@@ -1,6 +1,6 @@
 # ADR-0047: Bounded PHP PHPUnit frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [php completion review](../reports/language-support/php-completion-review.md))
 - Date: 2026-09-04
 - Scope: PHP in ADR-0020; admits a family-bearing frontend over one
   declaration anchor
@@ -247,6 +247,12 @@ frontend supersedes this one only through a new decision.
 Input is untrusted. The existing input-byte ceiling, a 4,096-unit ceiling,
 and the 256-deep nesting ceiling all abstain with a typed `UNKNOWN` rather
 than degrading silently or failing unsafely.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-php` 0.25.1
+grammar crate, with the lexer kept as the lexical-subset gate. This D6
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 

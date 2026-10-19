@@ -1,6 +1,6 @@
 # ADR-0046: Bounded MATLAB `matlab.unittest` frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [matlab completion review](../reports/language-support/matlab-completion-review.md))
 - Date: 2026-08-15
 - Scope: MATLAB in ADR-0020; admits a family-bearing frontend over one
   class-based test shape
@@ -354,6 +354,12 @@ process, or network operation runs; ADR-0037's prohibitions are carried forward.
 
 No Rust crate, no grammar, no toolchain, no downloaded artifact. The lexer and
 parser are hand-written Rust.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-matlab` 1.3.1
+grammar crate, with the lexer kept as the lexical-subset gate. This D6
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 

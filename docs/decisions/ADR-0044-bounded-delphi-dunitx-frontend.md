@@ -1,6 +1,6 @@
 # ADR-0044: Bounded Delphi DUnitX frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [delphi-object-pascal completion review](../reports/language-support/delphi-object-pascal-completion-review.md))
 - Date: 2026-08-15
 - Scope: Delphi/Object Pascal in ADR-0020; admits a family-bearing frontend over
   one attribute shape
@@ -156,6 +156,12 @@ network operation runs; ADR-0032's execution prohibitions are carried forward.
 ### D6. No dependency
 
 No Rust crate, no grammar, no toolchain, no downloaded artifact.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-pascal` 0.10.2
+grammar crate, with the lexer kept as the lexical-subset gate. This D6
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 
