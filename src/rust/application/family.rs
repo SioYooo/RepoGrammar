@@ -43,8 +43,6 @@ const PYTHON_MIN_FAMILY_SUPPORT: usize = 3;
 const TSJS_MIN_FAMILY_SUPPORT: usize = 3;
 const JAVA_MIN_FAMILY_SUPPORT: usize = 3;
 const CPP_MIN_FAMILY_SUPPORT: usize = 3;
-#[cfg(test)]
-const CSHARP_MIN_FAMILY_SUPPORT: usize = 3;
 const PYTHON_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-python-derived";
 const PYTHON_DERIVED_SUPPORT_METHOD: &str = "bounded_ast_anchor_v1";
 const PYTHON_FIXTURE_PROVIDER_ENGINE: &str = "python-fixture-provider";
@@ -54,10 +52,6 @@ pub(crate) const TSJS_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-tsjs-derived";
 pub(crate) const TSJS_DERIVED_SUPPORT_METHOD: &str = "bounded_exact_anchor_v1";
 pub(crate) const JAVA_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-java-derived";
 pub(crate) const JAVA_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_java_anchor_v1";
-#[cfg(test)]
-const CSHARP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-csharp-derived";
-#[cfg(test)]
-const CSHARP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_csharp_anchor_v1";
 pub(crate) const CPP_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-cpp-derived";
 pub(crate) const CPP_DERIVED_SUPPORT_METHOD: &str = "bounded_tree_sitter_c_cpp_anchor_v1";
 pub(crate) const RUST_DERIVED_SUPPORT_ENGINE: &str = "repogrammar-rust-derived";
@@ -905,8 +899,8 @@ fn prohibited_feature_constraints(key: &FamilyKey) -> Vec<FeatureConstraint> {
 
 /// Whether the language's `evidence_pair_is_compatible` refinement rejects a
 /// member that carries any `unknown_blocker:` feature. Mirrors the guard inlined
-/// at the top of the tsjs/java/csharp/cpp/rust compatibility functions; Python's
-/// refinement has no such guard.
+/// at the top of the tsjs/java/cpp/rust compatibility functions and of
+/// `pack_evidence_pair_is_compatible`; Python's refinement has no such guard.
 fn language_excludes_on_unknown_blocker(language: &str) -> bool {
     is_tsjs_language_name(language)
         || language == "java"
@@ -1460,43 +1454,6 @@ fn pack_context_variation_slots(
             })
         })
         .collect()
-}
-
-#[cfg(test)]
-fn csharp_variation_feature_prefixes(
-    framework_role: &str,
-) -> &'static [(&'static str, &'static [&'static str])] {
-    match framework_role {
-        "framework:aspnetcore.controller_action" => &[
-            ("csharp_aspnet_route_method", &["http_method:"]),
-            (
-                "csharp_aspnet_route_template_shape",
-                &["route_template_shape:", "class_route_template_shape:"],
-            ),
-            (
-                "csharp_aspnet_action_shape",
-                &["return_shape:", "parameter_shape:"],
-            ),
-        ],
-        "framework:aspnetcore.minimal_route" => &[
-            ("csharp_minimal_route_method", &["http_method:"]),
-            (
-                "csharp_minimal_route_template_shape",
-                &["route_template_shape:"],
-            ),
-        ],
-        "framework:aspnetcore.controller" => {
-            &[("csharp_controller_class_shape", &["class_shape:"])]
-        }
-        "framework:efcore.db_context" | "framework:efcore.entity_set" => &[(
-            "csharp_efcore_member_shape",
-            &["efcore_entity_type_shape:", "class_shape:"],
-        )],
-        "framework:xunit.test" | "framework:nunit.test" | "framework:mstest.test" => {
-            &[("csharp_test_data_shape", &["test_data_shape:"])]
-        }
-        _ => &[],
-    }
 }
 
 /// A unit's file language is `c` or `cpp`; both belong to the shared C/C++
@@ -2147,53 +2104,6 @@ fn add_java_family_features(
         }
     }
     add_classified_unknown_family_features(entry, "java", fact, framework_role);
-}
-
-#[cfg(test)]
-fn add_csharp_family_features(
-    entry: &mut BTreeSet<String>,
-    fact: &SemanticFact,
-    role_by_unit: &BTreeMap<String, BTreeSet<String>>,
-    support_targets_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) {
-    let code_unit_id = fact.evidence.code_unit_id.as_str();
-    let framework_role = role_by_unit
-        .get(code_unit_id)
-        .and_then(single_framework_role)
-        .unwrap_or("");
-
-    add_variation_features_from_assumptions(
-        entry,
-        &fact.assumptions,
-        &[
-            ("csharp_anchor_kind=", "anchor_kind:"),
-            ("aspnet_attribute=", "aspnet_attribute:"),
-            ("http_method=", "http_method:"),
-            ("route_template_shape=", "route_template_shape:"),
-            ("class_route_template_shape=", "class_route_template_shape:"),
-            ("test_attribute=", "test_attribute:"),
-            ("test_data_shape=", "test_data_shape:"),
-            ("csharp_visibility_shape=", "visibility_shape:"),
-            ("csharp_class_shape=", "class_shape:"),
-            ("csharp_return_shape=", "return_shape:"),
-            ("csharp_parameter_shape=", "parameter_shape:"),
-            ("efcore_entity_type_shape=", "efcore_entity_type_shape:"),
-        ],
-        stable_token,
-    );
-    if let Some(target) = fact.target.as_ref().map(|target| target.as_str()) {
-        let is_support_target = support_targets_by_unit
-            .get(code_unit_id)
-            .is_some_and(|targets| targets.contains(target));
-        if is_support_target {
-            entry.insert(format!("framework_api_anchor:{}", stable_token(target)));
-            entry.insert(format!(
-                "support_family:{}",
-                stable_token(&support_target_family(target, framework_role))
-            ));
-        }
-    }
-    add_classified_unknown_family_features(entry, "csharp", fact, framework_role);
 }
 
 fn add_pack_family_features(
@@ -3115,72 +3025,6 @@ fn java_unknown_is_non_blocking_family_subclaim(
     ) && java_framework_role_is_known(framework_role)
 }
 
-#[cfg(test)]
-fn csharp_unknown_reason_blocks_family_membership(
-    reason: UnknownReasonCode,
-    affected_claim: &str,
-    framework_role: &str,
-) -> bool {
-    match reason {
-        UnknownReasonCode::UnresolvedImport
-        | UnknownReasonCode::MissingProjectConfig
-        | UnknownReasonCode::MissingDependency
-        | UnknownReasonCode::FrameworkMagic
-        | UnknownReasonCode::BuildVariantAmbiguity
-        | UnknownReasonCode::ConflictingFacts
-        | UnknownReasonCode::StaleEvidence => {
-            csharp_unknown_affected_claim_blocks_family(affected_claim, framework_role)
-        }
-        UnknownReasonCode::RuntimeDependencyInjection
-        | UnknownReasonCode::DynamicImport
-        | UnknownReasonCode::MonkeyPatch
-        | UnknownReasonCode::PytestFixtureInjection
-        | UnknownReasonCode::MacroOrPreprocessor
-        | UnknownReasonCode::InsufficientSupport => false,
-    }
-}
-
-#[cfg(test)]
-fn csharp_unknown_affected_claim_blocks_family(
-    affected_claim: &str,
-    _framework_role: &str,
-) -> bool {
-    match affected_claim {
-        "csharp_family_membership"
-        | "csharp_attribute_binding"
-        | "csharp_controller_identity"
-        | "csharp_minimal_api_receiver"
-        | "csharp_test_class_identity"
-        | "csharp_build_variant" => true,
-        claim if claim.starts_with("family:") => true,
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-fn csharp_unknown_is_non_blocking_family_subclaim(
-    reason: UnknownReasonCode,
-    affected_claim: &str,
-    framework_role: &str,
-) -> bool {
-    matches!(
-        reason,
-        UnknownReasonCode::RuntimeDependencyInjection
-            | UnknownReasonCode::FrameworkMagic
-            | UnknownReasonCode::MacroOrPreprocessor
-    ) && matches!(
-        affected_claim,
-        "csharp_di_registration"
-            | "csharp_aspnet_filter_pipeline"
-            | "csharp_aspnet_route_template"
-            | "csharp_aspnet_convention_routing"
-            | "csharp_partial_external"
-            | "csharp_generated_source"
-            | "csharp_dynamic_binding"
-            | "csharp_test_member_data"
-    ) && csharp_framework_role_is_known(framework_role)
-}
-
 /// A pack UNKNOWN blocks membership when its reason may block and its claim is
 /// one of the pack's blocking claims or any `family:` claim.
 fn pack_unknown_reason_blocks_family_membership(
@@ -3639,58 +3483,6 @@ fn java_evidence_pair_is_compatible(
     }
 }
 
-#[cfg(test)]
-fn csharp_evidence_pair_is_compatible(
-    left: &FamilyEvidence,
-    right: &FamilyEvidence,
-    features_by_unit: &BTreeMap<String, BTreeSet<String>>,
-) -> bool {
-    if !prefixed_features(left, features_by_unit, "unknown_blocker:").is_empty()
-        || !prefixed_features(right, features_by_unit, "unknown_blocker:").is_empty()
-    {
-        return false;
-    }
-
-    let roles = prefixed_features(left, features_by_unit, "framework_role:");
-    let role = roles.iter().next().map(String::as_str).unwrap_or("");
-    match role {
-        "framework_aspnetcore_controller_action" => {
-            equal_feature_profiles(
-                left,
-                right,
-                features_by_unit,
-                &["anchor_kind:", "aspnet_attribute:"],
-            ) && required_equal_feature_profiles(
-                left,
-                right,
-                features_by_unit,
-                &["http_method:", "route_template_shape:"],
-            )
-        }
-        "framework_aspnetcore_minimal_route" => required_equal_feature_profiles(
-            left,
-            right,
-            features_by_unit,
-            &["http_method:", "route_template_shape:"],
-        ),
-        "framework_aspnetcore_controller" => equal_feature_profiles(
-            left,
-            right,
-            features_by_unit,
-            &["aspnet_attribute:", "class_shape:"],
-        ),
-        "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
-            equal_feature_profiles(left, right, features_by_unit, &["test_attribute:"])
-        }
-        "framework_efcore_db_context"
-        | "framework_efcore_entity_set"
-        | "framework_fluentvalidation_validator" => {
-            equal_feature_profiles(left, right, features_by_unit, &["support_family:"])
-        }
-        _ => true,
-    }
-}
-
 /// Pack members carrying a blocking UNKNOWN never pair; otherwise the role's
 /// equal and required-equal prefixes decide. Unknown roles stay compatible.
 fn pack_evidence_pair_is_compatible(
@@ -4096,27 +3888,6 @@ fn java_characteristic_prefixes(framework_role: &str) -> &'static [&'static str]
         "framework_servlet_http_servlet" => &["support_family:", "servlet_namespace_root:"],
         "framework_jaxrs_resource" => &["support_family:", "class_route_path_shape:"],
         "framework_jaxrs_resource_method" => &["anchor_kind:", "http_method:", "route_path_shape:"],
-        _ => &[],
-    }
-}
-
-#[cfg(test)]
-fn csharp_characteristic_prefixes(framework_role: &str) -> &'static [&'static str] {
-    match framework_role {
-        "framework_aspnetcore_controller_action" => &[
-            "anchor_kind:",
-            "aspnet_attribute:",
-            "http_method:",
-            "route_template_shape:",
-        ],
-        "framework_aspnetcore_minimal_route" => &["http_method:", "route_template_shape:"],
-        "framework_aspnetcore_controller" => &["aspnet_attribute:", "class_shape:"],
-        "framework_xunit_test" | "framework_nunit_test" | "framework_mstest_test" => {
-            &["test_attribute:"]
-        }
-        "framework_efcore_db_context"
-        | "framework_efcore_entity_set"
-        | "framework_fluentvalidation_validator" => &["support_family:"],
         _ => &[],
     }
 }
@@ -4982,48 +4753,6 @@ pub(crate) fn java_support_target_is_role_compatible(
 
 pub(crate) fn java_framework_role_is_known(framework_role: &str) -> bool {
     java::framework_role_is_known(framework_role)
-}
-
-#[cfg(test)]
-fn csharp_support_fact_is_role_compatible(
-    fact: &SemanticFact,
-    framework_role: &str,
-) -> Option<bool> {
-    let target = fact.target.as_ref().map(|target| target.as_str())?;
-    let target_is_compatible = csharp_support_target_is_role_compatible(target, framework_role)?;
-    Some(target_is_compatible && csharp_support_fact_has_safe_origin(fact, framework_role))
-}
-
-#[cfg(test)]
-fn csharp_support_fact_has_safe_origin(fact: &SemanticFact, framework_role: &str) -> bool {
-    let target = fact.target.as_ref().map(|target| target.as_str());
-    let mut required = vec!["derived_from=tree_sitter_csharp_structural_anchors".to_string()];
-    if let Some(target) = target {
-        required.push(format!(
-            "derived_from={}",
-            csharp::support_family(target, framework_role)
-        ));
-    }
-    derived_support_has_safe_origin(
-        fact,
-        CSHARP_DERIVED_SUPPORT_ENGINE,
-        CSHARP_DERIVED_SUPPORT_METHOD,
-        framework_role,
-        &required,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn csharp_support_target_is_role_compatible(
-    target: &str,
-    framework_role: &str,
-) -> Option<bool> {
-    csharp::support_target_is_role_compatible(target, framework_role)
-}
-
-#[cfg(test)]
-pub(crate) fn csharp_framework_role_is_known(framework_role: &str) -> bool {
-    csharp::framework_role_is_known(framework_role)
 }
 
 fn pack_support_fact_is_role_compatible(
@@ -6038,7 +5767,7 @@ mod tests {
                 ("python", python_framework_role_is_known(role)),
                 ("tsjs", tsjs_framework_role_is_known(role)),
                 ("java", java_framework_role_is_known(role)),
-                ("csharp", csharp_framework_role_is_known(role)),
+                ("csharp", csharp::framework_role_is_known(role)),
                 ("cpp", cpp_framework_role_is_known(role)),
                 ("rust", rust_role_is_known(role)),
                 ("sql", sql::framework_role_is_known(role)),
@@ -8973,9 +8702,9 @@ mod tests {
             subject: unit.id.clone(),
             target: Some(SymbolId::new(target).expect("valid target")),
             origin: FactOrigin {
-                engine: CSHARP_DERIVED_SUPPORT_ENGINE.to_string(),
+                engine: csharp::FAMILY_PACK.derived_support_engine.to_string(),
                 engine_version: "0.1.0".to_string(),
-                method: CSHARP_DERIVED_SUPPORT_METHOD.to_string(),
+                method: csharp::FAMILY_PACK.derived_support_method.to_string(),
             },
             certainty: FactCertainty::DataflowDerived,
             evidence: Evidence::new(
@@ -10837,325 +10566,216 @@ mod tests {
         }
     }
 
-    // Temporary legacy differential for the C# pack migration; removed with the
-    // legacy C# functions (docs/experiments/declarative-language-pack-spike.md).
-    const ALL_UNKNOWN_REASONS: [UnknownReasonCode; 13] = [
-        UnknownReasonCode::DynamicImport,
-        UnknownReasonCode::MonkeyPatch,
-        UnknownReasonCode::PytestFixtureInjection,
-        UnknownReasonCode::RuntimeDependencyInjection,
-        UnknownReasonCode::UnresolvedImport,
-        UnknownReasonCode::MissingProjectConfig,
-        UnknownReasonCode::MissingDependency,
-        UnknownReasonCode::FrameworkMagic,
-        UnknownReasonCode::MacroOrPreprocessor,
-        UnknownReasonCode::BuildVariantAmbiguity,
-        UnknownReasonCode::ConflictingFacts,
-        UnknownReasonCode::StaleEvidence,
-        UnknownReasonCode::InsufficientSupport,
-    ];
-
-    fn unknown_reason_index(reason: UnknownReasonCode) -> usize {
-        match reason {
-            UnknownReasonCode::DynamicImport => 0,
-            UnknownReasonCode::MonkeyPatch => 1,
-            UnknownReasonCode::PytestFixtureInjection => 2,
-            UnknownReasonCode::RuntimeDependencyInjection => 3,
-            UnknownReasonCode::UnresolvedImport => 4,
-            UnknownReasonCode::MissingProjectConfig => 5,
-            UnknownReasonCode::MissingDependency => 6,
-            UnknownReasonCode::FrameworkMagic => 7,
-            UnknownReasonCode::MacroOrPreprocessor => 8,
-            UnknownReasonCode::BuildVariantAmbiguity => 9,
-            UnknownReasonCode::ConflictingFacts => 10,
-            UnknownReasonCode::StaleEvidence => 11,
-            UnknownReasonCode::InsufficientSupport => 12,
+    #[test]
+    fn csharp_pack_role_tables_are_internally_consistent() {
+        let pack = &csharp::FAMILY_PACK;
+        assert_eq!(pack.language, "csharp");
+        assert_eq!(min_family_support("csharp"), 3);
+        for policy in pack.roles {
+            assert_eq!(policy.feature, stable_token(policy.role));
+            assert_eq!(
+                policy.characteristic.to_vec(),
+                [policy.equal, policy.required_equal].concat()
+            );
+            assert!((pack.role_is_known)(policy.role));
+            assert_eq!(
+                characteristic_profile_prefixes("csharp", policy.feature),
+                policy.characteristic
+            );
+            assert_eq!(
+                variation_feature_prefixes("csharp", policy.role),
+                policy.variation
+            );
         }
-    }
-
-    fn csharp_differential_roles() -> Vec<&'static str> {
-        let mut roles = csharp::FAMILY_PACK
-            .roles
-            .iter()
-            .map(|policy| policy.role)
-            .collect::<Vec<_>>();
-        roles.extend([
-            "framework:aspnetcore.unlisted",
-            "framework:xunit.unlisted",
-            "framework:fastapi.route",
-            "",
-        ]);
-        roles
+        assert!(variation_feature_prefixes("csharp", "framework:fastapi.route").is_empty());
+        assert!(characteristic_profile_prefixes("csharp", "framework_unlisted").is_empty());
     }
 
     #[test]
-    fn csharp_pack_unknown_rules_match_legacy_classifier() {
-        for (index, reason) in ALL_UNKNOWN_REASONS.into_iter().enumerate() {
-            assert_eq!(unknown_reason_index(reason), index);
-        }
-        let mut claims = csharp::FAMILY_PACK
+    fn csharp_pack_unknown_rules_keep_blocking_and_subclaim_partitions() {
+        let pack = &csharp::FAMILY_PACK;
+        assert!(pack
             .blocking_claims
             .iter()
-            .chain(csharp::FAMILY_PACK.non_blocking_claims)
-            .map(|claim| claim.to_string())
-            .collect::<Vec<_>>();
-        claims.extend(
-            [
-                "family:csharp:aspnet_controller_action:x",
-                "family:",
-                "family",
-                "csharp_other",
-                "csharp_build_variant_suffix",
-                "python_call_target",
-                "",
-            ]
-            .map(str::to_string),
-        );
-        for reason in ALL_UNKNOWN_REASONS {
-            for claim in &claims {
-                for role in csharp_differential_roles() {
-                    assert_eq!(
-                        pack_unknown_reason_blocks_family_membership(
-                            &csharp::FAMILY_PACK,
-                            reason,
-                            claim
-                        ),
-                        csharp_unknown_reason_blocks_family_membership(reason, claim, role),
-                        "blocking {reason:?} {claim} {role}"
-                    );
-                    assert_eq!(
-                        pack_unknown_is_non_blocking_family_subclaim(
-                            &csharp::FAMILY_PACK,
-                            reason,
-                            claim,
-                            role
-                        ),
-                        csharp_unknown_is_non_blocking_family_subclaim(reason, claim, role),
-                        "non-blocking {reason:?} {claim} {role}"
-                    );
-                }
-            }
+            .all(|claim| !pack.non_blocking_claims.contains(claim)));
+        assert!((pack.reason_may_block)(UnknownReasonCode::FrameworkMagic));
+        assert!(!(pack.reason_may_block)(
+            UnknownReasonCode::RuntimeDependencyInjection
+        ));
+        assert!(!(pack.reason_may_block)(
+            UnknownReasonCode::MacroOrPreprocessor
+        ));
+        let action = "framework:aspnetcore.controller_action";
+        for (reason, claim, role, blocks, non_blocking) in [
+            (
+                UnknownReasonCode::FrameworkMagic,
+                "csharp_controller_identity",
+                action,
+                true,
+                false,
+            ),
+            (
+                UnknownReasonCode::FrameworkMagic,
+                "csharp_aspnet_route_template",
+                action,
+                false,
+                true,
+            ),
+            (
+                UnknownReasonCode::FrameworkMagic,
+                "csharp_aspnet_route_template",
+                "framework:fastapi.route",
+                false,
+                false,
+            ),
+            (
+                UnknownReasonCode::UnresolvedImport,
+                "family:csharp:x",
+                action,
+                true,
+                false,
+            ),
+            (
+                UnknownReasonCode::RuntimeDependencyInjection,
+                "csharp_attribute_binding",
+                action,
+                false,
+                false,
+            ),
+            (
+                UnknownReasonCode::MacroOrPreprocessor,
+                "csharp_build_variant",
+                action,
+                false,
+                false,
+            ),
+            (
+                UnknownReasonCode::BuildVariantAmbiguity,
+                "csharp_build_variant",
+                action,
+                true,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                pack_unknown_reason_blocks_family_membership(pack, reason, claim),
+                blocks,
+                "{reason:?} {claim}"
+            );
+            assert_eq!(
+                pack_unknown_is_non_blocking_family_subclaim(pack, reason, claim, role),
+                non_blocking,
+                "{reason:?} {claim} {role}"
+            );
         }
     }
 
     #[test]
-    fn csharp_pack_role_tables_match_legacy_tables() {
-        for role in csharp_differential_roles() {
-            assert_eq!(
-                variation_feature_prefixes("csharp", role),
-                csharp_variation_feature_prefixes(role),
-                "{role}"
-            );
-            let feature = stable_token(role);
-            assert_eq!(
-                characteristic_profile_prefixes("csharp", &feature),
-                csharp_characteristic_prefixes(&feature),
-                "{role}"
-            );
-        }
-        assert_eq!(min_family_support("csharp"), CSHARP_MIN_FAMILY_SUPPORT);
-        assert_eq!(
-            csharp::FAMILY_PACK.derived_support_engine,
-            CSHARP_DERIVED_SUPPORT_ENGINE
-        );
-        assert_eq!(
-            csharp::FAMILY_PACK.derived_support_method,
-            CSHARP_DERIVED_SUPPORT_METHOD
-        );
-    }
-
-    #[test]
-    fn csharp_pack_pair_compatibility_matches_legacy() {
-        const PREFIXES: [&str; 7] = [
-            "anchor_kind:",
-            "aspnet_attribute:",
-            "http_method:",
-            "route_template_shape:",
-            "class_shape:",
-            "test_attribute:",
-            "support_family:",
-        ];
-        fn profile(role: &str, values: &[Option<&str>; 7], blocker: bool) -> BTreeSet<String> {
-            let mut features = PREFIXES
-                .iter()
-                .zip(values)
-                .filter_map(|(prefix, value)| value.map(|value| format!("{prefix}{value}")))
-                .collect::<BTreeSet<_>>();
-            if !role.is_empty() {
-                features.insert(format!("framework_role:{role}"));
-            }
-            if blocker {
-                features.insert("unknown_blocker:frameworkmagic".to_string());
-            }
-            features
-        }
+    fn csharp_pack_pair_compatibility_pins_required_and_blocking_prefixes() {
         let left = drift_evidence("left");
         let right = drift_evidence("right");
-        let mut roles = csharp::FAMILY_PACK
-            .roles
-            .iter()
-            .map(|policy| policy.feature)
-            .collect::<Vec<_>>();
-        roles.extend(["framework_unlisted", ""]);
-        let mut compared = 0;
-        for role in roles {
-            for mask in 0..(1 << PREFIXES.len()) {
-                let base: [Option<&str>; 7] =
-                    std::array::from_fn(|index| (mask & (1 << index) != 0).then_some("a"));
-                let mut variants = vec![base];
-                for index in 0..PREFIXES.len() {
-                    for value in [None, Some("a"), Some("b")] {
-                        let mut variant = base;
-                        variant[index] = value;
-                        variants.push(variant);
-                    }
-                }
-                for variant in variants {
-                    for (left_blocker, right_blocker) in
-                        [(false, false), (true, false), (false, true)]
-                    {
-                        let features_by_unit = BTreeMap::from([
-                            ("left".to_string(), profile(role, &base, left_blocker)),
-                            ("right".to_string(), profile(role, &variant, right_blocker)),
-                        ]);
-                        assert_eq!(
-                            pack_evidence_pair_is_compatible(
-                                &csharp::FAMILY_PACK,
-                                &left,
-                                &right,
-                                &features_by_unit
-                            ),
-                            csharp_evidence_pair_is_compatible(&left, &right, &features_by_unit),
-                            "{role} {base:?} {variant:?} {left_blocker} {right_blocker}"
-                        );
-                        compared += 1;
-                    }
-                }
-            }
+        let features = |left: &[&str], right: &[&str]| {
+            BTreeMap::from([
+                (
+                    "left".to_string(),
+                    left.iter().map(|value| value.to_string()).collect(),
+                ),
+                (
+                    "right".to_string(),
+                    right.iter().map(|value| value.to_string()).collect(),
+                ),
+            ])
+        };
+        let get = [
+            "framework_role:framework_aspnetcore_controller_action",
+            "anchor_kind:aspnet_controller_action",
+            "aspnet_attribute:httpget",
+            "http_method:get",
+            "route_template_shape:literal",
+        ];
+        let mut post = get;
+        post[3] = "http_method:post";
+        let mut blocked = get.to_vec();
+        blocked.push("unknown_blocker:frameworkmagic");
+        let untemplated = &get[..4];
+        for (left_features, right_features, compatible) in [
+            (&get[..], &get[..], true),
+            (&get[..], &post[..], false),
+            (&get[..], &blocked[..], false),
+            (untemplated, untemplated, false),
+            (
+                &["framework_role:framework_unlisted"][..],
+                &["framework_role:framework_unlisted"][..],
+                true,
+            ),
+        ] {
+            assert_eq!(
+                pack_evidence_pair_is_compatible(
+                    &csharp::FAMILY_PACK,
+                    &left,
+                    &right,
+                    &features(left_features, right_features)
+                ),
+                compatible,
+                "{left_features:?} {right_features:?}"
+            );
         }
-        assert!(compared > 10_000);
     }
 
     #[test]
-    fn csharp_pack_feature_extraction_matches_legacy() {
+    fn csharp_pack_feature_extraction_and_support_safety_are_pinned() {
         let unit = csharp_unit("Controllers/A.cs", "aspnet_controller_action", 0);
-        let extra = [
-            "aspnet_attribute=HttpGet",
-            "http_method=GET",
-            "route_template_shape=literal",
-            "class_route_template_shape=none",
-            "test_attribute=Fact",
-            "test_data_shape=fact",
-            "csharp_visibility_shape=public",
-            "csharp_class_shape=class",
-            "csharp_return_shape=action_result",
-            "csharp_parameter_shape=arity_0",
-            "efcore_entity_type_shape=named",
-            "unrelated_shape=x",
-        ]
-        .map(str::to_string)
-        .to_vec();
-        let facts = [
-            csharp_derived_fact(
-                &unit,
-                "aspnetcore.mvc.HttpGet",
-                "framework:aspnetcore.controller_action",
-                extra.clone(),
-            ),
-            csharp_derived_fact(
-                &unit,
-                "aspnetcore.mvc.HttpPost",
-                "framework:aspnetcore.controller_action",
-                extra,
-            ),
-            csharp_unknown_fact(
-                &unit,
-                UnknownReasonCode::RuntimeDependencyInjection,
-                "csharp_di_registration",
-            ),
-            csharp_unknown_fact(
-                &unit,
-                UnknownReasonCode::UnresolvedImport,
-                "csharp_attribute_binding",
-            ),
-        ];
+        let role = "framework:aspnetcore.controller_action";
+        let fact = csharp_action_derived_fact(
+            &unit,
+            "aspnetcore.mvc.HttpGet",
+            "HttpGet",
+            "GET",
+            "literal",
+        );
+        let role_by_unit = BTreeMap::from([(unit.id.clone(), BTreeSet::from([role.to_string()]))]);
         let support = BTreeMap::from([(
             unit.id.clone(),
             BTreeSet::from(["aspnetcore.mvc.HttpGet".to_string()]),
         )]);
-        for roles in [
-            BTreeSet::from(["framework:aspnetcore.controller_action".to_string()]),
-            BTreeSet::from([
-                "framework:aspnetcore.controller_action".to_string(),
-                "framework:xunit.test".to_string(),
-            ]),
-            BTreeSet::new(),
+        let mut features = BTreeSet::new();
+        add_pack_family_features(
+            &csharp::FAMILY_PACK,
+            &mut features,
+            &fact,
+            &role_by_unit,
+            &support,
+        );
+        for expected in [
+            "anchor_kind:aspnet_controller_action",
+            "aspnet_attribute:httpget",
+            "http_method:get",
+            "route_template_shape:literal",
+            "framework_api_anchor:aspnetcore_mvc_httpget",
+            "support_family:aspnetcore_mvc_http_attribute_route",
         ] {
-            let role_by_unit = BTreeMap::from([(unit.id.clone(), roles)]);
-            for fact in &facts {
-                let mut legacy = BTreeSet::new();
-                add_csharp_family_features(&mut legacy, fact, &role_by_unit, &support);
-                let mut packed = BTreeSet::new();
-                add_pack_family_features(
-                    &csharp::FAMILY_PACK,
-                    &mut packed,
-                    fact,
-                    &role_by_unit,
-                    &support,
-                );
-                assert_eq!(packed, legacy);
-            }
+            assert!(features.contains(expected), "{expected} in {features:?}");
         }
-    }
-
-    #[test]
-    fn csharp_pack_support_fact_safety_matches_legacy() {
-        let unit = csharp_unit("Controllers/A.cs", "aspnet_controller_action", 0);
-        let action_targets = csharp::HTTP_ROUTE_ATTRIBUTES
-            .iter()
-            .chain(csharp::MINIMAL_API_MAP_METHODS)
-            .map(|(_, target, _)| *target)
-            .collect::<Vec<_>>();
-        let mut targets = [
-            csharp::ASPNET_CONTROLLER_TARGETS,
-            &action_targets,
-            csharp::XUNIT_TEST_TARGETS,
-            csharp::NUNIT_TEST_TARGETS,
-            csharp::MSTEST_TEST_TARGETS,
-        ]
-        .concat();
-        targets.extend([
-            "efcore.DbContext",
-            "efcore.DbSet",
-            "fluentvalidation.AbstractValidator",
-            "unrelated.Target",
-        ]);
-        for role in csharp_differential_roles() {
-            for target in &targets {
-                let fact = csharp_derived_fact(&unit, target, role, Vec::new());
-                let mut variants = vec![fact.clone()];
-                let mut engine = fact.clone();
-                engine.origin.engine = "untrusted-provider".to_string();
-                variants.push(engine);
-                let mut method = fact.clone();
-                method.origin.method = "other".to_string();
-                variants.push(method);
-                let mut anchor = fact.clone();
-                anchor
-                    .assumptions
-                    .retain(|value| value != "derived_from=tree_sitter_csharp_structural_anchors");
-                variants.push(anchor);
-                let mut untargeted = fact.clone();
-                untargeted.target = None;
-                variants.push(untargeted);
-                for variant in variants {
-                    assert_eq!(
-                        pack_support_fact_is_role_compatible(&csharp::FAMILY_PACK, &variant, role),
-                        csharp_support_fact_is_role_compatible(&variant, role),
-                        "{role} {target}"
-                    );
-                }
-            }
-        }
+        assert_eq!(
+            pack_support_fact_is_role_compatible(&csharp::FAMILY_PACK, &fact, role),
+            Some(true)
+        );
+        let mut foreign = fact.clone();
+        foreign.origin.engine = "untrusted-provider".to_string();
+        assert_eq!(
+            pack_support_fact_is_role_compatible(&csharp::FAMILY_PACK, &foreign, role),
+            Some(false)
+        );
+        let unrelated = csharp_derived_fact(&unit, "unrelated.Target", role, Vec::new());
+        assert_eq!(
+            pack_support_fact_is_role_compatible(&csharp::FAMILY_PACK, &unrelated, role),
+            Some(false)
+        );
+        let mut untargeted = fact;
+        untargeted.target = None;
+        assert_eq!(
+            pack_support_fact_is_role_compatible(&csharp::FAMILY_PACK, &untargeted, role),
+            None
+        );
     }
 }
