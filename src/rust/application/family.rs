@@ -909,7 +909,7 @@ fn language_excludes_on_unknown_blocker(language: &str) -> bool {
         || language == "rust"
 }
 
-/// Languages whose family policy is a declarative pack (ADR-0057, proposed).
+/// Languages whose family policy is a declarative pack (ADR-0057).
 /// Every dispatch point below consults this registry instead of a per-language
 /// function set.
 static LANGUAGE_FAMILY_PACKS: &[&LanguageFamilyPack] = &[&csharp::FAMILY_PACK];

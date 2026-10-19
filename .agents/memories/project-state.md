@@ -2,9 +2,10 @@
 
 ## Declarative language-pack spike — 2026-10-20
 
-Branch `feat/declarative-language-pack-spike` (local, unmerged) moves C# family
-policy into the `LanguageFamilyPack` data type (proposed ADR-0057) and selects
-C# extractor nodes with `adapters/parsing/csharp/nodes.scm`. The verdict is
+The spike, merged into local `main` on 2026-10-20 and not pushed, moves C#
+family policy into the `LanguageFamilyPack` data type (ADR-0057, accepted
+2026-10-20) and selects C# extractor nodes with
+`adapters/parsing/csharp/nodes.scm`. The verdict is
 `QUALIFIED`: all 179 fixture roots (4,681 rows, including the full generation
 fingerprint) are byte-identical, `sync-equivalence` passes 14/14, and
 `product-eval` is equal apart from timing. One preregistered timing field,

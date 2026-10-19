@@ -343,4 +343,5 @@ in those three files.
   enforces across languages.
 - The node-query scanner calls `Node::parent()` for ordering ties and context
   lookup. Its cost on very large files was not measured.
-- ADR-0057 is Proposed; the maintainer must decide whether to accept it.
+- ADR-0057 was Proposed when this spike closed; the maintainer accepted it on
+  2026-10-20.

@@ -69,7 +69,7 @@ Every language slice follows the Java preview touch-point checklist:
 Provenance strings must match byte-for-byte across parser constants,
 application derivation constants, and query/test expectations.
 
-Proposed ADR-0057 changes item 7 for a packed language. The family policy
+Accepted ADR-0057 changes item 7 for a packed language. The family policy
 becomes one `LanguageFamilyPack` instance in the language's
 `adapters/frameworks/` module plus one `LANGUAGE_FAMILY_PACKS` entry; no
 language-specific family functions remain. C# is the only packed lane, its

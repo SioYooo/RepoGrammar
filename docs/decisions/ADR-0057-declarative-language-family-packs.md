@@ -1,6 +1,6 @@
 # ADR-0057: Declarative language family packs
 
-- Status: Proposed (maintainer acceptance pending; not accepted)
+- Status: Accepted (maintainer acceptance 2026-10-20)
 - Date: 2026-10-19
 - Extends: ADR-0003, ADR-0004, ADR-0019, ADR-0020
 - Evidence: [declarative language-pack spike](../experiments/declarative-language-pack-spike.md)
@@ -23,7 +23,7 @@ exact-anchor binding remain language- and framework-specific. The question
 this ADR answers is narrower: where the per-language knowledge lives, and
 whether the family layer can stay language-neutral.
 
-## Decision (proposed)
+## Decision
 
 1. A language's family policy is a `static` `LanguageFamilyPack` value. The
    type lives in `core::model`; each instance lives with its framework registry
@@ -93,7 +93,6 @@ are unchanged, and strict Top-20 completion remains 0/20.
 
 ## Follow-up
 
-- Maintainer decision: accept, amend or reject this ADR.
-- If accepted, migrate the next Tree-sitter lane (Java, then C/C++ and Rust)
+- Migrate the next Tree-sitter lane (Java, then C/C++ and Rust)
   under the same oracle, and decide separately whether non-Tree-sitter lanes
   adopt the family pack without a `.scm` query.

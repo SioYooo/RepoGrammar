@@ -1,4 +1,4 @@
-//! Declarative per-language family policy (ADR-0057, proposed).
+//! Declarative per-language family policy (ADR-0057).
 //!
 //! A pack is plain data that the family builder reads in place of a
 //! per-language function set. Packs are `static` items, so identity is the

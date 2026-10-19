@@ -157,7 +157,7 @@
     "no Top-20 progress; strict completion remains 0/20",
     "no performance claim",
     "Tree-sitter does not prove family membership",
-    "ADR-0057 is Proposed, not accepted"
+    "ADR-0057 was Proposed during the spike and accepted by the maintainer on 2026-10-20"
   ],
   "oracle_deviations": [
     {
