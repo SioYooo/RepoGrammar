@@ -346,7 +346,7 @@ mod tests {
     use crate::ports::parser::{ParserProjectContext, SourceParser};
 
     fn output(text: &str) -> SourceParseOutput {
-        crate::adapters::parsing::csharp::CSharpSyntaxParser
+        crate::adapters::parsing::csharp::CSharpSyntaxParser::default()
             .parse_with_context_output(
                 SourceDocument {
                     path: "src/App.csproj",
@@ -525,19 +525,20 @@ mod tests {
 
     #[test]
     fn non_csproj_paths_are_not_admitted() {
-        let result = crate::adapters::parsing::csharp::CSharpSyntaxParser.parse_with_context(
-            SourceDocument {
-                path: "src/Program.cs",
-                language: Language::CSharp,
-                content_hash: ContentHash::new(
-                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                )
-                .expect("hash"),
-                repository_revision: RepositoryRevision::new("UNKNOWN").expect("revision"),
-                text: "<Project/>",
-            },
-            &ParserProjectContext::default(),
-        );
+        let result = crate::adapters::parsing::csharp::CSharpSyntaxParser::default()
+            .parse_with_context(
+                SourceDocument {
+                    path: "src/Program.cs",
+                    language: Language::CSharp,
+                    content_hash: ContentHash::new(
+                        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    )
+                    .expect("hash"),
+                    repository_revision: RepositoryRevision::new("UNKNOWN").expect("revision"),
+                    text: "<Project/>",
+                },
+                &ParserProjectContext::default(),
+            );
         assert!(result.is_ok());
     }
 }

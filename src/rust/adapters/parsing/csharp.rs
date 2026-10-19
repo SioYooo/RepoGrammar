@@ -22,7 +22,7 @@ use crate::ports::parser::{
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 mod project_config;
@@ -35,7 +35,11 @@ pub(crate) const CSHARP_ANCHOR_METHOD: &str = "tree_sitter_csharp_structural_anc
 const NODE_QUERY: &str = include_str!("csharp/nodes.scm");
 
 #[derive(Debug, Default)]
-pub struct CSharpSyntaxParser;
+pub struct CSharpSyntaxParser {
+    /// Compiling the node query costs far more than parsing a typical file,
+    /// so each parser instance compiles it once.
+    node_query: OnceLock<Query>,
+}
 
 impl SourceParser for CSharpSyntaxParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
@@ -64,7 +68,7 @@ impl SourceParser for CSharpSyntaxParser {
         };
 
         let mut scanner = CSharpTreeScanner::new(document);
-        scanner.scan_tree(tree.root_node())?;
+        scanner.scan_tree(tree.root_node(), self.node_query()?)?;
         scanner.finish()
     }
 
@@ -78,6 +82,17 @@ impl SourceParser for CSharpSyntaxParser {
         }
         self.parse_with_context(document, context)
             .map(SourceParseOutput::from_report)
+    }
+}
+
+impl CSharpSyntaxParser {
+    fn node_query(&self) -> Result<&Query, ParseError> {
+        if let Some(query) = self.node_query.get() {
+            return Ok(query);
+        }
+        let query = Query::new(&tree_sitter_c_sharp::LANGUAGE.into(), NODE_QUERY)
+            .map_err(|error| ParseError::Internal(format!("compile C# node query: {error}")))?;
+        Ok(self.node_query.get_or_init(|| query))
     }
 }
 
@@ -156,7 +171,7 @@ impl<'a> CSharpTreeScanner<'a> {
         }
     }
 
-    fn scan_tree(&mut self, root: Node<'_>) -> Result<(), ParseError> {
+    fn scan_tree(&mut self, root: Node<'_>, query: &Query) -> Result<(), ParseError> {
         let module_unit =
             self.add_unit(CodeUnitKind::Module, "file", 0, self.document.text.len())?;
         self.module_unit = Some(module_unit);
@@ -169,7 +184,7 @@ impl<'a> CSharpTreeScanner<'a> {
                     .to_string(),
             });
         }
-        let captures = node_captures(root, self.document.text)?;
+        let captures = node_captures(root, self.document.text, query)?;
         // Receiver bindings are order-independent and must be complete before
         // any invocation is classified.
         for (capture, node) in &captures {
@@ -1155,13 +1170,12 @@ impl<'a> CSharpTreeScanner<'a> {
 fn node_captures<'tree>(
     root: Node<'tree>,
     source: &str,
+    query: &Query,
 ) -> Result<Vec<(&'static str, Node<'tree>)>, ParseError> {
-    let query = Query::new(&tree_sitter_c_sharp::LANGUAGE.into(), NODE_QUERY)
-        .map_err(|error| ParseError::Internal(format!("compile C# node query: {error}")))?;
     let names = query.capture_names();
     let mut cursor = QueryCursor::new();
     let mut captures = Vec::new();
-    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    let mut matches = cursor.matches(query, root, source.as_bytes());
     while let Some(found) = matches.next() {
         for capture in found.captures() {
             let name = match names[capture.index as usize] {
@@ -1938,7 +1952,9 @@ mod tests {
             repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
             text,
         };
-        CSharpSyntaxParser.parse(document).expect("parse csharp")
+        CSharpSyntaxParser::default()
+            .parse(document)
+            .expect("parse csharp")
     }
 
     fn unit_kinds(report: &ParseReport) -> Vec<&'static str> {
