@@ -1,0 +1,184 @@
+{
+  "base_commit": "0104073a0360ce03ff06891b7c3370a24c1d702f",
+  "baseline": {
+    "baseline_runs_agree": true,
+    "capture_harness_sha256": "73bac80c6eea9f6b7ca46b6089be8bff57b5bc0078e48228b46a02b422220e71",
+    "capture_roots": 179,
+    "capture_rows": 4681,
+    "capture_sha256": [
+      "2b8b463f7cd9f7538ccf28dabeca4ebdf9c0d7c83abfb77fde54dd516c3b0dad",
+      "3b32831277d4b134e906503ae849bf53aa85989a34c4e5284e800f1f42c67da7"
+    ],
+    "product_eval": {
+      "abstention": "36/36",
+      "context": "27/27",
+      "retrieval": "34/47"
+    },
+    "repo_guard_sha256": "476517edc5a022c7f30654e613fdbcc366c8702c232247415365d4c3b91ab3f0",
+    "repogrammar_sha256": "3211c5960506b644f18b8c9262b23ecfec9b20eae0d9edcef0e71d4022cd832c",
+    "sync_equivalence_sha256": "bf58bd160927683753e7f6e1e2ae55492c5bd486e79dc3b5b24b6e8788bacae5"
+  },
+  "baseline_product_eval_runs": {
+    "base2": {
+      "product_eval_sha256": "d83c8c5be27c3806efa30e591baa2343cc8c6557f6a4a329a116f99a36dce696",
+      "strict_equal_to_base2": true,
+      "summary_latency_ms_p50": 40,
+      "summary_latency_ms_p95": 69
+    },
+    "base3": {
+      "product_eval_sha256": "657db433cf75c60f2bb5f70040e533cffd5dc9c1fbb6e9b3c4b379e8951fc008",
+      "strict_equal_to_base2": true,
+      "summary_latency_ms_p50": 40,
+      "summary_latency_ms_p95": 67
+    },
+    "base4": {
+      "product_eval_sha256": "e4a10e386ab7fcba6cb71c3e3ea8eabdb6d78b1ed297273f2842bb8ddf926d49",
+      "strict_equal_to_base2": false,
+      "summary_latency_ms_p50": 44,
+      "summary_latency_ms_p95": 73
+    }
+  },
+  "branch": "feat/declarative-language-pack-spike",
+  "candidates": {
+    "cand1": {
+      "binary_sha256": "16e643049a5c7acc9674c1da28bab359b74aad379be3bf7cf73e6b8e95d35afb",
+      "capture_mismatches": 0,
+      "capture_roots": 179,
+      "capture_rows": 4681,
+      "capture_sha256": "42f563691762ad22ac7b2ed3d0d1885159844c70bd9d6977f731572e5273d30d",
+      "product_eval_equal_excluding_summary_p50": true,
+      "product_eval_sha256": "3ec74e0ff2b2eaa4f27650129e6e9432c09fab559d19ab197274ab1b9366ba07",
+      "product_eval_strict_equal": false,
+      "summary_latency_ms_p50": 57,
+      "summary_latency_ms_p95": 124,
+      "sync_equivalence_sha256": "f3a5cd7bce7d282cb43965dd719a006eb4d3e2f8cec5f3c9dcf7fe8f9dd0e815",
+      "sync_scenarios": 14,
+      "sync_scenarios_passed": 14
+    },
+    "cand2": {
+      "binary_sha256": "eae5cdbec336f59d38e937eaa3e76e265f1d17e63ee6eedbbbaed1c11b84a13b",
+      "capture_mismatches": 0,
+      "capture_roots": 179,
+      "capture_rows": 4681,
+      "capture_sha256": "e9e5674b3e1151c9ae2e44cb610cbcd2d4411ede331c71e2de1d8375589ba5eb",
+      "product_eval_equal_excluding_summary_p50": true,
+      "product_eval_sha256": "6cc540abc372cef015966cbe1a095eb8e37baa1f21b345b5a5fc886db2c5f357",
+      "product_eval_strict_equal": false,
+      "summary_latency_ms_p50": 48,
+      "summary_latency_ms_p95": 76,
+      "sync_equivalence_sha256": "18bff16ffe40378256bb3273c045d8953018b4855863d61d86efb5e678dd7262",
+      "sync_scenarios": 14,
+      "sync_scenarios_passed": 14
+    },
+    "cand3": {
+      "binary_sha256": "a9492e55bba81cd4941b912121c809b314aef05273e9cd979c1b8e7d1a6da4a8",
+      "capture_mismatches": 0,
+      "capture_roots": 179,
+      "capture_rows": 4681,
+      "capture_sha256": "740f2b6ce8cba8453b0b8cd0aeb467cdfbbcfc893efbc74450ed8378a0095126",
+      "product_eval_equal_excluding_summary_p50": true,
+      "product_eval_sha256": "dfa0da80e219ae8572369d9f5381aacb3f9cfc456d3b8a66b1dea93de78d8b73",
+      "product_eval_strict_equal": false,
+      "summary_latency_ms_p50": 52,
+      "summary_latency_ms_p95": 81,
+      "sync_equivalence_sha256": "a2ae5a05b3b9c255093a7cee799b213733497c16d915e4fe1f51179e14ba8354",
+      "sync_scenarios": 14,
+      "sync_scenarios_passed": 14
+    }
+  },
+  "checks": {
+    "capture_selftest": "PASS",
+    "cargo_test": "PASS",
+    "check_diff": "PASS",
+    "clippy": "PASS",
+    "diff_check": "PASS",
+    "fmt": "PASS",
+    "guides_equal": "PASS",
+    "python_worker_test": "PASS",
+    "repo_guard_check_checkout": "FAIL_PREEXISTING_ORPHANED_WORKTREE",
+    "repo_guard_check_clean_clone": "PASS",
+    "sync_equivalence": "PASS",
+    "typescript_worker_test": "PASS"
+  },
+  "commits": {
+    "legacy_removal": "0e9fbd604da3c762bd35f9eb9dce72be4a4346c1",
+    "migration": "305a61426547043ba1f6babfb1a80550f69f54d8",
+    "preregistration": "63aef3443ba51a8878026f09057a2b0058427498"
+  },
+  "date": "2026-10-20",
+  "differentials": {
+    "external_corpus": {
+      "committed": false,
+      "compared": 4818,
+      "equal": true,
+      "files": 4820,
+      "manifest_sha256": "87f9d286a814702cfbd05d8f7d4d096d224d0097e05a6aa247c18e1b857b407a",
+      "skipped_non_utf8": 2
+    },
+    "extraction": {
+      "branch_corpus_sources": 15,
+      "committed_cs_fixture_files": 11,
+      "equal": true
+    },
+    "family_policy": {
+      "claims": 21,
+      "equal": true,
+      "pair_comparisons_min": 10000,
+      "roles": 13,
+      "unknown_reasons": 13
+    }
+  },
+  "family_layer": {
+    "csharp_dedicated_fn_nonblank_lines_removed": 266,
+    "csharp_mentions_nontest": {
+      "final": 2,
+      "main": 90
+    },
+    "family_rs_nontest_nonblank_lines": {
+      "final": 5010,
+      "main": 5132
+    },
+    "generic_pack_fn_nonblank_lines_added": 142
+  },
+  "label": "QUALIFIED",
+  "line_split": {
+    "anchor_tables": 52,
+    "extraction_code_reduced": false,
+    "extractor_nontest_nonblank_final": 1832,
+    "extractor_nontest_nonblank_main": 1815,
+    "nodes_scm_nonblank": 19,
+    "procedural_semantics": 1699,
+    "procedural_share": 0.936,
+    "query_glue_nonblank": 129,
+    "traversal_and_dispatch": 64
+  },
+  "non_claims": [
+    "no new language, framework, family kind, provider or dependency",
+    "no Top-20 progress; strict completion remains 0/20",
+    "no performance claim",
+    "Tree-sitter does not prove family membership",
+    "ADR-0057 is Proposed, not accepted"
+  ],
+  "oracle_deviations": [
+    {
+      "check": "product-eval equality",
+      "corrected_result": "equal for every candidate and every baseline run",
+      "missed_timing_field": "summary.latency_ms_p50",
+      "preregistered_exclusions": [
+        "started_at",
+        "finished_at",
+        "fixtures[].resync_latency_ms",
+        "results[].latency_ms_all_reps",
+        "results[].latency_ms_p50",
+        "summary.latency_ms_p95",
+        "repogrammar_commit"
+      ],
+      "preregistration_edited": false,
+      "reason": "equal by coincidence in the two baseline runs used to derive the list; source defines it as percentile(all_latencies, 50)",
+      "strict_result": "not equal for every candidate and for a third baseline run"
+    }
+  ],
+  "rounds": 1,
+  "schema_version": "declarative-language-pack-spike.v1",
+  "target_language": "csharp"
+}

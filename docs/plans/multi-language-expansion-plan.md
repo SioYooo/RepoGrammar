@@ -69,6 +69,16 @@ Every language slice follows the Java preview touch-point checklist:
 Provenance strings must match byte-for-byte across parser constants,
 application derivation constants, and query/test expectations.
 
+Proposed ADR-0057 changes item 7 for a packed language. The family policy
+becomes one `LanguageFamilyPack` instance in the language's
+`adapters/frameworks/` module plus one `LANGUAGE_FAMILY_PACKS` entry; no
+language-specific family functions remain. C# is the only packed lane, its
+extractor selects nodes through `adapters/parsing/csharp/nodes.scm`, and its
+derived-support assumption filter reads the pack. Items 2-6 and 8-12 are
+unchanged, and other lanes keep their current item-7 functions until each
+migrates under the
+[spike's equivalence oracle](../experiments/declarative-language-pack-spike.md).
+
 ## Wave CS1 — C# initial slice
 
 Language tokens `csharp`, `csharp-config`; family prefix `family:csharp:`;

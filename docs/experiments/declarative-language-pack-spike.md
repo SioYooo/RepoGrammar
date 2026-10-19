@@ -1,7 +1,11 @@
 # Declarative language-pack spike (C#)
 
-Status: **PREREGISTERED**. Base: `main@0104073a0360ce03ff06891b7c3370a24c1d702f`,
-branch `feat/declarative-language-pack-spike`. Local only; no push or merge.
+Status: **QUALIFIED**, with one recorded oracle-definition deviation (see
+[Oracle definition defect](#oracle-definition-defect)). Base:
+`main@0104073a0360ce03ff06891b7c3370a24c1d702f`, branch
+`feat/declarative-language-pack-spike`. Local only; no push or merge. The
+preregistration below is unchanged from commit
+`63aef3443ba51a8878026f09057a2b0058427498`; results follow it.
 
 ## Question
 
@@ -157,3 +161,186 @@ python3 src/experiments/language_pack/capture.py --repo <checkout> --bin <produc
 <matching-repo-guard> sync-equivalence --fixture src/fixtures/incremental_equivalence/v1 --all --bin <product> --out <dir>
 <matching-repo-guard> product-eval --corpus src/fixtures/evaluation/query-corpus-v1.json --bin <product> --out <dir>
 ```
+
+## Results
+
+One round was needed; no failure class required a second round.
+
+| Commit | Purpose |
+| --- | --- |
+| `63aef3443ba51a8878026f09057a2b0058427498` | Preregistration and capture harness |
+| `305a61426547043ba1f6babfb1a80550f69f54d8` | Pack type, C# pack, node query, ADR-0057; legacy kept under `cfg(test)` with differentials |
+| `0e9fbd604da3c762bd35f9eb9dce72be4a4346c1` | Legacy removal; differentials become pinning and snapshot tests |
+
+Candidate products: `cand1` was built from the `305a614` tree before
+formatting (formatting only), `cand2` from the `0e9fbd6` tree before one
+three-line doc-comment edit, and `cand3` from `0e9fbd6` itself. Debug builds
+are not byte-reproducible, so the final evidence is `cand3`.
+
+### a. Byte equivalence
+
+| Product | Capture rows (179 roots) | Mismatches vs baseline | `sync-equivalence --all` | `product-eval`, preregistered exclusions | Same, plus `summary.latency_ms_p50` |
+| --- | ---: | ---: | --- | --- | --- |
+| `cand1` (`16e643049a5c`) | 4,681 | 0 | 14/14 pass | **not equal** | equal |
+| `cand2` (`eae5cdbec336`) | 4,681 | 0 | 14/14 pass | **not equal** | equal |
+| `cand3` (`a9492e55bba8`) | 4,681 | 0 | 14/14 pass | **not equal** | equal |
+
+Two baseline captures agreed on all 4,681 rows before any candidate run. Every
+row covers byte-identical units, facts, families, members, evidence, UNKNOWN
+inventory, deep family/member reads, `find`/`check`/`explain`, MCP payloads
+and the full 14-table generation fingerprint. That includes all non-C# roots,
+so the result also covers criterion c.
+
+The in-process differentials passed before the legacy code was deleted:
+
+- Extraction: identical `ParseReport`s (units, IR, facts, diagnostics) for
+  all 11 committed `.cs` fixture files and a 15-source branch corpus. The
+  branch corpus covers identical-range class/module nodes, file-scoped and
+  nested namespaces, nested classes, `#if` regions, minimal-API builder chains
+  and nested invocations, convention routing, partial/`dynamic`/source
+  generator markers, attribute recognition for every test framework, EF Core,
+  FluentValidation and a parse-degraded source. Full-report equality was
+  established once, before deletion. The retained
+  `node_query_scanner_branch_corpus_snapshots` test pins only unit kinds and
+  UNKNOWN claims; detail such as `MemberData` resolution, template shapes and
+  `test_data_shape` stays covered by the existing C# unit tests.
+- External corpus: 4,818 of 4,820 local Unity `.cs` files (read-only; manifest
+  SHA-256 `87f9d286a814702cfbd05d8f7d4d096d224d0097e05a6aa247c18e1b857b407a`,
+  path/content-hash lines sorted by path) were identical. Two non-UTF-8 files
+  were skipped before parsing:
+  `.../com.unity.render-pipelines.high-definition/Editor/RenderPipeline/VirtualTexturingSettingsUI.cs`
+  and `.../Samples~/Environment Samples/Scripts/CelestialBodiesManager.cs`.
+  The corpus is not committed, and the skip says nothing about product
+  discovery of non-UTF-8 files. The opt-in test that ran it was removed with
+  the legacy traversal, so this result cannot be re-run from the final tree.
+- Family policy: an exhaustive comparison of all 13 `UnknownReasonCode`s, 21
+  claims and 13 roles; identical variation and characteristic tables and
+  minimum support; per-prefix pair compatibility (more than 10,000 pairs,
+  including blocker variants); identical feature extraction; and identical
+  support-fact safety across every C# target and origin/assumption variants.
+
+### Oracle definition defect
+
+The preregistered `product-eval` exclusion list was built from the fields that
+differed between two baseline runs. `summary.latency_ms_p50` is
+`percentile(&all_latencies, 50)` in `repo_guard.rs`, the same kind of timing
+aggregate as the excluded `summary.latency_ms_p95`. It happened to be 40 in
+both baseline runs, so it was missed. A third run of the same baseline binary
+gave 44 and also fails the strict comparison against the first baseline.
+Under the preregistered list, every candidate differs only in that field.
+With it also excluded, every candidate is equal to the baseline, and so are
+both other baseline runs.
+
+| Run | Binary | `summary.latency_ms_p50` | `summary.latency_ms_p95` | Strict vs baseline run 1 |
+| --- | --- | ---: | ---: | --- |
+| baseline run 1 | baseline | 40 | 69 | equal |
+| baseline run 2 | baseline | 40 | 67 | equal |
+| baseline run 3 | baseline | 44 | 73 | **not equal** |
+| cand1 | candidate | 57 | 124 | **not equal** |
+| cand2 | candidate | 48 | 76 | **not equal** |
+| cand3 | candidate | 52 | 81 | **not equal** |
+
+The preregistration text is not edited. Latency fields differ between runs,
+the runs were not isolated, and no performance claim is made in either
+direction.
+
+### b. Family layer
+
+`application/family.rs` (non-test) no longer contains any C#-dedicated
+function, constant or `FamilyUnknownDomain` variant. The only remaining
+`csharp` mentions outside tests are the framework-module import list and the
+registry entry:
+
+```text
+7:    ada, cpp, csharp, delphi, fortran, go, java, matlab, php, r, ruby, sql, swift, tsjs,
+915:static LANGUAGE_FAMILY_PACKS: &[&LanguageFamilyPack] = &[&csharp::FAMILY_PACK];
+```
+
+C#-specific non-test mentions dropped from 90 to 2. The 266 non-blank lines of
+C#-dedicated family functions are replaced by 142 lines of generic pack code
+that any future pack reuses. Other languages' functions were left in place, so
+the generic `pack_context_variation_slots` body still duplicates five
+per-language variation-slot functions. Non-test `family.rs` went from 5,132 to 5,010
+non-blank lines.
+
+### c. Other languages
+
+Covered by the capture rows above, plus `sync-equivalence --all` passing all
+14 scenarios for each candidate, as at baseline.
+
+### d. Repository checks (final tree)
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | PASS |
+| `cargo test --workspace --all-features` | PASS (2,291 + 126 + 185 + 1 passed; 2 pre-existing ignored) |
+| `repo-guard check` (clean local clone) | PASS |
+| `repo-guard check` (this checkout) | FAIL, pre-existing: 2,508 `SourceOutsideSrc` paths, all under the orphaned `.claude/worktrees/` copy |
+| `repo-guard check-diff --base main --head HEAD` | PASS |
+| `repo-guard sync-equivalence --all` | PASS (14/14, `cand3`) |
+| `repo-guard product-eval` | Equal apart from timing fields; see the oracle defect |
+| `python3 src/workers/python/worker.test.py` (Python 3.14.6) | PASS |
+| `node src/workers/typescript/worker.test.js` | PASS |
+| `python3 src/experiments/language_pack/capture.test.py` | PASS |
+| `git diff --check`, `cmp -s AGENTS.md CLAUDE.md` | PASS |
+
+### Line split (headline)
+
+Of the 1,815 non-blank, non-test lines of the C# extractor at `main`:
+
+| Part | Lines | Now |
+| --- | ---: | --- |
+| Anchor tables (namespaces, attributes, minimal-API, convention, lookalike) | 52 | Data in `adapters/frameworks/csharp.rs`; two duplicated target lists removed |
+| Node-kind dispatch and recursive traversal, including binding collection | 64 | A 19-line `nodes.scm` plus 129 lines of query glue (capture collection, ordering, ancestor context, binding record) |
+| Procedural anchor semantics | 1,699 (93.6%) | Unchanged Rust |
+
+The 1,699 lines are the remainder after removing the tables and traversal
+listed above. Small shape-classifier matches, such as the visibility, class,
+return and route-template shape functions, count as procedural. So 93.6% is
+not an upper bound on what could ever be tabulated.
+
+The extractor is now 1,832 non-blank lines. **The spike did not shrink
+extraction code.** The query glue is language-neutral and should become a
+shared `adapters/parsing` helper when a second lane migrates; only then is it
+amortized. Per-language cost is dominated by anchor semantics: scoped `using`
+binding, role precedence, receiver chains, `MemberData` scopes, preprocessor
+regions, template and signature shapes, and unit/fact construction. Syntax
+selection and tables are a small share.
+
+The family side does shrink: the C# family policy is about 160 lines of pack
+data, and the 67-line `LanguageFamilyPack` type is shared.
+
+### Adding a language after this change
+
+For a packed Tree-sitter lane, compared with the twelve-item template in
+`docs/plans/multi-language-expansion-plan.md`:
+
+- Unchanged: grammar dependency, core-model kinds, discovery, framework
+  registry roles, derived-support derivation in `indexing.rs`, query/read
+  model, persistence whitelists, fixtures, unknown-reduction pairs, docs.
+- New per lane: a `nodes.scm`, the anchor handlers, anchor tables and a
+  `LanguageFamilyPack` instance next to the framework registry.
+- Removed per lane: every language-specific function in the family builder.
+  The family builder gains one `LANGUAGE_FAMILY_PACKS` entry.
+
+### Overlap with `refactor/architecture-preserving-simplification`
+
+That unmerged branch (4 commits, 21 behind `main`) also edits
+`application/family.rs` (it merges the blocking and non-blocking UNKNOWN
+collectors into `family_unknowns_by_unit`), `adapters/parsing/mod.rs` and
+`application/indexing.rs`. It does not touch the C# functions, the pack or the
+C# extractor. The two branches can be combined, but expect textual conflicts
+in those three files.
+
+### Remaining UNKNOWNs and risks
+
+- Only C# is packed. Java, C/C++, Rust, Python, TS/JS and the bounded
+  frontends keep their item-7 functions. C/C++ shares one policy across two
+  language tokens, and Rust has repository-level blocking unknowns; both still
+  need design.
+- `role_family_pack` relies on disjoint role namespaces, which an existing test
+  enforces across languages.
+- The node-query scanner calls `Node::parent()` for ordering ties and context
+  lookup. Its cost on very large files was not measured.
+- ADR-0057 is Proposed; the maintainer must decide whether to accept it.

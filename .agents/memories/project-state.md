@@ -1,5 +1,20 @@
 # Project State
 
+## Declarative language-pack spike — 2026-10-20
+
+Branch `feat/declarative-language-pack-spike` (local, unmerged) moves C# family
+policy into the `LanguageFamilyPack` data type (proposed ADR-0057) and selects
+C# extractor nodes with `adapters/parsing/csharp/nodes.scm`. The verdict is
+`QUALIFIED`: all 179 fixture roots (4,681 rows, including the full generation
+fingerprint) are byte-identical, `sync-equivalence` passes 14/14, and
+`product-eval` is equal apart from timing. One preregistered timing field,
+`summary.latency_ms_p50`, was missed and is recorded as an oracle deviation.
+`family.rs` has no C#-dedicated code. The C# extractor did not shrink: 93.6% of
+it is procedural anchor semantics, and the query glue should become a shared
+helper when a second lane migrates. Only C# is packed; no language, provider
+or dependency was added, and Top-20 remains 0/20. Evidence:
+`docs/experiments/declarative-language-pack-spike.md`.
+
 ## 0.5.1 publication preparation — 2026-10-15
 
 The maintainer requested the latest validated source on npm as well as the
