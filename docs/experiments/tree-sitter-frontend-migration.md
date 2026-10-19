@@ -1,6 +1,8 @@
 # Tree-sitter frontend migration
 
-Status: **PREREGISTERED**. Base: `main@58e57ab1e3fa4d175a3865a74654db779454660a`,
+Status: **LANES RECORDED**; TS/JS is a separate phase, and the `CLASSIFIED`
+lanes await maintainer acceptance (see
+[Decisions needed](#decisions-needed)). Preregistered in `22b0a31`. Base: `main@58e57ab1e3fa4d175a3865a74654db779454660a`,
 branch `feat/tree-sitter-frontends`. Local only; no push or merge. Authority:
 [ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md).
 
@@ -105,16 +107,95 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
 
 ## Lane results
 
-| Lane | Verdict | Fixture capture | In-process differential | External corpus | Non-test lines (before → after) |
+| Lane | Verdict | Fixture capture | In-process differential | External corpus | Frontend non-test lines |
 | --- | --- | --- | --- | --- | --- |
-| Go | `EQUIVALENT` | 4,681 rows, 0 mismatches; `sync-equivalence` 14/14; `product-eval` equal | all committed `_test.go` fixtures and 25 branch sources identical | 1,753 stdlib files: 60 legacy misparse refusals removed (22 legacy debug panics), 4 `refusal_class_changed` | 1,855 → 1,699 |
+| Go | `EQUIVALENT` | 0 mismatches | all committed `_test.go` fixtures and 25 branch sources identical | 1,753 stdlib files: 60 legacy misparse refusals removed (22 legacy debug panics), 4 `refusal_class_changed` | 2,661 → 2,520 |
+| Ruby | `CLASSIFIED` | 0 mismatches | 9 fixtures and 67 branch sources identical | 1,219 CocoaPods `.rb` files: 437 `unknown_removed` (legacy statement-modifier misparse), 1 `unknown_added` (grammar gap) | 2,318 → 2,329 |
+| PHP | `CLASSIFIED` | 0 mismatches | 7 fixtures and 195 branch sources identical | no PHPUnit corpus (33 files identical); 23,195 mutants: 419 `unknown_added` (skipped-region errors), 401 `refusal_class_changed` (broken and over the depth bound), 2 `unknown_removed` | 1,805 → 1,739 |
+| Delphi/Object Pascal | `CLASSIFIED`, with `anchor_changed` | 0 mismatches | 3 fixtures and the branch corpus identical apart from pinned divergences, which include new anchors | no DUnitX corpus; 2 of 3 `.pas` examples differ (not compilable units) | 1,001 → 952 |
+| Fortran | `CLASSIFIED` | 0 mismatches | 9 fixtures and 252 branch sources identical | 80 free-form files: 75 identical, 5 legacy refusals removed | 1,964 → 1,734 |
+| MATLAB | `CLASSIFIED` | 0 mismatches | 5 fixtures and 247 of 257 branch sources identical; 10 pinned | no `matlab.unittest` corpus; 2,554 deletion mutants: 359 differ, all invalid MATLAB (7 change the unit set) | 1,346 → 1,597 |
+| Swift | `CLASSIFIED` | 0 mismatches | 8 fixtures and 115 branch sources identical | 1,084 files: 101 differ (59 `unknown_removed`, 34 `refusal_class_changed`, 8 `unknown_added` grammar gaps), 0 `anchor_changed` | 1,821 → 1,664 |
+| R | `CLASSIFIED` | 0 mismatches | 3 fixtures and 486 branch sources identical | 3,434 installed `.R` files: 0 differ; 33,108 mutants: 8 differ, all with 0 anchors | 2,731 → 3,055 |
+| Ada | `CLASSIFIED` | 0 mismatches | 3 fixtures identical; 4,378 of 4,482 branch sources identical (70 `unknown_added`, 34 `unknown_removed`) | 3 Pygments files, identical | 2,355 → 1,485 |
+| Assembly | `BLOCKED` | n/a | n/a | `tree-sitter-asm` 0.24.0 does not parse GNU `as` AT&T syntax: all 679 local `.s` files have `ERROR` or `MISSING` nodes | unchanged |
+| SQL | `BLOCKED` | n/a | n/a | `tree-sitter-sequel` 0.3.11: 158 of 213 scanned files have `ERROR` or `MISSING` nodes that swallow statement boundaries | unchanged |
+| TS/JS | not ported | n/a | n/a | n/a | unchanged |
 
-Go evidence: capture `47ccdddb39ad17af0a7f0b686bf0a37b1e40784b979beb4349cfa74846b7adfe`,
-`sync-equivalence` `472442a11617f1fe505858c7b8760752e58e887747c6a55cc106fa1ebed779a0`,
-`product-eval` `344569bd8a44c5e0535cc4d442da47836ceb6b327c86a386ec29a788b0567dce`.
-The lexer stays as the lexical-subset gate; only the recursive-descent parser
-was removed. Details are in the
-[Go completion review](../reports/language-support/go-completion-review.md#adr-0058-frontend-change--2026-10-20).
+- The per-lane evidence is in each lane's completion review under
+  `docs/reports/language-support/`. Go's row is from
+  [go-completion-review](../reports/language-support/go-completion-review.md).
+- Fixture capture was run after each lane landed, cumulatively, in branch
+  order: Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R, Ada. Every run had
+  179 roots, 4,681 rows and 0 mismatches; `sync-equivalence` passed 14/14 and
+  `product-eval` was equal.
+- Frontend non-test lines count `src/rust/adapters/parsing/<lane>/*.rs`.
+  Items under `#[cfg(test)]` and test-only modules (the legacy parsers and
+  differentials) are left out. Both sides use the same count, before the
+  migration (`22b0a31^`) and now. The count leaves out the lane's
+  project-inventory file (`<lane>.rs`), which the migration did not touch. An
+  earlier version of the Go row gave 1,855 → 1,699 under a different count.
+- TS/JS has a dependency-free extractor with no declared subset or refusal
+  classes to reproduce, so this port protocol does not apply. It is
+  redesigned under the binding engine and role rows as a separate phase.
+
+## Decisions needed
+
+The legacy frontends stay under `cfg(test)` until the maintainer accepts the
+classification of each `CLASSIFIED` lane. Each lane loses or changes recall
+where its grammar has a gap:
+
+- Delphi/Object Pascal: a fixture after a `record` or `interface` in the same
+  `type` section, or after a nested record, now anchors. The legacy skip lost
+  it. This is `anchor_changed`, which the oracle tiers say blocks a lane
+  unless the maintainer accepts it. Every case is a legacy misparse, pinned by
+  a test.
+- PHP: `declare(strict_types=1, ticks=1)` (a directive list) is valid PHP that
+  grammar 0.25.1 rejects, so such a file now refuses.
+- Ruby: a method call on a command-call `do ... end` block is valid Ruby that
+  grammar 0.23.1 rejects; one external file now refuses.
+- Fortran: an alternate-return dummy (`subroutine s(a, *)`) is a grammar gap
+  and now refuses.
+- MATLAB: an empty attribute list, `methods ()`, adds a degraded-parse
+  diagnostic. 7 mutants of invalid MATLAB change the unit set.
+- Swift: 8 of 1,084 external files use Swift 5.10/6 forms, a labeled trailing
+  closure on its own line, or `f(())`, which grammar 0.7.4 cannot read, so
+  they abstain.
+- R: no valid-code regression; 8 mutant-only differences on inputs R rejects.
+- Ada: Ada 2022 `for I : T in 1 .. 3 loop` is a grammar gap and now refuses.
+  `type T is new A and B with null record` (an interface progenitor list) is
+  now admitted. ADR-0045 D4a excludes interface types but does not name
+  progenitor lists.
+
+## Build cost
+
+ADR-0058 requires binary size and build time to be recorded. Clean
+`cargo build --release --locked --bin repogrammar` on the maintainer machine,
+each in a fresh target directory:
+
+| Revision | Wall time | `repogrammar` size | `__const` section |
+| --- | --- | --- | --- |
+| baseline `58e57ab` | 34.2 s | 22,321,856 bytes | 11,230,556 bytes |
+| `33ed6a7` (9 lanes migrated) | 34.7 s | 38,608,576 bytes | 26,197,724 bytes |
+
+The binary grows by 16.3 MB (73%), almost all in parse tables. The new grammar
+static libraries total about 16.5 MB:
+
+| Grammar | Static library |
+| --- | --- |
+| `tree-sitter-fortran` | 6.3 MB |
+| `tree-sitter-swift` | 4.0 MB |
+| `tree-sitter-php` | 2.1 MB |
+| `tree-sitter-ruby` | 2.0 MB |
+| `tree-sitter-pascal` | 0.7 MB |
+| `tree-sitter-r` | 0.5 MB |
+| `tree-sitter-matlab` | 0.4 MB |
+| `tree-sitter-ada` | 0.3 MB |
+| `tree-sitter-go` | 0.2 MB |
+
+Fortran's grammar is the largest single cost for a lane that reads only the
+test-drive subset. Build wall time is unchanged, because the grammar C
+sources compile in parallel with the Rust crate.
 
 ## Optimization
 
