@@ -210,6 +210,8 @@ context lives under `.agents/memories/`.
   accepted): [declarative-language-pack-spike](experiments/declarative-language-pack-spike.md).
 - Tree-sitter frontend migration protocol and per-lane verdicts (ADR-0058):
   [tree-sitter-frontend-migration](experiments/tree-sitter-frontend-migration.md).
+- Preregistered language-neutral import-binding engine (Phase 2a):
+  [binding-engine](experiments/binding-engine.md).
 - One prioritized execution handoff and v0.6.0 go/no-go gates:
   [adoption/retrieval/release plan](plans/v0.6-adoption-retrieval-release-plan.md).
 
