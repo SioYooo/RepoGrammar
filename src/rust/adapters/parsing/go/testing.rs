@@ -33,6 +33,7 @@
 //! registry entry into certainty, and a count may fall only when a
 //! source-backed replacement fact discharges the same obligation.
 
+use super::super::binding::{BindingSpec, ImportScope};
 use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
@@ -54,6 +55,13 @@ pub const GO_ANCHOR_METHOD: &str = "bounded_go_test_declaration_v2";
 pub const GO_TESTING_TEST_TARGET: &str = "go.testing.test_function";
 
 const TESTING_IMPORT_PATH: &str = "testing";
+/// Go qualified type names: `qualifier.Type`, with no accepted suffix.
+const GO_TYPE_NAMES: BindingSpec = BindingSpec {
+    separator: '.',
+    fully_qualified_names: false,
+    name_suffixes: &[""],
+    type_arguments: None,
+};
 const CGO_IMPORT_PATH: &str = "C";
 const MAX_FUNCTION_UNITS: usize = 4_096;
 const MAX_FACTS: usize = 16_384;
@@ -436,7 +444,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             limit_hit = true;
             break;
         }
-        let family = admitted_anchor(declaration, &file.testing_binding);
+        let family = admitted_anchor(declaration, &file.imports);
         let kind = if family.is_some() {
             CodeUnitKind::GoTestFunction
         } else {
@@ -1217,11 +1225,14 @@ struct FunctionDecl {
 
 struct ParsedGoFile {
     testing_binding: TestingBinding,
+    /// The file's import bindings, as the shared engine reads them.
+    imports: ImportScope,
     functions: Vec<FunctionDecl>,
     has_header_build_directive: bool,
 }
 
 /// The alias shape of one import specification.
+#[derive(Clone, Copy)]
 enum ImportAlias<'a> {
     None,
     Named(&'a str),
@@ -1248,6 +1259,7 @@ fn parse_go_file(text: &str, root: Node<'_>) -> Result<ParsedGoFile, Refusal> {
     // of an exact `testing` import. Default names of other paths come from the
     // imported package's clause, which no source-local read can see.
     let mut bound_names: Vec<String> = Vec::new();
+    let mut imports = ImportScope::default();
     let mut functions = Vec::new();
     let mut seen_package = false;
     let mut cursor = root.walk();
@@ -1262,6 +1274,7 @@ fn parse_go_file(text: &str, root: Node<'_>) -> Result<ParsedGoFile, Refusal> {
                 node,
                 &mut testing_binding,
                 &mut bound_names,
+                &mut imports,
                 &mut refusals,
             ),
             "function_declaration" | "method_declaration" => {
@@ -1289,6 +1302,7 @@ fn parse_go_file(text: &str, root: Node<'_>) -> Result<ParsedGoFile, Refusal> {
     }
     Ok(ParsedGoFile {
         testing_binding,
+        imports,
         functions,
         has_header_build_directive,
     })
@@ -1341,6 +1355,7 @@ fn import_declaration(
     declaration: Node<'_>,
     testing_binding: &mut TestingBinding,
     bound_names: &mut Vec<String>,
+    imports: &mut ImportScope,
     refusals: &mut Vec<(usize, Refusal)>,
 ) {
     let mut specs = Vec::new();
@@ -1360,7 +1375,7 @@ fn import_declaration(
         }
     }
     for spec in specs {
-        if let Err(refusal) = import_spec(text, spec, testing_binding, bound_names) {
+        if let Err(refusal) = import_spec(text, spec, testing_binding, bound_names, imports) {
             refusals.push((spec.start_byte(), refusal));
             return;
         }
@@ -1372,6 +1387,7 @@ fn import_spec(
     spec: Node<'_>,
     testing_binding: &mut TestingBinding,
     bound_names: &mut Vec<String>,
+    imports: &mut ImportScope,
 ) -> Result<(), Refusal> {
     let alias = match spec.child_by_field_name("name") {
         Some(name) if name.kind() == "dot" => ImportAlias::Dot,
@@ -1390,7 +1406,17 @@ fn import_spec(
             end: path.end_byte(),
         },
     )?;
-    bind_import(&path, alias, testing_binding, bound_names)
+    bind_import(&path, alias, testing_binding, bound_names)?;
+    match alias {
+        ImportAlias::Named("_") => {}
+        ImportAlias::Named(name) => imports.alias(name.to_string(), path),
+        ImportAlias::Dot => imports.open(path),
+        // A default import's local name comes from the imported package
+        // clause, which no source-local read sees; only `testing` names itself.
+        ImportAlias::None if path == TESTING_IMPORT_PATH => imports.alias(path.clone(), path),
+        ImportAlias::None => {}
+    }
+    Ok(())
 }
 
 fn bind_import(
@@ -1706,16 +1732,19 @@ fn toolchain_family_for_name(name: &str) -> Option<TestFamily> {
 /// optionally named and whose type is exactly a pointer to the family's type
 /// letter in the file's own spelling of the `testing` package. Every part is
 /// read off tokens a parse produced; nothing is matched against text.
-fn admitted_anchor(declaration: &FunctionDecl, binding: &TestingBinding) -> Option<TestFamily> {
+fn admitted_anchor(declaration: &FunctionDecl, imports: &ImportScope) -> Option<TestFamily> {
     if declaration.is_method || declaration.has_results {
         return None;
     }
     let family = toolchain_family_for_name(&declaration.name)?;
-    let TestingBinding::Qualified(local) = binding else {
-        return None;
-    };
     let (qualifier, type_name) = declaration.pointer_parameter.as_ref()?;
-    (qualifier == local && type_name.len() == 1 && type_name.as_bytes()[0] == family.letter() as u8)
+    imports
+        .denotes(
+            &GO_TYPE_NAMES,
+            &format!("{qualifier}.{type_name}"),
+            &family.letter().to_string(),
+            TESTING_IMPORT_PATH,
+        )
         .then_some(family)
 }
 

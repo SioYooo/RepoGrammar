@@ -1,7 +1,8 @@
 # Language-neutral import-binding engine (Phase 2a)
 
-Status: **PREREGISTERED**. Base: `feat/tree-sitter-frontends@6302f64`. Local
-only; no push or merge. Context: ADR-0057, ADR-0058 and the
+Status: **QUALIFIED**, with one recorded method deviation (see below). Base:
+`feat/tree-sitter-frontends@6302f64`; the preregistration is unchanged from
+commit `31e266d`. Local only; no push or merge. Context: ADR-0057, ADR-0058 and the
 [Tree-sitter migration protocol](tree-sitter-frontend-migration.md), which
 splits the anchor-rule work into a binding engine (this experiment) and a
 later role-rule table (Phase 2b, preregistered separately after this
@@ -69,3 +70,49 @@ within three rounds gives `NO_GO`, with the failing constructs listed.
 No new language, framework, anchor, provider or dependency; no change to
 UNKNOWN semantics. Role decision (which anchor applies, precedence, context
 propagation) is out of scope and belongs to Phase 2b.
+
+## Results
+
+| Evidence | Result |
+| --- | --- |
+| Fixture-wide capture (179 roots) | 4,681 rows, 0 mismatches (capture `92b93e06512b0212…`) |
+| `sync-equivalence --all` | 14/14 pass |
+| `product-eval` (timing, clock and commit fields excluded) | equal |
+| Parse snapshot, 4,818 Unity C# files | identical, file by file |
+| Parse snapshot, 11 committed C# fixture sources | identical |
+| Parse snapshot, 1,753 Go 1.26.4 standard-library test files | identical |
+| Parse snapshot, 9 committed Go fixture sources | identical |
+| C# and Go unit tests (including the C# branch-corpus snapshots) | pass (771 tests under `parsing::`) |
+
+**Threshold.** All 12 C# binding functions are removed, which is 173 of 173
+classified lines (100% ≥ 80%): `scope_using_context`, `record_exact_using`,
+`declaration_attributes`, the five `attribute_*` exactness and lookalike
+functions, `base_list_types`, `base_simple_name` and `base_is_exact`. The
+`CSharpUsingContext` and `CSharpAttribute` types are removed as well. No C#
+binding logic remains. C# keeps 27 lines of specification data
+(`ATTRIBUTE_NAMES`, `TYPE_NAMES`, `USING_DIRECTIVES`, `ATTRIBUTE_LISTS`), which
+the preregistration excludes from the residue. `csharp.rs` went from 1,845 to
+1,680 non-test lines; the shared engine `adapters/parsing/binding.rs` is 273
+non-test lines.
+
+**Generality finding.** Go needed one switch the C# design lacked:
+`fully_qualified_names`. A C# qualifier may spell a namespace in full
+(`Microsoft.AspNetCore.Mvc.HttpGet`), but a Go qualifier is always a local
+package name, so `*testing.T` must not resolve when `testing` is imported as
+`tt`. The existing Go tests caught this. Go keeps its lane policy (duplicate
+bindings refuse the file; dot and blank `testing` imports are obligations)
+and now asks the engine whether `qualifier.Type` denotes `testing.T/B/F`.
+
+**Method deviation.** The preregistration kept the legacy C# and Go binding
+code under `cfg(test)` for an in-process differential. Instead, an opt-in
+parse-snapshot tool (`parse_snapshot_of_external_corpus`, committed before
+the change in `db7f552`) hashed every parse output before and after over all
+four corpora above. It compares the same full outputs over more inputs, and
+legacy code did not need to be retained.
+
+## Next
+
+Phase 2b (role-rule rows) is preregistered separately. The engine's
+annotation and directive extractors are written against node-kind data and
+can serve other Tree-sitter lanes: Java annotations, TS/JS imports and
+decorators, Python decorators.

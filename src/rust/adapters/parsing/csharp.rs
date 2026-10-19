@@ -6,6 +6,7 @@
 //! xUnit/NUnit/MSTest anchors, and typed UNKNOWN facts for every runtime,
 //! generated, or build-variant semantic that remains unresolved.
 
+use super::binding::{self, Annotation, AnnotationSpec, BindingSpec, DirectiveSpec, ImportScope};
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::adapters::frameworks::csharp::{
     ASPNET_MVC_NAMESPACE, CONVENTION_ROUTING_METHODS, EFCORE_NAMESPACE, FLUENTVALIDATION_NAMESPACE,
@@ -30,6 +31,37 @@ mod test_data;
 
 pub(crate) const CSHARP_ANCHOR_ENGINE: &str = "repogrammar-csharp-syntax";
 pub(crate) const CSHARP_ANCHOR_METHOD: &str = "tree_sitter_csharp_structural_anchors_v1";
+
+/// C# attribute names: `Name` or `NameAttribute`, optionally dotted.
+const ATTRIBUTE_NAMES: BindingSpec = BindingSpec {
+    separator: '.',
+    fully_qualified_names: true,
+    name_suffixes: &["", "Attribute"],
+    type_arguments: None,
+};
+/// C# type names as written in a base list, with optional type arguments.
+const TYPE_NAMES: BindingSpec = BindingSpec {
+    separator: '.',
+    fully_qualified_names: true,
+    name_suffixes: &[""],
+    type_arguments: Some('<'),
+};
+/// Exact `using` directives; `using static`, aliases and calls open nothing.
+const USING_DIRECTIVES: DirectiveSpec = DirectiveSpec {
+    kinds: &["using_directive", "global_using_directive"],
+    prefix: "global ",
+    keyword: "using ",
+    excluded_forms: &["static "],
+    excluded_characters: &['=', '('],
+    terminator: ';',
+    body_kinds: &["declaration_list"],
+};
+const ATTRIBUTE_LISTS: AnnotationSpec = AnnotationSpec {
+    list_kind: "attribute_list",
+    item_kind: "attribute",
+    name_field: "name",
+    arguments_kind: "attribute_argument_list",
+};
 
 /// Tree-sitter query selecting every node the scanner handles.
 const NODE_QUERY: &str = include_str!("csharp/nodes.scm");
@@ -110,34 +142,8 @@ struct VisitContext {
     class_route_template_shape: &'static str,
     in_efcore_db_context: bool,
     in_mstest_test_class: bool,
-    usings: Arc<CSharpUsingContext>,
+    usings: Arc<ImportScope>,
     xunit_member_data_scope: Arc<test_data::MemberDataScope>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CSharpAttribute {
-    name: String,
-    arguments: Option<String>,
-    parse_degraded: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-struct CSharpUsingContext {
-    parent: Option<Arc<CSharpUsingContext>>,
-    exact_usings: BTreeSet<String>,
-}
-
-impl CSharpUsingContext {
-    fn has_using_for(&self, namespace: &str) -> bool {
-        let mut context = Some(self);
-        while let Some(current) = context {
-            if current.exact_usings.contains(namespace) {
-                return true;
-            }
-            context = current.parent.as_deref();
-        }
-        false
-    }
 }
 
 struct CSharpTreeScanner<'a> {
@@ -211,10 +217,12 @@ impl<'a> CSharpTreeScanner<'a> {
             match capture {
                 "scope" => {
                     let mut next = context.clone();
-                    next.usings = Arc::new(scope_using_context(
+                    next.usings = Arc::new(binding::scope_imports(
                         self.document.text,
                         node,
                         Arc::clone(&context.usings),
+                        &USING_DIRECTIVES,
+                        &TYPE_NAMES,
                     ));
                     contexts.insert(node.id(), next);
                 }
@@ -265,38 +273,39 @@ impl<'a> CSharpTreeScanner<'a> {
         node: Node<'_>,
         context: &VisitContext,
     ) -> Result<VisitContext, ParseError> {
-        let attributes = declaration_attributes(self.document.text, node);
+        let attributes = binding::annotations(self.document.text, node, &ATTRIBUTE_LISTS);
         let modifiers = modifier_tokens(self.document.text, node);
-        let bases = base_list_types(self.document.text, node);
+        let bases = binding::listed_names(self.document.text, node, "base_list");
         let xunit_member_data_scope = self.xunit_member_data_scope(node, &modifiers, &bases);
-        let class_route_template_shape = attribute_segment_exact(
-            &attributes,
-            "Route",
-            ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
-        )
-        .map(|attribute| route_template_shape(attribute.arguments.as_deref()))
-        .unwrap_or("none");
+        let class_route_template_shape = context
+            .usings
+            .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "Route", ASPNET_MVC_NAMESPACE)
+            .map(|attribute| route_template_shape(attribute.arguments.as_deref()))
+            .unwrap_or("none");
 
-        let controller_target = if has_exact_attribute(
-            &attributes,
-            "ApiController",
-            ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
-        ) {
+        let controller_target = if context
+            .usings
+            .exact_annotation(
+                &ATTRIBUTE_NAMES,
+                &attributes,
+                "ApiController",
+                ASPNET_MVC_NAMESPACE,
+            )
+            .is_some()
+        {
             Some(("aspnetcore.mvc.ApiController", "ApiController"))
-        } else if base_is_exact(
+        } else if context.usings.any_denotes(
+            &TYPE_NAMES,
             &bases,
             "ControllerBase",
             ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
         ) {
             Some(("aspnetcore.mvc.ControllerBase", "ControllerBase"))
-        } else if base_is_exact(
+        } else if context.usings.any_denotes(
+            &TYPE_NAMES,
             &bases,
             "Controller",
             ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
         ) {
             Some(("aspnetcore.mvc.Controller", "Controller"))
         } else {
@@ -304,12 +313,9 @@ impl<'a> CSharpTreeScanner<'a> {
         };
         let db_context = controller_target.is_none()
             && node.kind() == "class_declaration"
-            && base_is_exact(
-                &bases,
-                "DbContext",
-                EFCORE_NAMESPACE,
-                context.usings.as_ref(),
-            );
+            && context
+                .usings
+                .any_denotes(&TYPE_NAMES, &bases, "DbContext", EFCORE_NAMESPACE);
 
         // Ordered after the ASP.NET and EF Core arms so one class never claims
         // two framework roles: a unit holding two is dropped from family
@@ -317,11 +323,11 @@ impl<'a> CSharpTreeScanner<'a> {
         let fluent_validator = controller_target.is_none()
             && !db_context
             && node.kind() == "class_declaration"
-            && base_is_exact(
+            && context.usings.any_denotes(
+                &TYPE_NAMES,
                 &bases,
                 "AbstractValidator",
                 FLUENTVALIDATION_NAMESPACE,
-                context.usings.as_ref(),
             );
 
         let kind = if controller_target.is_some() {
@@ -411,10 +417,10 @@ impl<'a> CSharpTreeScanner<'a> {
                 Vec::new(),
             )?);
             self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
-        } else if has_non_exact_known_attribute(
+        } else if context.usings.has_unbound_lookalike(
+            &ATTRIBUTE_NAMES,
             &attributes,
             KNOWN_CLASS_ATTRIBUTES,
-            context.usings.as_ref(),
         ) {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
@@ -428,7 +434,7 @@ impl<'a> CSharpTreeScanner<'a> {
         }
         if bases
             .iter()
-            .any(|base| base_simple_name(base) == "JsonSerializerContext")
+            .any(|base| TYPE_NAMES.looks_like(base, "JsonSerializerContext"))
         {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
@@ -445,37 +451,37 @@ impl<'a> CSharpTreeScanner<'a> {
             in_aspnet_controller: controller_target.is_some(),
             class_route_template_shape,
             in_efcore_db_context: db_context,
-            in_mstest_test_class: has_exact_attribute(
-                &attributes,
-                "TestClass",
-                MSTEST_NAMESPACE,
-                context.usings.as_ref(),
-            ),
+            in_mstest_test_class: context
+                .usings
+                .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "TestClass", MSTEST_NAMESPACE)
+                .is_some(),
             usings: Arc::clone(&context.usings),
             xunit_member_data_scope: Arc::new(xunit_member_data_scope),
         })
     }
 
     fn scan_method(&mut self, node: Node<'_>, context: &VisitContext) -> Result<(), ParseError> {
-        let attributes = declaration_attributes(self.document.text, node);
+        let attributes = binding::annotations(self.document.text, node, &ATTRIBUTE_LISTS);
         let modifiers = modifier_tokens(self.document.text, node);
         let route = HTTP_ROUTE_ATTRIBUTES
             .iter()
             .find_map(|(attribute, target, http_method)| {
-                attribute_segment_exact(
-                    &attributes,
-                    attribute,
-                    ASPNET_MVC_NAMESPACE,
-                    context.usings.as_ref(),
-                )
-                .map(|found| {
-                    (
-                        *attribute,
-                        *target,
-                        *http_method,
-                        route_template_shape(found.arguments.as_deref()),
+                context
+                    .usings
+                    .exact_annotation(
+                        &ATTRIBUTE_NAMES,
+                        &attributes,
+                        attribute,
+                        ASPNET_MVC_NAMESPACE,
                     )
-                })
+                    .map(|found| {
+                        (
+                            *attribute,
+                            *target,
+                            *http_method,
+                            route_template_shape(found.arguments.as_deref()),
+                        )
+                    })
             });
         let test = if route.is_none() {
             self.test_method_anchor(&attributes, context)
@@ -590,12 +596,11 @@ impl<'a> CSharpTreeScanner<'a> {
             return Ok(());
         }
 
-        if has_exact_attribute(
-            &attributes,
-            "MemberData",
-            XUNIT_NAMESPACE,
-            context.usings.as_ref(),
-        ) {
+        if context
+            .usings
+            .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "MemberData", XUNIT_NAMESPACE)
+            .is_some()
+        {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
                 &unit,
@@ -605,10 +610,10 @@ impl<'a> CSharpTreeScanner<'a> {
                 "xUnit MemberData appeared without an exact Theory attribute",
                 Vec::new(),
             )?);
-        } else if has_non_exact_known_attribute(
+        } else if context.usings.has_unbound_lookalike(
+            &ATTRIBUTE_NAMES,
             &attributes,
             KNOWN_METHOD_ATTRIBUTES,
-            context.usings.as_ref(),
         ) {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
@@ -625,32 +630,35 @@ impl<'a> CSharpTreeScanner<'a> {
 
     fn test_method_anchor(
         &self,
-        attributes: &[CSharpAttribute],
+        attributes: &[Annotation],
         context: &VisitContext,
     ) -> Option<TestMethodAnchor> {
         let exact = |simple: &str, namespace: &str| {
-            has_exact_attribute(attributes, simple, namespace, context.usings.as_ref())
+            context
+                .usings
+                .exact_annotation(&ATTRIBUTE_NAMES, attributes, simple, namespace)
+                .is_some()
         };
         if exact("Fact", XUNIT_NAMESPACE) || exact("Theory", XUNIT_NAMESPACE) {
             let theory = exact("Theory", XUNIT_NAMESPACE);
             let member_data_attributes = attributes
                 .iter()
                 .filter(|attribute| {
-                    attribute_is_exact(
+                    context.usings.annotation_is_exact(
+                        &ATTRIBUTE_NAMES,
                         attribute,
                         "MemberData",
                         XUNIT_NAMESPACE,
-                        context.usings.as_ref(),
                     )
                 })
                 .collect::<Vec<_>>();
             let has_non_exact_member_data = attributes.iter().any(|attribute| {
-                attribute_matches_name(&attribute.name, "MemberData")
-                    && !attribute_is_exact(
+                ATTRIBUTE_NAMES.looks_like(&attribute.name, "MemberData")
+                    && !context.usings.annotation_is_exact(
+                        &ATTRIBUTE_NAMES,
                         attribute,
                         "MemberData",
                         XUNIT_NAMESPACE,
-                        context.usings.as_ref(),
                     )
             });
             let member_data = if theory {
@@ -1308,54 +1316,6 @@ fn unknown_fact(
     })
 }
 
-/// Extends a lexical C# scope with only its direct Tree-sitter
-/// `using_directive` children. Comments, strings, and sibling namespaces never
-/// contribute binding evidence; `using static` and alias usings never gate
-/// exactness.
-fn scope_using_context(
-    source: &str,
-    scope: Node<'_>,
-    parent: Arc<CSharpUsingContext>,
-) -> CSharpUsingContext {
-    let mut context = CSharpUsingContext {
-        parent: Some(parent),
-        exact_usings: BTreeSet::new(),
-    };
-    let mut cursor = scope.walk();
-    for child in scope.named_children(&mut cursor) {
-        record_exact_using(source, child, &mut context);
-        if child.kind() == "declaration_list" {
-            let mut body_cursor = child.walk();
-            for body_child in child.named_children(&mut body_cursor) {
-                record_exact_using(source, body_child, &mut context);
-            }
-        }
-    }
-    context
-}
-
-fn record_exact_using(source: &str, node: Node<'_>, context: &mut CSharpUsingContext) {
-    if !matches!(node.kind(), "using_directive" | "global_using_directive") {
-        return;
-    }
-    let line = node_text(source, node).trim();
-    let line = line.strip_prefix("global ").unwrap_or(line);
-    let Some(rest) = line.strip_prefix("using ") else {
-        return;
-    };
-    if rest.starts_with("static ") || rest.contains('=') || rest.contains('(') {
-        return;
-    }
-    let namespace = rest.trim_end_matches(';').trim();
-    if !namespace.is_empty()
-        && namespace
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_'))
-    {
-        context.exact_usings.insert(namespace.to_string());
-    }
-}
-
 /// Byte ranges of `#if`..`#endif` conditional regions, computed lexically and
 /// applied span-scoped per unit. Conditions are recorded, never evaluated.
 fn conditional_preproc_regions(source: &str) -> Vec<(usize, usize)> {
@@ -1410,149 +1370,10 @@ fn is_preproc_directive(trimmed_line: &str, directive: &str) -> bool {
     })
 }
 
-fn declaration_attributes(source: &str, node: Node<'_>) -> Vec<CSharpAttribute> {
-    let mut attributes = Vec::new();
-    let mut list_cursor = node.walk();
-    for child in node.named_children(&mut list_cursor) {
-        if child.kind() != "attribute_list" {
-            continue;
-        }
-        let mut attribute_cursor = child.walk();
-        for attribute in child.named_children(&mut attribute_cursor) {
-            if attribute.kind() != "attribute" {
-                continue;
-            }
-            let name = attribute
-                .child_by_field_name("name")
-                .and_then(|name| node_text_checked(source, name))
-                .map(str::to_string);
-            let arguments = {
-                let mut argument_cursor = attribute.walk();
-                let found = attribute
-                    .named_children(&mut argument_cursor)
-                    .find(|candidate| candidate.kind() == "attribute_argument_list")
-                    .map(|arguments| node_text(source, arguments).to_string());
-                found
-            };
-            if let Some(name) = name {
-                attributes.push(CSharpAttribute {
-                    name,
-                    arguments,
-                    parse_degraded: attribute.has_error(),
-                });
-            }
-        }
-    }
-    attributes
-}
-
-fn attribute_matches_name(attribute_name: &str, simple: &str) -> bool {
-    let last = attribute_name.rsplit('.').next().unwrap_or(attribute_name);
-    last == simple || last == format!("{simple}Attribute")
-}
-
-fn attribute_name_is_exact(
-    attribute_name: &str,
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    let candidates = [simple.to_string(), format!("{simple}Attribute")];
-    if attribute_name.contains('.') {
-        return candidates
-            .iter()
-            .any(|candidate| attribute_name == format!("{namespace}.{candidate}"));
-    }
-    candidates
-        .iter()
-        .any(|candidate| attribute_name == candidate)
-        && usings.has_using_for(namespace)
-}
-
-fn attribute_is_exact(
-    attribute: &CSharpAttribute,
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    !attribute.parse_degraded && attribute_name_is_exact(&attribute.name, simple, namespace, usings)
-}
-
-fn has_exact_attribute(
-    attributes: &[CSharpAttribute],
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    attributes
-        .iter()
-        .any(|attribute| attribute_is_exact(attribute, simple, namespace, usings))
-}
-
-fn attribute_segment_exact<'a>(
-    attributes: &'a [CSharpAttribute],
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> Option<&'a CSharpAttribute> {
-    attributes
-        .iter()
-        .find(|attribute| attribute_is_exact(attribute, simple, namespace, usings))
-}
-
-fn has_non_exact_known_attribute(
-    attributes: &[CSharpAttribute],
-    known: &[(&str, &str)],
-    usings: &CSharpUsingContext,
-) -> bool {
-    attributes.iter().any(|attribute| {
-        known.iter().any(|(simple, namespace)| {
-            attribute_matches_name(&attribute.name, simple)
-                && !attribute_is_exact(attribute, simple, namespace, usings)
-        })
-    })
-}
-
 fn contains_generated_regex_marker(slice: &str) -> bool {
     identifier_tokens(slice)
         .iter()
         .any(|token| token == "GeneratedRegex" || token == "GeneratedRegexAttribute")
-}
-
-fn base_list_types(source: &str, node: Node<'_>) -> Vec<String> {
-    let mut bases = Vec::new();
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() != "base_list" {
-            continue;
-        }
-        let mut base_cursor = child.walk();
-        for base in child.named_children(&mut base_cursor) {
-            bases.push(node_text(source, base).to_string());
-        }
-    }
-    bases
-}
-
-fn base_simple_name(base: &str) -> &str {
-    let without_generics = base.split('<').next().unwrap_or(base).trim();
-    without_generics
-        .rsplit('.')
-        .next()
-        .unwrap_or(without_generics)
-}
-
-fn base_is_exact(
-    bases: &[String],
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    bases.iter().any(|base| {
-        let trimmed = base.split('<').next().unwrap_or(base).trim();
-        trimmed == format!("{namespace}.{simple}")
-            || (trimmed == simple && usings.has_using_for(namespace))
-    })
 }
 
 fn modifier_tokens(source: &str, node: Node<'_>) -> Vec<String> {

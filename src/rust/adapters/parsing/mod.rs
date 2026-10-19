@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 
 pub mod ada;
 pub mod assembly;
+pub(crate) mod binding;
 pub(crate) mod bounded_json;
 pub(crate) mod bounded_xml;
 pub mod cpp;
