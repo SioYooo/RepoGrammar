@@ -295,3 +295,62 @@ gem's constant, that Minitest selects, runs, or passes the test, or that the
 file is in any suite; and nothing here proves Ruby language support beyond the
 declared subset of ADR-0049 D4, nor any behavior of an arbitrary third-party
 library.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The Minitest frontend now reads class and method structure from the pinned
+`tree-sitter-ruby` 0.23.1 grammar. The ADR-0049 lexer stays the lexical-subset
+gate and runs first, so every lexical refusal (unterminated string, regexp,
+`%`-literal and heredoc, slash and `<<` disambiguation, unadmitted bytes) is
+unchanged. Only the `end`-matching structure parser was replaced. The anchor
+shape, the superclass resolution, the `require` context token and the unit and
+fact code are unchanged. The proposed migration verdict is `CLASSIFIED`: the
+committed fixtures and the branch corpus are identical, and the external
+corpus differs only where the legacy parser misparsed valid Ruby.
+
+How each ADR-0049 parse outcome is reproduced:
+
+- Header-shape refusals (`unadmitted_ruby_construct`) are read from the token
+  stream at every `def`, `class` and `module` keyword outside a bracket group:
+  endless and operator `def`, `def` parameters without parentheses, `def` on
+  an object, a constant `def` name, a non-constant class or module name, a
+  non-constant or call-shaped superclass, and a header that does not end its
+  line. A header refusal inside the span error recovery wrapped wins over the
+  generic tree error, as it did in a left-to-right parse.
+- `ruby_structural_failure` is any `ERROR` or `MISSING` node, or a lexer
+  `end` keyword the grammar leniently reads as an identifier (a stray `end`).
+  Only top-level classes that closed before the first error keep their
+  anchors, as before.
+- `parser_depth_limit` counts named region nodes (class, module, singleton
+  class, `def`, `begin`, `if`, `unless`, `while`, `until`, `case`, `for`, do
+  blocks) iteratively, with the program as the first region, so the 256-region
+  bound is exact.
+
+Differential results. All 9 committed `v0_2` fixture sources and 67 branch
+sources (every refusal class, anchor variation, near-miss, and the depth bound
+at 253, 254 and 300 nested regions) produce identical `SourceParseOutput`.
+Against the 56 `*.rb` files under `test/` or `tests/` directories of the
+installed CocoaPods gems, 48 are identical and 8 differ; across all 1,219 `.rb`
+files of that tree, 781 are identical and 438 differ, with no panics in either
+parser:
+
+- 437 `unknown_removed` (`ruby_structural_failure` removed). The legacy parser
+  treated a statement modifier (`x if y`, `next unless z`, `end if ...`,
+  `foo rescue nil` at program level) as the opener of an `end`-region that
+  swallowed the enclosing `end`: 433 of these files contain a modifier
+  (confirmed with MRI's Ripper where it could parse the file), and 2 contain a
+  `%|...#{{...}}|` literal that the shared lexer mis-scans. One of them,
+  `public_suffix-4.0.7/test/psl_test.rb`, now anchors its class and its
+  `test_valid` method, which the legacy failure had hidden.
+- 1 `unknown_added`. `cocoapods-try-1.2.0/spec/command/try_spec.rb` is valid
+  Ruby that `tree-sitter-ruby` 0.23.1 rejects (a method call on a command-call
+  `do ... end` block), so the file now reports `ruby_structural_failure`.
+- No `range_shift`, `anchor_changed` or `refusal_class_changed`.
+
+One divergence is declared in advance: a syntax error inside a method body
+that the legacy parser skipped now makes the containing class a structural
+failure. Known limits of the structure reader: a `def` placed after a
+class-body `rescue` or `else` marker is nested in the tree and no longer
+counts as a direct class-body declaration, and a `do` block inside an
+argument list counts as a depth region. The status above is unchanged; Gate 2
+evidence must be re-checked against ADR-0058 before any completion promotion.
