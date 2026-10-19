@@ -244,3 +244,32 @@ presence does not prove selection, installation, buildability, symbol
 identity, testing semantics, or runtime behavior; and the source anchor
 proves a declaration's shape, not that the file's tests run or that the
 declaring package resolves.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The `_test.go` frontend now reads declarations from the pinned
+`tree-sitter-go` 0.25.0 grammar. The ADR-0050 lexer stays the lexical-subset
+gate, and every ADR-0050 refusal class is applied over the tree and the token
+stream. The anchor shape, obligation registry and family claim are unchanged.
+The migration verdict is `EQUIVALENT`. All 179 fixture roots (4,681 rows,
+including the full generation fingerprint) are byte-identical, and
+`sync-equivalence` and `product-eval` are unchanged. The in-process
+differential matched the legacy parser on every committed fixture and 25
+branch sources.
+
+On the 1,753 `_test.go` files of the installed Go 1.26.4 standard library, 64
+files differ:
+
+- 60 were refused by the legacy parser although they are valid Go. Its skip of
+  top-level `type`/`var`/`const` declarations stopped at a `func` keyword, so
+  function types (`type F func(...)`) and function literals
+  (`var f = func(...) {...}`) were misread as declarations. In 22 of these the
+  misreading tripped a debug assertion in the legacy parser; release builds
+  refused them instead.
+- 4 still abstain, now under `generic_signature` instead of
+  `unadmitted_construct` or `undecidable_receiver_type`.
+
+One divergence is declared in advance: a syntax error inside a function body
+now refuses the file, which the legacy parser accepted because it skipped
+bodies. Gate 2 evidence must be re-checked against ADR-0058 before any
+completion promotion; the status above is unchanged.

@@ -102,3 +102,16 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
 (`52d49583aff5b1d8ff6af7c221ee3294b7d60ecd3d0dd826b8b15f32becab7dd`).
 `product-eval` reports retrieval 34/47, abstention 36/36 and context 27/27
 (`72d61389476cd08b275dba87cfc5c4fff23299e3bd6665f8eb4149c599c3541f`).
+
+## Lane results
+
+| Lane | Verdict | Fixture capture | In-process differential | External corpus | Non-test lines (before → after) |
+| --- | --- | --- | --- | --- | --- |
+| Go | `EQUIVALENT` | 4,681 rows, 0 mismatches; `sync-equivalence` 14/14; `product-eval` equal | all committed `_test.go` fixtures and 25 branch sources identical | 1,753 stdlib files: 60 legacy misparse refusals removed (22 legacy debug panics), 4 `refusal_class_changed` | 1,855 → 1,699 |
+
+Go evidence: capture `47ccdddb39ad17af0a7f0b686bf0a37b1e40784b979beb4349cfa74846b7adfe`,
+`sync-equivalence` `472442a11617f1fe505858c7b8760752e58e887747c6a55cc106fa1ebed779a0`,
+`product-eval` `344569bd8a44c5e0535cc4d442da47836ceb6b327c86a386ec29a788b0567dce`.
+The lexer stays as the lexical-subset gate; only the recursive-descent parser
+was removed. Details are in the
+[Go completion review](../reports/language-support/go-completion-review.md#adr-0058-frontend-change--2026-10-20).

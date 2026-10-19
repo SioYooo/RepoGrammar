@@ -714,10 +714,15 @@ discovery classifies bounded
 `.go` inputs as `go` and root or nested `go.mod`/`go.work` as `go-config`, then
 stores their repo-relative path, strict hash, size, and language token in the
 normal file inventory. [ADR-0050 D1–D5](../decisions/ADR-0050-bounded-go-testing-frontend.md)
-admits only `*_test.go` source to the bounded declaration parser. Its declared
-subset emits owned units/IR, exact Test/Benchmark/Fuzz anchors and typed
-UNKNOWNs; other `.go` files stay unread inventory. Malformed or unadmitted
-source cannot contribute confident function anchors.
+admits only `*_test.go` source to the bounded declaration frontend. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md)
+the declaration structure comes from the pinned `tree-sitter-go` 0.25.0
+grammar. The ADR-0050 lexer remains the lexical-subset gate, every ADR-0050
+refusal class is applied over the tree and the token stream, and any `ERROR`
+or `MISSING` node refuses the file. The declared subset emits owned units/IR,
+exact Test/Benchmark/Fuzz anchors and typed UNKNOWNs; other `.go` files stay
+unread inventory. Malformed or unadmitted source cannot contribute confident
+function anchors.
 
 `go-config` uses a bounded, non-executing, file-local static parser. Every
 discovered config yields one `project_config` unit/IR node. A valid `go.mod`
@@ -762,8 +767,9 @@ support a family.
 The ADR-0050 parser records build-constraint uncertainty and refuses cgo
 imports; it never evaluates constraints, executes generators or treats a marker
 as runtime proof. It supersedes ADR-0041's auxiliary-only family boundary for
-this declared subset. ADR-0021's future version-pinned syntax fallback and
-opt-in sandboxed standard-library worker remain unimplemented and unadmitted.
+this declared subset. ADR-0058 admits the version-pinned Tree-sitter grammar
+as the syntax frontend; ADR-0021's opt-in sandboxed standard-library worker
+remains unimplemented and unadmitted.
 Default indexing must not execute `go/packages`, `go list`, gopls, cgo or
 repository build/test/generate commands. Environment/workspace selection,
 external types, dispatch and execution remain typed obligations/non-claims.

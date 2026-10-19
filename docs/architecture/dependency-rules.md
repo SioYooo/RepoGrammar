@@ -250,14 +250,14 @@ key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is
 not an adapter and does not execute Pyrefly, Pyright, RightTyper, or repository
 code by itself.
 
-Go has the in-process bounded declaration parser admitted by ADR-0050 and the
-separate static `go.mod`/`go.work` inventory reader. Neither adds a production
-dependency or authorizes Go runtime behavior. ADR-0050 supersedes the earlier
-ADR-0041 auxiliary-only family boundary for this declared subset; all
-ADR-0021 worker and provider requirements remain in force for future semantic
-operations. Its version-pinned Tree-sitter fallback and opt-in sandboxed
-standard-library worker are unimplemented future routes, not dependencies
-admitted by the current parser. The safe default must not invoke `go/packages`,
+Go has the in-process bounded declaration frontend admitted by ADR-0050 and
+the separate static `go.mod`/`go.work` inventory reader. Under ADR-0058 the
+frontend reads declarations from the pinned `tree-sitter-go` grammar crate,
+the only production dependency it adds; neither authorizes Go runtime
+behavior. ADR-0050 supersedes the earlier ADR-0041 auxiliary-only family
+boundary for this declared subset; all ADR-0021 worker and provider
+requirements remain in force for future semantic operations, and the opt-in
+sandboxed standard-library worker remains an unimplemented future route. The safe default must not invoke `go/packages`,
 `go list`, gopls, cgo, or repository build/test/generate commands.
 The existing TypeScript process adapter is not a Go sandbox and must not be
 reused as one. Go claim impact must enter the existing authoritative cross-
