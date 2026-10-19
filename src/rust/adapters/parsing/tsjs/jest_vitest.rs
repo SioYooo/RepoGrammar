@@ -18,8 +18,8 @@ pub(crate) struct TestRunnerCallNames {
     pub test_names: BTreeSet<String>,
 }
 
-pub(crate) fn exact_test_runner_call_names(text: &str) -> TestRunnerCallNames {
-    let bindings = ScopeGraphLite::analyze(text);
+pub(crate) fn exact_test_runner_call_names(document: &SourceDocument<'_>) -> TestRunnerCallNames {
+    let bindings = ScopeGraphLite::analyze(document.text, document.path, &document.language);
     let mut names = TestRunnerCallNames::default();
     for (local, binding) in &bindings.imports {
         if bindings.unsafe_names.contains(local)

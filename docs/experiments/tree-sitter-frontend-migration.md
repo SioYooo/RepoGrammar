@@ -120,7 +120,7 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
 | Ada | `CLASSIFIED` | 0 mismatches | 3 fixtures identical; 4,378 of 4,482 branch sources identical (70 `unknown_added`, 34 `unknown_removed`) | 3 Pygments files, identical | 2,355 → 1,485 |
 | Assembly | `BLOCKED` | n/a | n/a | `tree-sitter-asm` 0.24.0 does not parse GNU `as` AT&T syntax: all 679 local `.s` files have `ERROR` or `MISSING` nodes | unchanged |
 | SQL | `BLOCKED` | n/a | n/a | `tree-sitter-sequel` 0.3.11: 158 of 213 scanned files have `ERROR` or `MISSING` nodes that swallow statement boundaries | unchanged |
-| TS/JS | not ported | n/a | n/a | n/a | unchanged |
+| TS/JS scope graph ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 1) | `CLASSIFIED`, with `unknown_removed` and `unknown_added` | 0 mismatches | 82 fixtures: 0 decision differences; 43 branch sources attributed | 882 external files: 0 decision differences apart from 48 `unknown_kind_changed`; 11 refused by grammar gaps | 901 → 778 (`scope_graph.rs`) |
 
 - The per-lane evidence is in each lane's completion review under
   `docs/reports/language-support/`. Go's row is from
@@ -136,8 +136,10 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
   project-inventory file (`<lane>.rs`), which the migration did not touch. An
   earlier version of the Go row gave 1,855 → 1,699 under a different count.
 - TS/JS has a dependency-free extractor with no declared subset or refusal
-  classes to reproduce, so this port protocol does not apply. It is
-  redesigned under the binding engine and role rows as a separate phase.
+  classes to reproduce, so this port protocol does not apply to the whole
+  lane. ADR-0059 ports it in slices; slice 1 (the scope graph) is recorded in
+  [tsjs-scope-graph-tree](tsjs-scope-graph-tree.md), and slices 2 and 3 are
+  not ported.
 
 ## Decisions needed
 
@@ -177,6 +179,7 @@ each in a fresh target directory:
 | --- | --- | --- | --- |
 | baseline `58e57ab` | 34.2 s | 22,321,856 bytes | 11,230,556 bytes |
 | `33ed6a7` (9 lanes migrated) | 34.7 s | 38,608,576 bytes | 26,197,724 bytes |
+| TS/JS slice 1 (`tree-sitter-typescript` + `tree-sitter-javascript`) | not timed | 41,899,392 bytes | not measured |
 
 The binary grows by 16.3 MB (73%), almost all in parse tables. The new grammar
 static libraries total about 16.5 MB:
@@ -192,6 +195,9 @@ static libraries total about 16.5 MB:
 | `tree-sitter-matlab` | 0.4 MB |
 | `tree-sitter-ada` | 0.3 MB |
 | `tree-sitter-go` | 0.2 MB |
+
+TS/JS slice 1 adds 3.3 MB (8.5%) for the TypeScript, TSX and JavaScript
+grammars.
 
 Fortran's grammar is the largest single cost for a lane that reads only the
 test-drive subset. Build wall time is unchanged, because the grammar C

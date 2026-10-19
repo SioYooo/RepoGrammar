@@ -1,5 +1,25 @@
-use super::{is_identifier_byte, is_identifier_start, leading_identifier};
+use super::leading_identifier;
+use crate::core::model::Language;
 use std::collections::{BTreeMap, BTreeSet};
+use tree_sitter::{Node, Parser};
+
+// Temporary ADR-0059 differential scaffolding: the legacy line reader and its
+// comparison tests are deleted once the maintainer accepts the slice-1
+// classification.
+#[cfg(test)]
+#[path = "scope_graph_differential.rs"]
+mod differential;
+#[cfg(test)]
+#[path = "legacy_scope_graph.rs"]
+mod legacy;
+
+/// Upper bound on name-to-scope insertions while reading one file. Nesting is
+/// untrusted, and every declaration is recorded in each enclosing scope, so
+/// the work is depth times declarations; past this bound the file is refused
+/// like a syntax error.
+// ponytail: refuses pathological nesting; interval-indexed declaration sites
+// would remove the bound if real code ever reaches it.
+const MAX_SCOPE_WORK: usize = 4_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ImportKind {
@@ -21,6 +41,7 @@ pub(super) enum ExpressReceiver {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(Clone))]
 pub(super) struct ScopeGraphLite {
     pub(super) imports: BTreeMap<String, ImportBinding>,
     pub(super) local_decls: BTreeSet<String>,
@@ -35,6 +56,9 @@ pub(super) struct ScopeGraphLite {
     pub(super) drizzle_table_factories: BTreeSet<String>,
     pub(super) drizzle_tables: BTreeSet<String>,
     pub(super) drizzle_dbs: BTreeSet<String>,
+    /// The tree had a syntax error, or the file exceeded the scope-work
+    /// bound; no binding was read (ADR-0059 D4).
+    pub(super) degraded: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,128 +70,168 @@ struct UnsafeNameEvent {
 struct ScopeInterval {
     start_byte: usize,
     end_byte: usize,
-    depth: usize,
     local_decls: BTreeSet<String>,
     params: BTreeSet<String>,
 }
 
 impl ScopeGraphLite {
-    pub(super) fn analyze(text: &str) -> Self {
+    pub(super) fn analyze(text: &str, path: &str, language: &Language) -> Self {
+        let mut parser = Parser::new();
+        let tree = parser
+            .set_language(&grammar(path, language))
+            .ok()
+            .and_then(|()| parser.parse(text, None));
+        match tree {
+            Some(tree) if !tree.root_node().has_error() => {
+                Self::from_tree(text, tree.root_node()).unwrap_or_else(Self::degraded)
+            }
+            _ => Self::degraded(),
+        }
+    }
+
+    fn degraded() -> Self {
+        Self {
+            degraded: true,
+            ..Self::default()
+        }
+    }
+
+    fn from_tree(text: &str, root: Node<'_>) -> Option<Self> {
+        let scope_intervals = scope_intervals(text, root)?;
         let mut declared_counts: BTreeMap<String, usize> = BTreeMap::new();
         let mut unsafe_events: BTreeMap<String, Vec<UnsafeNameEvent>> = BTreeMap::new();
         let mut imports: BTreeMap<String, ImportBinding> = BTreeMap::new();
         let mut local_decls: BTreeSet<String> = BTreeSet::new();
-        let mut top_level_lines: Vec<String> = Vec::new();
+        let mut items: Vec<String> = Vec::new();
 
-        let mut depth: i64 = 0;
-        for (line_start, raw_line) in lines_with_offsets(text) {
-            let at_top_level = depth == 0;
-            if at_top_level {
-                if let Some(name) = bare_assignment_name(raw_line) {
-                    push_unsafe_event(&mut unsafe_events, name, line_start);
+        let mut cursor = root.walk();
+        for child in root.named_children(&mut cursor) {
+            let statement = match child.kind() {
+                "export_statement" => match child.child_by_field_name("declaration") {
+                    Some(declaration) => declaration,
+                    None => continue,
+                },
+                _ => child,
+            };
+            match statement.kind() {
+                "import_statement" => {
+                    for (local, binding) in import_bindings(text, statement) {
+                        *declared_counts.entry(local.clone()).or_insert(0) += 1;
+                        imports.insert(local, binding);
+                    }
                 }
-            }
-            if at_top_level {
-                let import_bindings = parse_import_line(raw_line);
-                let produced_imports = !import_bindings.is_empty();
-                for (local, binding) in import_bindings {
-                    *declared_counts.entry(local.clone()).or_insert(0) += 1;
-                    imports.insert(local, binding);
+                "lexical_declaration" | "variable_declaration" => {
+                    let keyword = statement.child(0).map_or("", |node| node_text(text, node));
+                    let mut declarators = statement.walk();
+                    for declarator in statement.named_children(&mut declarators) {
+                        if declarator.kind() != "variable_declarator" {
+                            continue;
+                        }
+                        items.push(format!("{keyword} {}", node_text(text, declarator)));
+                        let Some(name) = declarator.child_by_field_name("name") else {
+                            continue;
+                        };
+                        let (required, declared) = require_declarator(text, declarator, name);
+                        for (local, binding) in required {
+                            *declared_counts.entry(local.clone()).or_insert(0) += 1;
+                            imports.insert(local, binding);
+                        }
+                        for declared_name in declared {
+                            *declared_counts.entry(declared_name.clone()).or_insert(0) += 1;
+                            local_decls.insert(declared_name);
+                        }
+                    }
                 }
-                // A `const x = require(...)` line is also a `const` declaration; count it
-                // only once so a single require binding is not mistaken for a redeclaration.
-                if !produced_imports {
-                    for name in declared_identifiers(raw_line) {
+                "function_declaration"
+                | "generator_function_declaration"
+                | "class_declaration"
+                | "abstract_class_declaration" => {
+                    if let Some(name) = statement.child_by_field_name("name") {
+                        let name = node_text(text, name).to_string();
                         *declared_counts.entry(name.clone()).or_insert(0) += 1;
                         local_decls.insert(name);
                     }
                 }
-                top_level_lines.push(raw_line.to_string());
-            }
-            depth += brace_delta(raw_line);
-            if depth < 0 {
-                depth = 0;
+                "expression_statement" => {
+                    if let Some(name) = bare_assignment_target(text, statement) {
+                        push_unsafe_event(&mut unsafe_events, name, statement.start_byte());
+                    }
+                    items.push(node_text(text, statement).to_string());
+                }
+                _ => {}
             }
         }
 
-        let mut unsafe_names: BTreeSet<String> = BTreeSet::new();
-        for (name, count) in &declared_counts {
-            if *count > 1 {
-                unsafe_names.insert(name.clone());
-            }
-        }
-        let scope_intervals = scope_intervals(text);
-
-        let mut express_receivers: BTreeMap<String, ExpressReceiver> = BTreeMap::new();
-        let mut express_router_prefixes: BTreeMap<String, String> = BTreeMap::new();
-        let mut fastify_receivers = BTreeSet::new();
-        let mut hono_receivers = BTreeSet::new();
-        let mut prisma_clients = BTreeSet::new();
-        let mut drizzle_table_factories = BTreeSet::new();
-        let mut drizzle_tables = BTreeSet::new();
-        let mut drizzle_dbs = BTreeSet::new();
-        for (local, binding) in &imports {
-            if binding.module.starts_with("drizzle-orm")
-                && matches!(&binding.kind, ImportKind::Named(original) if super::drizzle::DRIZZLE_TABLE_FACTORIES.contains(&original.as_str()))
-                && !unsafe_names.contains(local)
-            {
-                drizzle_table_factories.insert(local.clone());
-            }
-        }
-        for line in &top_level_lines {
-            if let Some((name, receiver)) =
-                express_receiver_declaration(line, &imports, &unsafe_names)
-            {
-                if !unsafe_names.contains(&name) {
-                    express_receivers.insert(name, receiver);
-                }
-            }
-            if let Some(name) = fastify_receiver_declaration(line, &imports, &unsafe_names) {
-                if !unsafe_names.contains(&name) {
-                    fastify_receivers.insert(name);
-                }
-            }
-            if let Some(name) = hono_receiver_declaration(line, &imports, &unsafe_names) {
-                if !unsafe_names.contains(&name) {
-                    hono_receivers.insert(name);
-                }
-            }
-            if let Some(name) = prisma_client_declaration(line, &imports, &unsafe_names) {
-                if !unsafe_names.contains(&name) {
-                    prisma_clients.insert(name);
-                }
-            }
-            if let Some((table, factory)) = super::drizzle::table_declaration_parts(line) {
-                if drizzle_table_factories.contains(factory) && !unsafe_names.contains(table) {
-                    drizzle_tables.insert(table.to_string());
-                }
-            }
-            if let Some(name) = drizzle_db_declaration(line, &imports, &unsafe_names) {
-                if !unsafe_names.contains(&name) {
-                    drizzle_dbs.insert(name);
-                }
-            }
-            if let Some((router, prefix)) =
-                express_router_prefix_mount(line, &express_receivers, &unsafe_names)
-            {
-                express_router_prefixes.entry(router).or_insert(prefix);
-            }
-        }
-
-        Self {
+        let unsafe_names = declared_counts
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .map(|(name, _)| name)
+            .collect();
+        let mut graph = Self {
             imports,
             local_decls,
             unsafe_names,
             unsafe_events,
             scope_intervals,
-            express_receivers,
-            express_router_prefixes,
-            fastify_receivers,
-            hono_receivers,
-            prisma_clients,
-            drizzle_table_factories,
-            drizzle_tables,
-            drizzle_dbs,
+            ..Self::default()
+        };
+        graph.fill_receivers(items.iter().map(String::as_str));
+        Some(graph)
+    }
+
+    /// Classifies top-level declarators and statements with the right-hand-side
+    /// classifiers below, which are the single receiver authority.
+    fn fill_receivers<'a>(&mut self, items: impl IntoIterator<Item = &'a str>) {
+        for (local, binding) in &self.imports {
+            if binding.module.starts_with("drizzle-orm")
+                && matches!(&binding.kind, ImportKind::Named(original) if super::drizzle::DRIZZLE_TABLE_FACTORIES.contains(&original.as_str()))
+                && !self.unsafe_names.contains(local)
+            {
+                self.drizzle_table_factories.insert(local.clone());
+            }
+        }
+        for line in items {
+            if let Some((name, receiver)) =
+                express_receiver_declaration(line, &self.imports, &self.unsafe_names)
+            {
+                if !self.unsafe_names.contains(&name) {
+                    self.express_receivers.insert(name, receiver);
+                }
+            }
+            if let Some(name) =
+                fastify_receiver_declaration(line, &self.imports, &self.unsafe_names)
+            {
+                if !self.unsafe_names.contains(&name) {
+                    self.fastify_receivers.insert(name);
+                }
+            }
+            if let Some(name) = hono_receiver_declaration(line, &self.imports, &self.unsafe_names) {
+                if !self.unsafe_names.contains(&name) {
+                    self.hono_receivers.insert(name);
+                }
+            }
+            if let Some(name) = prisma_client_declaration(line, &self.imports, &self.unsafe_names) {
+                if !self.unsafe_names.contains(&name) {
+                    self.prisma_clients.insert(name);
+                }
+            }
+            if let Some((table, factory)) = super::drizzle::table_declaration_parts(line) {
+                if self.drizzle_table_factories.contains(factory)
+                    && !self.unsafe_names.contains(table)
+                {
+                    self.drizzle_tables.insert(table.to_string());
+                }
+            }
+            if let Some(name) = drizzle_db_declaration(line, &self.imports, &self.unsafe_names) {
+                if !self.unsafe_names.contains(&name) {
+                    self.drizzle_dbs.insert(name);
+                }
+            }
+            if let Some((router, prefix)) =
+                express_router_prefix_mount(line, &self.express_receivers, &self.unsafe_names)
+            {
+                self.express_router_prefixes.entry(router).or_insert(prefix);
+            }
         }
     }
 
@@ -231,464 +295,298 @@ fn push_unsafe_event(
         .push(UnsafeNameEvent { byte });
 }
 
-fn scope_intervals(text: &str) -> Vec<ScopeInterval> {
-    let mut intervals = block_scope_intervals(text);
-    add_function_parameters_to_intervals(text, &mut intervals);
-    add_arrow_parameters_to_intervals(text, &mut intervals);
-    add_local_declarations_to_intervals(text, &mut intervals);
-    intervals.sort_by_key(|interval| (interval.start_byte, interval.end_byte, interval.depth));
-    intervals
+/// Grammar by extension (ADR-0059 D1); an unknown extension falls back to the
+/// document language.
+fn grammar(path: &str, language: &Language) -> tree_sitter::Language {
+    if path.ends_with(".tsx") {
+        tree_sitter_typescript::LANGUAGE_TSX.into()
+    } else if path.ends_with(".js") || path.ends_with(".jsx") {
+        tree_sitter_javascript::LANGUAGE.into()
+    } else if path.ends_with(".ts") || *language != Language::JavaScript {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    } else {
+        tree_sitter_javascript::LANGUAGE.into()
+    }
 }
 
-fn block_scope_intervals(text: &str) -> Vec<ScopeInterval> {
-    let mut stack: Vec<(usize, usize)> = Vec::new();
-    let mut intervals = Vec::new();
-    for (index, byte) in text.bytes().enumerate() {
-        match byte {
-            b'{' => {
-                let depth = stack.len() + 1;
-                stack.push((index, depth));
-            }
-            b'}' => {
-                if let Some((start_byte, depth)) = stack.pop() {
-                    intervals.push(ScopeInterval {
-                        start_byte,
-                        end_byte: index + 1,
-                        depth,
-                        local_decls: BTreeSet::new(),
-                        params: BTreeSet::new(),
-                    });
+fn node_text<'a>(text: &'a str, node: Node<'_>) -> &'a str {
+    text.get(node.byte_range()).unwrap_or("")
+}
+
+fn string_value(text: &str, node: Node<'_>) -> Option<String> {
+    let literal = node_text(text, node);
+    (node.kind() == "string" && literal.len() >= 2)
+        .then(|| literal.get(1..literal.len() - 1).map(str::to_string))
+        .flatten()
+}
+
+fn import_bindings(text: &str, statement: Node<'_>) -> Vec<(String, ImportBinding)> {
+    let Some(module) = statement
+        .child_by_field_name("source")
+        .and_then(|source| string_value(text, source))
+    else {
+        return Vec::new();
+    };
+    let binding = |kind| ImportBinding {
+        module: module.clone(),
+        kind,
+    };
+    let mut bindings = Vec::new();
+    let mut cursor = statement.walk();
+    for clause in statement
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() == "import_clause")
+    {
+        let mut parts = clause.walk();
+        for part in clause.named_children(&mut parts) {
+            match part.kind() {
+                "identifier" => bindings.push((
+                    node_text(text, part).to_string(),
+                    binding(ImportKind::Default),
+                )),
+                "namespace_import" => {
+                    if let Some(name) = part.named_child(0) {
+                        bindings.push((
+                            node_text(text, name).to_string(),
+                            binding(ImportKind::Namespace),
+                        ));
+                    }
                 }
+                "named_imports" => {
+                    let mut specifiers = part.walk();
+                    for specifier in part.named_children(&mut specifiers) {
+                        let Some(original) = specifier
+                            .child_by_field_name("name")
+                            .filter(|name| name.kind() == "identifier")
+                        else {
+                            continue;
+                        };
+                        let local = specifier.child_by_field_name("alias").unwrap_or(original);
+                        bindings.push((
+                            node_text(text, local).to_string(),
+                            binding(ImportKind::Named(node_text(text, original).to_string())),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    bindings
+}
+
+/// The module of a `require("module")` call, and nothing else.
+fn require_module(text: &str, value: Node<'_>) -> Option<String> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let callee = value.child_by_field_name("function")?;
+    let arguments = value.child_by_field_name("arguments")?;
+    if node_text(text, callee) != "require" || arguments.named_child_count() != 1 {
+        return None;
+    }
+    string_value(text, arguments.named_child(0)?)
+}
+
+/// Splits one top-level declarator into the imports it binds (a plain or
+/// destructured `require`) and the names it merely declares.
+fn require_declarator(
+    text: &str,
+    declarator: Node<'_>,
+    name: Node<'_>,
+) -> (Vec<(String, ImportBinding)>, Vec<String>) {
+    let Some(module) = declarator
+        .child_by_field_name("value")
+        .and_then(|value| require_module(text, value))
+    else {
+        return (Vec::new(), pattern_names(text, name));
+    };
+    let binding = |kind| ImportBinding {
+        module: module.clone(),
+        kind,
+    };
+    match name.kind() {
+        "identifier" => (
+            vec![(
+                node_text(text, name).to_string(),
+                binding(ImportKind::Default),
+            )],
+            Vec::new(),
+        ),
+        "object_pattern" => {
+            let (mut imported, mut declared) = (Vec::new(), Vec::new());
+            let mut cursor = name.walk();
+            for entry in name.named_children(&mut cursor) {
+                let named = match entry.kind() {
+                    "shorthand_property_identifier_pattern" => Some((entry, entry)),
+                    "object_assignment_pattern" => {
+                        entry.child_by_field_name("left").map(|left| (left, left))
+                    }
+                    "pair_pattern" => entry
+                        .child_by_field_name("value")
+                        .filter(|value| value.kind() == "identifier")
+                        .zip(entry.child_by_field_name("key")),
+                    _ => None,
+                };
+                match named {
+                    Some((local, original)) => imported.push((
+                        node_text(text, local).to_string(),
+                        binding(ImportKind::Named(node_text(text, original).to_string())),
+                    )),
+                    None => declared.extend(pattern_names(text, entry)),
+                }
+            }
+            (imported, declared)
+        }
+        _ => (Vec::new(), pattern_names(text, name)),
+    }
+}
+
+/// Every name a binding pattern or parameter list declares, including rest,
+/// default and nested destructured entries.
+fn pattern_names(text: &str, pattern: Node<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut pending = vec![pattern];
+    while let Some(node) = pending.pop() {
+        match node.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => {
+                names.push(node_text(text, node).to_string())
+            }
+            "pair_pattern" => pending.extend(node.child_by_field_name("value")),
+            "assignment_pattern" | "object_assignment_pattern" => {
+                pending.extend(node.child_by_field_name("left"))
+            }
+            "required_parameter" | "optional_parameter" => {
+                pending.extend(node.child_by_field_name("pattern"))
+            }
+            "formal_parameters" | "object_pattern" | "array_pattern" | "rest_pattern" => {
+                let mut cursor = node.walk();
+                pending.extend(node.named_children(&mut cursor));
             }
             _ => {}
         }
     }
-    for (start_byte, depth) in stack {
-        intervals.push(ScopeInterval {
-            start_byte,
-            end_byte: text.len(),
-            depth,
-            local_decls: BTreeSet::new(),
-            params: BTreeSet::new(),
-        });
-    }
-    intervals
+    names
 }
 
-fn add_function_parameters_to_intervals(text: &str, intervals: &mut [ScopeInterval]) {
-    let mut search_start = 0usize;
-    while let Some(relative) = text[search_start..].find("function") {
-        let function_offset = search_start + relative;
-        search_start = function_offset + "function".len();
-        if !has_identifier_boundaries(text, function_offset, "function".len()) {
-            continue;
-        }
-        let Some(open_relative) = text[search_start..].find('(') else {
-            continue;
-        };
-        let open = search_start + open_relative;
-        let Some(close) = matching_forward_delimiter(text, open, b'(', b')') else {
-            continue;
-        };
-        let Some(body_open_relative) = text[close + 1..].find('{') else {
-            continue;
-        };
-        let body_open = close + 1 + body_open_relative;
-        let params = parameter_identifiers(&text[open + 1..close]);
-        add_params_to_interval(intervals, body_open, params);
-    }
+/// The target of a bare `name = …` expression statement.
+fn bare_assignment_target<'a>(text: &'a str, statement: Node<'_>) -> Option<&'a str> {
+    let assignment = statement
+        .named_child(0)
+        .filter(|node| node.kind() == "assignment_expression")?;
+    let target = assignment
+        .child_by_field_name("left")
+        .filter(|node| node.kind() == "identifier")?;
+    Some(node_text(text, target))
 }
 
-fn add_arrow_parameters_to_intervals(text: &str, intervals: &mut [ScopeInterval]) {
-    let mut search_start = 0usize;
-    while let Some(relative) = text[search_start..].find("=>") {
-        let arrow = search_start + relative;
-        search_start = arrow + "=>".len();
-        let after_arrow = &text[search_start..];
-        let body_open_relative = after_arrow
-            .bytes()
-            .position(|byte| !byte.is_ascii_whitespace());
-        let Some(body_open_relative) = body_open_relative else {
-            continue;
-        };
-        if after_arrow.as_bytes().get(body_open_relative) != Some(&b'{') {
-            continue;
-        }
-        let body_open = search_start + body_open_relative;
-        let params = arrow_parameter_identifiers_before(text, arrow);
-        add_params_to_interval(intervals, body_open, params);
-    }
+fn is_scope_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "statement_block" | "class_body" | "object" | "switch_body"
+    )
 }
 
-fn arrow_parameter_identifiers_before(text: &str, arrow: usize) -> Vec<String> {
-    let before_arrow = text[..arrow].trim_end();
-    if before_arrow.ends_with(')') {
-        let close = before_arrow.len() - 1;
-        let Some(open) = matching_backward_delimiter(text, close, b'(', b')') else {
-            return Vec::new();
-        };
-        return parameter_identifiers(&text[open + 1..close]);
-    }
-    identifier_before_arrow(before_arrow)
-        .map(|identifier| vec![identifier.to_string()])
+fn declared_name(text: &str, node: Node<'_>) -> Vec<String> {
+    node.child_by_field_name("name")
+        .map(|name| vec![node_text(text, name).to_string()])
         .unwrap_or_default()
 }
 
-fn add_params_to_interval(intervals: &mut [ScopeInterval], body_open: usize, params: Vec<String>) {
-    if params.is_empty() {
-        return;
-    }
-    if let Some(interval) = intervals
-        .iter_mut()
-        .find(|interval| interval.start_byte == body_open)
-    {
-        interval.params.extend(params);
-    }
-}
+/// One interval per block-like node, read by a single iterative walk. Returns
+/// `None` when the scope work exceeds `MAX_SCOPE_WORK`.
+fn scope_intervals(text: &str, root: Node<'_>) -> Option<Vec<ScopeInterval>> {
+    let mut intervals: Vec<ScopeInterval> = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    let mut body_params: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+    let mut work = 0usize;
 
-fn add_local_declarations_to_intervals(text: &str, intervals: &mut [ScopeInterval]) {
-    for (line_start, line) in lines_with_offsets(text) {
-        let line_end = line_start + line.len();
-        let mut names = declared_identifiers(line);
-        if let Some(name) = bare_assignment_name(line) {
-            names.push(name.to_string());
-        }
-        if names.is_empty() {
-            continue;
-        }
-        names.sort();
-        names.dedup();
-        for interval in intervals
-            .iter_mut()
-            .filter(|interval| line_start < interval.end_byte && line_end > interval.start_byte)
-        {
-            interval.local_decls.extend(names.iter().cloned());
-        }
-    }
-}
-
-fn matching_forward_delimiter(
-    text: &str,
-    open: usize,
-    open_byte: u8,
-    close_byte: u8,
-) -> Option<usize> {
-    if text.as_bytes().get(open) != Some(&open_byte) {
-        return None;
-    }
-    let mut depth = 0usize;
-    for (offset, byte) in text.as_bytes()[open..].iter().enumerate() {
-        if *byte == open_byte {
-            depth += 1;
-        } else if *byte == close_byte {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return Some(open + offset);
+    let mut cursor = root.walk();
+    let mut descend = true;
+    loop {
+        let node = cursor.node();
+        if descend {
+            let kind = node.kind();
+            let mut names: Vec<String> = Vec::new();
+            match kind {
+                kind if is_scope_kind(kind) => {
+                    open.push(intervals.len());
+                    intervals.push(ScopeInterval {
+                        start_byte: node.start_byte(),
+                        end_byte: node.end_byte(),
+                        local_decls: BTreeSet::new(),
+                        params: body_params.remove(&node.start_byte()).unwrap_or_default(),
+                    });
+                }
+                "function_declaration"
+                | "generator_function_declaration"
+                | "function_expression"
+                | "generator_function"
+                | "arrow_function" => {
+                    if let Some(body) = node
+                        .child_by_field_name("body")
+                        .filter(|body| body.kind() == "statement_block")
+                    {
+                        let parameters = node
+                            .child_by_field_name("parameters")
+                            .or_else(|| node.child_by_field_name("parameter"));
+                        body_params.insert(
+                            body.start_byte(),
+                            parameters
+                                .map(|parameters| pattern_names(text, parameters))
+                                .unwrap_or_default()
+                                .into_iter()
+                                .collect(),
+                        );
+                    }
+                    if kind.ends_with("_declaration") {
+                        names = declared_name(text, node);
+                    }
+                }
+                "class_declaration" | "abstract_class_declaration" => {
+                    names = declared_name(text, node);
+                }
+                "lexical_declaration" | "variable_declaration" => {
+                    let mut declarators = node.walk();
+                    names = node
+                        .named_children(&mut declarators)
+                        .filter_map(|declarator| declarator.child_by_field_name("name"))
+                        .flat_map(|name| pattern_names(text, name))
+                        .collect();
+                }
+                "expression_statement" => {
+                    names.extend(bare_assignment_target(text, node).map(str::to_string));
+                }
+                _ => {}
+            }
+            work = work.saturating_add(open.len().saturating_mul(names.len()));
+            if work > MAX_SCOPE_WORK {
+                return None;
+            }
+            if !names.is_empty() {
+                for index in &open {
+                    intervals[*index].local_decls.extend(names.iter().cloned());
+                }
+            }
+            if cursor.goto_first_child() {
+                continue;
             }
         }
-    }
-    None
-}
-
-fn matching_backward_delimiter(
-    text: &str,
-    close: usize,
-    open_byte: u8,
-    close_byte: u8,
-) -> Option<usize> {
-    if text.as_bytes().get(close) != Some(&close_byte) {
-        return None;
-    }
-    let mut depth = 0usize;
-    for index in (0..=close).rev() {
-        let byte = text.as_bytes()[index];
-        if byte == close_byte {
-            depth += 1;
-        } else if byte == open_byte {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return Some(index);
-            }
+        if is_scope_kind(node.kind()) {
+            open.pop();
+        }
+        if cursor.goto_next_sibling() {
+            descend = true;
+        } else if cursor.goto_parent() {
+            descend = false;
+        } else {
+            return Some(intervals);
         }
     }
-    None
-}
-
-fn lines_with_offsets(text: &str) -> Vec<(usize, &str)> {
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    for line in text.split_inclusive('\n') {
-        lines.push((start, line));
-        start += line.len();
-    }
-    if text.is_empty() {
-        lines.push((0, ""));
-    }
-    lines
-}
-
-fn brace_delta(line: &str) -> i64 {
-    let mut delta = 0i64;
-    for byte in line.bytes() {
-        match byte {
-            b'{' => delta += 1,
-            b'}' => delta -= 1,
-            _ => {}
-        }
-    }
-    delta
-}
-
-fn parse_import_line(line: &str) -> Vec<(String, ImportBinding)> {
-    let trimmed = strip_export_prefix(line.trim());
-    if let Some(rest) = trimmed.strip_prefix("import ") {
-        return parse_es_import(rest);
-    }
-    parse_require_declaration(trimmed)
 }
 
 fn strip_export_prefix(line: &str) -> &str {
     line.strip_prefix("export ").unwrap_or(line)
-}
-
-fn parse_es_import(rest: &str) -> Vec<(String, ImportBinding)> {
-    let Some(module) = module_after_from(rest) else {
-        return Vec::new();
-    };
-    let clause = match rest.find(" from ") {
-        Some(index) => rest[..index].trim(),
-        None => return Vec::new(),
-    };
-    let mut bindings = Vec::new();
-    let mut remaining = clause;
-
-    if let Some(after_star) = remaining.strip_prefix("* as ") {
-        if let Some((name, _)) = leading_identifier(after_star) {
-            bindings.push((
-                name.to_string(),
-                ImportBinding {
-                    module: module.clone(),
-                    kind: ImportKind::Namespace,
-                },
-            ));
-        }
-        return bindings;
-    }
-
-    if !remaining.starts_with('{') {
-        if let Some((name, end)) = leading_identifier(remaining) {
-            bindings.push((
-                name.to_string(),
-                ImportBinding {
-                    module: module.clone(),
-                    kind: ImportKind::Default,
-                },
-            ));
-            remaining = remaining[end..].trim_start();
-            remaining = remaining
-                .strip_prefix(',')
-                .unwrap_or(remaining)
-                .trim_start();
-        }
-    }
-
-    if remaining.starts_with('{') {
-        for (local, original) in parse_named_specifiers(remaining) {
-            bindings.push((
-                local,
-                ImportBinding {
-                    module: module.clone(),
-                    kind: ImportKind::Named(original),
-                },
-            ));
-        }
-    }
-
-    bindings
-}
-
-fn parse_require_declaration(line: &str) -> Vec<(String, ImportBinding)> {
-    if !line.contains("require(") {
-        return Vec::new();
-    }
-    let Some(after_keyword) = ["const ", "let ", "var "]
-        .iter()
-        .find_map(|keyword| line.strip_prefix(keyword))
-    else {
-        return Vec::new();
-    };
-    let Some(module) = require_module(line) else {
-        return Vec::new();
-    };
-    let lhs = match after_keyword.find('=') {
-        Some(index) => after_keyword[..index].trim(),
-        None => return Vec::new(),
-    };
-    if lhs.starts_with('{') {
-        return parse_object_binding_specifiers(lhs)
-            .into_iter()
-            .map(|(local, original)| {
-                (
-                    local,
-                    ImportBinding {
-                        module: module.clone(),
-                        kind: ImportKind::Named(original),
-                    },
-                )
-            })
-            .collect();
-    }
-    match leading_identifier(lhs) {
-        Some((name, _)) => vec![(
-            name.to_string(),
-            ImportBinding {
-                module,
-                kind: ImportKind::Default,
-            },
-        )],
-        None => Vec::new(),
-    }
-}
-
-fn parse_named_specifiers(clause: &str) -> Vec<(String, String)> {
-    parse_braced_specifiers(clause, false)
-}
-
-fn parse_object_binding_specifiers(clause: &str) -> Vec<(String, String)> {
-    parse_braced_specifiers(clause, true)
-}
-
-fn parse_braced_specifiers(clause: &str, allow_colon_alias: bool) -> Vec<(String, String)> {
-    let open = match clause.find('{') {
-        Some(index) => index,
-        None => return Vec::new(),
-    };
-    let close = match clause[open..].find('}') {
-        Some(index) => open + index,
-        None => return Vec::new(),
-    };
-    let inner = &clause[open + 1..close];
-    let mut specifiers = Vec::new();
-    for part in inner.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let (original, local) = if allow_colon_alias {
-            match part.split_once(':') {
-                Some((original, local)) => (original.trim(), local.trim()),
-                None => (part, part),
-            }
-        } else {
-            match part.split_once(" as ") {
-                Some((original, local)) => (original.trim(), local.trim()),
-                None => (part, part),
-            }
-        };
-        let local = local.split('=').next().unwrap_or(local).trim();
-        let original = match leading_identifier(original) {
-            Some((name, _)) => name.to_string(),
-            None => continue,
-        };
-        let local = match leading_identifier(local) {
-            Some((name, _)) => name.to_string(),
-            None => continue,
-        };
-        specifiers.push((local, original));
-    }
-    specifiers
-}
-
-fn module_after_from(rest: &str) -> Option<String> {
-    let index = rest.find(" from ")?;
-    first_quoted(&rest[index + " from ".len()..])
-}
-
-fn require_module(line: &str) -> Option<String> {
-    let index = line.find("require(")?;
-    first_quoted(&line[index + "require(".len()..])
-}
-
-fn first_quoted(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let quote = bytes[index];
-        if quote == b'"' || quote == b'\'' {
-            let start = index + 1;
-            let end_relative = text[start..].find(quote as char)?;
-            return Some(text[start..start + end_relative].to_string());
-        }
-        index += 1;
-    }
-    None
-}
-
-fn declared_identifiers(line: &str) -> Vec<String> {
-    let trimmed = strip_export_prefix(line.trim());
-    for keyword in ["const ", "let ", "var "] {
-        if let Some(rest) = trimmed.strip_prefix(keyword) {
-            let rest = rest.trim_start();
-            if rest.starts_with('{') {
-                return parse_object_binding_specifiers(rest)
-                    .into_iter()
-                    .map(|(local, _)| local)
-                    .collect();
-            }
-            return leading_identifier(rest)
-                .map(|(name, _)| vec![name.to_string()])
-                .unwrap_or_default();
-        }
-    }
-    for keyword in ["function ", "class "] {
-        if let Some(rest) = trimmed.strip_prefix(keyword) {
-            let rest = rest.trim_start().trim_start_matches('*').trim_start();
-            return leading_identifier(rest)
-                .map(|(name, _)| vec![name.to_string()])
-                .unwrap_or_default();
-        }
-    }
-    Vec::new()
-}
-
-fn has_identifier_boundaries(line: &str, offset: usize, len: usize) -> bool {
-    let before = offset
-        .checked_sub(1)
-        .and_then(|index| line.as_bytes().get(index))
-        .copied();
-    let after = line.as_bytes().get(offset + len).copied();
-    !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
-}
-
-fn identifier_before_arrow(text: &str) -> Option<&str> {
-    let mut end = text.len();
-    let bytes = text.as_bytes();
-    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    let mut start = end;
-    while start > 0 && is_identifier_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    if start == end || !is_identifier_start(bytes[start]) {
-        return None;
-    }
-    Some(&text[start..end])
-}
-
-fn parameter_identifiers(parameters: &str) -> Vec<String> {
-    parameters
-        .split(',')
-        .filter_map(|parameter| {
-            let trimmed = parameter.trim();
-            if trimmed.is_empty() || trimmed.starts_with("...") || trimmed.starts_with('{') {
-                return None;
-            }
-            let before_type = trimmed.split(':').next().unwrap_or(trimmed).trim();
-            let before_default = before_type.split('=').next().unwrap_or(before_type).trim();
-            leading_identifier(before_default).map(|(name, _)| name.to_string())
-        })
-        .collect()
 }
 
 fn express_receiver_declaration(
@@ -877,25 +775,4 @@ fn top_level_declaration_assignment(line: &str) -> Option<(&str, &str)> {
     let (name, after_name) = leading_identifier(rest)?;
     let rhs = rest[after_name..].trim_start().strip_prefix('=')?.trim();
     Some((name, rhs))
-}
-
-fn bare_assignment_name(line: &str) -> Option<&str> {
-    let trimmed = line.trim_start();
-    for keyword in [
-        "const ", "let ", "var ", "return ", "case ", "import ", "export ", "if ", "while ", "for ",
-    ] {
-        if trimmed.starts_with(keyword) {
-            return None;
-        }
-    }
-    let (name, after) = leading_identifier(trimmed)?;
-    let rest = trimmed[after..].trim_start();
-    let bytes = rest.as_bytes();
-    if bytes.first() == Some(&b'=') {
-        let next = bytes.get(1).copied();
-        if next != Some(b'=') && next != Some(b'>') {
-            return Some(name);
-        }
-    }
-    None
 }
