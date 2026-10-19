@@ -66,3 +66,4 @@ Current accepted ADRs:
 - ADR-0054: Default conditional global agent instruction profiles.
 - ADR-0055: Qualified bounded Python project-session transport.
 - ADR-0056: Verified one-command bootstrap over existing setup.
+- ADR-0057: Declarative language family packs.

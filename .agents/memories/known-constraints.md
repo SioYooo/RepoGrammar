@@ -145,6 +145,15 @@ analysis rules.
   without stronger compatible evidence and family claim builders. Raw Python
   parser facts remain structural; only separately synthesized exact-anchor
   support or future provider-backed facts can become family support.
+- Local verification traps (2026-10-20). After this checkout moved to
+  `/Volumes/External/Development/RepoGrammar`, `target/` kept artifacts whose
+  embedded `CARGO_MANIFEST_DIR` named the former path, so debug binaries found
+  no source worker and every Python resync failed with "python project
+  frontend session failed". Run `cargo clean -p repogrammar` before trusting
+  harness results. The default `python3` is 3.9, so run harnesses with an
+  admitted Python 3.10+ first on PATH. `repo-guard check` also scans the
+  Git-ignored orphaned `.claude/worktrees/` copy; never delete it, and run
+  `check` from a clean local clone instead.
 
 ## Implications
 

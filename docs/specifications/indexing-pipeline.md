@@ -359,7 +359,13 @@ compatibility requires matching `http_method` and `route_template_shape`
 evidence. C# families require at least three complete-link-compatible support
 facts and no claim-relevant blocking C# `UNKNOWN`. RepoGrammar never executes
 MSBuild, Roslyn, source generators, or the ASP.NET Core runtime, and never
-evaluates preprocessor conditions.
+evaluates preprocessor conditions. Under ADR-0057, the adapter selects
+its handled nodes with the committed `csharp/nodes.scm` Tree-sitter query.
+Every variable declarator is recorded before other nodes, and the rest are
+visited in syntax-tree pre-order. The family builder reads the C# policy above
+(anchor and derived-support identity, minimum support, feature, variation and
+compatibility prefixes, and the blocking and non-blocking UNKNOWN rules) from
+the `FAMILY_PACK` declarative language pack, not from C#-specific functions.
 
 A parallel C/C++ preview path exists for include-evidence-gated GoogleTest,
 Catch2, doctest, and Boost.Test registration-macro shapes. Discovery includes
