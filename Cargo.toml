@@ -48,6 +48,8 @@ tree-sitter-matlab = "=1.3.1"
 tree-sitter-pascal = "=0.10.2"
 # Production (ADR-0058): pinned Tree-sitter PHP grammar for the PHPUnit frontend.
 tree-sitter-php = "=0.25.1"
+# Production (ADR-0058): pinned Tree-sitter R grammar for the R testthat frontend.
+tree-sitter-r = "=1.3.0"
 # Production (ADR-0058): pinned Tree-sitter Ruby grammar for the Minitest frontend.
 tree-sitter-ruby = "=0.23.1"
 tree-sitter-rust = "0.24"

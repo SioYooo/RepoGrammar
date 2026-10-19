@@ -177,3 +177,64 @@ ADR-0036, ADR-0042, product/incremental tests, and
 does not prove installation, loading, namespace binding, dispatch, native
 compatibility, or R support; and the source anchor proves a call's shape, not
 that `test_that` resolves to testthat's function or that the file's tests run.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The `tests/testthat/test-*.R` frontend now reads `test_that("...", { ... })`
+calls from the pinned `tree-sitter-r` 1.3.0 grammar. The ADR-0042 lexer stays
+the lexical-subset gate and runs first (unterminated quotes, malformed numbers
+and raw strings, `?`, `=>`, `_`, non-ASCII bytes in code position, `%` across a
+newline); the Tree-sitter tree is read over the proven token prefix, so the
+expressions before a lexical refusal are still read. The anchor shape, the
+obligation registry, `testthat::`/`library(testthat)` handling, the
+assignment/`assign()`/`for` rebinding forms and the family claim are unchanged.
+The tree is walked with an explicit stack, never by recursion, so a very long
+left-associative chain that overflowed the legacy recursive `visit` is now read.
+
+Every legacy refusal class is reproduced over the tree. Any `ERROR` or
+`MISSING` node, and any top-level debris token, refuses the file at its
+top-level expression (`unadmitted_r_construct`). The grammar's wider
+acceptance is refused where the legacy parser stopped: `:=`, `**`, `?`, a
+chained comparison (`a < b < c`), an assignment `=` inside an argument list,
+condition or `for` sequence, `x$`/`pkg::` with no name, a reserved word used as
+a name, a backticked formal or loop variable, whitespace inside `1 L`/`1 i`,
+and two expressions or statements on one line with no `;`. The legacy depth
+bound of 128 is reproduced from the legacy `enter` count carried down the tree
+(`parser_depth_limit`), and an unclosed nest that error recovery flattens into
+an `ERROR` node is checked against the same bound from its brackets, so the
+earlier of the two refusals still wins. A token that the legacy parser would
+have taken as a continuation of the previous expression drops that expression,
+as the legacy parse did.
+
+Verdict `CLASSIFIED` (committed fixtures and branch corpus are identical;
+the external differences below are classified). The in-process differential,
+kept under `cfg(test)` until the legacy parser is deleted, matched the legacy
+parser on all 3 committed `testthat` fixture sources and on 486 branch sources
+(every refusal class, every anchor variation, near-misses, and both sides of
+the depth bound for each nesting construct), with and without a declared
+`testthat`. On the installed R 4.5 library and the local conda R packages,
+3,434 `.R` files were compared as `tests/testthat/test-*.R` sources: 0 differ
+(36 refused by both, 106 files with 437 anchors, identical). A second,
+seeded mutation differential (12 single-edit mutants of each of the 2,759
+ASCII files under 6 KB, 33,108 mutants) found 8 differences, all with 0
+anchors on both sides, and all of them inputs that R itself rejects or that
+tree-sitter-r reads strictly:
+
+- `unknown_added` (4) and `unknown_removed` (4, the legacy parse had accepted
+  the file): `::` followed by a newline or comment (legacy skipped newlines
+  before a namespace name), `v$a::b` (legacy took any expression to the left of
+  `::`), `"\9"` (legacy accepted any escape), and `x[[1]` newline `]` (legacy
+  allowed a gap between the two closing `]`).
+
+Four further legacy-lax inputs are pinned by
+`grammar_stricter_than_the_legacy_parser_is_pinned` (`x[[1] ]`, `"\x"`,
+`f(TRUE = 1)`, `x$NULL`); each now refuses the file after the proven
+expression with `unadmitted_r_construct`, never an anchor. There were no
+`range_shift`, `anchor_changed`, or `refusal_class_changed` differences. The
+one residual approximation is the depth class for erroneous input: bracket
+nesting (calls, indexes, blocks, groups, and formal defaults) is modelled, so
+an unclosed file nested past the bound only through `if`/`while`/`for`/
+`function` bodies is labelled `unadmitted_r_construct` rather than
+`parser_depth_limit`; both refuse the file. Gate 2 evidence must be re-checked
+against ADR-0058 before any completion promotion; the status above is
+unchanged.
