@@ -1328,6 +1328,22 @@ python3 src/experiments/language_capability/recall.test.py
 python3 src/experiments/language_capability/recall.py --baseline <old-public-results.json> --candidate <candidate-public-results.json> --capture <capture-directory> --out <new-outside-repository-summary.json>
 ```
 
+### Fixture-wide product output equivalence
+
+`src/experiments/language_pack/capture.py` indexes every committed fixture root
+in an isolated workspace outside the checkout and hashes the CLI and MCP read
+surfaces plus the full owned-generation fingerprint from
+`compare_generations.py`. Only `active_generation`/`generation_id` keys are
+dropped. Run it with a baseline product, then with a candidate and `--compare`;
+any differing row fails. Agreement between two baseline runs must be shown
+first. It is a refactor-equivalence oracle, not a substitute for
+`sync-equivalence` or `product-eval`.
+
+```text
+python3 src/experiments/language_pack/capture.test.py
+python3 src/experiments/language_pack/capture.py --repo <checkout> --bin <product> --python <python3.10+> --scratch <outside-checkout-dir> --out <capture.json> [--compare <baseline-capture.json>]
+```
+
 ### Query intent taxonomy
 
 Every corpus query declares a measurement `intent` (a new optional field, so the
