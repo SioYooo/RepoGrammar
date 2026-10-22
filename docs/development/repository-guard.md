@@ -235,6 +235,10 @@ against a two-sided certificate's top-level `target_relationship`; and
 and `expected.abstention_reason` (e.g. `margin_too_close`) against
 `query_route.term_retrieval.abstention_reason`, which pins a scored
 term-retrieval tie apart from a generic `InsufficientSupport` abstention.
+Amendment 2026-10-22: the `ts-member-express-get` target unit id end moved from
+`56-107` to `56-108` because ADR-0059 slice 3 reads TS/JS units from the tree (the
+unit now ends at the route call's `)`). Gold semantics are unchanged; earlier
+results are historical and not rewritten.
 A case may also carry an optional `against` string (the `--against`
 comparison-family scope); the corpus loader rejects it on any operation other
 than `explain`/`check`. The `inspect_readiness` operation has no CLI verb, so the

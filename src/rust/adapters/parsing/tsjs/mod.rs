@@ -19,6 +19,7 @@ mod parts;
 mod prisma;
 mod project_context;
 mod scope_graph;
+mod units;
 mod unknown;
 mod zod;
 
@@ -30,22 +31,43 @@ use crate::ports::parser::{ParseError, ParserProjectContext, SourceDocument};
 use scope_graph::ScopeGraphLite;
 use unknown::UnknownAnchor;
 
-pub(crate) use jest_vitest::exact_test_runner_call_names;
+#[cfg(test)]
+pub(crate) use units::next_file_convention_kind;
 
 /// Engine identity for parser-emitted TS/JS structural anchors.
 pub const TSJS_ANCHOR_ENGINE: &str = "repogrammar-tsjs-syntax";
 /// Method identity for parser-emitted TS/JS structural anchors.
 pub const TSJS_ANCHOR_METHOD: &str = "exact_anchor_v1";
 
-/// Extract exact framework anchors for the given units. Returns `STRUCTURAL`
-/// facts whose evidence spans the full owning unit range.
-pub fn exact_framework_anchors(
-    document: &SourceDocument<'_>,
-    units: &[CodeUnit],
-    context: Option<&ParserProjectContext>,
-) -> Result<Vec<SemanticFact>, ParseError> {
-    let bindings = ScopeGraphLite::analyze(document.text, document.path, &document.language);
-    anchors_with_bindings(document, units, context, bindings)
+/// One analysis of a TS/JS file (ADR-0059): the scope graph and the
+/// Tree-sitter tree it keeps. The unit reader and the anchor pass share it, so
+/// a file is parsed once.
+pub(crate) struct TsJsAnalysis {
+    bindings: ScopeGraphLite,
+}
+
+impl TsJsAnalysis {
+    pub(crate) fn analyze(document: &SourceDocument<'_>) -> Self {
+        Self {
+            bindings: ScopeGraphLite::analyze(document.text, document.path, &document.language),
+        }
+    }
+
+    /// The code units of the file, read from the tree, in emission order.
+    pub(crate) fn units(&self, document: &SourceDocument<'_>) -> Vec<units::RawUnit> {
+        units::extract(document.text, document.path, &self.bindings)
+    }
+
+    /// Extract exact framework anchors for the given units. Returns
+    /// `STRUCTURAL` facts whose evidence spans the full owning unit range.
+    pub(crate) fn anchors(
+        self,
+        document: &SourceDocument<'_>,
+        units: &[CodeUnit],
+        context: Option<&ParserProjectContext>,
+    ) -> Result<Vec<SemanticFact>, ParseError> {
+        anchors_with_bindings(document, units, context, self.bindings)
+    }
 }
 
 fn anchors_with_bindings(
@@ -1415,6 +1437,45 @@ export async function listUsers() {
         );
     }
 
+    /// A Drizzle `select` unit ends at its statement, so it never reads the
+    /// `where:` of the next function (ADR-0059 slice 3, `extent_by_first_brace`).
+    #[test]
+    fn drizzle_select_does_not_read_the_next_functions_where_clause() {
+        let text = r#"import { drizzle } from "drizzle-orm/node-postgres";
+import { pgTable } from "drizzle-orm/pg-core";
+export const users = pgTable("users", {});
+const db = drizzle(pool);
+export async function listOrders() {
+  return db.select().from(users);
+}
+export async function queryUsers() {
+  return db.query.users.findMany({ where: eq(users.id, 1) });
+}
+"#;
+        let facts = parse_facts("src/drizzle_where.ts", text);
+        let shape = |target: &str| {
+            let fact = facts
+                .iter()
+                .find(|fact| {
+                    fact.kind != SemanticFactKind::Unknown
+                        && fact.target.as_ref().map(|t| t.as_str()) == Some(target)
+                })
+                .expect(target);
+            fact.assumptions
+                .iter()
+                .find(|a| a.starts_with("where_shape="))
+                .cloned()
+        };
+        assert_eq!(
+            shape("drizzle.query.select").as_deref(),
+            Some("where_shape=none")
+        );
+        assert_eq!(
+            shape("drizzle.query.query_findMany").as_deref(),
+            Some("where_shape=object_literal")
+        );
+    }
+
     #[test]
     fn drizzle_exact_schema_queries_and_transactions_anchor() {
         let text = r#"import { drizzle } from "drizzle-orm/node-postgres";
@@ -2072,13 +2133,8 @@ describe("orders", () => {
                 false,
                 &[],
             ),
-            (r#"comment_unit.ts"#, &[], false, &[r#"dynamic_route_call"#]),
-            (
-                r#"template_unit.ts"#,
-                &[],
-                false,
-                &[r#"dynamic_route_call"#],
-            ),
+            (r#"comment_unit.ts"#, &[], false, &[]),
+            (r#"template_unit.ts"#, &[], false, &[]),
             (
                 r#"this_receiver.ts"#,
                 &[],
@@ -2217,12 +2273,7 @@ describe("orders", () => {
                 false,
                 &[],
             ),
-            (
-                r#"prisma_comment_unit.ts"#,
-                &[],
-                false,
-                &[r#"prisma_dynamic_model_or_operation"#],
-            ),
+            (r#"prisma_comment_unit.ts"#, &[], false, &[]),
             (
                 r#"drizzle_comment_unit.ts"#,
                 &[(
@@ -2230,17 +2281,9 @@ describe("orders", () => {
                     &[r#"operation=schema_table"#, r#"table_name=users"#],
                 )],
                 false,
-                &[r#"drizzle_dynamic_query_builder"#],
-            ),
-            (
-                r#"this_prisma.ts"#,
                 &[],
-                false,
-                &[
-                    r#"dynamic_route_call"#,
-                    r#"prisma_dynamic_model_or_operation"#,
-                ],
             ),
+            (r#"this_prisma.ts"#, &[], false, &[r#"dynamic_route_call"#]),
             (
                 r#"comment_transaction_unit.ts"#,
                 &[(
@@ -2248,7 +2291,7 @@ describe("orders", () => {
                     &[r#"operation=schema_table"#, r#"table_name=users"#],
                 )],
                 false,
-                &[r#"drizzle_dynamic_query_builder"#],
+                &[],
             ),
             (
                 r#"zod_typed.ts"#,
@@ -2257,18 +2300,8 @@ describe("orders", () => {
                 &[],
             ),
             (r#"zod_comment_unit.ts"#, &[], false, &[]),
-            (
-                r#"vitest_comment_unit.test.ts"#,
-                &[],
-                false,
-                &[r#"dynamic_test_call"#],
-            ),
-            (
-                r#"method_describe.ts"#,
-                &[],
-                false,
-                &[r#"dynamic_test_call"#],
-            ),
+            (r#"vitest_comment_unit.test.ts"#, &[], false, &[]),
+            (r#"method_describe.ts"#, &[], false, &[]),
             (
                 r#"drizzle_call_table.ts"#,
                 &[(

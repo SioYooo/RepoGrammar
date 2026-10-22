@@ -94,7 +94,7 @@ fn path_to(tree: &Tree, byte: usize) -> Vec<Node<'_>> {
     }
 }
 
-fn is_optional(node: Node<'_>) -> bool {
+pub(super) fn is_optional(node: Node<'_>) -> bool {
     let mut cursor = node.walk();
     let optional = node
         .children(&mut cursor)
@@ -389,7 +389,7 @@ pub(super) fn drizzle_transaction<'a>(
 
 /// The call that starts a call chain: `z.object({}).strict()` is read as
 /// `z.object(...)`.
-fn chain_base_call(mut node: Node<'_>) -> Option<Node<'_>> {
+pub(super) fn chain_base_call(mut node: Node<'_>) -> Option<Node<'_>> {
     let mut base = None;
     loop {
         match node.kind() {

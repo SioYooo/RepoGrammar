@@ -26,6 +26,10 @@ run. Candidate manifests and staged packages are not public-release evidence.
   the tree too: commented-out `test(...)` lines and other non-code units no
   longer anchor, and one Drizzle UNKNOWN reason code changes
   (`UnresolvedImport` to `FrameworkMagic` on a mid-chain unit).
+  TS/JS code units now come from the same tree (ADR-0059 slice 3): unit ranges
+  and therefore TS/JS unit ids change on re-index, non-code units (comment text,
+  class-body statements) disappear, and one Drizzle `where_shape` variation on
+  the committed fixture corrects to `none`.
 
 ### Added
 
