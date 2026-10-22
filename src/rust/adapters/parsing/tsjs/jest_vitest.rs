@@ -18,6 +18,7 @@ pub(crate) struct TestRunnerCallNames {
     pub test_names: BTreeSet<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn exact_test_runner_call_names(document: &SourceDocument<'_>) -> TestRunnerCallNames {
     runner_call_names(&ScopeGraphLite::analyze(
         document.text,

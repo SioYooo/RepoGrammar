@@ -48,8 +48,21 @@ pub(super) struct ScopeGraphLite {
     /// The tree had a syntax error, or the file exceeded the scope-work
     /// bound; no binding was read (ADR-0059 D4).
     pub(super) degraded: bool,
-    /// The tree the graph was read from, shared with the anchor readers.
+    /// The tree the graph was read from, shared with the anchor readers and
+    /// the unit reader. Kept when the graph is degraded.
     pub(super) tree: Option<Tree>,
+    unit_names: UnitNames,
+}
+
+/// The loose receiver and import names the unit reader decides unit kinds
+/// from. The extractor never applied the anchor pass's unsafe-name policy, so
+/// these are read with an empty one (the anchor still decides).
+#[derive(Debug, Default)]
+pub(super) struct UnitNames {
+    pub(super) fastify: BTreeSet<String>,
+    pub(super) hono: BTreeSet<String>,
+    pub(super) zod: BTreeSet<String>,
+    pub(super) table_factories: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,17 +85,19 @@ impl ScopeGraphLite {
             .set_language(&grammar(path, language))
             .ok()
             .and_then(|()| parser.parse(text, None));
+        // A refused tree is kept: the unit reader still walks it (ADR-0059 D4).
         match tree {
-            Some(tree) if !tree.root_node().has_error() => {
-                match Self::from_tree(text, tree.root_node()) {
-                    Some(mut graph) => {
-                        graph.tree = Some(tree);
-                        graph
-                    }
-                    None => Self::degraded(),
-                }
+            Some(tree) => {
+                let graph = if tree.root_node().has_error() {
+                    None
+                } else {
+                    Self::from_tree(text, tree.root_node())
+                };
+                let mut graph = graph.unwrap_or_else(Self::degraded);
+                graph.tree = Some(tree);
+                graph
             }
-            _ => Self::degraded(),
+            None => Self::degraded(),
         }
     }
 
@@ -172,6 +187,7 @@ impl ScopeGraphLite {
             ..Self::default()
         };
         graph.fill_receivers(text, &items);
+        graph.fill_unit_names(text, &items);
         Some(graph)
     }
 
@@ -200,6 +216,47 @@ impl ScopeGraphLite {
         self.prisma_clients = found.prisma;
         self.drizzle_tables = found.drizzle_tables;
         self.drizzle_dbs = found.drizzle_dbs;
+    }
+
+    pub(super) fn unit_names(&self) -> &UnitNames {
+        &self.unit_names
+    }
+
+    fn fill_unit_names(&mut self, text: &str, items: &[Item<'_>]) {
+        let loose = parts::receivers(
+            text,
+            items,
+            &self.imports,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
+        let mut names = UnitNames {
+            fastify: loose.fastify,
+            hono: loose.hono,
+            table_factories: ["pgTable", "mysqlTable", "sqliteTable"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ..UnitNames::default()
+        };
+        for (local, binding) in &self.imports {
+            match (binding.module.as_str(), &binding.kind) {
+                ("zod" | "zod/v4", ImportKind::Default) => {
+                    names.zod.insert(local.clone());
+                }
+                ("zod" | "zod/v4", ImportKind::Named(original)) if original == "z" => {
+                    names.zod.insert(local.clone());
+                }
+                (
+                    "drizzle-orm/pg-core" | "drizzle-orm/mysql-core" | "drizzle-orm/sqlite-core",
+                    ImportKind::Named(original),
+                ) if super::drizzle::DRIZZLE_TABLE_FACTORIES.contains(&original.as_str()) => {
+                    names.table_factories.insert(local.clone());
+                }
+                _ => {}
+            }
+        }
+        self.unit_names = names;
     }
 
     pub(super) fn imported_runner(&self, name: &str) -> Option<(&str, &str)> {
@@ -708,7 +765,9 @@ mod tests {
             let units = SyntaxCodeUnitParser.parse(document()).expect("parse").units;
             let facts =
                 super::super::anchors_with_bindings(&document(), &units, None, g).expect("facts");
-            assert!(!facts.is_empty(), "{path}");
+            // Error recovery can leave no call node at all (`error_unclosed.ts`):
+            // the tree reader then has no unit to refuse (`degraded_unit_set`).
+            assert_eq!(facts.is_empty(), *path == "error_unclosed.ts", "{path}");
             for fact in &facts {
                 assert_eq!(fact.kind, SemanticFactKind::Unknown, "{path}");
                 assert!(

@@ -19,6 +19,11 @@ mod parts;
 mod prisma;
 mod project_context;
 mod scope_graph;
+#[cfg(test)]
+mod unit_corpus;
+#[cfg(test)]
+mod unit_differential;
+mod units;
 mod unknown;
 mod zod;
 
@@ -30,22 +35,56 @@ use crate::ports::parser::{ParseError, ParserProjectContext, SourceDocument};
 use scope_graph::ScopeGraphLite;
 use unknown::UnknownAnchor;
 
+#[cfg(test)]
 pub(crate) use jest_vitest::exact_test_runner_call_names;
+#[cfg(test)]
+pub(crate) use units::{is_component_name, is_hook_name, is_react_path, next_file_convention_kind};
 
 /// Engine identity for parser-emitted TS/JS structural anchors.
 pub const TSJS_ANCHOR_ENGINE: &str = "repogrammar-tsjs-syntax";
 /// Method identity for parser-emitted TS/JS structural anchors.
 pub const TSJS_ANCHOR_METHOD: &str = "exact_anchor_v1";
 
-/// Extract exact framework anchors for the given units. Returns `STRUCTURAL`
-/// facts whose evidence spans the full owning unit range.
+/// One analysis of a TS/JS file (ADR-0059): the scope graph and the
+/// Tree-sitter tree it keeps. The unit reader and the anchor pass share it, so
+/// a file is parsed once.
+pub(crate) struct TsJsAnalysis {
+    bindings: ScopeGraphLite,
+}
+
+impl TsJsAnalysis {
+    pub(crate) fn analyze(document: &SourceDocument<'_>) -> Self {
+        Self {
+            bindings: ScopeGraphLite::analyze(document.text, document.path, &document.language),
+        }
+    }
+
+    /// The code units of the file, read from the tree, in emission order.
+    pub(crate) fn units(&self, document: &SourceDocument<'_>) -> Vec<units::RawUnit> {
+        units::extract(document.text, document.path, &self.bindings)
+    }
+
+    /// Extract exact framework anchors for the given units. Returns
+    /// `STRUCTURAL` facts whose evidence spans the full owning unit range.
+    pub(crate) fn anchors(
+        self,
+        document: &SourceDocument<'_>,
+        units: &[CodeUnit],
+        context: Option<&ParserProjectContext>,
+    ) -> Result<Vec<SemanticFact>, ParseError> {
+        anchors_with_bindings(document, units, context, self.bindings)
+    }
+}
+
+/// Extract exact framework anchors for the given units, analysing the file
+/// itself (the legacy extractor's path).
+#[cfg(test)]
 pub fn exact_framework_anchors(
     document: &SourceDocument<'_>,
     units: &[CodeUnit],
     context: Option<&ParserProjectContext>,
 ) -> Result<Vec<SemanticFact>, ParseError> {
-    let bindings = ScopeGraphLite::analyze(document.text, document.path, &document.language);
-    anchors_with_bindings(document, units, context, bindings)
+    TsJsAnalysis::analyze(document).anchors(document, units, context)
 }
 
 fn anchors_with_bindings(
@@ -2072,13 +2111,8 @@ describe("orders", () => {
                 false,
                 &[],
             ),
-            (r#"comment_unit.ts"#, &[], false, &[r#"dynamic_route_call"#]),
-            (
-                r#"template_unit.ts"#,
-                &[],
-                false,
-                &[r#"dynamic_route_call"#],
-            ),
+            (r#"comment_unit.ts"#, &[], false, &[]),
+            (r#"template_unit.ts"#, &[], false, &[]),
             (
                 r#"this_receiver.ts"#,
                 &[],
@@ -2217,12 +2251,7 @@ describe("orders", () => {
                 false,
                 &[],
             ),
-            (
-                r#"prisma_comment_unit.ts"#,
-                &[],
-                false,
-                &[r#"prisma_dynamic_model_or_operation"#],
-            ),
+            (r#"prisma_comment_unit.ts"#, &[], false, &[]),
             (
                 r#"drizzle_comment_unit.ts"#,
                 &[(
@@ -2230,17 +2259,9 @@ describe("orders", () => {
                     &[r#"operation=schema_table"#, r#"table_name=users"#],
                 )],
                 false,
-                &[r#"drizzle_dynamic_query_builder"#],
-            ),
-            (
-                r#"this_prisma.ts"#,
                 &[],
-                false,
-                &[
-                    r#"dynamic_route_call"#,
-                    r#"prisma_dynamic_model_or_operation"#,
-                ],
             ),
+            (r#"this_prisma.ts"#, &[], false, &[r#"dynamic_route_call"#]),
             (
                 r#"comment_transaction_unit.ts"#,
                 &[(
@@ -2248,7 +2269,7 @@ describe("orders", () => {
                     &[r#"operation=schema_table"#, r#"table_name=users"#],
                 )],
                 false,
-                &[r#"drizzle_dynamic_query_builder"#],
+                &[],
             ),
             (
                 r#"zod_typed.ts"#,
@@ -2257,18 +2278,8 @@ describe("orders", () => {
                 &[],
             ),
             (r#"zod_comment_unit.ts"#, &[], false, &[]),
-            (
-                r#"vitest_comment_unit.test.ts"#,
-                &[],
-                false,
-                &[r#"dynamic_test_call"#],
-            ),
-            (
-                r#"method_describe.ts"#,
-                &[],
-                false,
-                &[r#"dynamic_test_call"#],
-            ),
+            (r#"vitest_comment_unit.test.ts"#, &[], false, &[]),
+            (r#"method_describe.ts"#, &[], false, &[]),
             (
                 r#"drizzle_call_table.ts"#,
                 &[(

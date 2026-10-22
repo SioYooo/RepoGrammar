@@ -273,7 +273,53 @@ binary size.
 
 ## Implementation log
 
-(empty)
+- Shared parse. `TsJsAnalysis` (in `tsjs/mod.rs`) holds the one
+  `ScopeGraphLite` and its `Tree`; `SyntaxScanner::scan` reads the units from
+  it (`tsjs/units.rs`, one iterative cursor walk with an ancestor stack) and
+  `finish` hands the same analysis to the anchor pass. `ScopeGraphLite` now keeps
+  its tree when the graph is degraded (an `ERROR`/`MISSING` tree, or the scope
+  work bound), so the unit reader still walks it. `exact_test_runner_call_names`
+  (the second analysis) and `exact_framework_anchors` are `cfg(test)` only.
+- Legacy oracle. The whole line-based extractor moved unchanged to
+  `parsing/legacy_units.rs` (`#[cfg(test)]`); `parsing/tsjs/unit_differential.rs`
+  runs it against the tree extractor; `unit_corpus.rs` is the branch corpus.
+- Unit kinds. Every row of "Readings replaced" reads the node named there.
+  Additions to the table that the first runs required, all recorded as
+  preregistration deviations:
+  - A member-call unit (`route`, Prisma, Drizzle, transaction) ends at the end
+    of its call chain (the outermost `.member(...)` call that continues it), not
+    at the inner call. With the inner call's end the Drizzle shape features
+    (`where_shape`, `returning_shape`), which are read from the unit text, lost
+    the `.where(...)` and `.returning()` of the same statement.
+  - A class member's decorators are the preceding `decorator` siblings in the
+    `class_body`, not children of the `method_definition`.
+  - `ends_in_identifier`: the Prisma and `$transaction` receivers keep the line
+    reader's "identifier before the dot" test (an identifier or a member chain
+    ending in a property identifier), so `this.prisma.user.create(` is still a
+    unit, now starting at `this`.
+  - Unit kind in a degraded file. The loose receiver, Zod and table-factory
+    names come from the graph's imports, which a degraded graph does not read
+    (D4), so in a degraded file a Hono/Fastify route is an Express route unit and
+    aliased runner names and Zod/Drizzle imports are not seen. Every
+    dispatched unit there is refused once, as before.
+- Additional difference classes the differential uses, all inside the
+  preregistered misreading list or stated here:
+  - `receiver_token_start` (new misreading name): the line reader starts a route
+    unit at the whitespace-delimited token before `.get(` (`(request.headers`,
+    `mw)`); the tree starts it at the chain start. It is classed
+    `unit_start_corrected` when the two units overlap, so the definition of
+    `unit_start_corrected` is "same kind and name, overlapping ranges, different
+    start", wider than "the legacy start lies inside the tree unit".
+  - `unit_kind_changed` (new class): same name and start, another kind
+    (`react_component` by `</` text against `function` by the tree,
+    `jsx_text_lookalike`).
+  - `accessor_name` (new misreading name): the line reader names a `get x()`
+    accessor `get`; the tree names it `x`.
+  - `string_prefix_expression` for the dynamic route: `console['warn']('a' + 'b')`
+    had a quote on the line; the tree requires a string argument.
+  - `one_unit_per_line`, `declarator_shape` and `decorator_walk` are read off
+    the differential as `unit_added` reasons; `statement_taken_for_method` and
+    `unit_not_code` as `unit_retired` reasons.
 
 ## Results
 
