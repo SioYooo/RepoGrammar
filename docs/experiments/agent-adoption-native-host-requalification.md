@@ -108,6 +108,18 @@ Verdict vocabulary: PASS per gate, BLOCKED, NOT_RUN, NOT_MEASURED.
   Change: the profile admits exactly the resolved non-system dylib files that
   the stdlib sqlite extension links (`otool -L`), as literal reads, plus
   metadata on their ancestors. No directory subpath, no data or product path.
+- Rounds 3 and 4 failure: identical kernel 0/22 (import blocked). The resolved
+  file literal alone (round 3), then the linked symlink hops (round 4), were not
+  enough: dyld also opens the alias symlink in the real `Cellar` directory.
+  Class: HARNESS_DEFECT. The round-4 attempt was started before the change was
+  verified in isolation, which wasted a round. Change: also admit the real
+  directory's alias literal. Before round 5 the generated host profile was
+  verified with a Homebrew-sqlite import and database open under
+  `sandbox-exec`, outside the campaign. Separately, the older offline
+  `runner_v2` qualification (not part of the native campaign) still fails
+  under Homebrew Python 3.14 because its profile lacks worktree-ancestor
+  metadata (sqlite open fails); the native host profile has it. Recorded, not
+  fixed here.
 
 ## Results
 

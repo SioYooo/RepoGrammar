@@ -137,10 +137,17 @@ class RunnerTest(unittest.TestCase):
 
     def test_sandbox_admits_only_exact_extension_dylibs(self):
         with tempfile.TemporaryDirectory() as tmp:
-            lib = Path(tmp).resolve() / "libfake.dylib"
+            root = Path(tmp).resolve()
+            (root / "Cellar").mkdir()
+            lib = root / "Cellar/libfake.1.dylib"
             lib.write_bytes(b"")
-            pairs = (("/opt/fake/opt/lib/libfake.dylib", str(lib)),)
-            with patch.object(runner, "EXTENSION_LIBS", pairs):
+            (root / "Cellar/libfake.dylib").symlink_to("libfake.1.dylib")
+            (root / "opt").symlink_to(root / "Cellar")
+            linked = str(root / "opt/libfake.dylib")
+            # dyld reads the opt symlink, the linked alias, the real-directory alias and the file; nothing broader.
+            self.assertEqual(runner._lib_literals(linked, str(lib)),
+                             [str(root / "opt"), linked, str(root / "Cellar/libfake.dylib"), str(lib)])
+            with patch.object(runner, "EXTENSION_LIBS", ((linked, str(lib)),)):
                 profile = runner.sandbox_profile(Path(tmp) / "w", {"HOME": tmp, "TMPDIR": tmp}, Path(tmp) / "p")
             self.assertIn(f'(literal "{lib}")', profile)
             self.assertNotIn('(subpath "/opt/fake', profile)

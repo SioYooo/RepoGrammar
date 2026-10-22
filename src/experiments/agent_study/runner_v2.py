@@ -45,6 +45,14 @@ def _extension_libs():
                  if not p.startswith(("/usr/lib/", "/System/")) and Path(p).is_file())
 
 
+def _lib_literals(linked, resolved):
+    """Exact paths dyld touches for a linked dylib: symlink hops, the real directory's alias and the file."""
+    parts = Path(linked).parts
+    hops = [str(Path(*parts[:i])) for i in range(2, len(parts) + 1) if Path(*parts[:i]).is_symlink()]
+    alias = Path(os.path.realpath(Path(linked).parent)) / Path(linked).name
+    return list(dict.fromkeys([*hops, str(alias), resolved]))
+
+
 EXTENSION_LIBS = _extension_libs()
 CHECKS = {"source_read", "source_glob", "source_write", "source_shell", "source_sqlite", "read", "grep", "glob",
           "recursive_glob", "shell", "sqlite", "symlink", "hardlink", "rename", "product_read",
@@ -117,7 +125,8 @@ def sandbox_profile(worktree, env, probe):
     libs = [Path(p) for pair in EXTENSION_LIBS for p in pair]
     ancestors = sorted({str(p) for root in [PYTHON, BASE_PREFIX, *libs] for p in root.parents})
     metadata = " ".join(f"(literal {quote(p)})" for p in ancestors)
-    lib_reads = "".join(f" (literal {quote(resolved)})" for _, resolved in EXTENSION_LIBS)
+    lib_reads = "".join(f" (literal {quote(p)})" for linked, resolved in EXTENSION_LIBS
+                        for p in _lib_literals(linked, resolved))
     execution = " ".join(f"(literal {quote(p)})" for p in (str(PYTHON), "/bin/cat"))
     reads = " ".join(f"(subpath {quote(p)})" for p in runtime + [str(worktree), env["HOME"]])
     writes = " ".join(f"(subpath {quote(p)})" for p in [str(worktree), env["TMPDIR"]])
