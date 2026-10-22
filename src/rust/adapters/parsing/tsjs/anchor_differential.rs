@@ -22,6 +22,9 @@ pub(super) struct Report {
     pub(super) considered_units: usize,
     pub(super) legacy_time: Duration,
     pub(super) tree_time: Duration,
+    /// Whole anchor pass (graph analysis included) per reading.
+    pub(super) legacy_pass: Duration,
+    pub(super) tree_pass: Duration,
     pub(super) extractor_panics: Vec<String>,
     pub(super) degraded_files: usize,
     /// Decision differences by unit kind and class.
@@ -64,6 +67,8 @@ impl Report {
         self.considered_units += other.considered_units;
         self.legacy_time += other.legacy_time;
         self.tree_time += other.tree_time;
+        self.legacy_pass += other.legacy_pass;
+        self.tree_pass += other.tree_pass;
         self.differences.extend(other.differences);
         for (key, count) in other.by_kind {
             *self.by_kind.entry(key).or_insert(0) += count;
@@ -227,16 +232,13 @@ pub(super) fn compare(path: &str, text: &str, report: &mut Report) {
             .iter()
             .map(|fact| fact.subject.clone())
             .collect();
-        let old_decisions = decisions(&anchors(ScopeGraphLite::analyze_text(
-            text,
-            path,
-            &document.language,
-        )));
-        let new_decisions = decisions(&anchors(ScopeGraphLite::analyze(
-            text,
-            path,
-            &document.language,
-        )));
+        let started = Instant::now();
+        let old_facts = anchors(ScopeGraphLite::analyze_text(text, path, &document.language));
+        report.legacy_pass += started.elapsed();
+        let started = Instant::now();
+        let new_facts = anchors(ScopeGraphLite::analyze(text, path, &document.language));
+        report.tree_pass += started.elapsed();
+        let (old_decisions, new_decisions) = (decisions(&old_facts), decisions(&new_facts));
         for unit in units
             .iter()
             .filter(|unit| considered.contains(unit.id.as_str()))
@@ -435,7 +437,7 @@ mod tests {
         let mut report = Report::default();
         let skipped = compare_roots(&roots, &mut report);
         let summary = format!(
-            "sources={} degraded_files={} skipped={skipped} extractor_panics={} considered_units={} counts={:?} by_kind={:?} text_analyze={:?} tree_analyze={:?}\n",
+            "sources={} degraded_files={} skipped={skipped} extractor_panics={} considered_units={} counts={:?} by_kind={:?} text_analyze={:?} tree_analyze={:?} text_pass={:?} tree_pass={:?}\n",
             report.sources,
             report.degraded_files,
             report.extractor_panics.len(),
@@ -443,7 +445,9 @@ mod tests {
             report.counts(),
             report.by_kind,
             report.legacy_time,
-            report.tree_time
+            report.tree_time,
+            report.legacy_pass,
+            report.tree_pass
         );
         std::fs::write(
             variable("REPOGRAMMAR_TSJS_DIFF_OUT"),

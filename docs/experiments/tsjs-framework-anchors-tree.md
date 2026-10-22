@@ -227,3 +227,5 @@ corpus in a release test build, before and after.
   from the call's arguments. No Nest, Express, Fastify, Hono, Prisma or
   Drizzle source exists in the external corpus, so those forms are covered by
   the committed fixtures and the branch corpus only.
+- The differential times the whole anchor pass per reading (`text_pass`,
+  `tree_pass`), analysis included.
