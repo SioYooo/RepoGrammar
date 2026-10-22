@@ -1,7 +1,8 @@
 # TS/JS framework anchors from the Tree-sitter tree (ADR-0059 slice 2)
 
-Status: **PREREGISTERED**. Base: `feat/tsjs-tree-sitter` at `32764f2`. Local
-only; no push or merge. Authority:
+Status: **CLASSIFIED, pending maintainer acceptance** (preregistered in
+`588ff4a`). Base: `feat/tsjs-tree-sitter` at `32764f2`. Local only; no push
+or merge. Authority:
 [ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md)
 (Accepted), D2 slice 2, D3 (policies stay), D4 (syntax errors), D5 (oracle),
 D6 (legacy reader stays under `cfg(test)` until acceptance). Slice 1:
@@ -229,3 +230,224 @@ corpus in a release test build, before and after.
   the committed fixtures and the branch corpus only.
 - The differential times the whole anchor pass per reading (`text_pass`,
   `tree_pass`), analysis included.
+
+## Results
+
+Verdict: **`CLASSIFIED`** overall and for every framework (Express, Hono,
+Fastify, Prisma, Drizzle, Zod, NestJS, Jest/Vitest). Pending maintainer
+acceptance: `anchor_changed`, `unknown_removed` and `unknown_added`, listed
+under "Decisions for the maintainer". Rounds taken: 0 of 3 (no unattributed
+decision difference on a committed fixture, so no fix round). Commits:
+`1e34b0c` (receivers and route calls: Express, Hono, Fastify), `3a757c0`
+(Prisma, Drizzle), `c3f37f1` (Zod, Jest/Vitest), `af9baaa` (NestJS), `61e8ab2`
+(differential timing).
+
+### Decisions for the maintainer, first
+
+1. **One product-visible change on a committed fixture.** Fixture
+   `typescript/release/v0_2/drizzle_exact_repositories` (`db.query.users.findMany(`)
+   gets two `unknown_kind_changed` units. The line-based extractor (slice 3)
+   starts a Prisma-shaped unit at `query.users.findMany(` in the middle of the
+   chain `db.query.users.findMany(`. The text reading took `query` for a Prisma
+   client (`prisma_injected_client`, `UnresolvedImport`); the tree finds no call
+   that starts there (`prisma_dynamic_model_or_operation`, `FrameworkMagic`).
+   Both are UNKNOWN and neither anchors, but `repogrammar unknowns` on that
+   fixture changes: `by_reason_code` and `by_obligation` flip
+   (`UnresolvedImport` to `FrameworkMagic`, `symbol_binding` to
+   `framework_identity`). This is the whole of the fixture-wide capture
+   mismatch (below). The unit itself is a mis-extraction, so neither kind is
+   "right" until slice 3 stops making it. The alternative that gives 0
+   mismatches is to read the suffix of a callee chain when no call starts at
+   the unit start, which would re-encode the `member_receiver` misreading in
+   production; it was not done.
+2. **`anchor_changed`** (each a legacy misreading; for Express,
+   `comment_in_call` and `trailing_comma` add the `handler_binding=local`
+   assumptions the text reading lost, and the others correct or drop a
+   `route_path_shape` the text reading invented):
+   - Express, 5 branch sources: `comment_in_call`, `path_from_non_first_argument`,
+     `trailing_comma`, `string_prefix_expression`, `escaped_quote`.
+   - NestJS, 5 branch sources: `decorator_argument_shape` (comment before the
+     first argument; trailing comma in a metadata array; a metadata key
+     mentioned inside a string; an array whose members are all object literals,
+     which the text counted as 0; a sole string member, counted as 0) and
+     `string_prefix_expression`.
+   - Zod, `declarator_type_annotation` (`const A: ZodType = z.object(...)`;
+     `AnchorOutcome::None` becomes `zod.object`): 1 branch source and, in the
+     unpreregistered extension below, 4 distinct units (8 with both contexts)
+     in an installed `zod`'s tests.
+3. **`unknown_removed`** (adds a support anchor): Express 1, Fastify 4
+   (`declarator_type_annotation`, `shorthand_or_method_field` x2,
+   `prefix_identifier_lookalike`), Prisma 3 (`type_arguments`,
+   `declarator_type_annotation`, spaced `$transaction( [`), Drizzle 2
+   (`declarator_type_annotation`, `chain_scope`), NestJS 1 (`for_root_lookalike`).
+   All branch sources; none on a committed fixture or in either external
+   corpus.
+4. **`unknown_added`**: 9 branch sources, and 196 differences (97 distinct units
+   in the run without a context) in the external corpus, all `unit_not_code`: the text reading anchored commented-out
+   `test(...)`, `describe(...)` and route lines in zod's tests; the tree refuses
+   them. Residual: those units get `dynamic_test_call` / `dynamic_route_call`
+   ("call shape is dynamic"), a misnomer for a unit that is not code, until
+   slice 3 stops making the unit.
+5. The unlisted classes (preregistration deviations): `keyword_receiver`
+   (`this.get(`, `super.get(`: `this`/`super` read as an identifier receiver;
+   UNKNOWN on both sides), `unit_not_code` widened to a method declaration
+   (`describe(d) {`), `table_expression_prefix` made explicit for Drizzle
+   (`db.delete(request("x"))`), and `member_receiver` observed for Prisma and
+   Drizzle units (a unit that starts inside a longer chain, `drill.a.b.delete(`
+   or `this.#ctes.delete(`). All are UNKNOWN to UNKNOWN. Accept them, or require
+   them pinned back to the text reading.
+6. Keep `legacy_text.rs`, `anchor_differential.rs` and `anchor_corpus.rs`
+   under `cfg(test)` until this is accepted (D6).
+
+### What reads the tree now
+
+`ScopeGraphLite` keeps the tree it read (`tree`) and a `reading` field. The
+new `tsjs/parts.rs` is the one reader of call parts, receivers and decorators;
+the anchor modules keep every policy and consume its data types.
+
+| Framework | Reads the tree now | Verdict |
+| --- | --- | --- |
+| Express | callee path and arguments of the unit's call (`CallParts`); receiver declarators and the router prefix mount | `CLASSIFIED` |
+| Hono | the same call parts; `new Hono<...>()` receivers | `CLASSIFIED` |
+| Fastify | call parts, full-route object fields, plugin and `prefix` options | `CLASSIFIED` |
+| Prisma | `client.model.operation` and `client.$transaction` callee paths, the array argument; `new PrismaClient(...)` receivers | `CLASSIFIED` |
+| Drizzle | `db.op`, `db.query.table.op` and `db.transaction` callee paths, the `from` table in the same call chain, table declarators, `drizzle(...)` db receivers | `CLASSIFIED` |
+| Zod | the first call of the initializer's call chain | `CLASSIFIED` |
+| NestJS | the leading `decorator` siblings and their arguments; roles are `RoleRow`s | `CLASSIFIED` |
+| Jest/Vitest | the one-segment callee of the test call | `CLASSIFIED` |
+| Next.js | not read (no receiver, call part or decorator) | unchanged |
+
+Shape features stay text, as preregistered: `handler_shape`, `async_shape`,
+`reply_shape`, `schema_present`, `opts_handler_present`, `raw_sql_present`,
+`object_clause_shape`, `select_include_shape`, `drizzle_join_shape`, the
+`returning`/`transaction` flags and the Zod field-count and refinement checks.
+
+NestJS role table (`NEST_ROLES` in `nest.rs`): 4 roles, 11 evidence rows, all
+`RoleEvidence::Annotation` on `@nestjs/common`.
+
+| Role | Evidence (target) |
+| --- | --- |
+| Controller | `Controller` (`nestjs.common.Controller`) |
+| Injectable | `Injectable` (`nestjs.common.Injectable`) |
+| Module | `Module` (`nestjs.common.Module`) |
+| Route | `Get`, `Post`, `Put`, `Delete`, `Patch`, `Head`, `Options`, `All` (`nestjs.common.<Name>`) |
+
+The honest shape is rows over the engine's types with the gate upstream: the
+scope graph decides whether a decorator name is an exact binding
+(`imports.get` plus `name_is_unsafe_at`), because a JS named import binds a
+local name to an export and `ImportScope` cannot model that (ADR-0059 D2).
+`first_role` then only resolves the evidence to the target, and the first
+decorator in source order that names a row's evidence is the one it is given,
+so the legacy source-order precedence is kept (no `row_precedence` class).
+`legacy_text::receivers` renders every declarator as `const ...`; that is
+faithful to the legacy reader, which stripped `const`, `let` and `var`
+identically.
+
+### Counts
+
+Decision level, per considered unit. Each source is run without and with a
+test-runner project context, so a unit can count twice.
+
+| Corpus | Sources | `anchor_changed` | `unknown_removed` | `unknown_added` | `unknown_kind_changed` |
+| --- | --- | --- | --- | --- | --- |
+| Committed fixtures | 82 | 0 | 0 | 0 | 4 (2 units, `member_receiver`) |
+| Branch corpus | 65 (27 identical) | 11 sources | 11 sources | 9 sources | 7 sources |
+| External (slice 1's roots) | 885 compared, 2 skipped, 11 degraded, 0 extractor panics | 0 | 0 | 196 | 162 |
+| External extension (unpreregistered) | 3,031 compared, 32 skipped, 30 degraded | 8 | 0 | 216 | 532 |
+
+External (slice 1's roots: `SurchargeCheck` with its installed `vitest`,
+`SurchargeCheck-seo`, `askveil` with its installed `zod`,
+`poppet-public-seed`; 6,522 considered units). Every difference is attributed
+(0 unattributed). By misreading class, with both contexts counted, and in
+parentheses the distinct units of the run without context:
+
+| Class | `unknown_added` | `unknown_kind_changed` |
+| --- | --- | --- |
+| `unit_not_code` (comment, string or template line; a method named `describe`/`it`) | 196 (97 distinct) | 90 (46) |
+| `keyword_receiver` | 0 | 64 (32) |
+| `table_expression_prefix` | 0 | 6 (3) |
+| `member_receiver` | 0 | 2 (1) |
+
+The 11 degraded external files are slice 1's grammar gaps (TypeScript variance
+modifiers in 4 `zod` `.ts` files; JavaScript keyword export names in 7 `zod`
+`.js` files), refused once by D4 on both sides. The panic that blocked 3
+external files in slice 1 is fixed on `main` (`dca43c0`), so none are excluded.
+
+The extension was an unpreregistered run over the other local projects
+(`AgentDesk`, `ClearPDF`, `PleaseRuinIt`, `Poppet`, `SeedWorld`, `appfitsme`
+and its `dev`/`heldout` copies, `worthfuel`, `tlm-asset-tools` and eight
+smaller ones, with the installed `vitest` and `zod` of two of them), run to
+look for framework sources the preregistered corpus lacks. It found none for
+Nest, Express, Fastify, Hono, Prisma or Drizzle either, and its 30 degraded
+files were not individually attributed. Its 8 `anchor_changed` (4 distinct) are
+the Zod `declarator_type_annotation` class; all its other differences are
+`unit_not_code`, `keyword_receiver`, `member_receiver` and
+`table_expression_prefix`. So the framework forms are exercised by the
+committed fixtures and the branch corpus only.
+
+`syntax_error` (D4) is not observable in this slice's differential: both
+readings share the parse and degrade together, so a syntax error gives no
+difference, and the branch source `error_route.ts` expects none. D4 is
+evidenced by the branch assertion that exactly that source is degraded and by
+slice 1's `syntax_errors_refuse_every_considered_unit_once`. Slice 2 adds no
+second refusal path.
+
+### Gates and oracle
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings`, `cargo test --workspace --all-features`
+  (Homebrew Python first): pass. `repo-guard check` is run by the main
+  session.
+- Fixture-wide capture against the frozen baseline: 179 roots, 4,681 rows,
+  **2 mismatches**, both `drizzle_exact_repositories` and one cause: `unknowns`
+  (the reason-code change above) and `generation`, which differs only in the
+  `evidence` and `semantic_facts` table hashes (same row counts). The 179th root
+  is an empty untracked directory `v0_1/stale-index/` that exists in the main
+  checkout and not in a worktree (git does not track empty directories); in a
+  worktree the capture reports 178 roots, 4,674 rows and 7 more `stale-index`
+  mismatches until that directory is created.
+- `sync-equivalence`: 14 of 14 PASS.
+- `product-eval`: equal to the frozen result apart from `summary.latency_ms_p50`
+  (44 to 33 ms), a timing field the preregistered exclusion list missed.
+
+### Measurements
+
+| Measure | Before (`32764f2`) | After |
+| --- | --- | --- |
+| Non-test lines, `tsjs/` modules touched (without `legacy_text.rs`) | 3,168 | 3,615 |
+| `legacy_text.rs` (test-only) | 0 | 792 |
+| `parts.rs` | 0 | 862 |
+| `scope_graph.rs` | 768 | 568 |
+| `mod.rs` | 499 | 421 |
+| `drizzle.rs` / `nest.rs` / `zod.rs` | 274 / 339 / 132 | 212 / 286 / 114 |
+| Release `repogrammar` size | 41,899,392 B (slice 1) | 41,905,248 B (+5,856) |
+
+Production code grows (+447 lines, +14%): the tree readers are longer than the
+text scanners they replace, which moved to the test-only oracle.
+
+Release timing, anchor pass per reading, 885 external sources x 2 contexts:
+text reading 1.149 s, tree reading 1.148 s; graph analysis alone 0.587 s and
+0.559 s. They are equal because both readings parse the tree (slice 1 moved the
+parse), so the claim is only that slice 2 adds no measurable cost over slice 1.
+
+Parse sharing: `ScopeGraphLite` carries the `Tree`, and `parts.rs` reads
+`bindings.tree`, so the anchor pass parses each file once. Slice 2 adds no
+parse. The remaining duplication is slice 1's: the line-based extractor calls
+`exact_test_runner_call_names`, which analyses the file once, and the anchor
+pass analyses it again (two parses per TS/JS file). Sharing one graph needs the
+extractor to hold it, which belongs to slice 3.
+
+### Residuals
+
+- Unit boundaries still come from the line-based extractor, so a unit that is
+  not code, or starts mid-chain, is anchored or refused by a tree reading of a
+  region it mis-bounded (`unit_not_code`, `keyword_receiver`, `member_receiver`
+  above). Slice 3.
+- The extractor's own text receiver scans (`fastify_receivers_for_scan`,
+  `hono_receivers_for_scan`) still decide a route unit's kind. A typed or
+  generic declarator that the tree reads as a Hono receiver therefore changes
+  `receiver_changed` only: the unit stays `ExpressRoute`, so no decision
+  changes (branch source `typed_hono.ts`).
+- The tree reading is exact about type arguments on a receiver `new`, but the
+  extractor makes no unit of `app.get<P>(`, so route calls with type arguments
+  are not units yet (branch source `typed_route.ts`). Slice 3.

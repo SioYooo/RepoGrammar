@@ -30,10 +30,14 @@ tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
 
 TS/JS goes in slices under ADR-0059 (Accepted 2026-10-22) on
 `feat/tsjs-tree-sitter`: slice 1 (the shared `ScopeGraphLite`) landed and its
-legacy reader was deleted the same day; slices 2 and 3 remain. Evidence:
+legacy reader was deleted the same day; slice 2 (framework anchors read the
+tree via `tsjs/parts.rs`, NestJS roles as `RoleRow`s, legacy text readings in
+`cfg(test)` `legacy_text.rs`) is `CLASSIFIED` and awaits acceptance of its
+`anchor_changed`, `unknown_removed` and `unknown_added` differences; slice 3
+remains. Evidence:
 `docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
-decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
-and `tsjs-scope-graph-tree.md`.
+decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`,
+`tsjs-scope-graph-tree.md` and `tsjs-framework-anchors-tree.md`.
 
 ## Declarative language-pack spike — 2026-10-20
 
@@ -995,7 +999,9 @@ transitional substrate, not the official Python-first v0.1 target, and this is
 not full TS/JS semantic analysis. TS/JS goes onto Tree-sitter in slices under
 ADR-0059 (Accepted 2026-10-22): slice 1 (the scope graph, `tsjs/scope_graph.rs`)
 landed with verdict CLASSIFIED and its legacy reader was deleted on acceptance;
-slices 2 and 3 are not ported and D6 still governs them.
+slice 2 (`tsjs/parts.rs`: receivers, call parts and NestJS decorator roles read
+the tree; text readings kept under `cfg(test)`) is CLASSIFIED and awaits
+acceptance, and slice 3 is not ported; D6 governs both.
 
 Family query output, MCP `repogrammar_context` family responses, and
 `repogrammar stats` now expose `estimated_potential_token_savings` as an
