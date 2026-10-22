@@ -116,7 +116,7 @@ differential oracle until the maintainer accepts that slice's classification.
 Slice 1's legacy reader was deleted on acceptance (2026-10-22); slice 2's
 legacy reading (`legacy_text.rs` and its differential) was deleted on its
 acceptance, also 2026-10-22; slice 3's legacy reader (`legacy_units.rs` and its
-differential) was detached on its acceptance, also 2026-10-22, so no legacy
+differential) was deleted on its acceptance, also 2026-10-22, so no legacy
 reader remains.
 
 ## Consequences
