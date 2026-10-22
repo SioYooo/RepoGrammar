@@ -248,3 +248,25 @@ product opens the index is a maintainer judgement; no product change was made.
 Next gate: decide the SQLite-sidecar policy (read-only open flags in the product
 versus a justified harness exclusion that still hashes the main database), in a
 new bounded campaign; then B2 and B3.
+
+## Campaign 3 preregistration (2026-10-22)
+
+Previous failure class: **PROTECTED_INTEGRITY** (campaign 2 round 3): after a
+real native `tools/call` the worktree gained `.repogrammar/repogrammar.sqlite-shm`
+and an empty `.repogrammar/repogrammar.sqlite-wal`; B1 transport otherwise passed.
+Policy (a harness policy chosen by the main session on 2026-10-22, open to
+maintainer veto; no product change): SQLite WAL sidecars are a reader artefact,
+since the product's storage contract runs `journal_mode=wal` and `doctor`
+reports `shm_bytes`/`wal_bytes` as normal state.
+
+The one change: the protected-integrity inventory tolerates exactly
+`.repogrammar/repogrammar.sqlite-shm` (any size) and an empty
+`.repogrammar/repogrammar.sqlite-wal`. Still failing: any change to the main
+database bytes, a non-empty `-wal`, and any other new, changed or deleted file
+or symlink under the protected paths. Negative tests cover a modified main
+database, a non-empty `-wal`, and an unexpected new file under `.repogrammar/`.
+
+Gates: G3 B1 end to end (controls, transport, integrity), then G4 B2, then G5
+B3. Cap: 3 rounds; evidence under `.../native-host-20261022/campaign-3/`
+(short run names). Stop on an unattributable control failure, an authority
+blocker or the cap. Effects remain NOT_MEASURED.
