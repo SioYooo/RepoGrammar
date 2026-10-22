@@ -129,8 +129,8 @@ context lives under `.agents/memories/`.
 - Public-preview release rollout gate:
   `release/public-preview-release-checklist.md`.
 - Stable `0.5.1` dual-channel candidate and publication gate:
-  `release/stable-v0.5.1-release-checklist.md` (PREPARATION / UNRELEASED until
-  exact public GitHub/npm evidence and finalizer pass).
+  `release/stable-v0.5.1-release-checklist.md` (GitHub published / npm staged,
+  awaiting maintainer approval; finalizer not yet passed).
 - Historical stable `0.5.0` GitHub-only publication evidence:
   `release/stable-v0.5.0-release-checklist.md`.
 - Stable `0.4.3` publication evidence remains in

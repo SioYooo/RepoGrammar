@@ -185,14 +185,16 @@ boundaries.
 
 ## Current publication truth
 
-Current GitHub stable: `0.5.0`.
-Current npm stable at last verification: `0.4.3`.
+Current GitHub stable: [`0.5.1`](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.1) (verified 2026-10-22).
+Current npm stable at last verification (2026-10-22): `0.4.3`.
 
 | Channel | Verified publication | Evidence and freshness boundary |
 | --- | --- | --- |
-| GitHub stable | Immutable `v0.5.0`, ten assets, published 2026-09-09 | [checklist](../release/stable-v0.5.0-release-checklist.md), [summary](../release/stable-v0.5.0-release.summary.json), [public release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.0) |
+| GitHub stable | Immutable `v0.5.1`, 11 assets, published 2026-10-17; release run 38820860471 all jobs succeeded | [checklist](../release/stable-v0.5.1-release-checklist.md), [public release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.1); public-asset verification and finalizer not yet run |
+| GitHub previous stable | Immutable `v0.5.0`, ten assets, published 2026-09-09 | [checklist](../release/stable-v0.5.0-release-checklist.md), [summary](../release/stable-v0.5.0-release.summary.json), [public release](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.0) |
 | npm stable | `@sioyooo/repogrammar@0.4.3` | [historical finalizer evidence](../release/stable-v0.4.3-release-checklist.md); [registry metadata](https://registry.npmjs.org/@sioyooo%2Frepogrammar) rechecked read-only on 2026-09-30: `latest=0.4.3` |
 | npm preview | `0.2.0-preview.0` | Same 2026-09-30 metadata check: `preview=0.2.0-preview.0` |
+| npm `0.5.1` | Not public: CI stage job succeeded, awaiting maintainer 2FA approval; registry lists no `0.5.1`, `latest=0.4.3`, `preview=0.2.0-preview.0` (2026-10-22 `npm view`) | [0.5.1 checklist](../release/stable-v0.5.1-release-checklist.md) |
 | npm `0.5.0` | Not published by the GitHub-only release | [v0.5.0 summary](../release/stable-v0.5.0-release.summary.json), `npm.published=false` |
 
 The bounded registry JSON check on 2026-09-30 also found no `0.5.0` version.

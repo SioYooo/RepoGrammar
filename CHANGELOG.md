@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-The 0.5.1 candidate restores coordinated GitHub and npm publication under the
-[release checklist](docs/release/stable-v0.5.1-release-checklist.md). Candidate
-manifests and staged packages are not public-release evidence.
+The 0.5.1 release restores coordinated GitHub and npm publication under the
+[release checklist](docs/release/stable-v0.5.1-release-checklist.md). As of
+2026-10-22 the GitHub release `v0.5.1` is public, but the npm package is not
+public (staged, awaiting maintainer approval) and the public finalizer has not
+run. Candidate manifests and staged packages are not public-release evidence.
 
 ### Added
 
