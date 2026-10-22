@@ -345,7 +345,7 @@ pub(crate) fn ident_is(text: &str, token: Token, expected: &str) -> bool {
 }
 
 /// Lowercased copy of a name token's glued text, for map keys. Only the
-/// retained legacy parser and the lexer tests read tokens this way.
+/// lexer tests read tokens this way.
 #[cfg(test)]
 pub(crate) fn lower(text: &str, token: Token) -> String {
     token_text(text, token).to_ascii_lowercase()

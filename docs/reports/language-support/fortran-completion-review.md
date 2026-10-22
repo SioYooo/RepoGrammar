@@ -318,3 +318,7 @@ keyword), an alternate-return dummy (`subroutine s(a, *)`) is a grammar gap
 that now refuses, and a non-ASCII identifier byte now refuses. Gate 2 evidence
 must be re-checked against ADR-0058 before any completion promotion; the
 status above is unchanged.
+
+The legacy parser and the differential were deleted on 2026-10-22 after the
+maintainer accepted the classification; the pinned cases remain as plain tests
+of the Tree-sitter reader.

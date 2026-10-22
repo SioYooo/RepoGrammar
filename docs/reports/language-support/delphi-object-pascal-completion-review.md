@@ -142,7 +142,9 @@ inside a `uses` clause are ignored, because the lexer reads that clause.
 The in-process differential matched the legacy parser on all 3 committed
 fixture sources and on the branch corpus (anchors, near-misses, every `{$IF*}`
 placement, dialect selectors, unterminated comments, abstaining classes). The
-legacy parser stays under `cfg(test)` until the tier verdict.
+legacy parser and this differential were deleted on 2026-10-22 after the
+maintainer accepted the classification; the pinned cases below remain as plain
+tests of the current frontend.
 
 Differences that are not reproduced, each pinned by its own test:
 
