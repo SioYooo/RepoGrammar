@@ -176,3 +176,30 @@ Next gate (a new, separately bounded campaign): let the bridge relay
 client, with a negative test that other unknown methods still fail closed;
 then rerun G2/G3 and finish B2/B3. Real effects still require a held-out task
 freeze and explicit budget/auth approval.
+
+## Campaign 2 preregistration (2026-10-22)
+
+Previous failure class: **TRANSPORT** from campaign 1 round 5. Claude Code
+2.1.304 sends `server/discover` (protocol `2026-07-28`, `_meta` keys
+`io.modelcontextprotocol/protocolVersion`, `.../clientInfo`,
+`.../clientCapabilities`) before `initialize`; the bridge allowlist closes on it
+and the client reports the server failed. Same identity as campaign 1 except the
+bridge hash. Branch `feat/native-host-requalification`; evidence under
+`/Volumes/External/Development/repogrammar-evidence/native-host-20261022/campaign-2/`
+(untracked). Cap: **3 rounds**. Same constraints: scripted loopback only, no
+real model/credential/network/spend, Seatbelt denials and product unchanged.
+
+The one change: `mcp_bridge_v2.py` admits `server/discover` as a request with an
+id and only the observed `_meta` keys, counts it, and relays it to the product
+unchanged so the product's own JSON-RPC -32601 (verified directly) reaches the
+client. Negative tests: every other unknown method, malformed frame, extra
+params/`_meta` keys on `server/discover` and id reuse still fail closed before
+the product.
+
+Gates in order: G2 initialize + tools/list reach the bridge (B1); G3 B1
+tools/call reaches the product once and its payload returns unchanged; G4 B2
+global-file discovery controls; G5 B3 controls. If the client still fails the
+server after -32601, retain the raw frames and classify TRANSPORT vs
+CLIENT_PROTOCOL; at most one further bridge-side change, only if the frames name
+a specific next required method; otherwise stop BLOCKED with the frames.
+Effects remain NOT_MEASURED.
