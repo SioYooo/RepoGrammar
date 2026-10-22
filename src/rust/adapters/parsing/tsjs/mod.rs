@@ -8,13 +8,20 @@
 //! structural anchors are later promoted to bounded `DATAFLOW_DERIVED` support
 //! facts by the application layer; they never prove membership by themselves.
 
+#[cfg(test)]
+mod anchor_corpus;
+#[cfg(test)]
+mod anchor_differential;
 mod drizzle;
 mod express;
 mod fastify;
 mod hono;
 mod jest_vitest;
+#[cfg(test)]
+mod legacy_text;
 mod nest;
 mod next;
+mod parts;
 mod prisma;
 mod project_context;
 mod scope_graph;
@@ -98,17 +105,37 @@ fn anchor_for_unit(
     else {
         return AnchorOutcome::None;
     };
+    let call = |bindings: &ScopeGraphLite| {
+        parts::route_call(
+            bindings,
+            document.text,
+            unit.range.start_byte..unit.range.end_byte,
+        )
+    };
     let outcome = match unit.kind {
-        CodeUnitKind::ExpressRoute => express::anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::ExpressRoute => express::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
         CodeUnitKind::NextAppPage
         | CodeUnitKind::NextAppLayout
         | CodeUnitKind::NextRouteHandler
         | CodeUnitKind::NextPagesApiRoute
         | CodeUnitKind::NextPagesPage => next::anchor(document, context, unit, slice),
-        CodeUnitKind::FastifyRoute => fastify::anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::FastifyPluginRegistration => {
-            fastify::register_anchor(bindings, slice, unit.range.start_byte)
-        }
+        CodeUnitKind::FastifyRoute => fastify::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
+        CodeUnitKind::FastifyPluginRegistration => fastify::register_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
         CodeUnitKind::PrismaQuery => prisma::query_anchor(bindings, slice, unit.range.start_byte),
         CodeUnitKind::PrismaTransaction => {
             prisma::transaction_anchor(bindings, slice, unit.range.start_byte)
@@ -131,7 +158,12 @@ fn anchor_for_unit(
             nest::injectable_anchor(bindings, slice, unit.range.start_byte)
         }
         CodeUnitKind::NestModule => nest::module_anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::HonoRoute => hono::anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::HonoRoute => hono::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
         CodeUnitKind::TestSuite => jest_vitest::anchor(
             document,
             bindings,
@@ -197,47 +229,6 @@ fn anchor_fact(
     })
 }
 
-pub(super) fn object_literal_string_field(slice: &str, field: &str) -> Option<String> {
-    for (field_index, _) in slice.match_indices(field) {
-        if let Some(after_colon) = object_literal_field_after_colon(slice, field, field_index) {
-            if let Some(value) = first_quoted(after_colon) {
-                return Some(value);
-            }
-        }
-    }
-    None
-}
-
-pub(super) fn object_literal_has_field(slice: &str, field: &str) -> bool {
-    slice.match_indices(field).any(|(field_index, _)| {
-        object_literal_field_after_colon(slice, field, field_index).is_some()
-    })
-}
-
-fn object_literal_field_after_colon<'a>(
-    slice: &'a str,
-    field: &str,
-    field_index: usize,
-) -> Option<&'a str> {
-    if !field_has_identifier_boundaries(slice, field_index, field.len()) {
-        return None;
-    }
-    let after_field = &slice[field_index + field.len()..];
-    after_field
-        .trim_start()
-        .strip_prefix(':')
-        .map(str::trim_start)
-}
-
-fn field_has_identifier_boundaries(text: &str, offset: usize, len: usize) -> bool {
-    let before = offset
-        .checked_sub(1)
-        .and_then(|index| text.as_bytes().get(index))
-        .copied();
-    let after = text.as_bytes().get(offset + len).copied();
-    !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
-}
-
 pub(super) fn object_clause_shape(slice: &str, field: &str) -> &'static str {
     let pattern = format!("{field}:");
     if slice.contains(&pattern) {
@@ -259,37 +250,6 @@ pub(super) fn raw_sql_present(slice: &str) -> bool {
         || slice.contains("$executeRaw")
         || slice.contains("queryRaw")
         || slice.contains("executeRaw")
-}
-
-pub(super) fn route_call_parts(slice: &str) -> Option<(&str, &str)> {
-    let (receiver, after) = leading_identifier(slice)?;
-    let rest = slice[after..].trim_start().strip_prefix('.')?;
-    let (method, after_method) = leading_identifier(rest)?;
-    if !rest[after_method..].trim_start().starts_with('(') {
-        return None;
-    }
-    Some((receiver, method))
-}
-
-pub(super) fn route_path_shape(slice: &str) -> Option<String> {
-    let open = slice.find('(')?;
-    let path = first_quoted(&slice[open + 1..])?;
-    Some(normalize_route_path(&path))
-}
-
-pub(super) fn first_quoted(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let quote = bytes[index];
-        if quote == b'"' || quote == b'\'' {
-            let start = index + 1;
-            let end_relative = text[start..].find(quote as char)?;
-            return Some(text[start..start + end_relative].to_string());
-        }
-        index += 1;
-    }
-    None
 }
 
 pub(super) fn normalize_route_path(path: &str) -> String {
@@ -351,10 +311,10 @@ pub(super) fn handler_shape(slice: &str) -> &'static str {
 
 fn route_handler_binding_assumptions(
     bindings: &ScopeGraphLite,
-    slice: &str,
+    handler: Option<&str>,
     start_byte: usize,
 ) -> Result<Vec<String>, UnknownAnchor> {
-    let Some(handler) = route_handler_identifier(slice) else {
+    let Some(handler) = handler else {
         return Ok(Vec::new());
     };
     if bindings.name_is_unsafe_at(handler, start_byte) {
@@ -395,73 +355,6 @@ fn route_handler_binding_assumptions(
         kind: "missing_route_handler",
         note: "TS/JS route handler identifier is not declared or imported",
     })
-}
-
-fn route_handler_identifier(slice: &str) -> Option<&str> {
-    let arguments = call_arguments(slice)?;
-    let candidate = match arguments.as_slice() {
-        [first, second] if string_literal_arg(first) => *second,
-        [only] => *only,
-        _ => return None,
-    };
-    let (handler, after_handler) = leading_identifier(candidate)?;
-    if candidate[after_handler..].trim().is_empty() {
-        Some(handler)
-    } else {
-        None
-    }
-}
-
-pub(super) fn string_literal_arg(argument: &str) -> bool {
-    let trimmed = argument.trim_start();
-    matches!(trimmed.as_bytes().first(), Some(b'"' | b'\''))
-}
-
-pub(super) fn call_arguments(slice: &str) -> Option<Vec<&str>> {
-    let open = slice.find('(')?;
-    let bytes = slice.as_bytes();
-    let mut arguments = Vec::new();
-    let mut start = open + 1;
-    let mut depth = 0usize;
-    let mut quote = None;
-    let mut escape = false;
-    for index in open + 1..bytes.len() {
-        let byte = bytes[index];
-        if let Some(quote_byte) = quote {
-            if escape {
-                escape = false;
-                continue;
-            }
-            if byte == b'\\' {
-                escape = true;
-                continue;
-            }
-            if byte == quote_byte {
-                quote = None;
-            }
-            continue;
-        }
-        match byte {
-            b'"' | b'\'' | b'`' => quote = Some(byte),
-            b'(' | b'{' | b'[' => depth += 1,
-            b')' => {
-                if depth == 0 {
-                    arguments.push(slice[start..index].trim());
-                    return Some(arguments);
-                }
-                depth = depth.saturating_sub(1);
-            }
-            b'}' | b']' => {
-                depth = depth.saturating_sub(1);
-            }
-            b',' if depth == 0 => {
-                arguments.push(slice[start..index].trim());
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 pub(super) fn async_shape(slice: &str) -> &'static str {

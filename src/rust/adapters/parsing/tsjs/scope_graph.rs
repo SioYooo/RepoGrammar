@@ -1,7 +1,7 @@
-use super::leading_identifier;
+use super::parts::{self, Item, Reading};
 use crate::core::model::Language;
 use std::collections::{BTreeMap, BTreeSet};
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 /// Upper bound on name-to-scope insertions while reading one file. Nesting is
 /// untrusted, and every declaration is recorded in each enclosing scope, so
@@ -48,6 +48,9 @@ pub(super) struct ScopeGraphLite {
     /// The tree had a syntax error, or the file exceeded the scope-work
     /// bound; no binding was read (ADR-0059 D4).
     pub(super) degraded: bool,
+    /// The tree the graph was read from, shared with the anchor readers.
+    pub(super) tree: Option<Tree>,
+    pub(super) reading: Reading,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,6 +68,17 @@ struct ScopeInterval {
 
 impl ScopeGraphLite {
     pub(super) fn analyze(text: &str, path: &str, language: &Language) -> Self {
+        Self::analyze_with(text, path, language, Reading::Tree)
+    }
+
+    /// The pre-slice-2 text reading of receivers and call parts, for the
+    /// differential.
+    #[cfg(test)]
+    pub(super) fn analyze_text(text: &str, path: &str, language: &Language) -> Self {
+        Self::analyze_with(text, path, language, Reading::Text)
+    }
+
+    fn analyze_with(text: &str, path: &str, language: &Language, reading: Reading) -> Self {
         let mut parser = Parser::new();
         let tree = parser
             .set_language(&grammar(path, language))
@@ -72,26 +86,32 @@ impl ScopeGraphLite {
             .and_then(|()| parser.parse(text, None));
         match tree {
             Some(tree) if !tree.root_node().has_error() => {
-                Self::from_tree(text, tree.root_node()).unwrap_or_else(Self::degraded)
+                match Self::from_tree(text, tree.root_node(), reading) {
+                    Some(mut graph) => {
+                        graph.tree = Some(tree);
+                        graph
+                    }
+                    None => Self::degraded(),
+                }
             }
             _ => Self::degraded(),
         }
     }
 
-    fn degraded() -> Self {
+    pub(super) fn degraded() -> Self {
         Self {
             degraded: true,
             ..Self::default()
         }
     }
 
-    fn from_tree(text: &str, root: Node<'_>) -> Option<Self> {
+    fn from_tree(text: &str, root: Node<'_>, reading: Reading) -> Option<Self> {
         let scope_intervals = scope_intervals(text, root)?;
         let mut declared_counts: BTreeMap<String, usize> = BTreeMap::new();
         let mut unsafe_events: BTreeMap<String, Vec<UnsafeNameEvent>> = BTreeMap::new();
         let mut imports: BTreeMap<String, ImportBinding> = BTreeMap::new();
         let mut local_decls: BTreeSet<String> = BTreeSet::new();
-        let mut items: Vec<String> = Vec::new();
+        let mut items: Vec<Item<'_>> = Vec::new();
 
         let mut cursor = root.walk();
         for child in root.named_children(&mut cursor) {
@@ -110,13 +130,12 @@ impl ScopeGraphLite {
                     }
                 }
                 "lexical_declaration" | "variable_declaration" => {
-                    let keyword = statement.child(0).map_or("", |node| node_text(text, node));
                     let mut declarators = statement.walk();
                     for declarator in statement.named_children(&mut declarators) {
                         if declarator.kind() != "variable_declarator" {
                             continue;
                         }
-                        items.push(format!("{keyword} {}", node_text(text, declarator)));
+                        items.push(Item::Declarator(declarator));
                         let Some(name) = declarator.child_by_field_name("name") else {
                             continue;
                         };
@@ -145,7 +164,7 @@ impl ScopeGraphLite {
                     if let Some(name) = bare_assignment_target(text, statement) {
                         push_unsafe_event(&mut unsafe_events, name, statement.start_byte());
                     }
-                    items.push(node_text(text, statement).to_string());
+                    items.push(Item::Statement(statement));
                 }
                 _ => {}
             }
@@ -162,15 +181,16 @@ impl ScopeGraphLite {
             unsafe_names,
             unsafe_events,
             scope_intervals,
+            reading,
             ..Self::default()
         };
-        graph.fill_receivers(items.iter().map(String::as_str));
+        graph.fill_receivers(text, &items);
         Some(graph)
     }
 
-    /// Classifies top-level declarators and statements with the right-hand-side
-    /// classifiers below, which are the single receiver authority.
-    fn fill_receivers<'a>(&mut self, items: impl IntoIterator<Item = &'a str>) {
+    /// Classifies top-level declarators and statements; `parts::receivers` is
+    /// the single receiver authority.
+    fn fill_receivers(&mut self, text: &str, items: &[Item<'_>]) {
         for (local, binding) in &self.imports {
             if binding.module.starts_with("drizzle-orm")
                 && matches!(&binding.kind, ImportKind::Named(original) if super::drizzle::DRIZZLE_TABLE_FACTORIES.contains(&original.as_str()))
@@ -179,49 +199,21 @@ impl ScopeGraphLite {
                 self.drizzle_table_factories.insert(local.clone());
             }
         }
-        for line in items {
-            if let Some((name, receiver)) =
-                express_receiver_declaration(line, &self.imports, &self.unsafe_names)
-            {
-                if !self.unsafe_names.contains(&name) {
-                    self.express_receivers.insert(name, receiver);
-                }
-            }
-            if let Some(name) =
-                fastify_receiver_declaration(line, &self.imports, &self.unsafe_names)
-            {
-                if !self.unsafe_names.contains(&name) {
-                    self.fastify_receivers.insert(name);
-                }
-            }
-            if let Some(name) = hono_receiver_declaration(line, &self.imports, &self.unsafe_names) {
-                if !self.unsafe_names.contains(&name) {
-                    self.hono_receivers.insert(name);
-                }
-            }
-            if let Some(name) = prisma_client_declaration(line, &self.imports, &self.unsafe_names) {
-                if !self.unsafe_names.contains(&name) {
-                    self.prisma_clients.insert(name);
-                }
-            }
-            if let Some((table, factory)) = super::drizzle::table_declaration_parts(line) {
-                if self.drizzle_table_factories.contains(factory)
-                    && !self.unsafe_names.contains(table)
-                {
-                    self.drizzle_tables.insert(table.to_string());
-                }
-            }
-            if let Some(name) = drizzle_db_declaration(line, &self.imports, &self.unsafe_names) {
-                if !self.unsafe_names.contains(&name) {
-                    self.drizzle_dbs.insert(name);
-                }
-            }
-            if let Some((router, prefix)) =
-                express_router_prefix_mount(line, &self.express_receivers, &self.unsafe_names)
-            {
-                self.express_router_prefixes.entry(router).or_insert(prefix);
-            }
-        }
+        let found = parts::receivers(
+            self.reading,
+            text,
+            items,
+            &self.imports,
+            &self.unsafe_names,
+            &self.drizzle_table_factories,
+        );
+        self.express_receivers = found.express;
+        self.express_router_prefixes = found.express_prefixes;
+        self.fastify_receivers = found.fastify;
+        self.hono_receivers = found.hono;
+        self.prisma_clients = found.prisma;
+        self.drizzle_tables = found.drizzle_tables;
+        self.drizzle_dbs = found.drizzle_dbs;
     }
 
     pub(super) fn imported_runner(&self, name: &str) -> Option<(&str, &str)> {
@@ -298,7 +290,7 @@ fn grammar(path: &str, language: &Language) -> tree_sitter::Language {
     }
 }
 
-fn node_text<'a>(text: &'a str, node: Node<'_>) -> &'a str {
+pub(super) fn node_text<'a>(text: &'a str, node: Node<'_>) -> &'a str {
     text.get(node.byte_range()).unwrap_or("")
 }
 
@@ -572,198 +564,6 @@ fn scope_intervals(text: &str, root: Node<'_>) -> Option<Vec<ScopeInterval>> {
             return Some(intervals);
         }
     }
-}
-
-fn strip_export_prefix(line: &str) -> &str {
-    line.strip_prefix("export ").unwrap_or(line)
-}
-
-fn express_receiver_declaration(
-    line: &str,
-    imports: &BTreeMap<String, ImportBinding>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<(String, ExpressReceiver)> {
-    let trimmed = strip_export_prefix(line.trim());
-    let rest = ["const ", "let ", "var "]
-        .iter()
-        .find_map(|keyword| trimmed.strip_prefix(keyword))?;
-    let (name, after) = leading_identifier(rest.trim_start())?;
-    let after_name = &rest.trim_start()[after..];
-    let rhs = after_name.trim_start().strip_prefix('=')?.trim();
-    let receiver = express_receiver_from_rhs(rhs, imports, unsafe_names)?;
-    Some((name.to_string(), receiver))
-}
-
-fn express_receiver_from_rhs(
-    rhs: &str,
-    imports: &BTreeMap<String, ImportBinding>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<ExpressReceiver> {
-    let rhs = rhs.trim().trim_end_matches(';').trim();
-    let (head, after) = leading_identifier(rhs)?;
-    if unsafe_names.contains(head) {
-        return None;
-    }
-    let tail = rhs[after..].trim_start();
-    if tail == "()" {
-        let binding = imports.get(head)?;
-        if binding.module != "express" {
-            return None;
-        }
-        return match &binding.kind {
-            ImportKind::Default | ImportKind::Namespace => Some(ExpressReceiver::App),
-            ImportKind::Named(original) if original == "Router" => Some(ExpressReceiver::Router),
-            ImportKind::Named(_) => None,
-        };
-    }
-    let member_rest = tail.strip_prefix('.')?;
-    let (member, after_member) = leading_identifier(member_rest)?;
-    if member != "Router" || member_rest[after_member..].trim_start() != "()" {
-        return None;
-    }
-    let binding = imports.get(head)?;
-    if binding.module == "express"
-        && matches!(binding.kind, ImportKind::Default | ImportKind::Namespace)
-    {
-        Some(ExpressReceiver::Router)
-    } else {
-        None
-    }
-}
-
-fn express_router_prefix_mount(
-    line: &str,
-    express_receivers: &BTreeMap<String, ExpressReceiver>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<(String, String)> {
-    let (receiver, method) = super::route_call_parts(line)?;
-    if method != "use"
-        || unsafe_names.contains(receiver)
-        || !matches!(express_receivers.get(receiver), Some(ExpressReceiver::App))
-    {
-        return None;
-    }
-    let arguments = super::call_arguments(line)?;
-    let [prefix_arg, router_arg] = arguments.as_slice() else {
-        return None;
-    };
-    if !super::string_literal_arg(prefix_arg) {
-        return None;
-    }
-    let prefix = super::first_quoted(prefix_arg)?;
-    let (router, after_router) = leading_identifier(router_arg)?;
-    if !router_arg[after_router..].trim().is_empty()
-        || unsafe_names.contains(router)
-        || !matches!(express_receivers.get(router), Some(ExpressReceiver::Router))
-    {
-        return None;
-    }
-    Some((router.to_string(), super::normalize_route_path(&prefix)))
-}
-
-fn fastify_receiver_declaration(
-    line: &str,
-    imports: &BTreeMap<String, ImportBinding>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<String> {
-    let (name, rhs) = top_level_declaration_assignment(line)?;
-    let (head, after_head) = leading_identifier(rhs)?;
-    if unsafe_names.contains(head) || !rhs[after_head..].trim_start().starts_with('(') {
-        return None;
-    }
-    let binding = imports.get(head)?;
-    if binding.module != "fastify" {
-        return None;
-    }
-    match &binding.kind {
-        ImportKind::Default | ImportKind::Namespace => Some(name.to_string()),
-        ImportKind::Named(original) if matches!(original.as_str(), "fastify" | "Fastify") => {
-            Some(name.to_string())
-        }
-        ImportKind::Named(_) => None,
-    }
-}
-
-fn hono_receiver_declaration(
-    line: &str,
-    imports: &BTreeMap<String, ImportBinding>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<String> {
-    let (name, rhs) = top_level_declaration_assignment(line)?;
-    let rhs = rhs.trim().trim_end_matches(';').trim();
-    let after_new = rhs.strip_prefix("new ")?;
-    let (constructor, after_constructor) = leading_identifier(after_new)?;
-    let tail = after_new[after_constructor..].trim_start();
-    // Accept `new Hono()` and `new Hono<Env>()`.
-    let tail = match tail.strip_prefix('<') {
-        Some(rest) => rest.find('>').map(|index| rest[index + 1..].trim_start())?,
-        None => tail,
-    };
-    if unsafe_names.contains(constructor) || !tail.starts_with('(') {
-        return None;
-    }
-    let binding = imports.get(constructor)?;
-    if binding.module == "hono"
-        && matches!(&binding.kind, ImportKind::Named(original) if original == "Hono")
-    {
-        Some(name.to_string())
-    } else {
-        None
-    }
-}
-
-fn prisma_client_declaration(
-    line: &str,
-    imports: &BTreeMap<String, ImportBinding>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<String> {
-    let (name, rhs) = top_level_declaration_assignment(line)?;
-    let rhs = rhs.trim().trim_end_matches(';').trim();
-    let after_new = rhs.strip_prefix("new ")?;
-    let (constructor, after_constructor) = leading_identifier(after_new)?;
-    if unsafe_names.contains(constructor)
-        || !after_new[after_constructor..].trim_start().starts_with('(')
-    {
-        return None;
-    }
-    let binding = imports.get(constructor)?;
-    if binding.module == "@prisma/client"
-        && matches!(&binding.kind, ImportKind::Named(original) if original == "PrismaClient")
-    {
-        Some(name.to_string())
-    } else {
-        None
-    }
-}
-
-fn drizzle_db_declaration(
-    line: &str,
-    imports: &BTreeMap<String, ImportBinding>,
-    unsafe_names: &BTreeSet<String>,
-) -> Option<String> {
-    let (name, rhs) = top_level_declaration_assignment(line)?;
-    let (factory, after_factory) = leading_identifier(rhs)?;
-    if unsafe_names.contains(factory) || !rhs[after_factory..].trim_start().starts_with('(') {
-        return None;
-    }
-    let binding = imports.get(factory)?;
-    if binding.module.starts_with("drizzle-orm")
-        && matches!(&binding.kind, ImportKind::Named(original) if original == "drizzle")
-    {
-        Some(name.to_string())
-    } else {
-        None
-    }
-}
-
-fn top_level_declaration_assignment(line: &str) -> Option<(&str, &str)> {
-    let trimmed = strip_export_prefix(line.trim());
-    let rest = ["const ", "let ", "var "]
-        .iter()
-        .find_map(|keyword| trimmed.strip_prefix(keyword))?;
-    let (name, after_name) = leading_identifier(rest)?;
-    let rhs = rest[after_name..].trim_start().strip_prefix('=')?.trim();
-    Some((name, rhs))
 }
 
 #[cfg(test)]

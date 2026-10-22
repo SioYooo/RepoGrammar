@@ -197,3 +197,12 @@ Non-test lines of each touched module before and after; parse count per file
 (the extractor's runner-name analysis and the anchor pass are the two
 analyses; slice 2 must add none); parse and anchor time on the external
 corpus in a release test build, before and after.
+
+## Implementation log
+
+- Shared seam and routes: `parts.rs` reads receivers and route call parts from the
+  tree `ScopeGraphLite` keeps (one parse per analysis); `legacy_text.rs` keeps
+  the text readings under `cfg(test)`; `anchor_differential.rs` and
+  `anchor_corpus.rs` are the differential. Express, Hono and Fastify consume
+  `CallParts`. Preregistration deviation: `keyword_receiver` (`this.get(...)`,
+  `super.get(...)` read as an identifier receiver; UNKNOWN on both sides).

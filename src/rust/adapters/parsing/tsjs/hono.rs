@@ -1,14 +1,20 @@
+use super::parts::CallParts;
 use super::scope_graph::ScopeGraphLite;
 use super::{
-    async_shape, call_arguments, handler_shape, route_call_parts,
-    route_handler_binding_assumptions, string_literal_arg, Anchor, AnchorOutcome, UnknownAnchor,
+    async_shape, handler_shape, route_handler_binding_assumptions, Anchor, AnchorOutcome,
+    UnknownAnchor,
 };
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
 const HONO_HTTP_METHODS: [&str; 5] = ["get", "post", "put", "delete", "patch"];
 
-pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) -> AnchorOutcome {
-    let Some((receiver, method)) = route_call_parts(slice) else {
+pub(super) fn anchor(
+    bindings: &ScopeGraphLite,
+    slice: &str,
+    start_byte: usize,
+    call: Option<&CallParts<'_>>,
+) -> AnchorOutcome {
+    let Some((receiver, method)) = call.map(|call| (call.receiver, call.method)) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "tsjs_support_target",
@@ -40,11 +46,7 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
             note: "TS/JS Hono route receiver is reassigned or redeclared",
         });
     }
-    let path_is_literal = call_arguments(slice)
-        .as_ref()
-        .and_then(|arguments| arguments.first())
-        .is_some_and(|argument| string_literal_arg(argument));
-    if !path_is_literal {
+    if !call.is_some_and(|call| call.first_is_string) {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "tsjs_support_target",
@@ -59,7 +61,11 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
         format!("handler_shape={}", handler_shape(slice)),
         format!("async_shape={}", async_shape(slice)),
     ];
-    match route_handler_binding_assumptions(bindings, slice, start_byte) {
+    match route_handler_binding_assumptions(
+        bindings,
+        call.and_then(|call| call.handler),
+        start_byte,
+    ) {
         Ok(extra) => assumptions.extend(extra),
         Err(unknown) => return AnchorOutcome::Unknown(unknown),
     }
