@@ -75,8 +75,10 @@ def _id(value: object) -> bool:
 
 
 def _meta(value: object) -> bool:
-    return (isinstance(value, dict) and set(value) <= {"progressToken"}
-            and ("progressToken" not in value or _id(value["progressToken"])))
+    # claudecode/toolUseId is observed native tool-call metadata; inert bounded text, never used for I/O.
+    return (isinstance(value, dict) and set(value) <= {"progressToken", "claudecode/toolUseId"}
+            and ("progressToken" not in value or _id(value["progressToken"]))
+            and ("claudecode/toolUseId" not in value or _text(value["claudecode/toolUseId"])))
 
 
 def admitted_request(line: bytes) -> dict:

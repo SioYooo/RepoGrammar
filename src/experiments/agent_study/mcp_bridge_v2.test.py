@@ -142,6 +142,14 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(Refusal):
                 admitted_request(bad)
 
+    def test_native_tool_use_id_meta_is_admitted_but_stays_closed(self):
+        call = dict(CALL, _meta={"claudecode/toolUseId": "toolu_1", "progressToken": 2})
+        self.assertEqual(admitted_request(frame("tools/call", 2, call))["params"]["_meta"]["claudecode/toolUseId"], "toolu_1")
+        for meta in ({"claudecode/toolUseId": ""}, {"claudecode/toolUseId": 5}, {"claudecode/toolUseId": "x" * 129},
+                     {"claudecode/other": "x"}, {"claudecode/toolUseId": "a\nb"}):
+            with self.assertRaises(Refusal):
+                admitted_request(frame("tools/call", 2, dict(CALL, _meta=meta)))
+
     def test_discover_probe_id_reuse_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             bridge = self.bridge(Path(directory))
