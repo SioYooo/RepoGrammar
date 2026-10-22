@@ -123,4 +123,56 @@ Verdict vocabulary: PASS per gate, BLOCKED, NOT_RUN, NOT_MEASURED.
 
 ## Results
 
-(To be filled after the rounds; see the follow-up commit.)
+Verdict: **BLOCKED (TRANSPORT)** at the five-round cap. G1 PASS (B0 only; B1
+control portion passes but its inventory check fails), G2 BLOCKED, G3 NOT_RUN,
+G4 NOT_RUN, G5 NOT_RUN. Real model, adoption, tokens and cost: NOT_MEASURED.
+No sixth round was run.
+
+| Round | Previous failure class | Conservative change | Outcome |
+| --- | --- | --- | --- |
+| 1 | none (first run) | none (pinned harness at 2.1.304) | HARNESS_DEFECT: kernel 0/22, Cellar-resolved Python framework not admitted |
+| 2 | HARNESS_DEFECT | resolved interpreter prefix | HARNESS_DEFECT: kernel 0/22, Homebrew libsqlite3 not admitted; SecurityServer PASS |
+| 3 | HARNESS_DEFECT | exact resolved sqlite dylib literal + ancestor metadata | HARNESS_DEFECT: kernel 0/22 |
+| 4 | HARNESS_DEFECT | symlink hops of the linked path | HARNESS_DEFECT: kernel 0/22 (wasted: not isolated-verified first) |
+| 5 | HARNESS_DEFECT | real-directory alias literal | B0 PASS; B1 BLOCKED, TRANSPORT |
+
+Gates:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| G1 B0/B1 controls | PASS for B0 (22/22 kernel, SecurityServer, 12/12 native, empty registries, 4 tools, no MCP). B1: 22/22, 11/12 native controls, only the MCP call fails | round 5 |
+| G2 initialize + tools/list reach bridge | BLOCKED | bridge saw one connection and zero frames; init manifest `mcp_servers[repogrammar].status = "failed"`; B1 exposes 4 tools |
+| G3 tools/call reaches product | NOT_RUN | not reached |
+| G4 B2 global-file discovery | NOT_RUN | B1 failed first |
+| G5 B3 | NOT_RUN | |
+
+Diagnosis (from retained raw files, not yet fixed): Claude Code 2.1.304 opens
+its MCP session with a pre-`initialize` probe, `server/discover` (protocol
+`2026-07-28`, `io.modelcontextprotocol/*` `_meta`; captured in the private
+client audit). The 2.1.286 bridge allowlist is `initialize`,
+`notifications/initialized`, `ping`, `tools/list`, `tools/call`, so it fails
+closed on the probe and the client marks the server failed without ever
+sending `initialize`. This is a new native protocol behaviour of the pinned
+CLI, distinct from the 2.1.286 tools/call failure. The product answers the
+same method with JSON-RPC -32601 "unsupported MCP JSON-RPC method" (checked
+directly), which a client could fall back on. This is a harness/bridge finding;
+the product is not a defect here and was not changed.
+
+Separately, the older `runner_v2` offline qualification (not part of this
+campaign) fails under Homebrew Python 3.14 for sqlite open (its profile lacks
+worktree-ancestor metadata that the native host profile adds). Recorded only.
+
+Identity actually used: Claude Code 2.1.304 SHA-256 `b9ac5374...ab78e6a`
+(full value above); product `9f754810...66fb`; guide `5df98f06...b256`; bridge `75bce279...b84c` and probes unchanged from
+preregistration; final `native_host_v2.py` `00fcbc78...8985`, final
+`runner_v2.py` `697dcf1a...6696` (changed in rounds 1-5; full hashes in
+`harness-final.sha256`). Raw evidence (all five rounds, logs, the offline
+sqlite preflight, hash manifest) is under
+`/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`,
+untracked and outside the repository.
+
+Next gate (a new, separately bounded campaign): let the bridge relay
+`server/discover` to the product unchanged so the product's -32601 reaches the
+client, with a negative test that other unknown methods still fail closed;
+then rerun G2/G3 and finish B2/B3. Real effects still require a held-out task
+freeze and explicit budget/auth approval.

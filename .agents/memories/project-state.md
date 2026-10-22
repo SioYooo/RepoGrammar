@@ -1,5 +1,16 @@
 # Project State
 
+## Native-host requalification — 2026-10-22
+
+Fresh offline campaign on branch `feat/native-host-requalification` (not pushed),
+pinned to Claude Code 2.1.304 because 2.1.286 and its tmp archive no longer
+exist. Five rounds: four harness sandbox fixes for Homebrew Python/sqlite, then
+B0 PASS and B1 BLOCKED (TRANSPORT): 2.1.304 sends `server/discover` before
+`initialize` and the bridge fails closed. B2/B3 NOT_RUN; no real model, auth or
+spend; effects NOT_MEASURED. Next bounded campaign: relay that method so the
+product's -32601 returns. Record: `docs/experiments/agent-adoption-native-host-requalification.md`;
+raw evidence under `/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`.
+
 ## Declarative language-pack spike — 2026-10-20
 
 The spike, merged into local `main` on 2026-10-20 and not pushed, moves C#
