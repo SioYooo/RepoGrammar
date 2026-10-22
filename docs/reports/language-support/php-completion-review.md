@@ -372,6 +372,7 @@ regression found; it costs recall on a file that uses it, never a false anchor.
 Non-test lines of the lane: 1,802 before (`lexer.rs` 421, `syntax.rs` 712,
 `phpunit.rs` 669), 1,729 after with the legacy parser excluded (`syntax.rs`
 625 of which the reader is 475 against a 564-line parser, `phpunit.rs` 683).
-The legacy parser stays under `#[cfg(test)]` until the fixture-wide capture is
-done. Gate 2 evidence must be re-checked against ADR-0058 before any
+The maintainer accepted the classification on 2026-10-22, and the legacy
+parser and its differential tests were deleted that day (the `declare` list and
+the other pinned differences now live in the ordinary `phpunit.rs` tests). Gate 2 evidence must be re-checked against ADR-0058 before any
 completion promotion; the status above is unchanged.

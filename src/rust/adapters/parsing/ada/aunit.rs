@@ -16,7 +16,7 @@
 
 use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use super::lexer::Refusal;
-use super::syntax::{parse_compilation, AdmittedUnit};
+use super::syntax::parse_compilation;
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -70,15 +70,6 @@ impl SourceParser for AdaAUnitParser {
 }
 
 pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError> {
-    parse_output_using(document, parse_compilation)
-}
-
-/// The frontend over an injected syntax layer, so the ADR-0058 differential can
-/// run the retired hand-written parser through the same downstream code.
-pub(crate) fn parse_output_using(
-    document: SourceDocument<'_>,
-    parse: fn(&str) -> Result<Result<AdmittedUnit, Refusal>, ParseError>,
-) -> Result<SourceParseOutput, ParseError> {
     if document.language != Language::Ada || !is_ada_body_path(document.path) {
         return Err(ParseError::UnsupportedLanguage);
     }
@@ -116,7 +107,7 @@ pub(crate) fn parse_output_using(
         return finish(units, facts, Vec::new());
     }
 
-    let admitted = match parse(document.text)? {
+    let admitted = match parse_compilation(document.text)? {
         Ok(admitted) => admitted,
         Err(refusal) => return refused(units, facts, module, document.path, refusal),
     };

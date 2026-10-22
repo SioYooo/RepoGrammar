@@ -1,6 +1,8 @@
 # Limitations
 
-Current GitHub stable: `0.5.0`.
+Current GitHub stable: `0.5.1` (npm `0.5.1` is staged, not public; see the
+[0.5.1 checklist](release/stable-v0.5.1-release-checklist.md)). Immutable `0.5.0`
+is described below as the previous GitHub-only release.
 
 The immutable GitHub-only release is recorded in the
 [v0.5.0 checklist](release/stable-v0.5.0-release-checklist.md) and its

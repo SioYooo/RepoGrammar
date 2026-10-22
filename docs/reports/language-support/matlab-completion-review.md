@@ -256,7 +256,9 @@ How each refusal class is reproduced:
 The migration verdict is `CLASSIFIED`. The in-process differential against the
 retired parser is identical on all 5 committed fixtures, including the
 deliberately degraded one, and on 247 of 257 branch sources. The 10 remaining
-sources are pinned by `declared_divergence_is_pinned_to_the_grammar_reading`:
+sources are pinned by `grammar_reading_divergences_are_pinned`. The retired
+parser and the differential were deleted on 2026-10-22 after the maintainer
+accepted the classification:
 
 - `unknown_added`: invalid MATLAB the legacy parser read leniently (a dangling
   `<` or `&` in the class header, `function = f`, a `properties` block with no

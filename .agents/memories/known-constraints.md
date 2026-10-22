@@ -154,6 +154,11 @@ analysis rules.
   admitted Python 3.10+ first on PATH. `repo-guard check` also scans the
   Git-ignored orphaned `.claude/worktrees/` copy; never delete it, and run
   `check` from a clean local clone instead.
+- Tree-sitter `Node::parent()` descends from the root on every call. Walking
+  ancestors with it is quadratic per node, and the C# scanner's per-node walks
+  were cubic in nesting depth (800 nested calls took 19 s). Walk with a cursor
+  or keep an explicit ancestor stack (`capture_ancestry` in
+  `adapters/parsing/csharp.rs`, the Ada and R readers).
 
 ## Implications
 

@@ -5,8 +5,10 @@
 The maintainer authorized a new GitHub/npm release on 2026-10-15. The
 [0.5.1 checklist](release/stable-v0.5.1-release-checklist.md) coordinates reviewed
 current source, four native artifacts, quickstart qualification and one exact
-npm candidate. This is release preparation, not public availability or closure
-of the v0.6 evidence milestone below.
+npm candidate. As of the 2026-10-22 read-only check, GitHub `v0.5.1` is public
+(immutable, 11 assets) while the npm `0.5.1` stage awaits maintainer 2FA
+approval (registry `latest=0.4.3`); public verification and the finalizer have
+not run. This does not close the v0.6 evidence milestone below.
 
 ## Next evidence milestone after d981d57
 
@@ -619,8 +621,9 @@ current public-preview label by itself.
 
 ## Later phases
 
-- Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
-  dependency policy are reviewed.
+- Tree-sitter grammars are production dependencies under ADR-0058; the
+  migrated lanes' classifications were accepted on 2026-10-22. Add a grammar
+  only through that ADR's admission table.
 - Implement Python structural-anchor persistence, repo-local import resolution,
   safe project configuration, pytest fixture graph recovery, broader usage
   propagation, provider-backed canonical target evidence, and cross-function

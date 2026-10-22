@@ -1,5 +1,39 @@
 # Project State
 
+## Tree-sitter frontend migration — 2026-10-20
+
+ADR-0058 (accepted) is implemented on the local branch
+`feat/tree-sitter-frontends`, merged into local `main` on 2026-10-22 and not
+pushed. Lane results:
+
+- Go is `EQUIVALENT`.
+- Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R and Ada are `CLASSIFIED`. The
+  maintainer accepted every classification on 2026-10-22, including Delphi's
+  `anchor_changed` additions; the legacy parsers and differentials were
+  deleted the same day, and each pinned difference is now a plain test of the
+  Tree-sitter frontend.
+- Assembly and SQL are `BLOCKED`, and their grammars were never added.
+- After every lane, the 179-root capture had 0 mismatches.
+
+The same branch also carries:
+
+- the shared binding engine (`adapters/parsing/binding.rs`, Phase 2a,
+  `QUALIFIED`);
+- C# role rows (Phase 2b, `QUALIFIED`): 6 of 9 C# roles are rows, and test
+  data shapes stay code;
+- a cached C# node query and a cursor-based capture ancestry, which removed a
+  cubic cost in nesting depth.
+
+The release binary grew from 22.3 MB to 38.6 MB, almost all grammar parse
+tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
+`adapters/parsing/tree_sitter.rs` was deleted on 2026-10-22 with maintainer approval.
+
+TS/JS goes in slices under ADR-0059 (Proposed) on `feat/tsjs-tree-sitter`,
+starting with the shared `ScopeGraphLite`. Evidence:
+`docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
+decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
+and `tsjs-scope-graph-tree.md`.
+
 ## Declarative language-pack spike — 2026-10-20
 
 The spike, merged into local `main` on 2026-10-20 and not pushed, moves C#
@@ -24,6 +58,15 @@ source version, exact candidate artifacts, a private npm stage, public channels
 and finalizer verification remain separate states. Historical GitHub-only
 0.5.0 is not rewritten, and v0.6 evidence gates remain open. The new release
 uses the existing OIDC stage and maintainer 2FA approval boundary.
+
+Verified read-only 2026-10-22: tag `v0.5.1` (`0104073`, equals `origin/main`)
+ran Release run 38820860471 with every job successful (preview stage skipped);
+GitHub `v0.5.1` is public, immutable, latest, 11 assets (published
+2026-10-17). npm still shows `latest=0.4.3`, `preview=0.2.0-preview.0` and no
+`0.5.1` version, so the stage awaits maintainer 2FA approval. Remaining
+maintainer action: authenticated stage inspection/approval, then public-asset
+and npm verification and the `stable-release-finalize.yml` run. Quickstart
+installer pin stays `v0.5.0` until that finalizer passes.
 
 ## Evidence-driven query reachability audit — 2026-10-14
 

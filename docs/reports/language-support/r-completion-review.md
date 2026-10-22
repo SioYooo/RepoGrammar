@@ -207,8 +207,9 @@ have taken as a continuation of the previous expression drops that expression,
 as the legacy parse did.
 
 Verdict `CLASSIFIED` (committed fixtures and branch corpus are identical;
-the external differences below are classified). The in-process differential,
-kept under `cfg(test)` until the legacy parser is deleted, matched the legacy
+the external differences below are classified). The in-process differential
+(the maintainer accepted the classification on 2026-10-22, and the legacy parser
+and its differential tests were deleted that day) matched the legacy
 parser on all 3 committed `testthat` fixture sources and on 486 branch sources
 (every refusal class, every anchor variation, near-misses, and both sides of
 the depth bound for each nesting construct), with and without a declared
@@ -227,7 +228,7 @@ tree-sitter-r reads strictly:
   allowed a gap between the two closing `]`).
 
 Four further legacy-lax inputs are pinned by
-`grammar_stricter_than_the_legacy_parser_is_pinned` (`x[[1] ]`, `"\x"`,
+`grammar_rejected_spellings_refuse_the_file_after_the_proven_expression` (`x[[1] ]`, `"\x"`,
 `f(TRUE = 1)`, `x$NULL`); each now refuses the file after the proven
 expression with `unadmitted_r_construct`, never an anchor. There were no
 `range_shift`, `anchor_changed`, or `refusal_class_changed` differences. The
