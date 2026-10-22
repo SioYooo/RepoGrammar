@@ -204,6 +204,8 @@ context lives under `.agents/memories/`.
   historical; real adoption effects are not measured.
 - Frozen 110-query retrieval baseline and exact 17-miss classification:
   [retrieval-miss-audit](experiments/retrieval-miss-audit.md).
+- Preregistered pytest-variant narrowing of the six tied public queries:
+  [pytest-variant-narrowing](experiments/pytest-variant-narrowing.md).
 - Qualified full-resync host wall/counter attribution and remaining CPU gap:
   [host-stage-attribution](experiments/host-stage-attribution.md).
 - C# declarative language-pack equivalence spike (QUALIFIED; ADR-0057

@@ -35,7 +35,8 @@ SETTINGS = {"disableAllHooks": True, "autoMemoryEnabled": False,
             "enabledPlugins": {"cc-plugin-agents-md@builtin": False, "cc-plugin-plugin-authoring@builtin": False}}
 DUMMY_KEY = "sk-ant-offline-fixture-not-a-secret"
 MAX_REQUEST = 8 * 1024 * 1024
-EXPECTED_CLI_SHA256 = "75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433"
+EXPECTED_CLI_VERSION = "2.1.304"
+EXPECTED_CLI_SHA256 = "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a"
 
 
 def guide_body(guide):
@@ -245,6 +246,10 @@ def inventory(root):
         if relative.parts[:3] == (".repogrammar", "telemetry", "local-metrics"):
             continue
         mode = path.lstat().st_mode
+        if stat.S_ISREG(mode) and relative.parts[:1] == (".repogrammar",) and len(relative.parts) == 2 and (
+                relative.parts[1] == "repogrammar.sqlite-shm"
+                or (relative.parts[1] == "repogrammar.sqlite-wal" and path.lstat().st_size == 0)):
+            continue  # SQLite WAL reader artefacts (harness policy 2026-10-22); main database stays hashed.
         if stat.S_ISLNK(mode):
             result[str(relative)] = {"kind": "SYMLINK", "sha256": offline.sha(os.readlink(path).encode())}
         elif stat.S_ISREG(mode):
@@ -356,6 +361,13 @@ def assess_manifest(transcript, enabled):
             "mcp_count": len(servers) if isinstance(servers, list) else None}
 
 
+def bridge_ok(summary):
+    """One product-answered tools/call and no product error, except the probe's expected -32601."""
+    return (summary["status"] in ("CLOSED", "COMPLETE") and summary["process_cleanup"] == "PASS"
+            and summary["method_counts"]["tools/call"] == 1
+            and all(f["status"] != "PRODUCT_ERROR" or f["method"] == "server/discover" for f in summary["frames"]))
+
+
 def qualify(out, cli, product, guide_file):
     guide = offline.regular_bytes(guide_file, 1024)
     if offline.sha(guide) != "5df98f0677189042c7ae58aa74d6e7ac90bd99324a18edf263f9be8db7b4b256":
@@ -370,7 +382,7 @@ def qualify(out, cli, product, guide_file):
     copied_cli.write_bytes(offline.regular_bytes(cli, 512 * 1024 * 1024))
     copied_cli.chmod(0o500)
     if offline.sha(copied_cli.read_bytes()) != EXPECTED_CLI_SHA256:
-        raise ValueError("CLI drift: this control freezes Claude Code 2.1.286")
+        raise ValueError(f"CLI drift: this control freezes Claude Code {EXPECTED_CLI_VERSION}")
     relay = runtime / "mcp_bridge_v2.py"
     relay.write_bytes(Path(__file__).with_name("mcp_bridge_v2.py").read_bytes())
     os_probe, service_probe = runtime / "os_probe.py", runtime / "service_probe.py"
@@ -393,7 +405,7 @@ def qualify(out, cli, product, guide_file):
     freeze = {"schema_version": "agent-native-offline-freeze.v2", "provider": "SCRIPTED_LOOPBACK",
               "source_sha256": source_hash, "index_sha256": tree_sha256(str(seed / ".repogrammar")),
               "cli_sha256": offline.sha(copied_cli.read_bytes()), "product_sha256": offline.sha(product.read_bytes()),
-              "cli_version": "2.1.286", "bridge_sha256": offline.sha(relay.read_bytes()),
+              "cli_version": EXPECTED_CLI_VERSION, "bridge_sha256": offline.sha(relay.read_bytes()),
               "os_probe_sha256": offline.sha(os_probe.read_bytes()), "service_probe_sha256": offline.sha(service_probe.read_bytes()),
               "guide_sha256": offline.sha(guide), "base_prompt_sha256": offline.sha(PROMPT.encode()),
               "arms": list(offline.ARMS), "live_execution": "BLOCKED_BUDGET_AUTH_HELD_OUT"}
@@ -455,10 +467,7 @@ def qualify(out, cli, product, guide_file):
                 p.is_file() and not p.is_symlink() and offline.sha(p.read_bytes()) == value
                 for p, value in protected_hashes.items()))
             bridge_summary = bridge.summary if arm != "B0" else None
-            bridge_pass = (arm == "B0" or (bridge_summary["status"] in ("CLOSED", "COMPLETE")
-                           and bridge_summary["process_cleanup"] == "PASS"
-                           and bridge_summary["method_counts"]["tools/call"] == 1
-                           and all(f["status"] != "PRODUCT_ERROR" for f in bridge_summary["frames"])))
+            bridge_pass = arm == "B0" or bridge_ok(bridge_summary)
             passed = (code == 0 and status == "COMPLETE" and provider.invalid == 0
                       and cleanup == "PASS"
                       and discovery["tool_inventory"] == "PASS"

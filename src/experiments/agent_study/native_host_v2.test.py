@@ -71,6 +71,39 @@ class NativeHostTest(unittest.TestCase):
         self.assertEqual(host.assess_manifest(json.dumps(event), False)["status"], "CONTROL_ISOLATION_BLOCKED")
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "Unix special file control")
+    def test_inventory_tolerates_only_wal_reader_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".repogrammar").mkdir()
+            db = root / ".repogrammar/repogrammar.sqlite"
+            db.write_bytes(b"main")
+            base = host.inventory(root)
+            (root / ".repogrammar/repogrammar.sqlite-shm").write_bytes(b"s" * 32768)
+            (root / ".repogrammar/repogrammar.sqlite-wal").write_bytes(b"")
+            self.assertEqual(host.inventory(root), base)
+            (root / ".repogrammar/repogrammar.sqlite-wal").write_bytes(b"w")
+            self.assertNotEqual(host.inventory(root), base)
+            (root / ".repogrammar/repogrammar.sqlite-wal").write_bytes(b"")
+            (root / ".repogrammar/other.tmp").write_bytes(b"")
+            self.assertNotEqual(host.inventory(root), base)
+            (root / ".repogrammar/other.tmp").unlink()
+            (root / ".repogrammar/sub").mkdir()
+            (root / ".repogrammar/sub/repogrammar.sqlite-shm").write_bytes(b"x")
+            self.assertNotEqual(host.inventory(root), base)
+            (root / ".repogrammar/sub/repogrammar.sqlite-shm").unlink()
+            db.write_bytes(b"mutated")
+            self.assertNotEqual(host.inventory(root), base)
+
+    def test_bridge_ok_excuses_only_the_discover_probe_error(self):
+        frame = lambda method, status: {"method": method, "status": status}
+        summary = {"status": "COMPLETE", "process_cleanup": "PASS", "method_counts": {"tools/call": 1},
+                   "frames": [frame("server/discover", "PRODUCT_ERROR"), frame("tools/call", "PRODUCT_SUCCESS")]}
+        self.assertTrue(host.bridge_ok(summary))
+        for method in ("tools/call", "initialize", "tools/list", "ping"):
+            bad = dict(summary, frames=summary["frames"] + [frame(method, "PRODUCT_ERROR")])
+            self.assertFalse(host.bridge_ok(bad))
+        self.assertFalse(host.bridge_ok(dict(summary, method_counts={"tools/call": 0})))
+
     def test_inventory_tags_types_and_rejects_special_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -110,6 +143,22 @@ else:
                         os.kill(int((root / "child.pid").read_text()), signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+    def test_cli_pin_is_current_and_drift_stays_strict(self):
+        self.assertEqual((host.EXPECTED_CLI_VERSION, host.EXPECTED_CLI_SHA256),
+                         ("2.1.304", "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a"))
+        real_sha = host.offline.sha
+        guide_hash = "5df98f0677189042c7ae58aa74d6e7ac90bd99324a18edf263f9be8db7b4b256"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "guide").write_bytes(b"guide")
+            old_cli = tmp / "old-cli"
+            old_cli.write_bytes(b"claude 2.1.286 stand-in")
+            sha = lambda data: guide_hash if data == b"guide" else real_sha(data)
+            with patch.object(host.offline, "sha", side_effect=sha), \
+                    patch.object(host.sys, "platform", "darwin"):
+                with self.assertRaisesRegex(ValueError, "CLI drift: .* 2.1.304"):
+                    host.qualify(tmp / "out", old_cli, old_cli, tmp / "guide")
 
 
 if __name__ == "__main__":

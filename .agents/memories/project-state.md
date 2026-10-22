@@ -1,5 +1,34 @@
 # Project State
 
+## Pytest-variant narrowing — 2026-10-22
+
+Preregistered and run on `feat/pytest-variant-narrowing` (not pushed): verdict
+`PARTIAL`, no code change. Of the six tied public pytest queries, the two FastAPI
+ones narrow to a unique family under the existing contract when the user adds a
+path locus that only one variant holds (directory scope `backend/tests/crud`, file
+`backend/tests/api/routes/test_private.py`). The four requests queries cannot be
+provably narrowed (one 74-member variant has a truncated inventory; files
+interleave variants). Ties, negatives and the stale control stay unselected;
+product-eval 34/47, 36/36, 27/27, 42/42 and sync 14/14 are unchanged. Narrowing
+the requests ties would need a new query-time variant discriminator (profile-aware
+ranking or fixture-context inference), which requires its own specification.
+Evidence: `docs/experiments/pytest-variant-narrowing.md`.
+
+## Native-host requalification — 2026-10-22
+
+Fresh offline campaign on branch `feat/native-host-requalification` (not pushed),
+pinned to Claude Code 2.1.304 because 2.1.286 and its tmp archive no longer
+exist. Five rounds: four harness sandbox fixes for Homebrew Python/sqlite, then
+B0 PASS and B1 BLOCKED (TRANSPORT): 2.1.304 sends `server/discover` before
+`initialize` and the bridge fails closed. B2/B3 NOT_RUN; no real model, auth or
+spend; effects NOT_MEASURED. Campaign 2 (3 rounds): relayed that method and admitted
+`claudecode/toolUseId` metadata, so a real tools/call reaches the product; B1 then
+failed integrity on SQLite -wal/-shm sidecars. Campaign 3 (2026-10-22, main-session harness
+policy, maintainer may veto): tolerate shm and an empty wal only, excuse the
+discover probe's -32601; B0-B3 scripted native controls PASS in round 2. Effects
+NOT_MEASURED; next is the held-out freeze plus budget/auth approval. Record: `docs/experiments/agent-adoption-native-host-requalification.md`;
+raw evidence under `/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`.
+
 ## Tree-sitter frontend migration — 2026-10-20
 
 ADR-0058 (accepted) is implemented on the local branch
@@ -996,13 +1025,8 @@ v0.1 `jest-vitest-basic`
 fixture remains below the conservative TS/JS support threshold and returns
 `UNKNOWN` rather than forming ambient suite/test families. TS/JS remains a
 transitional substrate, not the official Python-first v0.1 target, and this is
-not full TS/JS semantic analysis. TS/JS goes onto Tree-sitter in slices under
-ADR-0059 (Accepted 2026-10-22): slice 1 (the scope graph, `tsjs/scope_graph.rs`)
-landed with verdict CLASSIFIED and its legacy reader was deleted on acceptance;
-slice 2 (`tsjs/parts.rs`: receivers, call parts and NestJS decorator roles read
-the tree; text readings kept under `cfg(test)`) is CLASSIFIED and awaits
-acceptance, and slice 3 is not ported; D6 governs both.
-
+not full TS/JS semantic analysis. The Tree-sitter slice status is the single TS/JS
+paragraph near the top of this file.
 Family query output, MCP `repogrammar_context` family responses, and
 `repogrammar stats` now expose `estimated_potential_token_savings` as an
 `ESTIMATED` local potential-read-displacement diagnostic. Query responses also
