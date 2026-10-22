@@ -3,13 +3,15 @@
 ## Tree-sitter frontend migration — 2026-10-20
 
 ADR-0058 (accepted) is implemented on the local branch
-`feat/tree-sitter-frontends`, which is not merged into `main` and not pushed.
-Lane results:
+`feat/tree-sitter-frontends`, merged into local `main` on 2026-10-22 and not
+pushed. Lane results:
 
 - Go is `EQUIVALENT`.
-- Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R and Ada are `CLASSIFIED`. Their
-  legacy parsers stay under `cfg(test)` until the maintainer accepts each
-  classification; Delphi includes `anchor_changed` additions.
+- Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R and Ada are `CLASSIFIED`. The
+  maintainer accepted every classification on 2026-10-22, including Delphi's
+  `anchor_changed` additions; the legacy parsers and differentials were
+  deleted the same day, and each pinned difference is now a plain test of the
+  Tree-sitter frontend.
 - Assembly and SQL are `BLOCKED`, and their grammars were never added.
 - After every lane, the 179-root capture had 0 mismatches.
 
@@ -28,8 +30,8 @@ tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
 
 TS/JS goes in slices under ADR-0059 (Proposed) on `feat/tsjs-tree-sitter`,
 starting with the shared `ScopeGraphLite`. Evidence:
-`docs/experiments/tree-sitter-frontend-migration.md` (lanes, decisions
-needed, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
+`docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
+decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
 and `tsjs-scope-graph-tree.md`.
 
 ## Declarative language-pack spike — 2026-10-20

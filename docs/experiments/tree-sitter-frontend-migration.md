@@ -1,9 +1,9 @@
 # Tree-sitter frontend migration
 
-Status: **LANES RECORDED**; TS/JS is a separate phase, and the `CLASSIFIED`
-lanes await maintainer acceptance (see
-[Decisions needed](#decisions-needed)). Preregistered in `22b0a31`. Base: `main@58e57ab1e3fa4d175a3865a74654db779454660a`,
-branch `feat/tree-sitter-frontends`. Local only; no push or merge. Authority:
+Status: **ACCEPTED 2026-10-22**; every `CLASSIFIED` lane was accepted and its
+legacy parser deleted (see [Decisions](#decisions)). TS/JS is a separate
+phase under ADR-0059. Preregistered in `22b0a31`. Base: `main@58e57ab1e3fa4d175a3865a74654db779454660a`,
+branch `feat/tree-sitter-frontends`. Local only; no push. Authority:
 [ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md).
 
 ## Objective
@@ -139,11 +139,15 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
   classes to reproduce, so this port protocol does not apply. It is
   redesigned under the binding engine and role rows as a separate phase.
 
-## Decisions needed
+## Decisions
 
-The legacy frontends stay under `cfg(test)` until the maintainer accepts the
-classification of each `CLASSIFIED` lane. Each lane loses or changes recall
-where its grammar has a gap:
+The maintainer accepted every `CLASSIFIED` lane on 2026-10-22, including
+Delphi's `anchor_changed`, and authorized deleting the placeholder
+`adapters/parsing/tree_sitter.rs`. The legacy parsers and their in-process
+differentials were deleted the same day; each classified difference below
+that a differential pinned now lives on as an ordinary test of the Tree-sitter
+frontend's current output. The list below is the record of what was accepted.
+Each lane loses or changes recall where its grammar has a gap:
 
 - Delphi/Object Pascal: a fixture after a `record` or `interface` in the same
   `type` section, or after a nested record, now anchors. The legacy skip lost
