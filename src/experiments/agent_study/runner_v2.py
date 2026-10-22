@@ -7,6 +7,7 @@ agent-adoption-run.v2 validator or a sandbox for arbitrary installed agents.
 import argparse
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -25,10 +26,34 @@ ARMS = ("B0", "B1", "B2", "B3")
 SEED = 20260930
 PREFIX = "Use the available RepoGrammar MCP for this task before broad source acquisition.\n"
 PROBE = Path(__file__).with_name("isolation_probe_v2.py")
+# dyld loads the resolved framework, so Seatbelt must admit the resolved prefix (Homebrew opt -> Cellar).
+BASE_PREFIX = Path(sys.base_prefix).resolve()
 PYTHON = Path(sys.executable).resolve()
-FRAMEWORK_PYTHON = Path(sys.base_prefix) / "Resources/Python.app/Contents/MacOS/Python"
+FRAMEWORK_PYTHON = BASE_PREFIX / "Resources/Python.app/Contents/MacOS/Python"
 if FRAMEWORK_PYTHON.is_file():
     PYTHON = FRAMEWORK_PYTHON.resolve()
+
+
+def _extension_libs():
+    """Non-system dylibs the stdlib sqlite extension links (Homebrew sqlite): (as linked, resolved)."""
+    spec = importlib.util.find_spec("_sqlite3")
+    if sys.platform != "darwin" or not spec or not spec.origin:
+        return ()
+    listing = subprocess.run(["/usr/bin/otool", "-L", spec.origin], capture_output=True, text=True).stdout
+    linked = [line.split()[0] for line in listing.splitlines()[1:] if line.startswith("\t")]
+    return tuple((p, str(Path(p).resolve())) for p in linked
+                 if not p.startswith(("/usr/lib/", "/System/")) and Path(p).is_file())
+
+
+def _lib_literals(linked, resolved):
+    """Exact paths dyld touches for a linked dylib: symlink hops, the real directory's alias and the file."""
+    parts = Path(linked).parts
+    hops = [str(Path(*parts[:i])) for i in range(2, len(parts) + 1) if Path(*parts[:i]).is_symlink()]
+    alias = Path(os.path.realpath(Path(linked).parent)) / Path(linked).name
+    return list(dict.fromkeys([*hops, str(alias), resolved]))
+
+
+EXTENSION_LIBS = _extension_libs()
 CHECKS = {"source_read", "source_glob", "source_write", "source_shell", "source_sqlite", "read", "grep", "glob",
           "recursive_glob", "shell", "sqlite", "symlink", "hardlink", "rename", "product_read",
           "product_exec", "oracle", "other_profile", "global_path",
@@ -96,10 +121,12 @@ def environment(cell):
 def sandbox_profile(worktree, env, probe):
     # ponytail: macOS tool-process sandbox only; qualify another backend/host before live use.
     quote = json.dumps
-    runtime = ["/System", "/usr/lib", "/usr/share", "/usr/bin", "/bin", sys.base_prefix]
-    ancestors = sorted({str(p) for root in (PYTHON, Path(sys.base_prefix))
-                        for p in root.parents})
+    runtime = ["/System", "/usr/lib", "/usr/share", "/usr/bin", "/bin", str(BASE_PREFIX)]
+    libs = [Path(p) for pair in EXTENSION_LIBS for p in pair]
+    ancestors = sorted({str(p) for root in [PYTHON, BASE_PREFIX, *libs] for p in root.parents})
     metadata = " ".join(f"(literal {quote(p)})" for p in ancestors)
+    lib_reads = "".join(f" (literal {quote(p)})" for linked, resolved in EXTENSION_LIBS
+                        for p in _lib_literals(linked, resolved))
     execution = " ".join(f"(literal {quote(p)})" for p in (str(PYTHON), "/bin/cat"))
     reads = " ".join(f"(subpath {quote(p)})" for p in runtime + [str(worktree), env["HOME"]])
     writes = " ".join(f"(subpath {quote(p)})" for p in [str(worktree), env["TMPDIR"]])
@@ -107,7 +134,7 @@ def sandbox_profile(worktree, env, probe):
             "(allow sysctl-read)\n"
             f"(allow file-read-metadata {metadata})\n"
             f"(allow process-exec {execution})\n"
-            f"(allow file-read* {reads} (literal \"/\") (literal {quote(str(PYTHON))}) (literal {quote(str(PYTHON.parent))}) (literal {quote(str(probe))}) (subpath {quote(env['TMPDIR'])}))\n"
+            f"(allow file-read* {reads} (literal \"/\") (literal {quote(str(PYTHON))}) (literal {quote(str(PYTHON.parent))}) (literal {quote(str(probe))}) (subpath {quote(env['TMPDIR'])}){lib_reads})\n"
             f"(allow file-write* {writes})\n"
             "(allow file-read* file-write* (literal \"/dev/null\") (literal \"/dev/urandom\"))\n"
             f"(deny file-read* file-write* (subpath {quote(str(worktree / '.repogrammar'))}))\n")

@@ -33,6 +33,12 @@ is PARTIAL with no code change: two of the six tied queries narrow to one family
 via an existing path locus, four requests queries need a new variant-discriminator
 specification.
 
+2026-10-22: the native-host requalification (Claude Code 2.1.304, scripted
+loopback only) reached B0 PASS; campaign 2 fixed the `server/discover` and tool-use metadata
+transport blockers, and campaign 3 (WAL-sidecar tolerance, a main-session harness
+policy open to maintainer veto) passed B0-B3 scripted native controls; adoption
+effects remain NOT_MEASURED pending a held-out freeze and budget/auth approval.
+
 ## Bootstrap complete
 
 - Repository governance and mirrored agent contract.

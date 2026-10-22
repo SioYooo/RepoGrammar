@@ -69,7 +69,7 @@ for line in sys.stdin:
              "pinned_command": sys.argv[1:] == ["serve", "--project", os.getcwd()]}}
     elif method == "tools/list":
         response["result"] = {{"tools": [{{"name": "repogrammar_context"}}]}}
-    elif method == "ping":
+    elif method in ("ping", "server/discover"):
         response["error"] = {{"code": -32601, "message": "unsupported method"}}
     else:
         response["result"] = {{"content": [{{"type": "text", "text": '{{"status":"FALLBACK_TO_CODE_SEARCH"}}'}}], "isError": False}}
@@ -120,6 +120,42 @@ class BridgeTests(unittest.TestCase):
                 self.assertNotIn(forbidden, summary)
             self.assertTrue(bridge.summary["requests_sha256"])
             self.assertTrue(bridge.summary["results_sha256"])
+
+    def test_discover_probe_is_relayed_and_product_error_preserved(self):
+        probe = frame("server/discover", "server-discover-probe-1", {"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {"name": "claude-code", "version": "2.1.304"},
+            "io.modelcontextprotocol/clientCapabilities": {"roots": {"listChanged": True}}}})
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = self.bridge(Path(directory))
+            responses = self.exchange(bridge, [probe, frame("initialize", 1, {"protocolVersion": "2025-06-18"})])
+            payloads = [json.loads(line) for line in responses]
+            self.assertEqual(payloads[0]["id"], "server-discover-probe-1")
+            self.assertEqual(payloads[0]["error"]["code"], -32601)
+            self.assertIn("result", payloads[1])
+            self.assertEqual(bridge.summary["method_counts"]["server/discover"], 1)
+            self.assertEqual(bridge.summary["frames"][0]["status"], "PRODUCT_ERROR")
+        for bad in (frame("server/discover", 1, {"name": "x"}),
+                    frame("server/discover", 1, {"_meta": {"progressToken": 1}}),
+                    frame("server/discover", None), frame("server/discover", 1, []),
+                    frame("server/discovery", 1), frame("resources/list", 1)):
+            with self.assertRaises(Refusal):
+                admitted_request(bad)
+
+    def test_native_tool_use_id_meta_is_admitted_but_stays_closed(self):
+        call = dict(CALL, _meta={"claudecode/toolUseId": "toolu_1", "progressToken": 2})
+        self.assertEqual(admitted_request(frame("tools/call", 2, call))["params"]["_meta"]["claudecode/toolUseId"], "toolu_1")
+        for meta in ({"claudecode/toolUseId": ""}, {"claudecode/toolUseId": 5}, {"claudecode/toolUseId": "x" * 129},
+                     {"claudecode/other": "x"}, {"claudecode/toolUseId": "a\nb"}):
+            with self.assertRaises(Refusal):
+                admitted_request(frame("tools/call", 2, dict(CALL, _meta=meta)))
+
+    def test_discover_probe_id_reuse_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = self.bridge(Path(directory))
+            responses = self.exchange(bridge, [frame("server/discover", 7), frame("server/discover", 7)])
+            self.assertEqual(len(responses), 1)
+            self.assertEqual(bridge.summary["reason"], "ID_REUSE")
 
     def test_denied_requests_never_reach_product(self):
         for denied in [frame("shutdown"), frame("tools/call", 1, {"name": "Bash", "arguments": {}}),
@@ -486,6 +522,10 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(json.loads(payloads[2]["result"]["content"][0]["text"])["status"], "FALLBACK_TO_CODE_SEARCH")
             self.assertFalse((bridge.worktree / ".repogrammar").exists())
             self.assertEqual(bridge.summary["status"], "COMPLETE")
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = self.bridge(Path(directory), binary=PRODUCT_BINARY)
+            payload = json.loads(self.exchange(bridge, [frame("server/discover", "p", {"_meta": {}})])[0])
+            self.assertEqual(payload["error"]["code"], -32601)
 
 
 if __name__ == "__main__":
