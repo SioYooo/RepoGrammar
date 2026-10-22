@@ -26,6 +26,10 @@ run. Candidate manifests and staged packages are not public-release evidence.
   the tree too: commented-out `test(...)` lines and other non-code units no
   longer anchor, and one Drizzle UNKNOWN reason code changes
   (`UnresolvedImport` to `FrameworkMagic` on a mid-chain unit).
+  TS/JS code units now come from the same tree (ADR-0059 slice 3, pending
+  acceptance): units end at their syntax node, text in comments and strings is
+  no longer a unit, and a file is parsed once, so unit ids and `read_plan`
+  spans of TS/JS members change.
 
 ### Added
 

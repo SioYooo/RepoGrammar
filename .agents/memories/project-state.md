@@ -62,10 +62,15 @@ TS/JS goes in slices under ADR-0059 (Accepted 2026-10-22) on
 legacy reader was deleted the same day; slice 2 (framework anchors read the
 tree via `tsjs/parts.rs`, NestJS roles as `RoleRow`s) is `CLASSIFIED` and was
 accepted the same day, its text readings (`legacy_text.rs` and the differential)
-detached and covered by plain tests; slice 3 remains. Evidence:
+detached and covered by plain tests; slice 3 (the units read from the tree,
+one parse per file, the line reader kept under `cfg(test)` as the oracle) is
+built on `feat/tsjs-unit-extraction-slice3` and `BLOCKED` by its preregistered
+rule pending maintainer acceptance (one `anchor_changed` on a Drizzle fixture,
+one product-eval query pinning a unit id; `tsjs-unit-extraction-tree.md`). Evidence:
 `docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
 decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`,
-`tsjs-scope-graph-tree.md` and `tsjs-framework-anchors-tree.md`.
+`tsjs-scope-graph-tree.md`, `tsjs-framework-anchors-tree.md` and
+`tsjs-unit-extraction-tree.md`.
 
 ## Declarative language-pack spike — 2026-10-20
 

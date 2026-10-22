@@ -1,6 +1,7 @@
 # TS/JS unit extraction from the Tree-sitter tree (ADR-0059 slice 3)
 
-Status: **PREREGISTERED** (before any code of the slice). Base: `main@5097d7a`
+Status: **`BLOCKED` by the preregistered rule, pending maintainer acceptance** (preregistered in
+`fe45ee2`; see "Results"). Base: `main@5097d7a`
 (`feat/tsjs-unit-extraction-slice3`). Local only; no push or merge. Authority:
 [ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md)
 (Accepted), D2 slice 3, D3 (policies stay), D4 (syntax errors), D5 ("Slice 3
@@ -300,8 +301,11 @@ binary size.
   - Unit kind in a degraded file. The loose receiver, Zod and table-factory
     names come from the graph's imports, which a degraded graph does not read
     (D4), so in a degraded file a Hono/Fastify route is an Express route unit and
-    aliased runner names and Zod/Drizzle imports are not seen. Every
-    dispatched unit there is refused once, as before.
+    aliased runner names, Zod imports and aliased table factories are not seen
+    (the three default Drizzle table factories are seeded, as the line reader
+    always had them). Every dispatched unit there is refused once, as before;
+    but a tree whose error recovery leaves no call node yields no unit to refuse
+    (`error_unclosed.ts`), a D4 observability change reported under "Results".
 - Additional difference classes the differential uses, all inside the
   preregistered misreading list or stated here:
   - `receiver_token_start` (new misreading name): the line reader starts a route
@@ -323,4 +327,163 @@ binary size.
 
 ## Results
 
-(pending)
+Verdict: **`BLOCKED` by the preregistered decision rule**, pending maintainer
+acceptance of two attributed items. Both are legacy misreadings of the line
+reader that the tree no longer makes; neither is a regression of the tree
+reading, and no oracle was tuned. Fix rounds taken: 1 of 5 (the first full run
+exposed the call-chain end, the decorator siblings and the degraded ambient
+factories; each was one change with a test). Commits: `fe45ee2`
+(preregistration), `72f7e98` (units read from the tree), `c4542e4` (ambient
+Drizzle factories in a refused tree, differential reasons), and the results
+commit. Binaries and JSON are retained in
+`/Volumes/External/Development/repogrammar-evidence/tsjs-slice3-20261022/`.
+
+The rule I preregistered is stricter than ADR-0059 D5, which lets the
+maintainer accept an `anchor_changed` that cites a legacy misreading. The two
+items below would be accepted under D5; under this document's rule
+("`CLASSIFIED` ... no `anchor_changed`", "product-eval not holding exactly is
+`BLOCKED` regardless of the class counts") they block. The rule was not
+rewritten after the run.
+
+### Decisions for the maintainer, first
+
+1. **One `anchor_changed` on a committed fixture** (attributed to
+   `extent_by_first_brace`). `drizzle_exact_repositories/src/repositories.ts`,
+   `listOrders`: `db.select().from(orders).where(eq(orders.id, 1))`. The line
+   reader ended the unit at the matching brace of the first `{` after its
+   start, which is the body of the next function (`findUsers`), so it read
+   `where:` from `db.query.users.findMany({ where: ... })` and recorded
+   `where_shape=object_literal` for `listOrders`. The tree reads
+   `where_shape=none`, the right value. Product-visible consequences, all in
+   that one root: the `drizzle_query` family loses the
+   `variation:tsjs_drizzle_query_shape` slot and its
+   `false,none,object_literal` profile (the misread was the only variation);
+   the three `select` members shrink from 154/154/152 bytes (`311-465`,
+   `410-564`, `513-665`: each ran into the next function) to the statement
+   (`311-357`, `410-462`, `513-561`), so `read_plan` spans and
+   `end_line` change (`20` to `15`). Members, support and the UNKNOWN
+   inventory do not change.
+2. **`product-eval` does not hold exactly on the committed corpus**: 96/110
+   (baseline 97/110), `by_intent` retrieval 33/47 (34/47), hit@1 33/47,
+   `committed_precision` 41/41 (42/42); abstention 36/36 and context 27/27
+   hold. One query, `ts-member-express-get`, pins a unit id
+   (`unit:express_exact_routes/app.ts#express_route:get:56-107:1`) whose end
+   byte is the legacy brace end; the tree unit is `56-108` (the call's `)`),
+   so the lookup answers `exact_lookup_unknown`. With that one `target`
+   rewritten to `56-108` in a scratch copy of the corpus, every number returns
+   to the baseline exactly (97/110, 34/47, 36/36, 27/27, 42/42; retained as
+   `product-eval-new-idfollow.json`). `query-corpus-v1.json` is frozen gold and
+   was not edited; changing that one `target` is the maintainer's call. No
+   other TS/JS unit id is pinned in the corpus, the docs or the tests.
+3. **`degraded_unit_set` (D4)**: a refused tree no longer gives the same unit
+   set. On the 11 refused external files no dispatched unit appears or
+   disappears except 2 `test_suite` rows from a comment, so the refusal count
+   there is unchanged. But error recovery can leave no call node at all (the
+   unit test `error_unclosed.ts`: an unterminated route call), in which case
+   there is no unit to refuse and the file yields zero `tsjs_parse_degraded`
+   rows where the line reader made and refused a unit. The alternative that
+   keeps D4 exactly is to keep the line reader in production for refused trees
+   only, which contradicts "units come from the tree". Accept the tree
+   behaviour, or require that fallback.
+4. **Accept the attributed unit-level classes** below (`unit_retired`,
+   `unit_added`, `unit_start_corrected`, `unit_kind_changed`,
+   `unknown_kind_changed`, `degraded_unit_set`), each with its legacy
+   misreading.
+5. **Preregistration deviations** (listed so none is folded into a listed
+   class): the end of a member-call unit is its call chain's end;
+   `receiver_token_start`, `accessor_name`, `unit_kind_changed` are new names;
+   `unit_start_corrected` was widened from "the legacy start lies inside the
+   tree unit" to "same kind and name, overlapping ranges"; the family
+   differential's attribution rule is as preregistered.
+6. Keep `legacy_units.rs`, `unit_differential.rs` and `unit_corpus.rs` under
+   `cfg(test)` until this is accepted (D6).
+
+### Oracle 1: family-level differential, 179 roots
+
+`family_diff.py`, baseline `main@5097d7a`, candidate at `c4542e4`
+(snapshots `family-snapshot-base.json` and `-final.json`, diff
+`family-diff-final.json`, SHA-256
+`e3c207ae1b09fb7670d8b131e1257d5955d178b5c03b57688edad9527b26496b`).
+
+| Root label | Roots | Meaning |
+| --- | --- | --- |
+| `identical` | 151 | no unit, family or UNKNOWN difference (all 148 non-TS/JS roots and 3 TS/JS roots) |
+| `unit_boundary_only` | 26 | same units and facts, the end byte differs |
+| `unit_retired` | 1 | `express_exact_routes/lookalikes.ts`: the word `function` in a comment was a unit |
+| `anchor_changed` | 1 | `drizzle_exact_repositories`, decision 1 (it also holds 2 `unit_start_corrected`) |
+| `family_changed` | 0 | no family, member, anchor kind or support difference on any root |
+| UNKNOWN inventory difference | 0 | no (kind, path, line) row appears or disappears |
+
+Unit level, in-process, the 82 committed sources, each without and with a
+test-runner context (570 legacy units, 568 tree units): `unit_boundary_only`
+258, `unit_retired` 2 (`not_code`), `unit_start_corrected` 4 (the Prisma-shaped
+unit at `query.users.findMany(` now starts at `db`; both sides are the same
+UNKNOWN kind, `prisma_dynamic_model_or_operation`), `anchor_changed` 2 (decision
+1). The branch corpus (30 sources, one per misreading class with near-misses and
+the two syntax-error placements) differs exactly as attributed
+(`branch_corpus_differences_match_their_attribution`).
+
+### Oracle 5: external corpus (in-process)
+
+885 sources compared (slice 1's roots), 2 skipped, 0 extractor panics, 11 refused
+files. Both contexts counted; legacy 25,932 units, tree 22,800.
+
+| Class | Count | Reasons |
+| --- | --- | --- |
+| `unit_boundary_only` | 7,554 | `test_case` 4,496, `express_route` 1,078, `function` 902, `arrow_function` 652, `prisma_query` 102, `method` 114, `test_suite` 88, `drizzle_query` 68, `zod_schema` 46, `class` 8 |
+| `unit_retired` | 3,964 | `statement_in_class` 3,090 (`this.go()`, `await f()`, object-literal methods read as methods); `not_code:text` 794 (`class`/`function`/`describe` in comments and strings); `keyword_receiver` 58 (`this.items.delete(`, `this.get(`); `not_code:method_name` 8 (`describe(d) {`); `string_prefix_expression` 8 (`console['warn']('a' + 'b')`); `other` 6 (3 sources, `Map(this.get(x))` and `...(this.get(p) ?? {})`: the legacy start is the token `Map(this`, the same `keyword_receiver`/`receiver_token_start` reading, not paired by the differential) |
+| `unit_added` | 808 | `declarator_shape` 330 (return-typed, generic and later-declarator arrows); `accessor_name` 266 (`get x()`); `line_reader_missed` 190 (minified bundles with several functions per line, class overloads); `second_unit_on_line` 22 |
+| `unit_start_corrected` | 272 | `receiver_token_start` 270 (`express_route`), `member_receiver` 2 (`prisma_query`) |
+| `unit_kind_changed` | 22 | `react_component` to `function`/`arrow_function` by `</` text in a string or comment (`jsx_text_lookalike`; acorn) |
+| `unit_merged` / `unit_split` | 14 / 4 | `method`: overloads and adjacent members that the brace extent joined |
+| `unknown_kind_changed` | 108 | on `unit_start_corrected` pairs, UNKNOWN to UNKNOWN: `unsupported_route_method` to `dynamic_route_call` 56, `dynamic_route_call` to `unresolved_express_receiver` 52 |
+| `anchor_changed` | 0 | |
+
+Refused files (`degraded_unit_set`, counted separately, one context): 8 of the 11
+refused files differ; the rows are 338 retired and 43 added `method` units, 7 retired
+`function` and 2 retired `test_suite` (comment text), 12 added `function`/
+`arrow_function`, plus end-byte and merge/split rows. No dispatched unit is
+gained or lost other than the 2 comment `test_suite` rows.
+
+### Byte capture (diagnostic)
+
+`capture.py --compare base-capture-main-8cdefea.json`: the baseline binary
+(`main@5097d7a`) reproduces it with 0 mismatches over 179 roots and 4,681 rows.
+The candidate: 179 roots, 4,680 rows (one `member:` row fewer: the retired
+comment unit), **507 mismatches in 28 roots**, which are exactly the 28 roots
+the family differential labels non-identical (26 `unit_boundary_only`, the
+`lookalikes.ts` retirement, the Drizzle root); by surface: `member` 270,
+`check` 54, `explain` 54, `generation` 28, `units` 28, `family`/`mcp_family` 23
+each, `find`/`mcp_find` 13 each, `resync` 1 (`indexed_units` falls by the one
+retired unit). No `files`, `families` or `unknowns` surface mismatch. The
+unit ids embed the end byte, so every TS/JS unit that moved changes an id and
+the rows keyed by it. `capture-final.json` SHA-256
+`e4a6618d89bd64e763b33e8a597b35becf8cbafa7f9cdca067202bf1a3b6659e`.
+
+### Product evaluation and sync
+
+`product-eval`: decision 2. `sync-equivalence --all`: 14 of 14 PASS.
+
+### Measurements
+
+| Measure | Before (`5097d7a`) | After |
+| --- | --- | --- |
+| Parses per TS/JS file | 2 (extractor runner names, then the anchor pass) | 1 (`TsJsAnalysis`); `exact_test_runner_call_names` and `exact_framework_anchors` are `cfg(test)` only |
+| Non-test lines, `syntax.rs` | 2,384 | 1,220 |
+| Non-test lines, `tsjs/units.rs` | 0 | 969 |
+| `legacy_units.rs` (test-only) | 0 | 1,281 |
+| Release parse time, 885 external sources x 2 contexts (`parse` incl. anchors, one release test build) | line reader 3.90 s (2.2 ms per parse; includes its second analysis) | tree 1.47 s (0.83 ms per parse) |
+| Release `repogrammar` | 41,905,248 B | 41,920,496 B (+15,248) |
+
+### Residuals
+
+- `delimiters_are_balanced` (the unbalanced-delimiter diagnostic) and
+  `tsjs_import_resolution_facts` (import and `require` specifier facts) still
+  read lines and are not units; they are the remaining text readings of
+  `syntax.rs` for TS/JS.
+- The shape features of ADR slice 2 (`handler_shape`, `object_clause_shape`,
+  Zod field counts, ...) still read the unit's text; with tree-exact unit ends
+  they now read the statement and nothing past it.
+- The Prisma and Drizzle unit tests rely on the chain end; a statement whose
+  call chain is broken by a parenthesised or `await`ed sub-expression ends at
+  the inner chain.

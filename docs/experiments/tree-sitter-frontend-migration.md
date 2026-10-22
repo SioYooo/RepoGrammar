@@ -122,6 +122,7 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
 | SQL | `BLOCKED` | n/a | n/a | `tree-sitter-sequel` 0.3.11: 158 of 213 scanned files have `ERROR` or `MISSING` nodes that swallow statement boundaries | unchanged |
 | TS/JS scope graph ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 1) | `CLASSIFIED`, with `unknown_removed` and `unknown_added` | 0 mismatches | 82 fixtures: 0 decision differences; 43 branch sources attributed | 882 external files: 0 decision differences apart from 48 `unknown_kind_changed`; 11 refused by grammar gaps | 901 → 778 (`scope_graph.rs`) |
 | TS/JS framework anchors ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 2) | `CLASSIFIED`, accepted 2026-10-22 with its text readings deleted, with `anchor_changed`, `unknown_removed` and `unknown_added` | 2 mismatches, one cause: `drizzle_exact_repositories` `unknowns` reason code (a mid-chain unit) and its `generation` hash | 82 fixtures: 4 `unknown_kind_changed` (2 units); 65 branch sources attributed (11 `anchor_changed`) | 885 external files: 0 `anchor_changed`, 196 `unknown_added` (commented-out test lines), 162 `unknown_kind_changed`; no framework sources locally | 3,168 → 3,615 (touched `tsjs/` modules; +792 test-only) |
+| TS/JS unit extraction ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 3) | `BLOCKED` by its preregistered rule, pending acceptance of one `anchor_changed` and one pinned unit id | 507 mismatches in 28 roots (unit ids embed the end byte), exactly the 28 roots the family differential lists | family level, 179 roots: 151 identical, 26 `unit_boundary_only`, 1 `unit_retired`, 1 `anchor_changed` (`where_shape` read past the unit end); 0 `family_changed`, 0 UNKNOWN inventory differences; product-eval 33/47 until one pinned unit id follows (then equal) | 885 external files: 0 `anchor_changed`; 3,964 `unit_retired` (3,090 statements read as methods, 794 text), 808 `unit_added`, 272 `unit_start_corrected`; 1 parse per file; 2.2 to 0.83 ms per parse | `syntax.rs` 2,384 → 1,220 (+969 in `tsjs/units.rs`; +1,281 test-only) |
 
 - The per-lane evidence is in each lane's completion review under
   `docs/reports/language-support/`. Go's row is from
@@ -142,7 +143,10 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
   [tsjs-scope-graph-tree](tsjs-scope-graph-tree.md), slice 2 (framework
   anchors read the tree) in
   [tsjs-framework-anchors-tree](tsjs-framework-anchors-tree.md) (accepted
-  2026-10-22 with its text readings deleted), and slice 3 is not ported.
+  2026-10-22 with its text readings deleted), and slice 3 (unit extraction) is in
+  [tsjs-unit-extraction-tree](tsjs-unit-extraction-tree.md) (`BLOCKED` by its
+  preregistered rule pending maintainer acceptance; the line reader stays under
+  `cfg(test)`).
 
 ## Decisions
 
