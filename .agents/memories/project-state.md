@@ -59,10 +59,13 @@ tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
 
 TS/JS goes in slices under ADR-0059 (Accepted 2026-10-22) on
 `feat/tsjs-tree-sitter`: slice 1 (the shared `ScopeGraphLite`) landed and its
-legacy reader was deleted the same day; slices 2 and 3 remain. Evidence:
+legacy reader was deleted the same day; slice 2 (framework anchors read the
+tree via `tsjs/parts.rs`, NestJS roles as `RoleRow`s) is `CLASSIFIED` and was
+accepted the same day, its text readings (`legacy_text.rs` and the differential)
+detached and covered by plain tests; slice 3 remains. Evidence:
 `docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
-decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
-and `tsjs-scope-graph-tree.md`.
+decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`,
+`tsjs-scope-graph-tree.md` and `tsjs-framework-anchors-tree.md`.
 
 ## Declarative language-pack spike — 2026-10-20
 
@@ -1021,7 +1024,8 @@ v0.1 `jest-vitest-basic`
 fixture remains below the conservative TS/JS support threshold and returns
 `UNKNOWN` rather than forming ambient suite/test families. TS/JS remains a
 transitional substrate, not the official Python-first v0.1 target, and this is
-not full TS/JS semantic analysis. TS/JS goes onto Tree-sitter in slices under
+not full TS/JS semantic analysis. The Tree-sitter slice status is the single TS/JS
+paragraph near the top of this file.
 Family query output, MCP `repogrammar_context` family responses, and
 `repogrammar stats` now expose `estimated_potential_token_savings` as an
 `ESTIMATED` local potential-read-displacement diagnostic. Query responses also

@@ -1,7 +1,6 @@
+use super::parts::{PrismaQuery, PrismaTransaction};
 use super::scope_graph::ScopeGraphLite;
-use super::{
-    leading_identifier, object_clause_shape, raw_sql_present, Anchor, AnchorOutcome, UnknownAnchor,
-};
+use super::{object_clause_shape, raw_sql_present, Anchor, AnchorOutcome, UnknownAnchor};
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
 const PRISMA_OPERATIONS: [&str; 10] = [
@@ -21,6 +20,7 @@ pub(super) fn query_anchor(
     bindings: &ScopeGraphLite,
     slice: &str,
     start_byte: usize,
+    query: Option<PrismaQuery<'_>>,
 ) -> AnchorOutcome {
     if raw_sql_present(slice) {
         return AnchorOutcome::Unknown(UnknownAnchor {
@@ -30,7 +30,12 @@ pub(super) fn query_anchor(
             note: "Prisma raw SQL query is not support evidence",
         });
     }
-    let Some((client, model, operation)) = prisma_query_parts(slice) else {
+    let Some(PrismaQuery {
+        client,
+        model,
+        operation,
+    }) = query
+    else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "prisma_query_shape",
@@ -90,6 +95,7 @@ pub(super) fn transaction_anchor(
     bindings: &ScopeGraphLite,
     slice: &str,
     start_byte: usize,
+    transaction: Option<PrismaTransaction<'_>>,
 ) -> AnchorOutcome {
     if raw_sql_present(slice) {
         return AnchorOutcome::Unknown(UnknownAnchor {
@@ -99,7 +105,11 @@ pub(super) fn transaction_anchor(
             note: "Prisma raw SQL transaction is not support evidence",
         });
     }
-    let Some(client) = prisma_transaction_client(slice) else {
+    let Some(PrismaTransaction {
+        client,
+        array_argument,
+    }) = transaction
+    else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "prisma_transaction_shape",
@@ -115,7 +125,7 @@ pub(super) fn transaction_anchor(
             note: "Prisma transaction client is not an exact local PrismaClient binding",
         });
     }
-    if !slice.contains("$transaction([") {
+    if !array_argument {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "prisma_transaction_shape",
@@ -174,24 +184,4 @@ fn select_include_shape(slice: &str) -> &'static str {
         (false, true) => "include",
         (false, false) => "none",
     }
-}
-
-fn prisma_query_parts(slice: &str) -> Option<(&str, &str, &str)> {
-    let (client, after_client) = leading_identifier(slice)?;
-    let rest = slice[after_client..].trim_start().strip_prefix('.')?;
-    let (model, after_model) = leading_identifier(rest)?;
-    let rest = rest[after_model..].trim_start().strip_prefix('.')?;
-    let (operation, after_operation) = leading_identifier(rest)?;
-    if !rest[after_operation..].trim_start().starts_with('(') {
-        return None;
-    }
-    Some((client, model, operation))
-}
-
-fn prisma_transaction_client(slice: &str) -> Option<&str> {
-    let (client, after_client) = leading_identifier(slice)?;
-    slice[after_client..]
-        .trim_start()
-        .strip_prefix(".$transaction(")?;
-    Some(client)
 }

@@ -1,14 +1,20 @@
+use super::parts::CallParts;
 use super::scope_graph::ScopeGraphLite;
 use super::{
-    async_shape, handler_shape, route_call_parts, route_handler_binding_assumptions,
-    route_path_shape, Anchor, AnchorOutcome, UnknownAnchor,
+    async_shape, handler_shape, normalize_route_path, route_handler_binding_assumptions, Anchor,
+    AnchorOutcome, UnknownAnchor,
 };
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
 const EXPRESS_HTTP_METHODS: [&str; 6] = ["get", "post", "put", "patch", "delete", "use"];
 
-pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) -> AnchorOutcome {
-    let Some((receiver, method)) = route_call_parts(slice) else {
+pub(super) fn anchor(
+    bindings: &ScopeGraphLite,
+    slice: &str,
+    start_byte: usize,
+    call: Option<&CallParts<'_>>,
+) -> AnchorOutcome {
+    let Some((receiver, method)) = call.map(|call| (call.receiver, call.method)) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "tsjs_support_target",
@@ -40,7 +46,9 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
             note: "TS/JS route receiver is reassigned or redeclared",
         });
     }
-    let path_shape = route_path_shape(slice);
+    let path_shape = call
+        .and_then(|call| call.path_literal)
+        .map(normalize_route_path);
     let mut assumptions = vec![
         "tsjs_anchor_kind=express_route".to_string(),
         format!("route_method={method}"),
@@ -62,7 +70,11 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
         assumptions.push("route_prefix_shape=none".to_string());
     }
     if method != "use" {
-        match route_handler_binding_assumptions(bindings, slice, start_byte) {
+        match route_handler_binding_assumptions(
+            bindings,
+            call.and_then(|call| call.handler),
+            start_byte,
+        ) {
             Ok(extra) => assumptions.extend(extra),
             Err(unknown) => return AnchorOutcome::Unknown(unknown),
         }

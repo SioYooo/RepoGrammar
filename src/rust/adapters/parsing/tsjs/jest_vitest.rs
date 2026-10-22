@@ -1,5 +1,5 @@
 use super::scope_graph::{ImportKind, ScopeGraphLite};
-use super::{async_shape, leading_identifier, Anchor, AnchorOutcome, UnknownAnchor};
+use super::{async_shape, Anchor, AnchorOutcome, UnknownAnchor};
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 use crate::ports::parser::SourceDocument;
 use std::collections::BTreeSet;
@@ -59,8 +59,9 @@ pub(super) fn anchor(
     start_byte: usize,
     is_suite: bool,
     ambient_runner_allowed: bool,
+    call_name: Option<&str>,
 ) -> AnchorOutcome {
-    let Some(name) = test_call_name(slice) else {
+    let Some(name) = call_name else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "tsjs_runner_binding",
@@ -223,12 +224,4 @@ fn is_test_file(path: &str) -> bool {
         ".spec.jsx",
     ];
     SUFFIXES.iter().any(|suffix| path.ends_with(suffix))
-}
-
-fn test_call_name(slice: &str) -> Option<&str> {
-    let (name, after) = leading_identifier(slice)?;
-    if !slice[after..].trim_start().starts_with('(') {
-        return None;
-    }
-    Some(name)
 }

@@ -15,6 +15,7 @@ mod hono;
 mod jest_vitest;
 mod nest;
 mod next;
+mod parts;
 mod prisma;
 mod project_context;
 mod scope_graph;
@@ -98,40 +99,92 @@ fn anchor_for_unit(
     else {
         return AnchorOutcome::None;
     };
+    let range = || unit.range.start_byte..unit.range.end_byte;
+    let call = |bindings: &ScopeGraphLite| parts::route_call(bindings, document.text, range());
     let outcome = match unit.kind {
-        CodeUnitKind::ExpressRoute => express::anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::ExpressRoute => express::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
         CodeUnitKind::NextAppPage
         | CodeUnitKind::NextAppLayout
         | CodeUnitKind::NextRouteHandler
         | CodeUnitKind::NextPagesApiRoute
         | CodeUnitKind::NextPagesPage => next::anchor(document, context, unit, slice),
-        CodeUnitKind::FastifyRoute => fastify::anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::FastifyPluginRegistration => {
-            fastify::register_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::PrismaQuery => prisma::query_anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::PrismaTransaction => {
-            prisma::transaction_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::DrizzleSchemaTable => {
-            drizzle::schema_table_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::DrizzleQuery => drizzle::query_anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::DrizzleTransaction => {
-            drizzle::transaction_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::ZodSchema => zod::anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::NestController => {
-            nest::controller_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::NestRoute => {
-            nest::route_anchor(bindings, nest_context, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::NestInjectable => {
-            nest::injectable_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::NestModule => nest::module_anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::HonoRoute => hono::anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::FastifyRoute => fastify::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
+        CodeUnitKind::FastifyPluginRegistration => fastify::register_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
+        CodeUnitKind::PrismaQuery => prisma::query_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::prisma_query(bindings, document.text, range()),
+        ),
+        CodeUnitKind::PrismaTransaction => prisma::transaction_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::prisma_transaction(bindings, document.text, range()),
+        ),
+        CodeUnitKind::DrizzleSchemaTable => drizzle::schema_table_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::table_declaration_at(bindings, document.text, range()),
+        ),
+        CodeUnitKind::DrizzleQuery => drizzle::query_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::drizzle_query(bindings, document.text, range()),
+        ),
+        CodeUnitKind::DrizzleTransaction => drizzle::transaction_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::drizzle_transaction(bindings, document.text, range()),
+        ),
+        CodeUnitKind::ZodSchema => zod::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::zod_builder(bindings, document.text, range()),
+        ),
+        CodeUnitKind::NestController => nest::controller_anchor(
+            bindings,
+            &parts::decorators(bindings, document.text, range()),
+        ),
+        CodeUnitKind::NestRoute => nest::route_anchor(
+            bindings,
+            nest_context,
+            &parts::decorators(bindings, document.text, range()),
+            unit.range.start_byte,
+        ),
+        CodeUnitKind::NestInjectable => nest::injectable_anchor(
+            bindings,
+            &parts::decorators(bindings, document.text, range()),
+        ),
+        CodeUnitKind::NestModule => nest::module_anchor(
+            bindings,
+            &parts::decorators(bindings, document.text, range()),
+        ),
+        CodeUnitKind::HonoRoute => hono::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            call(bindings).as_ref(),
+        ),
         CodeUnitKind::TestSuite => jest_vitest::anchor(
             document,
             bindings,
@@ -139,6 +192,7 @@ fn anchor_for_unit(
             unit.range.start_byte,
             true,
             context.is_some_and(|context| context.tsjs_has_test_runner_context),
+            parts::test_call_name(bindings, document.text, range()),
         ),
         CodeUnitKind::TestCase => jest_vitest::anchor(
             document,
@@ -147,6 +201,7 @@ fn anchor_for_unit(
             unit.range.start_byte,
             false,
             context.is_some_and(|context| context.tsjs_has_test_runner_context),
+            parts::test_call_name(bindings, document.text, range()),
         ),
         _ => return AnchorOutcome::None,
     };
@@ -197,47 +252,6 @@ fn anchor_fact(
     })
 }
 
-pub(super) fn object_literal_string_field(slice: &str, field: &str) -> Option<String> {
-    for (field_index, _) in slice.match_indices(field) {
-        if let Some(after_colon) = object_literal_field_after_colon(slice, field, field_index) {
-            if let Some(value) = first_quoted(after_colon) {
-                return Some(value);
-            }
-        }
-    }
-    None
-}
-
-pub(super) fn object_literal_has_field(slice: &str, field: &str) -> bool {
-    slice.match_indices(field).any(|(field_index, _)| {
-        object_literal_field_after_colon(slice, field, field_index).is_some()
-    })
-}
-
-fn object_literal_field_after_colon<'a>(
-    slice: &'a str,
-    field: &str,
-    field_index: usize,
-) -> Option<&'a str> {
-    if !field_has_identifier_boundaries(slice, field_index, field.len()) {
-        return None;
-    }
-    let after_field = &slice[field_index + field.len()..];
-    after_field
-        .trim_start()
-        .strip_prefix(':')
-        .map(str::trim_start)
-}
-
-fn field_has_identifier_boundaries(text: &str, offset: usize, len: usize) -> bool {
-    let before = offset
-        .checked_sub(1)
-        .and_then(|index| text.as_bytes().get(index))
-        .copied();
-    let after = text.as_bytes().get(offset + len).copied();
-    !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
-}
-
 pub(super) fn object_clause_shape(slice: &str, field: &str) -> &'static str {
     let pattern = format!("{field}:");
     if slice.contains(&pattern) {
@@ -259,37 +273,6 @@ pub(super) fn raw_sql_present(slice: &str) -> bool {
         || slice.contains("$executeRaw")
         || slice.contains("queryRaw")
         || slice.contains("executeRaw")
-}
-
-pub(super) fn route_call_parts(slice: &str) -> Option<(&str, &str)> {
-    let (receiver, after) = leading_identifier(slice)?;
-    let rest = slice[after..].trim_start().strip_prefix('.')?;
-    let (method, after_method) = leading_identifier(rest)?;
-    if !rest[after_method..].trim_start().starts_with('(') {
-        return None;
-    }
-    Some((receiver, method))
-}
-
-pub(super) fn route_path_shape(slice: &str) -> Option<String> {
-    let open = slice.find('(')?;
-    let path = first_quoted(&slice[open + 1..])?;
-    Some(normalize_route_path(&path))
-}
-
-pub(super) fn first_quoted(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let quote = bytes[index];
-        if quote == b'"' || quote == b'\'' {
-            let start = index + 1;
-            let end_relative = text[start..].find(quote as char)?;
-            return Some(text[start..start + end_relative].to_string());
-        }
-        index += 1;
-    }
-    None
 }
 
 pub(super) fn normalize_route_path(path: &str) -> String {
@@ -351,10 +334,10 @@ pub(super) fn handler_shape(slice: &str) -> &'static str {
 
 fn route_handler_binding_assumptions(
     bindings: &ScopeGraphLite,
-    slice: &str,
+    handler: Option<&str>,
     start_byte: usize,
 ) -> Result<Vec<String>, UnknownAnchor> {
-    let Some(handler) = route_handler_identifier(slice) else {
+    let Some(handler) = handler else {
         return Ok(Vec::new());
     };
     if bindings.name_is_unsafe_at(handler, start_byte) {
@@ -395,73 +378,6 @@ fn route_handler_binding_assumptions(
         kind: "missing_route_handler",
         note: "TS/JS route handler identifier is not declared or imported",
     })
-}
-
-fn route_handler_identifier(slice: &str) -> Option<&str> {
-    let arguments = call_arguments(slice)?;
-    let candidate = match arguments.as_slice() {
-        [first, second] if string_literal_arg(first) => *second,
-        [only] => *only,
-        _ => return None,
-    };
-    let (handler, after_handler) = leading_identifier(candidate)?;
-    if candidate[after_handler..].trim().is_empty() {
-        Some(handler)
-    } else {
-        None
-    }
-}
-
-pub(super) fn string_literal_arg(argument: &str) -> bool {
-    let trimmed = argument.trim_start();
-    matches!(trimmed.as_bytes().first(), Some(b'"' | b'\''))
-}
-
-pub(super) fn call_arguments(slice: &str) -> Option<Vec<&str>> {
-    let open = slice.find('(')?;
-    let bytes = slice.as_bytes();
-    let mut arguments = Vec::new();
-    let mut start = open + 1;
-    let mut depth = 0usize;
-    let mut quote = None;
-    let mut escape = false;
-    for index in open + 1..bytes.len() {
-        let byte = bytes[index];
-        if let Some(quote_byte) = quote {
-            if escape {
-                escape = false;
-                continue;
-            }
-            if byte == b'\\' {
-                escape = true;
-                continue;
-            }
-            if byte == quote_byte {
-                quote = None;
-            }
-            continue;
-        }
-        match byte {
-            b'"' | b'\'' | b'`' => quote = Some(byte),
-            b'(' | b'{' | b'[' => depth += 1,
-            b')' => {
-                if depth == 0 {
-                    arguments.push(slice[start..index].trim());
-                    return Some(arguments);
-                }
-                depth = depth.saturating_sub(1);
-            }
-            b'}' | b']' => {
-                depth = depth.saturating_sub(1);
-            }
-            b',' if depth == 0 => {
-                arguments.push(slice[start..index].trim());
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 pub(super) fn async_shape(slice: &str) -> &'static str {
@@ -1968,5 +1884,479 @@ describe("orders", () => {
                 .iter()
                 .any(|assumption| assumption == "runner_kind=node_test")
         }));
+    }
+    // ---- ADR-0059 slice 2: accepted differences, asserted on the tree reading alone
+    const EXPRESS_HEAD: &str = "import express, { Router } from \"express\";\n";
+
+    fn prisma(body: &str) -> String {
+        format!("import {{ PrismaClient }} from \"@prisma/client\";\nconst prisma = new PrismaClient();\n{body}")
+    }
+
+    fn drizzle(body: &str) -> String {
+        format!("import {{ drizzle }} from \"drizzle-orm/node-postgres\";\nimport {{ pgTable }} from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {{}});\nconst db = drizzle(pool);\n{body}")
+    }
+
+    fn zod(body: &str) -> String {
+        format!("import {{ z }} from \"zod\";\n{body}")
+    }
+
+    fn nest(body: &str) -> String {
+        format!("import {{ Controller, Get, Post, All, Injectable, Module }} from \"@nestjs/common\";\n{body}")
+    }
+
+    fn express(body: &str) -> String {
+        format!("{EXPRESS_HEAD}const app = express();\n{body}")
+    }
+
+    fn slice2_sources() -> Vec<(&'static str, &'static str, String)> {
+        let fastify = |body: &str| {
+            format!("import Fastify from \"fastify\";\nconst app = Fastify();\nconst plugin = async () => {{}};\nfunction handler() {{}}\n{body}")
+        };
+        let hono = |body: &str| {
+            format!(
+                "import {{ Hono }} from \"hono\";\nconst app = new Hono();\nfunction h() {{}}\n{body}"
+            )
+        };
+        vec![
+            ("comment_in_call", "comment_arg.ts", express("function h() {}\napp.get(\"/a\", /* c */ h);\n")),
+            ("path_from_non_first_argument", "path_later.ts", express("const p = \"/x\";\napp.get(p, (req, res) => res.send(\"ok\"));\n")),
+            ("trailing_comma", "trailing_comma.ts", express("function h() {}\napp.get(\"/a\", h,);\n")),
+            ("string_prefix_expression", "string_prefix.ts", express("function h() {}\nconst x = \"1\";\napp.get(\"/a\" + x, h);\n")),
+            ("string_prefix_expression", "string_prefix_hono.ts", hono("const x = \"1\";\napp.get(\"/a\" + x, h);\n")),
+            ("escaped_quote", "escaped_quote.ts", express("function h() {}\napp.get('/it\\'s', h);\n")),
+            ("unit_not_code", "comment_unit.ts", express("// app.get(\"/a\", (req, res) => res.send(\"a\"));\n")),
+            ("unit_not_code", "template_unit.ts", express("const doc = `\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n`;\n")),
+            ("keyword_receiver", "this_receiver.ts", express("class C {\n  m() {\n    this.get(\"/a\");\n  }\n}\n")),
+            ("declarator_type_annotation", "typed_app.ts", format!("{EXPRESS_HEAD}const app: Express = express();\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n")),
+            ("declarator_type_annotation", "typed_fastify.ts", "import Fastify from \"fastify\";\nconst app: FastifyInstance = Fastify();\napp.get(\"/f\", async () => 1);\n".to_string()),
+            ("object_field_lookalike", "nested_method.ts", fastify("app.route({ url: \"/r\", handler: async () => ({ method: \"POST\" }) });\n")),
+            ("object_field_lookalike", "url_expression.ts", fastify("app.route({ method: \"GET\", url: `/r`, handler: async () => \"ok\" });\n")),
+            ("shorthand_or_method_field", "shorthand_handler.ts", fastify("app.route({ method: \"GET\", url: \"/r\", handler });\n")),
+            ("shorthand_or_method_field", "method_handler.ts", fastify("app.route({ method: \"GET\", url: \"/r\", handler(request) { return 1; } });\n")),
+            ("prefix_identifier_lookalike", "prefix_value.ts", fastify("app.register(plugin, { name: prefix });\n")),
+            ("type_arguments", "prisma_generic.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma = new PrismaClient<Options>();\nexport async function list() {\n  return prisma.user.findMany();\n}\n".to_string()),
+            ("declarator_type_annotation", "prisma_typed.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma: PrismaClient = new PrismaClient();\nexport async function list() {\n  return prisma.user.findMany();\n}\n".to_string()),
+            ("declarator_type_annotation", "drizzle_typed.ts", "import { drizzle } from \"drizzle-orm/node-postgres\";\nimport { pgTable } from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {});\nconst db: Db = drizzle(pool);\nexport async function list() {\n  return db.select().from(users);\n}\n".to_string()),
+            ("member_receiver", "drizzle_query_member.ts", drizzle("export async function rel() {\n  return db.query.users.findMany();\n}\n")),
+            ("chain_scope", "drizzle_from_elsewhere.ts", drizzle("export async function list(xs) {\n  return db.select({ n: Array.from(xs) }).from(users);\n}\n")),
+            ("table_expression_prefix", "drizzle_member_table.ts", drizzle("export async function add() {\n  return db.insert(schema.users).values({ name: \"a\" });\n}\n")),
+            ("string_prefix_expression", "prisma_tx_spaced.ts", prisma("export async function tx() {\n  return prisma.$transaction( [prisma.user.findMany()] );\n}\n")),
+            ("unit_not_code", "prisma_comment_unit.ts", prisma("// prisma.user.findMany();\n")),
+            ("unit_not_code", "drizzle_comment_unit.ts", drizzle("// db.select().from(users);\n")),
+            ("keyword_receiver", "this_prisma.ts", prisma("class C {\n  m() {\n    this.items.delete(key);\n  }\n}\n")),
+            ("unit_not_code", "comment_transaction_unit.ts", drizzle("/**\n * db.transaction(() => run());\n */\nexport function f() {}\n")),
+            ("declarator_type_annotation", "zod_typed.ts", zod("export const A: ZodType = z.object({ name: z.string() });\n")),
+            ("unit_not_code", "zod_comment_unit.ts", zod("// const Ghost = z.object({});\n")),
+            ("unit_not_code", "vitest_comment_unit.test.ts", "import { describe } from \"vitest\";\n// describe(\"ghost\", () => {});\n".to_string()),
+            ("unit_not_code", "method_describe.ts", "class A {\n  describe(d: string): this {\n    return this;\n  }\n}\n".to_string()),
+            ("table_expression_prefix", "drizzle_call_table.ts", drizzle("export async function f() {\n  return db.delete(table(\"users\"));\n}\n")),
+            ("member_receiver", "member_chain_prisma.ts", prisma("export async function f(drill) {\n  drill.client.customers.delete(1);\n}\n")),
+            ("decorator_argument_shape", "nest_comment_arg.ts", nest("@Controller()\nexport class C {\n  @Get(/* c */ \"a\")\n  m() {}\n}\n")),
+            ("string_prefix_expression", "nest_prefix_expr.ts", nest("@Controller()\nexport class C {\n  @Get(\"a\" + b)\n  m() {}\n}\n")),
+            ("decorator_argument_shape", "nest_module_trailing_comma.ts", nest("@Module({ imports: [A, B,], providers: [C] })\nexport class M {}\n")),
+            ("decorator_argument_shape", "nest_module_key_lookalike.ts", nest("@Module({ imports: [\"providers: [A, B]\"], providers: [C] })\nexport class M {}\n")),
+            ("for_root_lookalike", "nest_for_root_string.ts", nest("@Module({ providers: [A], name: \"forRootToken\" })\nexport class M {}\n")),
+            ("decorator_argument_shape", "nest_module_object_members.ts", nest("@Module({ providers: [{ provide: \"T\", useValue: 1 }] })\nexport class M {}\n")),
+        ]
+    }
+
+    type Anchors<'a> = &'a [(&'a str, &'a [&'a str])];
+
+    fn assert_slice2_case(
+        path: &str,
+        source: &str,
+        anchors: &[(&str, &[&str])],
+        absent_path: bool,
+        kinds: &[&str],
+    ) {
+        let facts = parse_facts(path, source);
+        let mut expected = anchors
+            .iter()
+            .map(|(target, _)| target.to_string())
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            expected,
+            "{path} targets"
+        );
+        for (target, needles) in anchors {
+            let fact = facts
+                .iter()
+                .find(|fact| fact.target.as_ref().is_some_and(|t| t.as_str() == *target))
+                .expect("anchor present");
+            for needle in *needles {
+                assert!(
+                    fact.assumptions.iter().any(|a| a == needle),
+                    "{path} {target} lacks {needle}"
+                );
+            }
+            if absent_path {
+                assert!(
+                    !fact
+                        .assumptions
+                        .iter()
+                        .any(|a| a.starts_with("route_path_shape=")),
+                    "{path} {target} invented a route path"
+                );
+            }
+        }
+        assert_eq!(
+            unknown_kinds_from_facts(facts),
+            kinds,
+            "{path} unknown kinds"
+        );
+    }
+
+    /// Each accepted ADR-0059 slice 2 difference (decisions 1 to 5 of the
+    /// 2026-10-22 acceptance), on a minimal input, as the tree reading
+    /// answers it. The text reading that disagreed was deleted.
+    #[test]
+    fn slice2_accepted_differences_hold_on_the_tree_reading() {
+        let sources = slice2_sources();
+        let cases: Vec<(&str, Anchors, bool, &[&str])> = vec![
+            (
+                r#"comment_arg.ts"#,
+                &[(
+                    r#"express.route.get"#,
+                    &[
+                        r#"route_path_shape=/a"#,
+                        r#"handler_binding=local"#,
+                        r#"handler_local_name=h"#,
+                    ],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"path_later.ts"#,
+                &[(r#"express.route.get"#, &[])],
+                true,
+                &[],
+            ),
+            (
+                r#"trailing_comma.ts"#,
+                &[(
+                    r#"express.route.get"#,
+                    &[
+                        r#"route_path_shape=/a"#,
+                        r#"handler_binding=local"#,
+                        r#"handler_local_name=h"#,
+                    ],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"string_prefix.ts"#,
+                &[(r#"express.route.get"#, &[])],
+                true,
+                &[],
+            ),
+            (
+                r#"string_prefix_hono.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_route_call"#],
+            ),
+            (
+                r#"escaped_quote.ts"#,
+                &[(
+                    r#"express.route.get"#,
+                    &[
+                        r#"route_path_shape=/it\'s"#,
+                        r#"handler_binding=local"#,
+                        r#"handler_local_name=h"#,
+                    ],
+                )],
+                false,
+                &[],
+            ),
+            (r#"comment_unit.ts"#, &[], false, &[r#"dynamic_route_call"#]),
+            (
+                r#"template_unit.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_route_call"#],
+            ),
+            (
+                r#"this_receiver.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_route_call"#],
+            ),
+            (
+                r#"typed_app.ts"#,
+                &[(r#"express.route.get"#, &[r#"route_path_shape=/a"#])],
+                false,
+                &[],
+            ),
+            (
+                r#"typed_fastify.ts"#,
+                &[(
+                    r#"fastify.route.get"#,
+                    &[r#"opts_handler_present=false"#, r#"route_path_shape=/f"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nested_method.ts"#,
+                &[],
+                false,
+                &[r#"fastify_dynamic_method"#],
+            ),
+            (
+                r#"url_expression.ts"#,
+                &[],
+                false,
+                &[r#"fastify_missing_literal_path"#],
+            ),
+            (
+                r#"shorthand_handler.ts"#,
+                &[(
+                    r#"fastify.route.route"#,
+                    &[r#"opts_handler_present=true"#, r#"route_path_shape=/r"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"method_handler.ts"#,
+                &[(
+                    r#"fastify.route.route"#,
+                    &[r#"opts_handler_present=true"#, r#"route_path_shape=/r"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"prefix_value.ts"#,
+                &[(
+                    r#"fastify.plugin.register"#,
+                    &[r#"operation=register"#, r#"plugin_binding=local"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"prisma_generic.ts"#,
+                &[(r#"prisma.query.findMany"#, &[r#"operation=findMany"#])],
+                false,
+                &[],
+            ),
+            (
+                r#"prisma_typed.ts"#,
+                &[(r#"prisma.query.findMany"#, &[r#"operation=findMany"#])],
+                false,
+                &[],
+            ),
+            (
+                r#"drizzle_typed.ts"#,
+                &[
+                    (
+                        r#"drizzle.query.select"#,
+                        &[r#"operation=select"#, r#"table_name=users"#],
+                    ),
+                    (
+                        r#"drizzle.schema.table"#,
+                        &[r#"operation=schema_table"#, r#"table_name=users"#],
+                    ),
+                ],
+                false,
+                &[],
+            ),
+            (
+                r#"drizzle_query_member.ts"#,
+                &[
+                    (
+                        r#"drizzle.query.query_findMany"#,
+                        &[r#"operation=query_findMany"#, r#"table_name=users"#],
+                    ),
+                    (
+                        r#"drizzle.schema.table"#,
+                        &[r#"operation=schema_table"#, r#"table_name=users"#],
+                    ),
+                ],
+                false,
+                &[r#"prisma_dynamic_model_or_operation"#],
+            ),
+            (
+                r#"drizzle_from_elsewhere.ts"#,
+                &[
+                    (
+                        r#"drizzle.query.select"#,
+                        &[r#"operation=select"#, r#"table_name=users"#],
+                    ),
+                    (
+                        r#"drizzle.schema.table"#,
+                        &[r#"operation=schema_table"#, r#"table_name=users"#],
+                    ),
+                ],
+                false,
+                &[],
+            ),
+            (
+                r#"drizzle_member_table.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[r#"drizzle_dynamic_query_builder"#],
+            ),
+            (
+                r#"prisma_tx_spaced.ts"#,
+                &[
+                    (r#"prisma.query.findMany"#, &[r#"operation=findMany"#]),
+                    (
+                        r#"prisma.transaction"#,
+                        &[r#"operation=transaction"#, r#"transaction_shape=array"#],
+                    ),
+                ],
+                false,
+                &[],
+            ),
+            (
+                r#"prisma_comment_unit.ts"#,
+                &[],
+                false,
+                &[r#"prisma_dynamic_model_or_operation"#],
+            ),
+            (
+                r#"drizzle_comment_unit.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[r#"drizzle_dynamic_query_builder"#],
+            ),
+            (
+                r#"this_prisma.ts"#,
+                &[],
+                false,
+                &[
+                    r#"dynamic_route_call"#,
+                    r#"prisma_dynamic_model_or_operation"#,
+                ],
+            ),
+            (
+                r#"comment_transaction_unit.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[r#"drizzle_dynamic_query_builder"#],
+            ),
+            (
+                r#"zod_typed.ts"#,
+                &[(r#"zod.object"#, &[r#"zod_builder=object"#])],
+                false,
+                &[],
+            ),
+            (r#"zod_comment_unit.ts"#, &[], false, &[]),
+            (
+                r#"vitest_comment_unit.test.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_test_call"#],
+            ),
+            (
+                r#"method_describe.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_test_call"#],
+            ),
+            (
+                r#"drizzle_call_table.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[
+                    r#"drizzle_dynamic_query_builder"#,
+                    r#"unresolved_express_receiver"#,
+                ],
+            ),
+            (
+                r#"member_chain_prisma.ts"#,
+                &[],
+                false,
+                &[
+                    r#"dynamic_route_call"#,
+                    r#"prisma_dynamic_model_or_operation"#,
+                ],
+            ),
+            (
+                r#"nest_comment_arg.ts"#,
+                &[
+                    (
+                        r#"nestjs.common.Controller"#,
+                        &[r#"class_route_path_shape=none"#],
+                    ),
+                    (r#"nestjs.common.Get"#, &[r#"route_path_shape=literal"#]),
+                ],
+                false,
+                &[r#"tsjs_nest_di_resolution"#],
+            ),
+            (
+                r#"nest_prefix_expr.ts"#,
+                &[
+                    (
+                        r#"nestjs.common.Controller"#,
+                        &[r#"class_route_path_shape=none"#],
+                    ),
+                    (r#"nestjs.common.Get"#, &[r#"route_path_shape=dynamic"#]),
+                ],
+                false,
+                &[r#"tsjs_nest_di_resolution"#],
+            ),
+            (
+                r#"nest_module_trailing_comma.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_2_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nest_module_key_lookalike.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_1_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nest_for_root_string.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_0_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nest_module_object_members.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_0_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+        ];
+        assert_eq!(cases.len(), sources.len());
+        for ((_, path, source), (case_path, anchors, absent_path, kinds)) in
+            sources.iter().zip(cases)
+        {
+            assert_eq!(*path, case_path);
+            assert_slice2_case(path, source, anchors, absent_path, kinds);
+        }
     }
 }

@@ -1,8 +1,8 @@
+use super::parts::{CallParts, Prefix};
 use super::scope_graph::ScopeGraphLite;
 use super::{
-    async_shape, call_arguments, handler_shape, is_identifier_byte, leading_identifier,
-    normalize_route_path, object_literal_has_field, object_literal_string_field, route_call_parts,
-    route_handler_binding_assumptions, route_path_shape, Anchor, AnchorOutcome, UnknownAnchor,
+    async_shape, handler_shape, normalize_route_path, route_handler_binding_assumptions, Anchor,
+    AnchorOutcome, UnknownAnchor,
 };
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
@@ -10,8 +10,13 @@ const FASTIFY_HTTP_METHODS: [&str; 8] = [
     "get", "head", "post", "put", "delete", "options", "patch", "all",
 ];
 
-pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) -> AnchorOutcome {
-    let Some((receiver, method)) = route_call_parts(slice) else {
+pub(super) fn anchor(
+    bindings: &ScopeGraphLite,
+    slice: &str,
+    start_byte: usize,
+    call: Option<&CallParts<'_>>,
+) -> AnchorOutcome {
+    let Some((receiver, method)) = call.map(|call| (call.receiver, call.method)) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "fastify_route_shape",
@@ -36,7 +41,7 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
         });
     }
     if method == "route" {
-        return fastify_full_route_anchor(slice);
+        return fastify_full_route_anchor(slice, call);
     }
     if !FASTIFY_HTTP_METHODS.contains(&method) {
         return AnchorOutcome::Unknown(UnknownAnchor {
@@ -57,10 +62,17 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
         "plugin_context=none".to_string(),
         "prefix_unknown=false".to_string(),
     ];
-    if let Some(path_shape) = route_path_shape(slice) {
+    if let Some(path_shape) = call
+        .and_then(|call| call.path_literal)
+        .map(normalize_route_path)
+    {
         assumptions.push(format!("route_path_shape={path_shape}"));
     }
-    match route_handler_binding_assumptions(bindings, slice, start_byte) {
+    match route_handler_binding_assumptions(
+        bindings,
+        call.and_then(|call| call.handler),
+        start_byte,
+    ) {
         Ok(extra) => assumptions.extend(extra),
         Err(unknown) => return AnchorOutcome::Unknown(unknown),
     }
@@ -73,10 +85,11 @@ pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) 
 
 pub(super) fn register_anchor(
     bindings: &ScopeGraphLite,
-    slice: &str,
+    _slice: &str,
     start_byte: usize,
+    call: Option<&CallParts<'_>>,
 ) -> AnchorOutcome {
-    let Some((receiver, method)) = route_call_parts(slice) else {
+    let Some((receiver, method)) = call.map(|call| (call.receiver, call.method)) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "fastify_plugin_registration",
@@ -116,11 +129,20 @@ pub(super) fn register_anchor(
         "prefix_unknown=false".to_string(),
         "plugin_effects=unresolved".to_string(),
     ];
-    match fastify_plugin_binding_assumptions(bindings, slice, start_byte) {
+    match fastify_plugin_binding_assumptions(
+        bindings,
+        call.and_then(|call| call.plugin),
+        start_byte,
+    ) {
         Ok(extra) => assumptions.extend(extra),
         Err(unknown) => return AnchorOutcome::Unknown(unknown),
     }
-    let prefix_shape = match fastify_register_prefix_shape(slice) {
+    let prefix_shape = match call.map_or(
+        Err(dynamic_prefix(
+            "Fastify plugin registration arguments could not be parsed",
+        )),
+        fastify_register_prefix_shape,
+    ) {
         Ok(prefix_shape) => prefix_shape,
         Err(unknown) => return AnchorOutcome::Unknown(unknown),
     };
@@ -132,8 +154,11 @@ pub(super) fn register_anchor(
     })
 }
 
-fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
-    let Some(method) = object_literal_string_field(slice, "method") else {
+fn fastify_full_route_anchor(slice: &str, call: Option<&CallParts<'_>>) -> AnchorOutcome {
+    let object = call
+        .map(|call| call.route_object.clone())
+        .unwrap_or_default();
+    let Some(method) = object.method else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::BuildVariantAmbiguity,
             affected_claim: "fastify_route_method",
@@ -150,10 +175,7 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
             note: "Fastify full route method is not in the exact allowlist",
         });
     }
-    let Some(path_shape) = object_literal_string_field(slice, "url")
-        .or_else(|| object_literal_string_field(slice, "path"))
-        .map(|path| normalize_route_path(&path))
-    else {
+    let Some(path_shape) = object.path.map(normalize_route_path) else {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "fastify_route_shape",
@@ -161,7 +183,7 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
             note: "Fastify full route path/url is not a literal string",
         });
     };
-    if !object_literal_has_field(slice, "handler") {
+    if !object.has_handler {
         return AnchorOutcome::Unknown(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "fastify_route_shape",
@@ -190,10 +212,10 @@ fn fastify_full_route_anchor(slice: &str) -> AnchorOutcome {
 
 fn fastify_plugin_binding_assumptions(
     bindings: &ScopeGraphLite,
-    slice: &str,
+    plugin: Option<&str>,
     start_byte: usize,
 ) -> Result<Vec<String>, UnknownAnchor> {
-    let Some(plugin) = fastify_plugin_identifier(slice) else {
+    let Some(plugin) = plugin else {
         return Err(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "fastify_plugin_binding",
@@ -232,71 +254,44 @@ fn fastify_plugin_binding_assumptions(
     })
 }
 
-fn fastify_plugin_identifier(slice: &str) -> Option<&str> {
-    let arguments = call_arguments(slice)?;
-    let candidate = arguments.first()?;
-    let (plugin, after_plugin) = leading_identifier(candidate)?;
-    if candidate[after_plugin..].trim().is_empty() {
-        Some(plugin)
-    } else {
-        None
+fn dynamic_prefix(note: &'static str) -> UnknownAnchor {
+    UnknownAnchor {
+        reason: UnknownReasonCode::FrameworkMagic,
+        affected_claim: "fastify_route_prefix",
+        kind: "fastify_dynamic_prefix",
+        note,
     }
 }
 
-fn fastify_register_prefix_shape(slice: &str) -> Result<String, UnknownAnchor> {
-    let Some(arguments) = call_arguments(slice) else {
-        return Err(UnknownAnchor {
-            reason: UnknownReasonCode::FrameworkMagic,
-            affected_claim: "fastify_route_prefix",
-            kind: "fastify_dynamic_prefix",
-            note: "Fastify plugin registration arguments could not be parsed",
-        });
-    };
-    match arguments.as_slice() {
-        [_plugin] => Ok("none".to_string()),
-        [_plugin, options] => fastify_register_options_prefix_shape(options),
-        _ => Err(UnknownAnchor {
+fn fastify_register_prefix_shape(call: &CallParts<'_>) -> Result<String, UnknownAnchor> {
+    match call.arity {
+        None => Err(dynamic_prefix(
+            "Fastify plugin registration arguments could not be parsed",
+        )),
+        Some(1) => Ok("none".to_string()),
+        Some(2) => match call.prefix {
+            Prefix::Literal(prefix) => Ok(normalize_route_path(prefix)),
+            Prefix::Absent => Ok("none".to_string()),
+            Prefix::NotObject => Err(UnknownAnchor {
+                reason: UnknownReasonCode::BuildVariantAmbiguity,
+                affected_claim: "fastify_route_prefix",
+                kind: "fastify_dynamic_prefix",
+                note: "Fastify plugin registration options are not an exact object literal",
+            }),
+            Prefix::Dynamic => Err(UnknownAnchor {
+                reason: UnknownReasonCode::BuildVariantAmbiguity,
+                affected_claim: "fastify_route_prefix",
+                kind: "fastify_dynamic_prefix",
+                note: "Fastify plugin registration prefix is not a literal string",
+            }),
+        },
+        Some(_) => Err(UnknownAnchor {
             reason: UnknownReasonCode::FrameworkMagic,
             affected_claim: "fastify_plugin_registration",
             kind: "fastify_dynamic_register_call",
             note: "Fastify plugin registration has a non-exact argument shape",
         }),
     }
-}
-
-fn fastify_register_options_prefix_shape(options: &str) -> Result<String, UnknownAnchor> {
-    let trimmed = options.trim_start();
-    if !trimmed.starts_with('{') {
-        return Err(UnknownAnchor {
-            reason: UnknownReasonCode::BuildVariantAmbiguity,
-            affected_claim: "fastify_route_prefix",
-            kind: "fastify_dynamic_prefix",
-            note: "Fastify plugin registration options are not an exact object literal",
-        });
-    }
-    if let Some(prefix) = object_literal_string_field(trimmed, "prefix") {
-        return Ok(normalize_route_path(&prefix));
-    }
-    if contains_identifier(trimmed, "prefix") {
-        return Err(UnknownAnchor {
-            reason: UnknownReasonCode::BuildVariantAmbiguity,
-            affected_claim: "fastify_route_prefix",
-            kind: "fastify_dynamic_prefix",
-            note: "Fastify plugin registration prefix is not a literal string",
-        });
-    }
-    Ok("none".to_string())
-}
-
-fn contains_identifier(text: &str, identifier: &str) -> bool {
-    text.match_indices(identifier).any(|(offset, _)| {
-        let before = offset
-            .checked_sub(1)
-            .and_then(|index| text.as_bytes().get(index))
-            .copied();
-        let after = text.as_bytes().get(offset + identifier.len()).copied();
-        !before.is_some_and(is_identifier_byte) && !after.is_some_and(is_identifier_byte)
-    })
 }
 
 fn reply_shape(slice: &str) -> &'static str {

@@ -1,11 +1,16 @@
 use super::scope_graph::{ImportKind, ScopeGraphLite};
-use super::{leading_identifier, Anchor, AnchorOutcome, UnknownAnchor};
+use super::{Anchor, AnchorOutcome, UnknownAnchor};
 use crate::core::model::{SemanticFactKind, UnknownReasonCode};
 
 const ZOD_MODULES: [&str; 2] = ["zod", "zod/v4"];
 
-pub(super) fn anchor(bindings: &ScopeGraphLite, slice: &str, start_byte: usize) -> AnchorOutcome {
-    let Some((head, builder)) = schema_builder_parts(slice) else {
+pub(super) fn anchor(
+    bindings: &ScopeGraphLite,
+    slice: &str,
+    start_byte: usize,
+    builder_parts: Option<(&str, &str)>,
+) -> AnchorOutcome {
+    let Some((head, builder)) = builder_parts else {
         return AnchorOutcome::None;
     };
     let Some((builder_token, target)) = builder_target(builder) else {
@@ -45,29 +50,6 @@ fn head_is_exact_zod_import(bindings: &ScopeGraphLite, head: &str) -> bool {
         }
         _ => false,
     }
-}
-
-fn schema_builder_parts(slice: &str) -> Option<(&str, &str)> {
-    let trimmed = slice.trim_start();
-    let trimmed = trimmed
-        .strip_prefix("export ")
-        .unwrap_or(trimmed)
-        .trim_start();
-    let rest = ["const ", "let ", "var "]
-        .iter()
-        .find_map(|keyword| trimmed.strip_prefix(keyword))?;
-    let (_, after_name) = leading_identifier(rest)?;
-    let rhs = rest[after_name..]
-        .trim_start()
-        .strip_prefix('=')?
-        .trim_start();
-    let (head, after_head) = leading_identifier(rhs)?;
-    let after_dot = rhs[after_head..].trim_start().strip_prefix('.')?;
-    let (builder, after_builder) = leading_identifier(after_dot)?;
-    if !after_dot[after_builder..].trim_start().starts_with('(') {
-        return None;
-    }
-    Some((head, builder))
 }
 
 fn builder_target(builder: &str) -> Option<(&'static str, &'static str)> {
