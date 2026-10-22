@@ -26,7 +26,10 @@ ROOT = Path(__file__).resolve().parents[3]
 MAX_LINE_BYTES = 1_048_576  # Same inclusive NDJSON request bound as product serve.
 MAX_FRAMES = 128
 MAX_TRAFFIC_BYTES = 32 * MAX_LINE_BYTES
-METHODS = ("initialize", "notifications/initialized", "ping", "tools/list", "tools/call")
+METHODS = ("initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "server/discover")
+# Claude Code 2.1.304 probes with server/discover before initialize; the product answers -32601.
+DISCOVER_META = {"io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/clientInfo",
+                 "io.modelcontextprotocol/clientCapabilities"}
 OPERATIONS = ("find_analogues", "show_family", "explain_deviation", "check_conformance", "inspect_readiness")
 
 
@@ -92,7 +95,11 @@ def admitted_request(line: bytes) -> dict:
     params = request.get("params", {})
     if not isinstance(params, dict):
         raise Refusal("PARAMS_DENIED")
-    if "_meta" in params and not _meta(params["_meta"]):
+    if method == "server/discover":
+        meta = params.get("_meta", {})
+        if set(params) - {"_meta"} or not isinstance(meta, dict) or set(meta) - DISCOVER_META:
+            raise Refusal("PARAMS_DENIED")
+    elif "_meta" in params and not _meta(params["_meta"]):
         raise Refusal("PARAMS_DENIED")
     if method == "initialize":
         if (set(params) - {"protocolVersion", "capabilities", "clientInfo", "_meta"}
@@ -106,6 +113,8 @@ def admitted_request(line: bytes) -> dict:
                     or set(info) - {"name", "version", "title", "description", "websiteUrl"}
                     or not all(_text(v) for v in info.values())):
                 raise Refusal("PARAMS_DENIED")
+    elif method == "server/discover":
+        pass
     elif method in ("notifications/initialized", "ping", "tools/list"):
         if set(params) - {"_meta"}:
             raise Refusal("PARAMS_DENIED")
