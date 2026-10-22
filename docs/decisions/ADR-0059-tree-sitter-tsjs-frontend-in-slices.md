@@ -1,6 +1,6 @@
 # ADR-0059: Tree-sitter TS/JS frontend in slices
 
-- Status: Proposed
+- Status: Accepted (maintainer decision 2026-10-22)
 - Date: 2026-10-20
 - Implements: [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md)
   for the TS/JS lane
@@ -112,6 +112,8 @@ preregistered separately before it runs.
 
 The legacy implementation of each slice stays under `cfg(test)` as the
 differential oracle until the maintainer accepts that slice's classification.
+Slice 1's legacy reader was deleted on acceptance (2026-10-22); D6 continues
+to govern slices 2 and 3.
 
 ## Consequences
 

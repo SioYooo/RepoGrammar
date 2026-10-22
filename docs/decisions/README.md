@@ -68,4 +68,4 @@ Current accepted ADRs:
 - ADR-0056: Verified one-command bootstrap over existing setup.
 - ADR-0057: Declarative language family packs.
 - ADR-0058: Tree-sitter frontends for every source language.
-- ADR-0059: Tree-sitter TS/JS frontend in slices (Proposed).
+- ADR-0059: Tree-sitter TS/JS frontend in slices (Accepted).

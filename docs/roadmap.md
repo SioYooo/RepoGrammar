@@ -589,6 +589,9 @@ current public-preview label by itself.
   family claims, and does not perform broad binding/export propagation beyond
   the bounded structural project-context resolver and optional worker
   operations.
+- ADR-0059 (accepted 2026-10-22) moves the TS/JS frontend onto Tree-sitter in
+  three slices. Slice 1 (the scope graph read from the tree) has landed;
+  slices 2 and 3 remain.
 - Production-quality broad TS/JS family evidence remains deferred until after
   the Python-first path validates the product surface, unless a later ADR
   changes scope again.
