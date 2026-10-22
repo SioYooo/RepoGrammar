@@ -1,8 +1,12 @@
 # Stable v0.5.1 dual-channel release checklist
 
-Status: **PREPARATION / UNRELEASED**. This is the canonical candidate and
-publication gate for RepoGrammar `0.5.1`; no future build, stage or public
-verification is recorded as passed by this document.
+Status: **GITHUB PUBLISHED / NPM STAGED, AWAITING MAINTAINER 2FA APPROVAL
+(verified read-only 2026-10-22)**. GitHub release `v0.5.1` is public and
+immutable; the npm `0.5.1` stage job succeeded in CI but the package is not
+public (registry `latest=0.4.3`, no `0.5.1` version). Public-asset
+verification, npm public verification and the read-only finalizer have not
+run, so `STABLE_RELEASE_READY` is not established. This is the canonical
+candidate and publication gate for RepoGrammar `0.5.1`.
 
 On 2026-10-15 the maintainer explicitly requested publication of the latest
 version to npm after the remaining CI fixes. That instruction authorizes this
@@ -203,15 +207,24 @@ update current publication/quickstart claims together; preserve the immutable
 | Gate | State at checklist creation |
 | --- | --- |
 | Maintainer request and new dual-channel scope | Recorded, 2026-10-15 |
-| Exact release source/CI and version occupancy | Pending candidate evidence |
-| Four native candidates and quickstart qualification | Pending candidate evidence |
-| Frozen npm pack, private GitHub draft and OIDC stage | Pending candidate evidence |
-| Public GitHub bytes and maintainer npm approval | Not established |
+| Exact release source/CI and version occupancy | Tag `v0.5.1` at `0104073a0360ce03ff06891b7c3370a24c1d702f` (equals `origin/main`); Release run [38820860471](https://github.com/SioYooo/RepoGrammar/actions/runs/38820860471) attempt 1 (push on tag), rechecked 2026-10-22 |
+| Four native candidates and quickstart qualification | Release gate, four build jobs, exact npm candidate smoke and installer retention succeeded in run 38820860471; per-case quickstart qualification artifacts not re-inspected on 2026-10-22 |
+| Frozen npm pack, private GitHub draft and OIDC stage | Asset-preparation job and "Stage immutable npm stable launcher" job succeeded (preview stage skipped); stage id and integrity not recorded here |
+| GitHub release publication | [v0.5.1](https://github.com/SioYooo/RepoGrammar/releases/tag/v0.5.1) published 2026-10-17T03:12:14Z: not draft, not prerelease, immutable, GitHub latest, 11 assets |
+| Public GitHub bytes verification | Not established (byte comparison, `gh release verify`, `verify-asset` not run) |
+| Maintainer npm 2FA approval | Pending: registry lists no `0.5.1`; `latest=0.4.3`, `preview=0.2.0-preview.0` (2026-10-22) |
 | Public npm SRI/provenance/pinned/latest smoke | Not established |
 | Read-only finalizer | Not established |
 
 Append exact identities, commands, results and remaining limitations as each
 gate executes. Do not replace these pending states with inferred success.
+
+The 2026-10-22 rows come from read-only `gh release view`, `gh run view`,
+`npm view` and `git rev-parse` checks. A succeeded stage job means CI
+submitted the stage; it is not publication. Registry absence of `0.5.1` is
+consistent with a pending stage but does not prove one exists (authenticated
+inspection is still required). The public quickstart installer pin remains
+`v0.5.0` until the finalizer passes.
 
 ## Preflight evidence, 2026-10-15
 
