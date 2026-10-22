@@ -151,8 +151,8 @@ literal, replacement character, unsupported character, `gnatprep` directive and
 substitution, edition-sensitive word, edition-selecting pragma, construct
 outside the declared subset, nesting ceiling), and the anchor shape, claim
 surface and downstream facts are unchanged. Non-test lines in the lane went from
-2,352 to 1,482 (`syntax.rs` 1,551 to 666). The hand-written parser is kept as
-`legacy_syntax.rs` under `cfg(test)` until the coordinator's capture.
+2,352 to 1,482 (`syntax.rs` 1,551 to 666). The hand-written parser and its differential were deleted on 2026-10-22 after
+the maintainer accepted the classification.
 
 How the declared subset is applied over the tree:
 
