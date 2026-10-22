@@ -156,6 +156,16 @@ class RunnerTest(unittest.TestCase):
             self.assertFalse(linked.startswith(("/usr/lib/", "/System/")))
             self.assertTrue(Path(resolved).is_file())
 
+    def test_sandbox_admits_worktree_ancestor_metadata_only(self):
+        # sqlite open lstat()s every worktree ancestor; admit them as metadata literals, never as reads.
+        worktree = Path("/private/var/qual/cells/0/worktree")
+        profile = runner.sandbox_profile(worktree, {"HOME": "/h", "TMPDIR": "/t"}, Path("/p"))
+        metadata = next(line for line in profile.splitlines() if line.startswith("(allow file-read-metadata"))
+        for ancestor in worktree.parents:
+            self.assertIn(f'(literal "{ancestor}")', metadata)
+        self.assertNotIn(f'(literal "{worktree}")', metadata)
+        self.assertNotIn(f'(subpath "{worktree.parent}")', profile)
+
 
 if __name__ == "__main__":
     unittest.main()
