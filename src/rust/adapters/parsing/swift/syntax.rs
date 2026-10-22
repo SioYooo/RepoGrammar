@@ -36,24 +36,6 @@
 use crate::ports::parser::ParseError;
 use tree_sitter::{Node, Parser};
 
-// Temporary ADR-0058 differential scaffolding: the legacy parser and its
-// comparison tests are deleted once the fixture-wide capture confirms the
-// migration.
-#[cfg(test)]
-#[path = "differential_tmp.rs"]
-mod differential;
-#[cfg(test)]
-#[path = "legacy_syntax.rs"]
-mod legacy;
-
-#[cfg(test)]
-thread_local! {
-    /// Routes `parse_file` to the legacy parser for the differential tests:
-    /// 0 reads the tree, 1 runs the legacy parser, 2 runs it with its
-    /// `init`/`deinit` head defect repaired.
-    static USE_LEGACY: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-}
-
 /// The bounded ceilings this parser works under. Repository input is
 /// untrusted, so the token stream, the interpolation nesting inside string
 /// literals, the class recursion, and every declaration header are capped.
@@ -310,12 +292,6 @@ pub(crate) struct SwiftFile {
 /// first as the lexical-subset gate, so every lexical refusal is decided
 /// before the grammar is consulted.
 pub(crate) fn parse_file(text: &str) -> Result<Result<SwiftFile, Refusal>, ParseError> {
-    #[cfg(test)]
-    match USE_LEGACY.with(std::cell::Cell::get) {
-        1 => return Ok(legacy::parse_file(text)),
-        2 => return Ok(legacy::parse_file_patched(text)),
-        _ => {}
-    }
     let tokens = match lex(text) {
         Ok(tokens) => tokens,
         Err(refusal) => return Ok(Err(refusal)),
@@ -1221,6 +1197,41 @@ mod tests {
 
     fn test_class(source: &str) -> String {
         format!("import XCTest\nfinal class CatalogTests: XCTestCase {{\n{source}}}\n")
+    }
+
+    // -- classified differences from the retired hand-written parser (ADR-0058) --
+
+    #[test]
+    fn a_syntax_error_in_a_skipped_body_refuses_the_file() {
+        let text = test_class("    func testA() {\n        let = = 1 +\n    }\n");
+        assert_eq!(parse(&text).unwrap_err(), Refusal::UnadmittedFileConstruct);
+    }
+
+    /// tree-sitter-swift 0.7.4 cannot read this valid Swift, so the file
+    /// refuses. Pinned so a grammar bump that fixes it is noticed.
+    #[test]
+    fn valid_swift_the_pinned_grammar_cannot_read_refuses_the_file() {
+        for body in [
+            "    func testA() {\n        nonisolated(unsafe) let data = 1\n    }\n",
+            "    func testA() { emit(value: ()) }\n",
+            "    func testA() {\n        Button { action() }\n        label: {\n            Text(\"x\")\n        }\n    }\n",
+            "    func testA() { let t: [Any] = [~String.self] }\n",
+        ] {
+            assert!(parse(&test_class(body)).is_err(), "{body:?}");
+        }
+    }
+
+    #[test]
+    fn initializers_are_admitted_and_never_anchor() {
+        let text = test_class(
+            "    init?() { super.init() }\n    deinit { }\n    override init() { super.init() }\n    required init(x: Int) { super.init() }\n    func testA() { }\n",
+        );
+        let parsed = parse(&text).expect("initializers are admitted");
+        assert_eq!(parsed.classes[0].methods.len(), 1);
+        assert_eq!(
+            parse(&test_class("    init<T>(v: T) { }\n")).unwrap_err(),
+            Refusal::GenericDeclaration
+        );
     }
 
     // -- lexer: strings and comments never move a boundary -------------------

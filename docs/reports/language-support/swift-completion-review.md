@@ -262,7 +262,8 @@ load error.
 The migration verdict is `CLASSIFIED`. The 8 committed fixtures and 115
 branch-corpus sources (every refusal class, every anchor variation and
 near-misses) are identical in the full `SourceParseOutput`, compared in
-process against the legacy parser before it is removed.
+process against the legacy parser. The legacy parser and its differential
+were deleted on 2026-10-22 after the maintainer accepted the classification.
 
 On 1,084 distinct Swift files found on the development machine (1,507 `.swift`
 files outside this repository, deduplicated by content; one is a scratch
