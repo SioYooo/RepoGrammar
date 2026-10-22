@@ -1167,7 +1167,7 @@ impl<'a> SyntaxScanner<'a> {
         lines: &[(usize, &str)],
         class_ranges: &[(usize, usize)],
     ) -> Result<(), ParseError> {
-        let test_runner_names = super::tsjs::exact_test_runner_call_names(self.document.text);
+        let test_runner_names = super::tsjs::exact_test_runner_call_names(&self.document);
         let fastify_receivers = fastify_receivers_for_scan(self.document.text);
         let hono_receivers = hono_receivers_for_scan(self.document.text);
         let zod_bindings = zod_bindings_for_scan(self.document.text);

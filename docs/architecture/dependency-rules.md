@@ -116,7 +116,10 @@ admits the lowercase free-form `.f90`/`.f95`/`.f03`/`.f08` subset to the bounded
 test-drive frontend; fixed-form and deferred source paths remain inventory.
 Under ADR-0058 these frontends read declarations from the pinned
 `tree-sitter-ada` and `tree-sitter-fortran` grammar crates, the only production
-dependencies they add; the ADR-0045 and ADR-0051 lexers remain the
+dependencies they add. Under ADR-0059 slice 1 the transitional TS/JS scope graph
+reads imports, scopes and shadowing from the pinned `tree-sitter-typescript`
+and `tree-sitter-javascript` grammar crates, the only production dependencies
+it adds, with no change of TS/JS scope; the ADR-0045 and ADR-0051 lexers remain the
 lexical-subset gates, and the grammars authorize no runtime behavior.
 Unadmitted or malformed source retains the language's typed abstention rather
 than supplying family anchors. Separate inventory parsers read only supplied

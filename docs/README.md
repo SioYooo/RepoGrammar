@@ -216,6 +216,8 @@ context lives under `.agents/memories/`.
   [binding-engine](experiments/binding-engine.md).
 - Anchor role rows over the binding engine (Phase 2b, QUALIFIED):
   [anchor-role-rows](experiments/anchor-role-rows.md).
+- Preregistered TS/JS scope graph from the Tree-sitter tree (ADR-0059 slice 1):
+  [tsjs-scope-graph-tree](experiments/tsjs-scope-graph-tree.md).
 - One prioritized execution handoff and v0.6.0 go/no-go gates:
   [adoption/retrieval/release plan](plans/v0.6-adoption-retrieval-release-plan.md).
 

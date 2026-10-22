@@ -23,7 +23,7 @@ mod zod;
 
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Provenance,
-    SemanticFact, SemanticFactKind, SourceRange, SymbolId,
+    SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
 };
 use crate::ports::parser::{ParseError, ParserProjectContext, SourceDocument};
 use scope_graph::ScopeGraphLite;
@@ -43,7 +43,16 @@ pub fn exact_framework_anchors(
     units: &[CodeUnit],
     context: Option<&ParserProjectContext>,
 ) -> Result<Vec<SemanticFact>, ParseError> {
-    let bindings = ScopeGraphLite::analyze(document.text);
+    let bindings = ScopeGraphLite::analyze(document.text, document.path, &document.language);
+    anchors_with_bindings(document, units, context, bindings)
+}
+
+fn anchors_with_bindings(
+    document: &SourceDocument<'_>,
+    units: &[CodeUnit],
+    context: Option<&ParserProjectContext>,
+    bindings: ScopeGraphLite,
+) -> Result<Vec<SemanticFact>, ParseError> {
     let nest_context = nest::NestContext::analyze(&bindings, document.text, units);
     let mut facts = Vec::new();
     for unit in units {
@@ -89,7 +98,7 @@ fn anchor_for_unit(
     else {
         return AnchorOutcome::None;
     };
-    match unit.kind {
+    let outcome = match unit.kind {
         CodeUnitKind::ExpressRoute => express::anchor(bindings, slice, unit.range.start_byte),
         CodeUnitKind::NextAppPage
         | CodeUnitKind::NextAppLayout
@@ -139,8 +148,19 @@ fn anchor_for_unit(
             false,
             context.is_some_and(|context| context.tsjs_has_test_runner_context),
         ),
-        _ => AnchorOutcome::None,
+        _ => return AnchorOutcome::None,
+    };
+    // ADR-0059 D4: every unit kind dispatched above is refused, once, when the
+    // file's tree could not be read.
+    if bindings.degraded {
+        return AnchorOutcome::Unknown(UnknownAnchor {
+            reason: UnknownReasonCode::InsufficientSupport,
+            affected_claim: "tsjs_syntax",
+            kind: "tsjs_parse_degraded",
+            note: "TS/JS syntax tree could not be read exactly; no bindings were read",
+        });
     }
+    outcome
 }
 
 fn anchor_fact(
