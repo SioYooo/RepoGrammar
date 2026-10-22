@@ -27,7 +27,15 @@ accepted cases are kept as the plain test
 asserts the tree reading's anchors, key assumptions and UNKNOWN kinds on 39
 minimal sources (Express, Fastify, Hono, Prisma, Drizzle, Zod, Jest/Vitest and
 NestJS) with no legacy call. The measurements below were taken with the oracle
-present.
+present. After the merge (`main@8cdefea`) the fixture-wide capture differs from
+the pre-slice-2 baseline in exactly the two accepted
+`drizzle_exact_repositories` rows (`generation`, `unknowns`); that capture is
+the new baseline, SHA-256
+`53d288682c17a4c8c1afab5c0d422d67502d0304bb4dd4a638c6766b6f00a389`, retained
+with its predecessor
+(`e493fdb9ae47e2f5e83a0b2a81d7f95de1e374fe4621eef3b9c6ad283423a85e`) outside
+the repository under
+`/Volumes/External/Development/repogrammar-evidence/capture-baselines-20261022/`.
 
 ## Objective
 
