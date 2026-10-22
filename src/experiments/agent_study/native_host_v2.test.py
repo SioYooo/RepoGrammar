@@ -71,6 +71,29 @@ class NativeHostTest(unittest.TestCase):
         self.assertEqual(host.assess_manifest(json.dumps(event), False)["status"], "CONTROL_ISOLATION_BLOCKED")
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "Unix special file control")
+    def test_inventory_tolerates_only_wal_reader_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".repogrammar").mkdir()
+            db = root / ".repogrammar/repogrammar.sqlite"
+            db.write_bytes(b"main")
+            base = host.inventory(root)
+            (root / ".repogrammar/repogrammar.sqlite-shm").write_bytes(b"s" * 32768)
+            (root / ".repogrammar/repogrammar.sqlite-wal").write_bytes(b"")
+            self.assertEqual(host.inventory(root), base)
+            (root / ".repogrammar/repogrammar.sqlite-wal").write_bytes(b"w")
+            self.assertNotEqual(host.inventory(root), base)
+            (root / ".repogrammar/repogrammar.sqlite-wal").write_bytes(b"")
+            (root / ".repogrammar/other.tmp").write_bytes(b"")
+            self.assertNotEqual(host.inventory(root), base)
+            (root / ".repogrammar/other.tmp").unlink()
+            (root / ".repogrammar/sub").mkdir()
+            (root / ".repogrammar/sub/repogrammar.sqlite-shm").write_bytes(b"x")
+            self.assertNotEqual(host.inventory(root), base)
+            (root / ".repogrammar/sub/repogrammar.sqlite-shm").unlink()
+            db.write_bytes(b"mutated")
+            self.assertNotEqual(host.inventory(root), base)
+
     def test_inventory_tags_types_and_rejects_special_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

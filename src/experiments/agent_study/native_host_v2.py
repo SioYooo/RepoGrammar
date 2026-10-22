@@ -246,6 +246,10 @@ def inventory(root):
         if relative.parts[:3] == (".repogrammar", "telemetry", "local-metrics"):
             continue
         mode = path.lstat().st_mode
+        if stat.S_ISREG(mode) and relative.parts[:1] == (".repogrammar",) and len(relative.parts) == 2 and (
+                relative.parts[1] == "repogrammar.sqlite-shm"
+                or (relative.parts[1] == "repogrammar.sqlite-wal" and path.lstat().st_size == 0)):
+            continue  # SQLite WAL reader artefacts (harness policy 2026-10-22); main database stays hashed.
         if stat.S_ISLNK(mode):
             result[str(relative)] = {"kind": "SYMLINK", "sha256": offline.sha(os.readlink(path).encode())}
         elif stat.S_ISREG(mode):
