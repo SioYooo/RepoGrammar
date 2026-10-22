@@ -326,6 +326,10 @@ How each ADR-0049 parse outcome is reproduced:
   blocks) iteratively, with the program as the first region, so the 256-region
   bound is exact.
 
+The maintainer accepted the classification on 2026-10-22, and the legacy
+parser and its differential tests were deleted that day; the measurements
+below are historical.
+
 Differential results. All 9 committed `v0_2` fixture sources and 67 branch
 sources (every refusal class, anchor variation, near-miss, and the depth bound
 at 253, 254 and 300 nested regions) produce identical `SourceParseOutput`.
