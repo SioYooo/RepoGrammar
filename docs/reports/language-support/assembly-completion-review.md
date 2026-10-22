@@ -92,3 +92,44 @@ is reachable, or that a labeled procedure forms a family. It does not support
 Highest risk: extension/dialect ambiguity. The next highest-value action is a
 repository-controlled target-profile record plus a pinned parse-only provider
 that can discharge the exact same profile obligation.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The migration verdict is `BLOCKED`. No production change was made: the
+scanner in `src/rust/adapters/parsing/assembly.rs` is unchanged and
+`tree-sitter-asm` was not admitted. A spike with `tree-sitter-asm` 0.24.0
+(`tree_sitter_asm::LANGUAGE`) showed that the generic grammar does not parse
+GNU `as` AT&T syntax, so reproducing the candidate set would mean
+reimplementing the scanner on top of an error-ridden tree.
+
+Under the ADR-0058 rule that any `ERROR` or `MISSING` node refuses the file:
+
+- 5 of the 8 probed unit-test sources, including the first emission test, the
+  macro/include test and the comment/malformed-operand test, produce `ERROR`
+  or `MISSING` nodes.
+- All 679 `.s` files found on the machine (Rust compiler-builtins, LLVM
+  libunwind tests and similar; several are non-x86) contain an `ERROR` or
+  `MISSING` node, so the lane would abstain on every file.
+
+Constructs the grammar mis-tokenizes or cannot express:
+
+- `@` is not a token: `.type entry,@function`, `.section ...,@progbits` and
+  `call bar@PLT` fail, although `@` is a legal symbol character for the scanner.
+- `*` indirect operands (`call *%rax`, `call *target`) fail; the grammar admits
+  `*` only as `*rel[int]`.
+- A label and a statement on one line (`.L1: ret`, `foo: call bar`) and
+  chained labels (`a: b:`) fail, because the grammar separates items only by
+  newline.
+- `;` and `//` are always comments; in GNU `as` x86 `;` separates statements
+  and `//` is not a comment.
+- A backslash macro parameter (`call \target`) is an `ERROR`.
+- Numeric local labels (`1:`) and operands such as `bad-label!:` are read as
+  instructions, expression fragments or `MISSING` nodes instead of being
+  distinguished from labels.
+
+The lane's whole job is these byte-exact spellings (labels, selected
+directives, direct call/jump operands) with the scanner's own `is_symbol` and
+line-shape rules, so no part of the syntax layer can move to the grammar
+without re-implementing it. The scanner stays the production frontend. A
+revisit needs either an AT&T-aware grammar or the parse-only LLVM MC provider
+named in ADR-0038 follow-up. Status above is unchanged.

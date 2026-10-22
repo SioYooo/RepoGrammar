@@ -1,19 +1,24 @@
-//! Recursive-descent parser for the ADR-0045 declared Ada subset.
+//! Tree-sitter reader for the ADR-0045 declared Ada subset (ADR-0058).
 //!
-//! The parser has two outcomes and no third: it consumes the whole compilation
-//! unit, or it refuses the file. It never recovers, never resynchronises, and
-//! never produces a partial tree, because an anchor recovered from a guess is
-//! indistinguishable from an anchor that is there.
+//! The syntax layer is the pinned `tree-sitter-ada` grammar. The ADR-0045 lexer
+//! stays in front of it as the lexical-subset gate, so a file is read by
+//! Tree-sitter only after the lexer has proved that every literal, comment and
+//! delimiter is inside the declared subset, and after the edition-sensitive
+//! words have been refused. The ADR-0045 subset policy is applied over the
+//! tree: this module turns the tree into an [`AdmittedUnit`] or a [`Refusal`],
+//! and nothing else.
 //!
-//! That failure mode is what makes a hand-written subset acceptable. A gap in
-//! the grammar costs recall -- the file abstains -- and can never invent a
-//! registration that the source does not contain.
+//! The reader has two outcomes and no third: it accepts the whole compilation
+//! unit, or it refuses the file. It never recovers, because an anchor recovered
+//! from a guess is indistinguishable from an anchor that is there. Any `ERROR`
+//! or `MISSING` node refuses the file as [`Refusal::OutsideDeclaredSubset`], so
+//! a gap in the grammar costs recall and can never invent a registration.
 //!
 //! ## The invariance argument
 //!
 //! RepoGrammar cannot see which Ada edition a GPR project selects, so the
 //! declared subset is built so that it does not need to. For every text this
-//! grammar admits, the token stream and the phrase structure are the same under
+//! reader admits, the token stream and the phrase structure are the same under
 //! **every edition of {Ada 95, Ada 2005, Ada 2012, Ada 2022} under which that
 //! text is legal**. Ada 83 is outside the set and costs nothing: `'Access` does
 //! not exist in Ada 83, so no Ada 83 compilation unit can contain the admitted
@@ -24,13 +29,26 @@
 //! own token kind. `overriding` is admitted only immediately before `procedure`
 //! or `function`, where the Ada 95 reading is not legal at all, so the two
 //! editions cannot disagree about a text that parses. Every other occurrence of
-//! an edition-sensitive word is refused.
+//! an edition-sensitive word is refused before the grammar sees the file.
+//!
+//! ## Precedence
+//!
+//! A left-to-right parse reports the refusal it reaches first. This reader
+//! reproduces that over the tree: the lexical and edition gates run over the
+//! whole token stream first, and among the tree refusals (a syntax error, a
+//! construct outside the declared subset, the nesting ceiling, an
+//! edition-selecting pragma) the earliest source position wins. At one position
+//! a structural refusal precedes the pragma refusal, because a pragma in a
+//! position the declared grammar does not reach is never read as a pragma.
 
-use super::lexer::{lex, Refusal, Token, TokenKind};
+use super::lexer::{is_reserved_word, lex, Refusal, Token, TokenKind};
+use crate::ports::parser::ParseError;
+use tree_sitter::{Node, Parser};
 
-/// Recursion ceiling. Untrusted input may nest arbitrarily; a stack overflow
-/// aborts the process, so the depth is bounded and a breach abstains.
-const MAX_DEPTH: usize = 96;
+/// Nesting ceiling. Input is untrusted, and deeply nested source is refused
+/// rather than analysed. The depth is measured over the tree with the same
+/// production weights the declared grammar charged, see [`own_depth`].
+pub(crate) const MAX_DEPTH: usize = 96;
 
 /// Byte range of one admitted `Register_Routine` call, from the first character
 /// of the callee name through the closing parenthesis.
@@ -59,12 +77,87 @@ const LANGUAGE_EDITION_PRAGMAS: &[&str] = &["ada_83", "ada_1983", "extensions_al
 
 const REGISTER_ROUTINE: &str = "register_routine";
 
-pub(crate) fn parse_compilation(source: &str) -> Result<AdmittedUnit, Refusal> {
-    let tokens = lex(source)?;
-    refuse_misplaced_edition_sensitive_words(source, &tokens)?;
-    let mut parser = Parser::new(source, &tokens);
-    parser.compilation()?;
-    Ok(parser.admitted)
+/// Constructs ADR-0045 D4a names as outside the declared subset. A file holding
+/// one abstains as a whole.
+const OUTSIDE_SUBSET_KINDS: &[&str] = &[
+    // Generic declarations (instantiations are admitted).
+    "generic_package_declaration",
+    "generic_subprogram_declaration",
+    "generic_renaming_declaration",
+    "generic_formal_part",
+    // Task and protected types and bodies, entries, and every tasking statement.
+    "task_type_declaration",
+    "single_task_declaration",
+    "task_body",
+    "task_body_stub",
+    "task_definition",
+    "protected_type_declaration",
+    "single_protected_declaration",
+    "protected_body",
+    "protected_body_stub",
+    "protected_definition",
+    "entry_declaration",
+    "entry_body",
+    "accept_statement",
+    "selective_accept",
+    "asynchronous_select",
+    "conditional_entry_call",
+    "timed_entry_call",
+    "requeue_statement",
+    "abort_statement",
+    "delay_relative_statement",
+    "delay_until_statement",
+    "terminate_alternative",
+    // Interface and synchronized types.
+    "interface_type_definition",
+    "formal_interface_type_definition",
+    // Representation clauses.
+    "attribute_definition_clause",
+    "enumeration_representation_clause",
+    "record_representation_clause",
+    "at_clause",
+    "mod_clause",
+    "component_clause",
+    // Subunits, and the package stub. A subprogram stub (`procedure P is
+    // separate;`) is an ordinary declaration the declared grammar admits.
+    "subunit",
+    "package_body_stub",
+    // Ada 2022 and later: declare expressions, the `@` target name, raise
+    // expressions, delta aggregates, square-bracket aggregates and iterated
+    // component associations.
+    "declare_expression",
+    "target_name",
+    "raise_expression",
+    "array_delta_aggregate",
+    "record_delta_aggregate",
+    "value_sequence",
+    "iterated_element_association",
+    "reduction_attribute_designator",
+    // SPARK and Ada 2022 `Global` aspect modes, which the declared aspect
+    // grammar (an aspect name and an expression) does not read.
+    "global_aspect_definition",
+    "global_aspect_element",
+    "global_mode",
+];
+
+/// Reads one `.adb` text. The outer `Result` carries a grammar-loading failure,
+/// which is an internal error and never a refusal.
+pub(crate) fn parse_compilation(source: &str) -> Result<Result<AdmittedUnit, Refusal>, ParseError> {
+    let tokens = match lex(source) {
+        Ok(tokens) => tokens,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    if let Err(refusal) = refuse_misplaced_edition_sensitive_words(source, &tokens) {
+        return Ok(Err(refusal));
+    }
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_ada::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load Ada grammar: {error}")))?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter Ada parse failed".to_string()))?;
+    Ok(read_compilation(source, tree.root_node()))
 }
 
 /// An edition-sensitive word is admitted in exactly one position: as the
@@ -87,1468 +180,490 @@ fn refuse_misplaced_edition_sensitive_words(source: &str, tokens: &[Token]) -> R
     Ok(())
 }
 
-/// What an actual parameter or expression turned out to be, to the precision
-/// the admitted anchor needs and no further.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExprShape {
-    /// A plain dotted name whose only other suffix is a final `'Access`.
-    AccessName,
-    /// Exactly one string literal.
-    StringLiteral,
-    Other,
-}
+/// The earliest tree refusal. A structural refusal outranks a pragma refusal at
+/// the same position, and an earlier recorded refusal wins a remaining tie.
+#[derive(Default)]
+struct EarliestRefusal(Option<(usize, u8, Refusal)>);
 
-struct CallSuffix {
-    designator_start: usize,
-    designator_end: usize,
-    actuals: Vec<ExprShape>,
-    end: usize,
-}
-
-struct NameInfo {
-    start: usize,
-    shape: ExprShape,
-    /// Present when the last suffix of the name was an actual-parameter part,
-    /// which is what makes the name a candidate procedure call.
-    call: Option<CallSuffix>,
-}
-
-struct Parser<'a> {
-    source: &'a str,
-    tokens: &'a [Token],
-    position: usize,
-    depth: usize,
-    admitted: AdmittedUnit,
-}
-
-impl<'a> Parser<'a> {
-    fn new(source: &'a str, tokens: &'a [Token]) -> Self {
-        Self {
-            source,
-            tokens,
-            position: 0,
-            depth: 0,
-            admitted: AdmittedUnit::default(),
-        }
-    }
-
-    // ---------------------------------------------------------------- cursor
-
-    fn peek(&self) -> Option<&'a Token> {
-        self.tokens.get(self.position)
-    }
-
-    fn peek_at(&self, offset: usize) -> Option<&'a Token> {
-        self.tokens.get(self.position + offset)
-    }
-
-    fn at(&self, kind: TokenKind, word: &str) -> bool {
-        self.peek()
-            .is_some_and(|token| token.matches(self.source, kind, word))
-    }
-
-    fn at_word(&self, word: &str) -> bool {
-        self.at(TokenKind::Reserved, word)
-    }
-
-    fn at_symbol(&self, symbol: &str) -> bool {
-        self.at(TokenKind::Delimiter, symbol)
-    }
-
-    fn at_kind(&self, kind: TokenKind) -> bool {
-        self.peek().is_some_and(|token| token.kind == kind)
-    }
-
-    fn advance(&mut self) -> Result<&'a Token, Refusal> {
-        let token = self.peek().ok_or(Refusal::OutsideDeclaredSubset)?;
-        self.position += 1;
-        Ok(token)
-    }
-
-    fn eat_word(&mut self, word: &str) -> bool {
-        let found = self.at_word(word);
-        if found {
-            self.position += 1;
-        }
-        found
-    }
-
-    fn eat_symbol(&mut self, symbol: &str) -> bool {
-        let found = self.at_symbol(symbol);
-        if found {
-            self.position += 1;
-        }
-        found
-    }
-
-    fn expect_word(&mut self, word: &str) -> Result<(), Refusal> {
-        if self.eat_word(word) {
-            Ok(())
-        } else {
-            Err(Refusal::OutsideDeclaredSubset)
-        }
-    }
-
-    fn expect_symbol(&mut self, symbol: &str) -> Result<(), Refusal> {
-        if self.eat_symbol(symbol) {
-            Ok(())
-        } else {
-            Err(Refusal::OutsideDeclaredSubset)
-        }
-    }
-
-    fn expect_identifier(&mut self) -> Result<&'a Token, Refusal> {
-        if self.at_kind(TokenKind::Identifier) {
-            self.advance()
-        } else {
-            Err(Refusal::OutsideDeclaredSubset)
-        }
-    }
-
-    fn enter(&mut self) -> Result<(), Refusal> {
-        self.depth += 1;
-        if self.depth > MAX_DEPTH {
-            return Err(Refusal::NestingLimit);
-        }
-        Ok(())
-    }
-
-    fn leave(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
-    }
-
-    // ----------------------------------------------------------- compilation
-
-    /// `compilation ::= { pragma | with_clause | use_clause } library_item`
-    ///
-    /// `library_item` is a package body or a library-level subprogram body,
-    /// which are the two forms a `.adb` file holds. A subunit (`separate (P)`)
-    /// is refused: its context clause is inherited from the parent, and
-    /// ADR-0045 D2 does not admit an import it cannot see.
-    fn compilation(&mut self) -> Result<(), Refusal> {
-        loop {
-            if self.at_word("pragma") {
-                self.pragma()?;
-            } else if self.at_word("with") || self.at_word("limited") || self.at_word("private") {
-                self.with_clause()?;
-            } else if self.at_word("use") {
-                self.use_clause()?;
-            } else {
-                break;
-            }
-        }
-        if self.at_word("package") {
-            self.package_body()?;
-        } else if self.at_word("procedure") || self.at_word("function") || self.at_word("not") {
-            match self.subprogram_declaration_or_body()? {
-                SubprogramForm::Body => {}
-                SubprogramForm::Declaration => return Err(Refusal::OutsideDeclaredSubset),
-            }
-        } else {
-            return Err(Refusal::OutsideDeclaredSubset);
-        }
-        if self.position != self.tokens.len() {
-            return Err(Refusal::OutsideDeclaredSubset);
-        }
-        Ok(())
-    }
-
-    /// `with_clause ::= [limited] [private] "with" name {"," name} ";"`
-    fn with_clause(&mut self) -> Result<(), Refusal> {
-        let _ = self.eat_word("limited");
-        let _ = self.eat_word("private");
-        self.expect_word("with")?;
-        loop {
-            let first = self.expect_identifier()?;
-            if first.text(self.source).eq_ignore_ascii_case("aunit") {
-                self.admitted.aunit_context_clause = true;
-            }
-            while self.eat_symbol(".") {
-                self.expect_identifier()?;
-            }
-            if !self.eat_symbol(",") {
-                break;
-            }
-        }
-        self.expect_symbol(";")
-    }
-
-    /// `use_clause ::= "use" ["all"] ["type"] name {"," name} ";"`
-    fn use_clause(&mut self) -> Result<(), Refusal> {
-        self.expect_word("use")?;
-        let _ = self.eat_word("all");
-        let _ = self.eat_word("type");
-        loop {
-            self.name()?;
-            if !self.eat_symbol(",") {
-                break;
-            }
-        }
-        self.expect_symbol(";")
-    }
-
-    /// `pragma ::= "pragma" identifier [ "(" association_list ")" ] ";"`
-    fn pragma(&mut self) -> Result<(), Refusal> {
-        self.expect_word("pragma")?;
-        // The identifier position also accepts a few reserved words, because
-        // `pragma Interface` and `pragma Pure` spell differently across
-        // editions; only the edition-selecting names matter here.
-        let name = self.advance()?;
-        if !matches!(name.kind, TokenKind::Identifier | TokenKind::Reserved) {
-            return Err(Refusal::OutsideDeclaredSubset);
-        }
-        if LANGUAGE_EDITION_PRAGMAS
-            .iter()
-            .any(|pragma| name.text(self.source).eq_ignore_ascii_case(pragma))
-        {
-            return Err(Refusal::LanguageEditionPragma);
-        }
-        if self.at_symbol("(") {
-            self.parenthesised_associations()?;
-        }
-        self.expect_symbol(";")
-    }
-
-    // -------------------------------------------------------------- packages
-
-    /// `package_body ::= "package" "body" name [aspect] "is" declarative_part`
-    /// `[ "begin" handled_sequence ] "end" [name] ";"`
-    fn package_body(&mut self) -> Result<(), Refusal> {
-        self.expect_word("package")?;
-        self.expect_word("body")?;
-        self.defining_name()?;
-        self.optional_aspect_specification()?;
-        self.expect_word("is")?;
-        self.declarative_part()?;
-        if self.eat_word("begin") {
-            self.handled_sequence_of_statements()?;
-        }
-        self.expect_word("end")?;
-        if self.at_kind(TokenKind::Identifier) {
-            self.defining_name()?;
-        }
-        self.expect_symbol(";")
-    }
-
-    /// The declarative-level `package` forms: a body, a nested declaration, a
-    /// generic instantiation, and a renaming.
-    fn package_declarative_item(&mut self) -> Result<(), Refusal> {
+impl EarliestRefusal {
+    fn note(&mut self, position: usize, rank: u8, refusal: Refusal) {
         if self
-            .peek_at(1)
-            .is_some_and(|token| token.matches(self.source, TokenKind::Reserved, "body"))
+            .0
+            .is_none_or(|(at, held, _)| (position, rank) < (at, held))
         {
-            return self.package_body();
-        }
-        self.expect_word("package")?;
-        self.defining_name()?;
-        if self.eat_word("renames") {
-            self.name()?;
-            return self.expect_symbol(";");
-        }
-        self.optional_aspect_specification()?;
-        self.expect_word("is")?;
-        if self.eat_word("new") {
-            self.name()?;
-            self.optional_aspect_specification()?;
-            return self.expect_symbol(";");
-        }
-        self.declarative_part()?;
-        if self.eat_word("private") {
-            self.declarative_part()?;
-        }
-        self.expect_word("end")?;
-        if self.at_kind(TokenKind::Identifier) {
-            self.defining_name()?;
-        }
-        self.expect_symbol(";")
-    }
-
-    /// A defining name may be dotted, because a child unit body names its
-    /// parent (`package body Parent.Child is`).
-    fn defining_name(&mut self) -> Result<(), Refusal> {
-        self.expect_identifier()?;
-        while self.at_symbol(".")
-            && self
-                .peek_at(1)
-                .is_some_and(|token| token.kind == TokenKind::Identifier)
-        {
-            self.position += 1;
-            self.position += 1;
-        }
-        Ok(())
-    }
-
-    // ---------------------------------------------------------- declarations
-
-    fn declarative_part(&mut self) -> Result<(), Refusal> {
-        self.enter()?;
-        while !(self.peek().is_none()
-            || self.at_word("begin")
-            || self.at_word("end")
-            || self.at_word("private")
-            || self.at_word("exception"))
-        {
-            self.declarative_item()?;
-        }
-        self.leave();
-        Ok(())
-    }
-
-    fn declarative_item(&mut self) -> Result<(), Refusal> {
-        if self.at_word("pragma") {
-            return self.pragma();
-        }
-        if self.at_word("use") {
-            return self.use_clause();
-        }
-        if self.at_word("type") {
-            return self.type_declaration();
-        }
-        if self.at_word("subtype") {
-            return self.subtype_declaration();
-        }
-        if self.at_word("package") {
-            return self.package_declarative_item();
-        }
-        if self.at_word("procedure") || self.at_word("function") || self.at_word("not") {
-            self.subprogram_declaration_or_body()?;
-            return Ok(());
-        }
-        if self.at_kind(TokenKind::EditionSensitive) {
-            // Only `overriding procedure` / `overriding function` reach here,
-            // because the pre-pass refused every other placement.
-            self.subprogram_declaration_or_body()?;
-            return Ok(());
-        }
-        if self.at_kind(TokenKind::Identifier) {
-            return self.object_like_declaration();
-        }
-        // `generic`, `task`, `protected`, `entry`, `for` representation
-        // clauses, and `separate` subunits are outside the declared subset.
-        Err(Refusal::OutsideDeclaredSubset)
-    }
-
-    /// Object, number, exception, and object-renaming declarations, which all
-    /// begin with a defining identifier list followed by `:`.
-    fn object_like_declaration(&mut self) -> Result<(), Refusal> {
-        self.identifier_list()?;
-        self.expect_symbol(":")?;
-        if self.eat_word("exception") {
-            if self.eat_word("renames") {
-                self.name()?;
-            }
-            return self.expect_symbol(";");
-        }
-        let _ = self.eat_word("aliased");
-        let constant = self.eat_word("constant");
-        if constant && self.at_symbol(":=") {
-            // `X : constant := 5;` -- a number declaration has no subtype.
-            self.position += 1;
-            self.expression()?;
-            self.optional_aspect_specification()?;
-            return self.expect_symbol(";");
-        }
-        self.object_subtype()?;
-        if self.eat_word("renames") {
-            self.name()?;
-            self.optional_aspect_specification()?;
-            return self.expect_symbol(";");
-        }
-        if self.eat_symbol(":=") {
-            self.expression()?;
-        }
-        self.optional_aspect_specification()?;
-        self.expect_symbol(";")
-    }
-
-    fn identifier_list(&mut self) -> Result<(), Refusal> {
-        loop {
-            self.expect_identifier()?;
-            if !self.eat_symbol(",") {
-                return Ok(());
-            }
+            self.0 = Some((position, rank, refusal));
         }
     }
+}
 
-    fn object_subtype(&mut self) -> Result<(), Refusal> {
-        if self.at_word("array") {
-            return self.array_type_definition();
-        }
-        self.subtype_indication()
+const STRUCTURAL: u8 = 0;
+const PRAGMA: u8 = 1;
+
+fn read_compilation(source: &str, root: Node<'_>) -> Result<AdmittedUnit, Refusal> {
+    let mut refusals = EarliestRefusal::default();
+    let mut admitted = AdmittedUnit::default();
+    check_units(source, root, &mut refusals, &mut admitted);
+    walk(source, root, &mut refusals, &mut admitted);
+    match refusals.0 {
+        Some((_, _, refusal)) => Err(refusal),
+        None => Ok(admitted),
     }
+}
 
-    /// `subtype_indication ::= [not null] subtype_mark [constraint]`
-    ///
-    /// An index or discriminant constraint is a parenthesised suffix of the
-    /// name, so it is already consumed by [`Self::name`].
-    fn subtype_indication(&mut self) -> Result<(), Refusal> {
-        if self.at_word("not") {
-            self.position += 1;
-            self.expect_word("null")?;
-        }
-        if self.at_word("access") {
-            return self.access_definition();
-        }
-        self.name()?;
-        self.optional_scalar_constraint()
-    }
-
-    fn optional_scalar_constraint(&mut self) -> Result<(), Refusal> {
-        if self.eat_word("range") {
-            self.range_or_box()?;
-        } else if self.eat_word("digits") {
-            self.simple_expression()?;
-            if self.eat_word("range") {
-                self.range_or_box()?;
-            }
-        } else if self.eat_word("delta") {
-            self.simple_expression()?;
-            if self.eat_word("digits") {
-                self.simple_expression()?;
-            }
-            if self.eat_word("range") {
-                self.range_or_box()?;
-            }
-        }
-        Ok(())
-    }
-
-    fn range_or_box(&mut self) -> Result<(), Refusal> {
-        if self.eat_symbol("<>") {
-            return Ok(());
-        }
-        self.simple_expression()?;
-        if self.eat_symbol("..") {
-            self.simple_expression()?;
-        }
-        Ok(())
-    }
-
-    /// `access_definition ::= "access" ["all"|"constant"] subtype_indication`
-    /// `| "access" ["protected"] ("procedure"|"function") profile`
-    fn access_definition(&mut self) -> Result<(), Refusal> {
-        self.expect_word("access")?;
-        let _ = self.eat_word("protected");
-        if self.eat_word("procedure") {
-            if self.at_symbol("(") {
-                self.parameter_profile()?;
-            }
-            return Ok(());
-        }
-        if self.eat_word("function") {
-            if self.at_symbol("(") {
-                self.parameter_profile()?;
-            }
-            self.expect_word("return")?;
-            return self.return_subtype();
-        }
-        let _ = self.eat_word("all") || self.eat_word("constant");
-        self.subtype_indication()
-    }
-
-    fn subtype_declaration(&mut self) -> Result<(), Refusal> {
-        self.expect_word("subtype")?;
-        self.expect_identifier()?;
-        self.expect_word("is")?;
-        self.subtype_indication()?;
-        self.optional_aspect_specification()?;
-        self.expect_symbol(";")
-    }
-
-    // ----------------------------------------------------------------- types
-
-    fn type_declaration(&mut self) -> Result<(), Refusal> {
-        self.expect_word("type")?;
-        self.expect_identifier()?;
-        if self.at_symbol("(") {
-            self.discriminant_part()?;
-        }
-        if self.eat_symbol(";") {
-            // An incomplete type declaration.
-            return Ok(());
-        }
-        self.expect_word("is")?;
-        self.type_definition()?;
-        self.optional_aspect_specification()?;
-        self.expect_symbol(";")
-    }
-
-    fn discriminant_part(&mut self) -> Result<(), Refusal> {
-        self.expect_symbol("(")?;
-        if self.eat_symbol("<>") {
-            return self.expect_symbol(")");
-        }
-        loop {
-            self.identifier_list()?;
-            self.expect_symbol(":")?;
-            if self.at_word("access") {
-                self.access_definition()?;
-            } else {
-                self.subtype_indication()?;
-            }
-            if self.eat_symbol(":=") {
-                self.expression()?;
-            }
-            if !self.eat_symbol(";") {
-                break;
-            }
-        }
-        self.expect_symbol(")")
-    }
-
-    fn type_definition(&mut self) -> Result<(), Refusal> {
-        // `abstract`, `tagged`, and `limited` are prefixes of several
-        // definitions and never change where the definition ends.
-        while self.eat_word("abstract") || self.eat_word("tagged") || self.eat_word("limited") {}
-        if self.at_symbol("(") {
-            return self.enumeration_type_definition();
-        }
-        if self.at_word("array") {
-            return self.array_type_definition();
-        }
-        if self.at_word("access") || self.at_word("not") {
-            return self.subtype_indication();
-        }
-        if self.eat_word("private") {
-            return Ok(());
-        }
-        if self.eat_word("range") {
-            return self.range_or_box();
-        }
-        if self.eat_word("mod") {
-            self.simple_expression()?;
-            return Ok(());
-        }
-        if self.at_word("digits") || self.at_word("delta") {
-            return self.optional_scalar_constraint();
-        }
-        if self.at_word("null") || self.at_word("record") {
-            return self.record_definition();
-        }
-        if self.eat_word("new") {
-            self.subtype_indication()?;
-            if self.eat_word("with") {
-                if self.eat_word("private") {
-                    return Ok(());
-                }
-                return self.record_definition();
-            }
-            return Ok(());
-        }
-        // `task`, `protected`, `interface`, and `synchronized` type
-        // definitions are outside the declared subset.
-        Err(Refusal::OutsideDeclaredSubset)
-    }
-
-    fn enumeration_type_definition(&mut self) -> Result<(), Refusal> {
-        self.expect_symbol("(")?;
-        loop {
-            if self.at_kind(TokenKind::Identifier) || self.at_kind(TokenKind::Character) {
-                self.position += 1;
-            } else {
-                return Err(Refusal::OutsideDeclaredSubset);
-            }
-            if !self.eat_symbol(",") {
-                break;
-            }
-        }
-        self.expect_symbol(")")
-    }
-
-    fn array_type_definition(&mut self) -> Result<(), Refusal> {
-        self.expect_word("array")?;
-        self.expect_symbol("(")?;
-        loop {
-            if self.at_word("others") {
-                return Err(Refusal::OutsideDeclaredSubset);
-            }
-            self.discrete_range()?;
-            if !self.eat_symbol(",") {
-                break;
-            }
-        }
-        self.expect_symbol(")")?;
-        self.expect_word("of")?;
-        self.component_definition()
-    }
-
-    /// `discrete_range ::= subtype_indication | range`
-    ///
-    /// Both readings consume the same tokens, and this frontend derives no
-    /// meaning from either, so one production covers them.
-    fn discrete_range(&mut self) -> Result<(), Refusal> {
-        if self.at_word("range") {
-            self.position += 1;
-            return self.range_or_box();
-        }
-        self.simple_expression()?;
-        if self.eat_symbol("..") {
-            self.simple_expression()?;
-        } else if self.eat_word("range") {
-            self.range_or_box()?;
-        }
-        Ok(())
-    }
-
-    fn component_definition(&mut self) -> Result<(), Refusal> {
-        let _ = self.eat_word("aliased");
-        self.subtype_indication()
-    }
-
-    /// `record_definition ::= "null" "record" | "record" component_list "end" "record"`
-    fn record_definition(&mut self) -> Result<(), Refusal> {
-        if self.eat_word("null") {
-            return self.expect_word("record");
-        }
-        self.expect_word("record")?;
-        self.component_list()?;
-        self.expect_word("end")?;
-        self.expect_word("record")
-    }
-
-    fn component_list(&mut self) -> Result<(), Refusal> {
-        self.enter()?;
-        loop {
-            if self.at_word("end") || self.at_word("when") || self.peek().is_none() {
-                break;
-            }
-            if self.eat_word("null") {
-                self.expect_symbol(";")?;
-                continue;
-            }
-            if self.at_word("case") {
-                self.variant_part()?;
-                continue;
-            }
-            self.identifier_list()?;
-            self.expect_symbol(":")?;
-            self.component_definition()?;
-            if self.eat_symbol(":=") {
-                self.expression()?;
-            }
-            self.optional_aspect_specification()?;
-            self.expect_symbol(";")?;
-        }
-        self.leave();
-        Ok(())
-    }
-
-    fn variant_part(&mut self) -> Result<(), Refusal> {
-        self.expect_word("case")?;
-        self.name()?;
-        self.expect_word("is")?;
-        while self.eat_word("when") {
-            self.discrete_choice_list()?;
-            self.expect_symbol("=>")?;
-            self.component_list()?;
-        }
-        self.expect_word("end")?;
-        self.expect_word("case")?;
-        self.expect_symbol(";")
-    }
-
-    // ------------------------------------------------------------ subprogram
-
-    fn subprogram_declaration_or_body(&mut self) -> Result<SubprogramForm, Refusal> {
-        if self.at_word("not") {
-            self.position += 1;
-        }
-        if self.at_kind(TokenKind::EditionSensitive) {
-            // The pre-pass proved this is an `overriding` indicator.
-            self.position += 1;
-        }
-        self.subprogram_specification()?;
-        if self.eat_word("renames") {
-            self.name()?;
-            self.optional_aspect_specification()?;
-            self.expect_symbol(";")?;
-            return Ok(SubprogramForm::Declaration);
-        }
-        self.optional_aspect_specification()?;
-        if self.eat_symbol(";") {
-            return Ok(SubprogramForm::Declaration);
-        }
-        self.expect_word("is")?;
-        if self.eat_word("abstract") || self.eat_word("separate") {
-            self.optional_aspect_specification()?;
-            self.expect_symbol(";")?;
-            return Ok(SubprogramForm::Declaration);
-        }
-        if self.at_word("null")
-            && self
-                .peek_at(1)
-                .is_some_and(|token| token.matches(self.source, TokenKind::Delimiter, ";"))
-        {
-            self.position += 2;
-            return Ok(SubprogramForm::Declaration);
-        }
-        if self.eat_word("new") {
-            self.name()?;
-            self.optional_aspect_specification()?;
-            self.expect_symbol(";")?;
-            return Ok(SubprogramForm::Declaration);
-        }
-        if self.at_symbol("(") {
-            // An Ada 2012 expression function.
-            self.parenthesised_associations()?;
-            self.optional_aspect_specification()?;
-            self.expect_symbol(";")?;
-            return Ok(SubprogramForm::Declaration);
-        }
-        self.declarative_part()?;
-        self.expect_word("begin")?;
-        self.handled_sequence_of_statements()?;
-        self.expect_word("end")?;
-        self.optional_designator()?;
-        self.expect_symbol(";")?;
-        Ok(SubprogramForm::Body)
-    }
-
-    fn subprogram_specification(&mut self) -> Result<(), Refusal> {
-        if self.eat_word("procedure") {
-            self.defining_name()?;
-            if self.at_symbol("(") {
-                self.parameter_profile()?;
-            }
-            return Ok(());
-        }
-        self.expect_word("function")?;
-        if self.at_kind(TokenKind::String) {
-            // An operator symbol, as in `function "+" (...)`.
-            self.position += 1;
-        } else {
-            self.defining_name()?;
-        }
-        if self.at_symbol("(") {
-            self.parameter_profile()?;
-        }
-        self.expect_word("return")?;
-        self.return_subtype()
-    }
-
-    fn return_subtype(&mut self) -> Result<(), Refusal> {
-        if self.at_word("not") || self.at_word("access") {
-            return self.subtype_indication();
-        }
-        self.name()?;
-        Ok(())
-    }
-
-    fn optional_designator(&mut self) -> Result<(), Refusal> {
-        if self.at_kind(TokenKind::Identifier) {
-            self.defining_name()?;
-        } else if self.at_kind(TokenKind::String) {
-            self.position += 1;
-        }
-        Ok(())
-    }
-
-    fn parameter_profile(&mut self) -> Result<(), Refusal> {
-        self.expect_symbol("(")?;
-        loop {
-            self.identifier_list()?;
-            self.expect_symbol(":")?;
-            let _ = self.eat_word("aliased");
-            let _ = self.eat_word("in");
-            let _ = self.eat_word("out");
-            if self.at_word("access") {
-                self.access_definition()?;
-            } else {
-                self.subtype_indication()?;
-            }
-            if self.eat_symbol(":=") {
-                self.expression()?;
-            }
-            if !self.eat_symbol(";") {
-                break;
-            }
-        }
-        self.expect_symbol(")")
-    }
-
-    /// `aspect_specification ::= "with" aspect_mark ["=>" expression] {"," ...}`
-    ///
-    /// The caller must have already consumed any `with` that belongs to a
-    /// derived type definition, because that `with` is followed by `private`,
-    /// `null`, or `record` -- all reserved words, so the two are distinct.
-    fn optional_aspect_specification(&mut self) -> Result<(), Refusal> {
-        if !self.at_word("with") {
-            return Ok(());
-        }
-        self.position += 1;
-        loop {
-            self.expect_identifier()?;
-            if self.eat_symbol("'") {
-                self.expect_identifier()?;
-            }
-            if self.eat_symbol("=>") {
-                self.expression()?;
-            }
-            if !self.eat_symbol(",") {
-                return Ok(());
-            }
-        }
-    }
-
-    // ------------------------------------------------------------ statements
-
-    fn handled_sequence_of_statements(&mut self) -> Result<(), Refusal> {
-        self.sequence_of_statements()?;
-        if self.eat_word("exception") {
-            while self.eat_word("when") {
-                if self.at_kind(TokenKind::Identifier)
-                    && self
-                        .peek_at(1)
-                        .is_some_and(|token| token.matches(self.source, TokenKind::Delimiter, ":"))
-                {
-                    self.position += 2;
-                }
-                self.discrete_choice_list()?;
-                self.expect_symbol("=>")?;
-                self.sequence_of_statements()?;
-            }
-        }
-        Ok(())
-    }
-
-    fn sequence_of_statements(&mut self) -> Result<(), Refusal> {
-        self.enter()?;
-        let mut statements = 0usize;
-        while !(self.peek().is_none()
-            || self.at_word("end")
-            || self.at_word("elsif")
-            || self.at_word("else")
-            || self.at_word("when")
-            || self.at_word("exception"))
-        {
-            self.statement()?;
-            statements += 1;
-        }
-        self.leave();
-        if statements == 0 {
-            // Ada requires at least one statement, so an empty sequence means
-            // the surrounding shape was misread.
-            return Err(Refusal::OutsideDeclaredSubset);
-        }
-        Ok(())
-    }
-
-    fn statement(&mut self) -> Result<(), Refusal> {
-        while self.eat_symbol("<<") {
-            self.expect_identifier()?;
-            self.expect_symbol(">>")?;
-        }
-        if self.at_kind(TokenKind::Identifier)
-            && self
-                .peek_at(1)
-                .is_some_and(|token| token.matches(self.source, TokenKind::Delimiter, ":"))
-        {
-            // A statement label on a loop or a block.
-            self.position += 2;
-            return self.compound_statement();
-        }
-        if self.at_word("pragma") {
-            return self.pragma();
-        }
-        if self.eat_word("null") {
-            return self.expect_symbol(";");
-        }
-        if self.at_word("if")
-            || self.at_word("case")
-            || self.at_word("loop")
-            || self.at_word("while")
-            || self.at_word("for")
-            || self.at_word("declare")
-            || self.at_word("begin")
-        {
-            return self.compound_statement();
-        }
-        if self.eat_word("exit") {
-            if self.at_kind(TokenKind::Identifier) {
-                self.name()?;
-            }
-            if self.eat_word("when") {
-                self.expression()?;
-            }
-            return self.expect_symbol(";");
-        }
-        if self.eat_word("goto") {
-            self.name()?;
-            return self.expect_symbol(";");
-        }
-        if self.at_word("return") {
-            return self.return_statement();
-        }
-        if self.eat_word("raise") {
-            if !self.at_symbol(";") {
-                self.name()?;
-                if self.eat_word("with") {
-                    self.expression()?;
-                }
-            }
-            return self.expect_symbol(";");
-        }
-        if self.at_kind(TokenKind::Identifier) {
-            return self.call_or_assignment();
-        }
-        // `accept`, `select`, `delay`, `abort`, `requeue`, and `terminate` are
-        // outside the declared subset.
-        Err(Refusal::OutsideDeclaredSubset)
-    }
-
-    fn compound_statement(&mut self) -> Result<(), Refusal> {
-        if self.at_word("if") {
-            return self.if_statement();
-        }
-        if self.at_word("case") {
-            return self.case_statement();
-        }
-        if self.at_word("loop") || self.at_word("while") || self.at_word("for") {
-            return self.loop_statement();
-        }
-        if self.at_word("declare") || self.at_word("begin") {
-            return self.block_statement();
-        }
-        Err(Refusal::OutsideDeclaredSubset)
-    }
-
-    fn if_statement(&mut self) -> Result<(), Refusal> {
-        self.expect_word("if")?;
-        self.expression()?;
-        self.expect_word("then")?;
-        self.sequence_of_statements()?;
-        while self.eat_word("elsif") {
-            self.expression()?;
-            self.expect_word("then")?;
-            self.sequence_of_statements()?;
-        }
-        if self.eat_word("else") {
-            self.sequence_of_statements()?;
-        }
-        self.expect_word("end")?;
-        self.expect_word("if")?;
-        self.expect_symbol(";")
-    }
-
-    fn case_statement(&mut self) -> Result<(), Refusal> {
-        self.expect_word("case")?;
-        self.expression()?;
-        self.expect_word("is")?;
-        while self.eat_word("when") {
-            self.discrete_choice_list()?;
-            self.expect_symbol("=>")?;
-            self.sequence_of_statements()?;
-        }
-        self.expect_word("end")?;
-        self.expect_word("case")?;
-        self.expect_symbol(";")
-    }
-
-    fn loop_statement(&mut self) -> Result<(), Refusal> {
-        if self.eat_word("while") {
-            self.expression()?;
-        } else if self.eat_word("for") {
-            self.expect_identifier()?;
-            if self.eat_symbol(":") {
-                self.subtype_indication()?;
-            }
-            if !self.eat_word("in") && !self.eat_word("of") {
-                return Err(Refusal::OutsideDeclaredSubset);
-            }
-            let _ = self.eat_word("reverse");
-            self.discrete_range()?;
-        }
-        self.expect_word("loop")?;
-        self.sequence_of_statements()?;
-        self.expect_word("end")?;
-        self.expect_word("loop")?;
-        if self.at_kind(TokenKind::Identifier) {
-            self.position += 1;
-        }
-        self.expect_symbol(";")
-    }
-
-    fn block_statement(&mut self) -> Result<(), Refusal> {
-        if self.eat_word("declare") {
-            self.declarative_part()?;
-        }
-        self.expect_word("begin")?;
-        self.handled_sequence_of_statements()?;
-        self.expect_word("end")?;
-        if self.at_kind(TokenKind::Identifier) {
-            self.position += 1;
-        }
-        self.expect_symbol(";")
-    }
-
-    fn return_statement(&mut self) -> Result<(), Refusal> {
-        self.expect_word("return")?;
-        if self.eat_symbol(";") {
-            return Ok(());
-        }
-        if self.at_kind(TokenKind::Identifier)
-            && self
-                .peek_at(1)
-                .is_some_and(|token| token.matches(self.source, TokenKind::Delimiter, ":"))
-        {
-            // An Ada 2005 extended return statement.
-            self.position += 2;
-            let _ = self.eat_word("aliased");
-            let _ = self.eat_word("constant");
-            self.subtype_indication()?;
-            if self.eat_symbol(":=") {
-                self.expression()?;
-            }
-            if self.eat_word("do") {
-                self.handled_sequence_of_statements()?;
-                self.expect_word("end")?;
-                self.expect_word("return")?;
-            }
-            return self.expect_symbol(";");
-        }
-        self.expression()?;
-        self.expect_symbol(";")
-    }
-
-    /// A procedure call statement and an assignment both start with a name.
-    fn call_or_assignment(&mut self) -> Result<(), Refusal> {
-        let name = self.name()?;
-        if self.eat_symbol(":=") {
-            self.expression()?;
-            return self.expect_symbol(";");
-        }
-        self.expect_symbol(";")?;
-        if let Some(call) = name.call.as_ref() {
-            self.record_registration(name.start, call);
-        }
-        Ok(())
-    }
-
-    /// ADR-0045 D2's exact anchor, read off the parse rather than off the text.
-    fn record_registration(&mut self, start: usize, call: &CallSuffix) {
-        let designator = &self.source[call.designator_start..call.designator_end];
-        if !designator.eq_ignore_ascii_case(REGISTER_ROUTINE) {
+/// `compilation ::= { pragma | with_clause | use_clause } library_item`
+///
+/// The grammar lets a compilation hold any run of declarations and statements,
+/// so the ADR-0045 D1/D2 shape is enforced here: context items, then exactly
+/// one package body or library-level subprogram body, then nothing. A subunit
+/// or a spec is refused for the reasons ADR-0045 D1 and D2 give.
+fn check_units(
+    source: &str,
+    root: Node<'_>,
+    refusals: &mut EarliestRefusal,
+    admitted: &mut AdmittedUnit,
+) {
+    let mut cursor = root.walk();
+    let units: Vec<Node<'_>> = root
+        .named_children(&mut cursor)
+        .filter(|node| node.kind() == "compilation_unit")
+        .collect();
+    let mut library_item_seen = false;
+    for unit in &units {
+        if library_item_seen {
+            refusals.note(
+                unit.start_byte(),
+                STRUCTURAL,
+                Refusal::OutsideDeclaredSubset,
+            );
             return;
         }
-        if call.actuals.len() != 3 {
-            return;
-        }
-        if call.actuals[1] != ExprShape::AccessName || call.actuals[2] != ExprShape::StringLiteral {
-            return;
-        }
-        self.admitted.registrations.push(Registration {
-            start,
-            end: call.end,
-        });
-    }
-
-    // ----------------------------------------------------------- expressions
-
-    fn expression(&mut self) -> Result<ExprShape, Refusal> {
-        self.enter()?;
-        let mut shape = self.relation()?;
-        loop {
-            if self.eat_word("and") {
-                let _ = self.eat_word("then");
-            } else if self.eat_word("or") {
-                let _ = self.eat_word("else");
-            } else if !self.eat_word("xor") {
-                break;
-            }
-            self.relation()?;
-            shape = ExprShape::Other;
-        }
-        self.leave();
-        Ok(shape)
-    }
-
-    fn relation(&mut self) -> Result<ExprShape, Refusal> {
-        let mut shape = self.simple_expression()?;
-        if self.at_symbol("=")
-            || self.at_symbol("/=")
-            || self.at_symbol("<")
-            || self.at_symbol("<=")
-            || self.at_symbol(">")
-            || self.at_symbol(">=")
-        {
-            self.position += 1;
-            self.simple_expression()?;
-            return Ok(ExprShape::Other);
-        }
-        let negated = self.at_word("not")
-            && self
-                .peek_at(1)
-                .is_some_and(|token| token.matches(self.source, TokenKind::Reserved, "in"));
-        if negated {
-            self.position += 1;
-        }
-        if self.eat_word("in") {
-            self.membership_choice_list()?;
-            shape = ExprShape::Other;
-        }
-        Ok(shape)
-    }
-
-    fn membership_choice_list(&mut self) -> Result<(), Refusal> {
-        loop {
-            self.simple_expression()?;
-            if self.eat_symbol("..") {
-                self.simple_expression()?;
-            }
-            if !self.eat_symbol("|") {
-                return Ok(());
-            }
-        }
-    }
-
-    fn simple_expression(&mut self) -> Result<ExprShape, Refusal> {
-        let signed = self.at_symbol("+") || self.at_symbol("-");
-        if signed {
-            self.position += 1;
-        }
-        let mut shape = self.term()?;
-        if signed {
-            shape = ExprShape::Other;
-        }
-        while self.at_symbol("+") || self.at_symbol("-") || self.at_symbol("&") {
-            self.position += 1;
-            self.term()?;
-            shape = ExprShape::Other;
-        }
-        Ok(shape)
-    }
-
-    fn term(&mut self) -> Result<ExprShape, Refusal> {
-        let mut shape = self.factor()?;
-        while self.at_symbol("*")
-            || self.at_symbol("/")
-            || self.at_word("mod")
-            || self.at_word("rem")
-        {
-            self.position += 1;
-            self.factor()?;
-            shape = ExprShape::Other;
-        }
-        Ok(shape)
-    }
-
-    fn factor(&mut self) -> Result<ExprShape, Refusal> {
-        if self.eat_word("abs") || self.eat_word("not") {
-            self.primary()?;
-            return Ok(ExprShape::Other);
-        }
-        let shape = self.primary()?;
-        if self.eat_symbol("**") {
-            self.primary()?;
-            return Ok(ExprShape::Other);
-        }
-        Ok(shape)
-    }
-
-    fn primary(&mut self) -> Result<ExprShape, Refusal> {
-        self.enter()?;
-        let shape = self.primary_inner()?;
-        self.leave();
-        Ok(shape)
-    }
-
-    fn primary_inner(&mut self) -> Result<ExprShape, Refusal> {
-        if self.at_kind(TokenKind::Numeric) || self.at_kind(TokenKind::Character) {
-            self.position += 1;
-            return Ok(ExprShape::Other);
-        }
-        if self.at_kind(TokenKind::String) {
-            // A string literal is also how an operator symbol is spelled, so it
-            // is a name when a name suffix follows it.
-            let is_name = self.peek_at(1).is_some_and(|token| {
-                token.matches(self.source, TokenKind::Delimiter, "(")
-                    || token.matches(self.source, TokenKind::Delimiter, ".")
-                    || token.matches(self.source, TokenKind::Delimiter, "'")
-            });
-            if !is_name {
-                self.position += 1;
-                return Ok(ExprShape::StringLiteral);
-            }
-            return self.name().map(|name| name.shape);
-        }
-        if self.eat_word("null") {
-            return Ok(ExprShape::Other);
-        }
-        if self.eat_word("new") {
-            self.subtype_indication()?;
-            return Ok(ExprShape::Other);
-        }
-        if self.at_symbol("(") {
-            self.parenthesised_associations()?;
-            return Ok(ExprShape::Other);
-        }
-        if self.at_kind(TokenKind::Identifier) {
-            return self.name().map(|name| name.shape);
-        }
-        Err(Refusal::OutsideDeclaredSubset)
-    }
-
-    /// One production covers a parenthesised expression, an aggregate, an
-    /// actual-parameter part, and an index. All four consume the same tokens,
-    /// and this frontend derives no meaning from the distinction.
-    fn parenthesised_associations(&mut self) -> Result<Vec<ExprShape>, Refusal> {
-        self.enter()?;
-        self.expect_symbol("(")?;
-        let mut shapes = Vec::new();
-        if self.at_word("if") {
-            self.conditional_expression()?;
-            shapes.push(ExprShape::Other);
-        } else if self.at_word("case") {
-            self.case_expression()?;
-            shapes.push(ExprShape::Other);
-        } else if self.at_word("for") {
-            self.quantified_expression()?;
-            shapes.push(ExprShape::Other);
-        } else if self.at_word("null")
-            && self
-                .peek_at(1)
-                .is_some_and(|token| token.matches(self.source, TokenKind::Reserved, "record"))
-        {
-            self.position += 2;
-            shapes.push(ExprShape::Other);
-        } else {
-            loop {
-                shapes.push(self.association()?);
-                if self.eat_word("with") {
-                    // An extension aggregate; its associations continue here.
-                    if self.at_word("null")
-                        && self.peek_at(1).is_some_and(|token| {
-                            token.matches(self.source, TokenKind::Reserved, "record")
-                        })
-                    {
-                        self.position += 2;
-                        break;
-                    }
-                    shapes.push(self.association()?);
-                }
-                if !self.eat_symbol(",") {
-                    break;
+        let mut unit_cursor = unit.walk();
+        let parts: Vec<Node<'_>> = unit
+            .children(&mut unit_cursor)
+            .filter(|node| node.kind() != "comment")
+            .collect();
+        match parts.as_slice() {
+            [part] if matches!(part.kind(), "with_clause") => {
+                if with_clause_names_aunit(source, *part) {
+                    admitted.aunit_context_clause = true;
                 }
             }
-        }
-        self.expect_symbol(")")?;
-        self.leave();
-        Ok(shapes)
-    }
-
-    /// `association ::= [choice_list "=>"] ("<>" | expression [".." expression])`
-    fn association(&mut self) -> Result<ExprShape, Refusal> {
-        if self.at_word("others") {
-            self.position += 1;
-            self.expect_symbol("=>")?;
-            if !self.eat_symbol("<>") {
-                self.expression()?;
+            [part] if matches!(part.kind(), "use_clause" | "pragma_g") => {}
+            [part] if matches!(part.kind(), "package_body" | "subprogram_body") => {
+                library_item_seen = true;
             }
-            return Ok(ExprShape::Other);
-        }
-        if self.eat_symbol("<>") {
-            return Ok(ExprShape::Other);
-        }
-        let shape = self.expression()?;
-        if self.eat_symbol("..") {
-            self.simple_expression()?;
-            return Ok(ExprShape::Other);
-        }
-        if self.at_symbol("|") {
-            while self.eat_symbol("|") {
-                self.discrete_choice()?;
-            }
-            self.expect_symbol("=>")?;
-            if !self.eat_symbol("<>") {
-                self.expression()?;
-            }
-            return Ok(ExprShape::Other);
-        }
-        if self.eat_symbol("=>") {
-            if !self.eat_symbol("<>") {
-                self.expression()?;
-            }
-            return Ok(ExprShape::Other);
-        }
-        Ok(shape)
-    }
-
-    fn discrete_choice_list(&mut self) -> Result<(), Refusal> {
-        loop {
-            self.discrete_choice()?;
-            if !self.eat_symbol("|") {
-                return Ok(());
+            _ => {
+                refusals.note(
+                    unit.start_byte(),
+                    STRUCTURAL,
+                    Refusal::OutsideDeclaredSubset,
+                );
+                return;
             }
         }
     }
-
-    fn discrete_choice(&mut self) -> Result<(), Refusal> {
-        if self.eat_word("others") {
-            return Ok(());
-        }
-        self.discrete_range()
-    }
-
-    fn conditional_expression(&mut self) -> Result<(), Refusal> {
-        self.expect_word("if")?;
-        self.expression()?;
-        self.expect_word("then")?;
-        self.expression()?;
-        while self.eat_word("elsif") {
-            self.expression()?;
-            self.expect_word("then")?;
-            self.expression()?;
-        }
-        if self.eat_word("else") {
-            self.expression()?;
-        }
-        Ok(())
-    }
-
-    fn case_expression(&mut self) -> Result<(), Refusal> {
-        self.expect_word("case")?;
-        self.expression()?;
-        self.expect_word("is")?;
-        loop {
-            self.expect_word("when")?;
-            self.discrete_choice_list()?;
-            self.expect_symbol("=>")?;
-            self.expression()?;
-            if !self.eat_symbol(",") {
-                return Ok(());
-            }
-        }
-    }
-
-    fn quantified_expression(&mut self) -> Result<(), Refusal> {
-        self.expect_word("for")?;
-        // `for some` is refused by the edition pre-pass, so only `for all`
-        // reaches here.
-        self.expect_word("all")?;
-        self.expect_identifier()?;
-        if !self.eat_word("in") && !self.eat_word("of") {
-            return Err(Refusal::OutsideDeclaredSubset);
-        }
-        let _ = self.eat_word("reverse");
-        self.discrete_range()?;
-        self.expect_symbol("=>")?;
-        self.expression()?;
-        Ok(())
-    }
-
-    // ----------------------------------------------------------------- names
-
-    fn name(&mut self) -> Result<NameInfo, Refusal> {
-        self.enter()?;
-        let start = self.peek().ok_or(Refusal::OutsideDeclaredSubset)?.start;
-        if self.at_kind(TokenKind::Identifier)
-            || self.at_kind(TokenKind::String)
-            || self.at_kind(TokenKind::Character)
-        {
-            self.position += 1;
-        } else {
-            return Err(Refusal::OutsideDeclaredSubset);
-        }
-        // A name is "plain" while every suffix so far is a selected component
-        // naming an identifier. Only a plain prefix may carry the `'Access`
-        // that ADR-0045 D2 admits as the second actual parameter.
-        let mut plain = true;
-        let mut shape = ExprShape::Other;
-        let mut call: Option<CallSuffix> = None;
-        // The identifier that would name a called subprogram: the last one
-        // before an actual-parameter part.
-        let mut designator = (
-            self.tokens[self.position - 1].start,
-            self.tokens[self.position - 1].end,
+    // With a syntax error present, the `ERROR` node is the refusal and sits at
+    // the position error recovery chose; a missing library item is then only an
+    // artifact of that recovery and must not outrank an earlier pragma.
+    if !library_item_seen && !root.has_error() {
+        refusals.note(
+            units.first().map_or(0, Node::start_byte),
+            STRUCTURAL,
+            Refusal::OutsideDeclaredSubset,
         );
-
-        loop {
-            if self.at_symbol(".") {
-                self.position += 1;
-                shape = ExprShape::Other;
-                call = None;
-                if self.eat_word("all") {
-                    plain = false;
-                    continue;
-                }
-                let selected = self.advance()?;
-                if !matches!(
-                    selected.kind,
-                    TokenKind::Identifier | TokenKind::String | TokenKind::Character
-                ) {
-                    return Err(Refusal::OutsideDeclaredSubset);
-                }
-                if selected.kind == TokenKind::Identifier {
-                    designator = (selected.start, selected.end);
-                } else {
-                    plain = false;
-                }
-                continue;
-            }
-            if self.at_symbol("(") {
-                let actuals = self.parenthesised_associations()?;
-                let end = self.tokens[self.position - 1].end;
-                call = Some(CallSuffix {
-                    designator_start: designator.0,
-                    designator_end: designator.1,
-                    actuals,
-                    end,
-                });
-                plain = false;
-                shape = ExprShape::Other;
-                continue;
-            }
-            if self.at_symbol("'") {
-                self.position += 1;
-                call = None;
-                if self.at_symbol("(") {
-                    // A qualified expression, as in `Integer'(1)`.
-                    self.parenthesised_associations()?;
-                    plain = false;
-                    shape = ExprShape::Other;
-                    continue;
-                }
-                let designator_token = self.advance()?;
-                let is_attribute = designator_token.kind == TokenKind::Identifier
-                    || matches!(designator_token.kind, TokenKind::Reserved)
-                        && ["access", "delta", "digits", "mod", "range"]
-                            .iter()
-                            .any(|word| {
-                                designator_token
-                                    .text(self.source)
-                                    .eq_ignore_ascii_case(word)
-                            });
-                if !is_attribute {
-                    return Err(Refusal::OutsideDeclaredSubset);
-                }
-                let is_access = designator_token
-                    .text(self.source)
-                    .eq_ignore_ascii_case("access");
-                shape = if plain && is_access {
-                    ExprShape::AccessName
-                } else {
-                    ExprShape::Other
-                };
-                plain = false;
-                if self.at_symbol("(") {
-                    self.parenthesised_associations()?;
-                    shape = ExprShape::Other;
-                }
-                continue;
-            }
-            break;
-        }
-        self.leave();
-        Ok(NameInfo { start, shape, call })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SubprogramForm {
-    Declaration,
-    Body,
+/// True when a withed unit's first identifier is `AUnit`.
+fn with_clause_names_aunit(source: &str, clause: Node<'_>) -> bool {
+    let mut cursor = clause.walk();
+    let names: Vec<Node<'_>> = clause.named_children(&mut cursor).collect();
+    names.into_iter().any(|name| {
+        let mut leftmost = name;
+        while leftmost.kind() == "selected_component" {
+            match leftmost.named_child(0) {
+                Some(prefix) => leftmost = prefix,
+                None => return false,
+            }
+        }
+        leftmost.kind() == "identifier"
+            && leftmost
+                .utf8_text(source.as_bytes())
+                .is_ok_and(|text| text.eq_ignore_ascii_case("aunit"))
+    })
 }
 
+/// Iterative pre-order walk over every node, so hostile nesting cannot exhaust
+/// the stack. It records syntax errors, constructs outside the subset, the
+/// nesting ceiling, edition-selecting pragmas, and admitted registrations.
+fn walk(source: &str, root: Node<'_>, refusals: &mut EarliestRefusal, admitted: &mut AdmittedUnit) {
+    let mut cursor = root.walk();
+    // Cumulative depth at each open ancestor; the last entry is the parent of
+    // the node about to be visited. The ancestors themselves are kept so no
+    // check needs `Node::parent`, which costs a walk from the root.
+    let mut depths: Vec<usize> = vec![0];
+    let mut ancestors: Vec<Node<'_>> = Vec::new();
+    loop {
+        let node = cursor.node();
+        let parent_depth = depths.last().copied().unwrap_or(0);
+        let depth = parent_depth + own_depth(node, &ancestors);
+        visit(source, node, &ancestors, depth, refusals, admitted);
+        if depth > MAX_DEPTH {
+            // Every node still to visit starts at or after this one, so no
+            // later refusal can outrank the ceiling.
+            return;
+        }
+        if cursor.goto_first_child() {
+            depths.push(depth);
+            ancestors.push(node);
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
+            depths.pop();
+            ancestors.pop();
+        }
+    }
+}
+
+fn visit(
+    source: &str,
+    node: Node<'_>,
+    ancestors: &[Node<'_>],
+    depth: usize,
+    refusals: &mut EarliestRefusal,
+    admitted: &mut AdmittedUnit,
+) {
+    if node.is_missing() {
+        refusals.note(
+            node.start_byte(),
+            STRUCTURAL,
+            Refusal::OutsideDeclaredSubset,
+        );
+        return;
+    }
+    if node.is_error() {
+        // Error recovery wraps the parsed prefix into the node, so its start can
+        // precede the real failure by the whole declaration; its end is where
+        // the parser gave up, which is where a left-to-right parse stops.
+        refusals.note(node.end_byte(), STRUCTURAL, Refusal::OutsideDeclaredSubset);
+        return;
+    }
+    if depth > MAX_DEPTH {
+        refusals.note(node.start_byte(), STRUCTURAL, Refusal::NestingLimit);
+    }
+    let kind = node.kind();
+    if OUTSIDE_SUBSET_KINDS.contains(&kind) {
+        refusals.note(
+            node.start_byte(),
+            STRUCTURAL,
+            Refusal::OutsideDeclaredSubset,
+        );
+        return;
+    }
+    match kind {
+        "identifier" => {
+            if reserved_word_used_as_name(source, node, ancestors) {
+                refusals.note(
+                    node.start_byte(),
+                    STRUCTURAL,
+                    Refusal::OutsideDeclaredSubset,
+                );
+            }
+        }
+        "procedure_call_statement" | "assignment_statement" if !starts_with_identifier(node) => {
+            // A statement begins with a name, and a name begins with an
+            // identifier; the grammar also lets an operator symbol or a
+            // character literal start one.
+            refusals.note(
+                node.start_byte(),
+                STRUCTURAL,
+                Refusal::OutsideDeclaredSubset,
+            );
+        }
+        "pragma_g" => {
+            let selects_edition = node.named_child(0).is_some_and(|name| {
+                name.utf8_text(source.as_bytes()).is_ok_and(|text| {
+                    LANGUAGE_EDITION_PRAGMAS
+                        .iter()
+                        .any(|pragma| text.eq_ignore_ascii_case(pragma))
+                })
+            });
+            if selects_edition {
+                refusals.note(node.start_byte(), PRAGMA, Refusal::LanguageEditionPragma);
+            }
+        }
+        _ => {}
+    }
+    if kind == "procedure_call_statement" && starts_with_identifier(node) {
+        if let Some(registration) = registration(source, node) {
+            admitted.registrations.push(registration);
+        }
+    }
+}
+
+/// The leftmost token of a statement is an identifier.
+fn starts_with_identifier(statement: Node<'_>) -> bool {
+    let mut leftmost = statement;
+    while let Some(child) = leftmost.child(0) {
+        leftmost = child;
+    }
+    leftmost.kind() == "identifier"
+}
+
+/// The grammar accepts some reserved words as names (`end;` and `terminate;`
+/// read as procedure calls), which the declared subset does not: a reserved word
+/// is never an identifier. Three places spell a reserved word as an identifier
+/// node on purpose.
+fn reserved_word_used_as_name(source: &str, node: Node<'_>, ancestors: &[Node<'_>]) -> bool {
+    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+        return false;
+    };
+    if !is_reserved_word(text) {
+        return false;
+    }
+    let Some(&parent) = ancestors.last() else {
+        return true;
+    };
+    match parent.kind() {
+        // Any word names a pragma.
+        "pragma_g" => parent.named_child(0) != Some(node),
+        // The grammar reads the `private` of `type T is new B with private;` as
+        // an aspect name; that is the private extension.
+        "aspect_association" => {
+            // The association, its list, the specification, the declaration.
+            let private_extension = text.eq_ignore_ascii_case("private")
+                && ancestors
+                    .len()
+                    .checked_sub(4)
+                    .and_then(|index| ancestors.get(index))
+                    .is_some_and(|declaration| {
+                        let mut cursor = declaration.walk();
+                        let derived = declaration
+                            .named_children(&mut cursor)
+                            .any(|part| part.kind() == "derived_type_definition");
+                        derived
+                    });
+            !private_extension
+        }
+        // `Pointer.all`: the selector the grammar spells as a name, except in
+        // the dotted names the declared grammar reads as plain identifiers.
+        "selected_component" => {
+            !(text.eq_ignore_ascii_case("all")
+                && parent.child(parent.child_count().saturating_sub(1)) == Some(node)
+                && !in_plain_dotted_name(ancestors))
+        }
+        _ => true,
+    }
+}
+
+/// True when this dotted name sits where the declared grammar allows only plain
+/// identifiers: a `with` clause, or the name of a package or subprogram.
+fn in_plain_dotted_name(ancestors: &[Node<'_>]) -> bool {
+    for ancestor in ancestors.iter().rev() {
+        match ancestor.kind() {
+            "selected_component" => continue,
+            "with_clause"
+            | "package_body"
+            | "procedure_specification"
+            | "function_specification" => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// How many nesting levels the declared grammar charged for this node. The
+/// ceiling bounds untrusted nesting, so the weights follow the productions the
+/// frontend recurses through: a declarative part, a statement sequence, a record
+/// component list, an expression, a primary, a name, and a parenthesised
+/// association list.
+fn own_depth(node: Node<'_>, ancestors: &[Node<'_>]) -> usize {
+    match node.kind() {
+        "non_empty_declarative_part"
+        | "handled_sequence_of_statements"
+        | "if_statement"
+        | "case_statement_alternative"
+        | "loop_statement"
+        | "component_list"
+        | "expression"
+        | "function_call"
+        | "actual_parameter_part"
+        | "procedure_call_statement"
+        | "record_aggregate"
+        | "extension_aggregate"
+        | "positional_array_aggregate"
+        | "named_array_aggregate"
+        | "enumeration_aggregate"
+        | "null_array_aggregate" => 1,
+        // A name plus a parenthesised part.
+        "qualified_expression" => 2,
+        // A name used as a primary is read through the name production.
+        "identifier" | "selected_component"
+            if ancestors
+                .last()
+                .is_some_and(|parent| parent.kind() == "term") =>
+        {
+            1
+        }
+        "if_expression" | "case_expression" | "quantified_expression" => 1,
+        // A primary, plus one more when the primary is a parenthesised expression.
+        "term" => {
+            let mut cursor = node.walk();
+            let parenthesised = node
+                .named_children(&mut cursor)
+                .any(|child| matches!(child.kind(), "expression"));
+            1 + usize::from(parenthesised)
+        }
+        _ => 0,
+    }
+}
+
+/// ADR-0045 D2's exact anchor, read off the tree: a procedure call statement
+/// naming `Register_Routine`, with exactly three positional actuals, the second
+/// a plain dotted name with a final `'Access` and the third one string literal.
+fn registration(source: &str, call: Node<'_>) -> Option<Registration> {
+    let name = call.child_by_field_name("name")?;
+    let mut cursor = call.walk();
+    let actuals = call
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "actual_parameter_part")?;
+    if designator(source, name)?.eq_ignore_ascii_case(REGISTER_ROUTINE) {
+        let mut actual_cursor = actuals.walk();
+        let associations: Vec<Node<'_>> = actuals
+            .named_children(&mut actual_cursor)
+            .filter(|child| child.kind() != "comment")
+            .collect();
+        if associations.len() == 3
+            && associations
+                .iter()
+                .all(|node| node.kind() == "parameter_association")
+            && positional_single_term(associations[1])
+                .is_some_and(|term| is_access_name(source, term))
+            && positional_single_term(associations[2]).is_some_and(is_string_literal)
+        {
+            return Some(Registration {
+                start: name.start_byte(),
+                end: actuals.end_byte(),
+            });
+        }
+    }
+    None
+}
+
+fn is_all(source: &str, node: Node<'_>) -> bool {
+    node.utf8_text(source.as_bytes())
+        .is_ok_and(|text| text.eq_ignore_ascii_case("all"))
+}
+
+/// The text of the identifier that names the called subprogram: the name itself
+/// or the last selector of a dotted name.
+fn designator<'s>(source: &'s str, name: Node<'_>) -> Option<&'s str> {
+    let identifier = match name.kind() {
+        "identifier" => name,
+        // A call of a call result keeps the designator of the inner name.
+        "function_call" => return designator(source, name.named_child(0)?),
+        "selected_component" => {
+            let mut cursor = name.walk();
+            let selector = name
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() != "comment")
+                .last()?;
+            if selector.kind() != "identifier" {
+                return None;
+            }
+            selector
+        }
+        _ => return None,
+    };
+    identifier.utf8_text(source.as_bytes()).ok()
+}
+
+/// The sole `term` of a positional association whose expression is that term
+/// alone: no named notation, no `<>`, no operator.
+fn positional_single_term(association: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = association.walk();
+    let parts: Vec<Node<'_>> = association
+        .children(&mut cursor)
+        .filter(|node| node.kind() != "comment")
+        .collect();
+    let [expression] = parts.as_slice() else {
+        return None;
+    };
+    if expression.kind() != "expression" {
+        return None;
+    }
+    let mut expression_cursor = expression.walk();
+    let parts: Vec<Node<'_>> = expression
+        .children(&mut expression_cursor)
+        .filter(|node| node.kind() != "comment")
+        .collect();
+    match parts.as_slice() {
+        [term] if term.kind() == "term" => Some(*term),
+        _ => None,
+    }
+}
+
+fn is_string_literal(term: Node<'_>) -> bool {
+    let mut cursor = term.walk();
+    let parts: Vec<Node<'_>> = term
+        .children(&mut cursor)
+        .filter(|node| node.kind() != "comment")
+        .collect();
+    matches!(parts.as_slice(), [only] if only.kind() == "string_literal")
+}
+
+/// A plain dotted name whose only other suffix is a final `'Access`.
+fn is_access_name(source: &str, term: Node<'_>) -> bool {
+    let mut cursor = term.walk();
+    let parts: Vec<Node<'_>> = term
+        .children(&mut cursor)
+        .filter(|node| node.kind() != "comment")
+        .collect();
+    let [prefix, tick, attribute] = parts.as_slice() else {
+        return false;
+    };
+    tick.kind() == "tick"
+        && attribute.kind() == "attribute_designator"
+        && attribute
+            .utf8_text(source.as_bytes())
+            .is_ok_and(|text| text.eq_ignore_ascii_case("access"))
+        && is_plain_dotted_name(source, *prefix)
+}
+
+fn is_plain_dotted_name(source: &str, name: Node<'_>) -> bool {
+    let mut current = name;
+    loop {
+        match current.kind() {
+            "identifier" => return true,
+            // An operator symbol is a name (`"+"'Access`).
+            "string_literal" => return true,
+            "selected_component" => {
+                let mut cursor = current.walk();
+                let children: Vec<Node<'_>> = current
+                    .children(&mut cursor)
+                    .filter(|node| node.kind() != "comment")
+                    .collect();
+                match children.as_slice() {
+                    [prefix, dot, selector]
+                        if dot.kind() == "."
+                            && selector.kind() == "identifier"
+                            && !is_all(source, *selector) =>
+                    {
+                        current = *prefix;
+                    }
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1562,7 +677,7 @@ mod tests {
     }
 
     fn parse(source: &str) -> Result<AdmittedUnit, Refusal> {
-        parse_compilation(source)
+        parse_compilation(source).expect("the Ada grammar loads")
     }
 
     fn registrations(source: &str) -> usize {
@@ -1793,6 +908,80 @@ mod tests {
         }
     }
 
+    /// Inputs on which the grammar deliberately differs from the retired
+    /// hand-written parser (ADR-0058): text that is not valid Ada, or newer
+    /// than the pinned grammar, is refused; valid Ada the old parser could not
+    /// read is admitted.
+    #[test]
+    fn the_grammar_refuses_invalid_ada_and_reads_the_constructs_the_old_parser_missed() {
+        let in_package = |declaration: &str| {
+            format!(
+                "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n{declaration}\n\
+                 procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+                 Register_Routine (T, Loads'Access, \"loads\");\n\
+                 end Register_Tests;\nend Catalog_Tests;\n"
+            )
+        };
+        for declaration in [
+            "function Q return T is null;",
+            "not procedure Q is null;",
+            "subtype T is access Integer;",
+            "subtype T is A range <>;",
+            "subtype P is not null access Integer;",
+            "type T is range <>;",
+            "type T is record end record;",
+            "type T is record null; A : Integer; end record;",
+            "X : T := A and B or C;",
+            "X : T := A and then B or else C;",
+            "X : T := A and B xor C;",
+            "X : T := A or B xor C;",
+            "X : T := A'Range;",
+            "X : T := T'Range (1);",
+            "X : T := new access T;",
+        ] {
+            assert_eq!(
+                parse(&in_package(declaration)),
+                Err(Refusal::OutsideDeclaredSubset),
+                "{declaration}"
+            );
+        }
+        for statement in [
+            "case X is end case;",
+            "L : if A then null; end if;",
+            "L : case X is when others => null; end case;",
+            "for I : Integer in 1 .. 3 loop null; end loop;",
+            "if A and then B or else C then null; end if;",
+            "Register_Routine (T, 1 .. 2, \"loads\");",
+            "Register_Routine (T, 1 | 2 => X, \"loads\");",
+            "Do_It (null => 1);",
+            "null;\nexception when null => null;",
+            "X := Y'range;",
+            "X := Y'range (1);",
+        ] {
+            assert_eq!(
+                parse(&body(&format!("{statement}\n"))),
+                Err(Refusal::OutsideDeclaredSubset),
+                "{statement}"
+            );
+        }
+        for declaration in [
+            "function Max is new Generic_Max (Integer);",
+            "function \"+\" is new R (Integer);",
+            "X : Arr := (1 .. 3 => 0);",
+            "X : T := (for all I : T in A => B);",
+            "type T is new A and B with null record;",
+            "type T is new A and B with private;",
+            "X renames Y;",
+            "type T is tagged;",
+            "type T is record A : Integer; end record T;",
+            "type T is record pragma Convention (C, T); A : Integer; end record;",
+            "type T is record A : Integer; pragma Atomic (A); end record;",
+        ] {
+            assert_eq!(registrations(&in_package(declaration)), 1, "{declaration}");
+        }
+        parse(&body("for I in 1 .. 3 when I > 1 loop null; end loop;\n")).expect("iterator filter");
+    }
+
     #[test]
     fn a_subunit_and_a_spec_are_not_admitted_compilation_units() {
         assert_eq!(
@@ -1828,6 +1017,112 @@ mod tests {
             ")".repeat(MAX_DEPTH * 4)
         ));
         assert_eq!(parse(&source), Err(Refusal::NestingLimit));
+    }
+
+    #[test]
+    fn a_reserved_word_the_grammar_reads_as_a_name_is_refused() {
+        // The grammar parses `end;` and `terminate;` as procedure calls.
+        for statement in ["end;", "terminate;", "Pkg.end;", "X := terminate;"] {
+            assert_eq!(
+                parse(&body(&format!("{statement}\n"))),
+                Err(Refusal::OutsideDeclaredSubset),
+                "{statement}"
+            );
+        }
+        // `Pointer.all` is a dereference, and any word may name a pragma.
+        assert_eq!(
+            registrations(&body("Ptr.all := 1;\npragma Interface_Name (X);\n")),
+            0
+        );
+    }
+
+    #[test]
+    fn a_pointer_dereference_is_not_a_plain_name_for_the_access_actual() {
+        assert_eq!(
+            registrations(&body("Register_Routine (T, Ptr.all'Access, \"loads\");\n")),
+            0
+        );
+        assert_eq!(
+            registrations(&body("Register_Routine (T, Pkg.Ptr'Access, \"loads\");\n")),
+            1
+        );
+    }
+
+    #[test]
+    fn a_subprogram_stub_is_a_declaration_and_a_package_stub_is_not() {
+        assert_eq!(
+            registrations(&decl_with("procedure Helper is separate;")),
+            1
+        );
+        assert_eq!(
+            parse(&decl_with("package Helper is separate;")),
+            Err(Refusal::OutsideDeclaredSubset)
+        );
+    }
+
+    #[test]
+    fn the_earliest_refusal_wins_over_the_tree() {
+        // A pragma before a syntax error is the refusal a left-to-right parse
+        // reaches first, and so is the syntax error before a pragma.
+        assert_eq!(
+            parse(&body("pragma Ada_83;\nX := ;\n")),
+            Err(Refusal::LanguageEditionPragma)
+        );
+        assert_eq!(
+            parse(&body("X := ;\npragma Ada_83;\nnull;\n")),
+            Err(Refusal::OutsideDeclaredSubset)
+        );
+        // An error-recovered tree never yields a registration.
+        assert_eq!(
+            parse(&body(
+                "Register_Routine (T, Loads'Access, \"loads\");\nX := ;\n"
+            )),
+            Err(Refusal::OutsideDeclaredSubset)
+        );
+        // A missing final `end` is found at the end of the file, after the
+        // pragma a left-to-right parse has already refused.
+        assert_eq!(
+            parse("package body Q is\nprocedure R is begin null; pragma Ada_83; end R;\n"),
+            Err(Refusal::LanguageEditionPragma)
+        );
+    }
+
+    #[test]
+    fn a_global_aspect_mode_is_outside_the_declared_aspect_grammar() {
+        assert_eq!(
+            parse(&decl_with("procedure Q with Global => in out State;")),
+            Err(Refusal::OutsideDeclaredSubset)
+        );
+        assert_eq!(registrations(&decl_with("procedure Q with Inline;")), 1);
+    }
+
+    fn decl_with(declaration: &str) -> String {
+        format!(
+            "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n{declaration}\n\
+             procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+             Register_Routine (T, Loads'Access, \"loads\");\n\
+             end Register_Tests;\nend Catalog_Tests;\n"
+        )
+    }
+
+    #[test]
+    fn hostile_inputs_at_the_byte_ceiling_refuse_within_the_bounded_budget() {
+        let started = std::time::Instant::now();
+        for hostile in [
+            // Very deep nesting, flat noise, and an operator chain.
+            format!("X := {}1{};\n", "(".repeat(200_000), ")".repeat(200_000)),
+            "F (".repeat(200_000),
+            format!("X := {};\n", "1 + ".repeat(200_000)),
+            "begin\n".repeat(150_000),
+        ] {
+            let parsed = parse(&body(&hostile));
+            assert!(parsed.is_err(), "hostile input must not be admitted");
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "hostile inputs took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

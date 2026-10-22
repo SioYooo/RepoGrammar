@@ -117,3 +117,54 @@ XML inventory but unmeasured for compiler/project-scale work. Evidence:
 `2b5fd6d1bf32e8805798e26e53ff9f090ec22d3e`. Exact non-claim: Delphi
 metadata does not implement Free Pascal/Lazarus, resolve packages, or prove any
 source/runtime behavior.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The DUnitX source frontend (`delphi/pascal.rs`, `delphi/dunitx.rs`) now reads
+declarations from the pinned `tree-sitter-pascal` 0.10.2 grammar. The
+hand-written lexer stays as the lexical-subset gate, and it still owns the
+`uses` binding, the attribute-spelling scan and the conditional-compilation
+depth: a `{$IFDEF}`/`{$IF}`/`{$IFOPT}` token region is `depth > 0` exactly as
+before, so a declaration, attribute or `class` keyword under it still anchors
+nothing and still reports `declaration_under_conditional_compilation`. Only the
+recursive-descent parser was replaced; the anchor shape, units, facts and
+diagnostics are unchanged. The package/project inventory (`delphi.rs`) is not
+touched.
+
+Refusal mapping: an `ERROR` or `MISSING` node inside a class declaration
+abstains that class (the legacy "class body outside the admitted subset"
+diagnostic); elsewhere it refuses the file. A node whose span holds a token
+under conditional compilation is the more specific refusal and reports the
+conditional-compilation unknown instead. An unterminated comment is parsed as
+the prefix before the opener, where only class-level errors count. Errors
+inside a `uses` clause are ignored, because the lexer reads that clause.
+
+The in-process differential matched the legacy parser on all 3 committed
+fixture sources and on the branch corpus (anchors, near-misses, every `{$IF*}`
+placement, dialect selectors, unterminated comments, abstaining classes). The
+legacy parser and this differential were deleted on 2026-10-22 after the
+maintainer accepted the classification; the pinned cases below remain as plain
+tests of the current frontend.
+
+Differences that are not reproduced, each pinned by its own test:
+
+- A fixture after a `record` or `interface` in the same `type` section, or after
+  a record nested in the fixture, is now anchored. The legacy skip stopped at
+  the first `;` inside that body and lost the rest of the section.
+- A class that abstains no longer hides the next fixture (legacy lost its place).
+- An attribute before a visibility keyword, which is not valid Pascal, now
+  abstains the class instead of being skipped.
+- Source with a syntax error outside any class (the declared
+  `syntax_error_in_skipped_region` class) now refuses the file.
+
+Grammar gaps seen: `class sealed` does not parse (the class abstains with a
+diagnostic), `uses A in 'a.pas'` does not parse (ignored, see above), and a
+`{$IFDEF}` that splits a declaration produces an `ERROR` (reported as the
+conditional-compilation unknown, file refused). No attribute (`[Test]`,
+`[TestFixture]`), class section or procedure form the legacy frontend admits
+failed to parse.
+
+No DUnitX or other Object Pascal corpus exists locally. The only `.pas` files
+are 3 Free Pascal/Delphi lexer examples; 2 differ, both because they are not
+compilable units (two units concatenated in one file; a lexer stress file full
+of `@@` and stray directives). The completion status above is unchanged.

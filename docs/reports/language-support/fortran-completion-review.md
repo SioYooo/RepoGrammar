@@ -253,3 +253,72 @@ tests. Exact non-claims: the anchor proves a declaration's shape and
 an in-file import, not that the test is registered, runs, or passes; the fpm
 inventory proves neither compilation nor module linkage; and no Fortran
 dialect beyond the declared free-form subset is claimed.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The test-drive frontend now reads declarations from the pinned
+`tree-sitter-fortran` 0.6.0 grammar. The ADR-0051 free-form lexer stays the
+lexical-subset gate and runs first, so the preprocessor, fixed-form and
+unadmitted-byte refusals, the lexer flags (unterminated literal diagnostic) and
+every fact range are unchanged. The sentences above that describe a hand-written
+structural parser describe the pre-ADR-0058 implementation; the anchor shape,
+obligation registry and family claim are unchanged. The fpm manifest inventory
+in `fortran.rs` is untouched.
+
+How each ADR-0051 refusal is reproduced:
+
+- `include_statement` and a labeled `do` (`unadmitted_fortran_construct`) are
+  read from the token stream at statement starts, so tree error recovery cannot
+  move them; an `include` between program units or among a module's or
+  program's contained procedures stays `unadmitted_fortran_construct`, as before.
+- `unadmitted_fortran_construct` for structure is read from the tree: a
+  program-unit child that is not a module, program, subroutine or function; a
+  contained procedure whose first token is not `subroutine`/`function` after
+  `pure`/`impure`/`elemental`/`recursive` (typed functions, `module` prefixes);
+  a non-procedure after `contains`; a label or other non-keyword first token in
+  module or program specification; and the closing-`end` rule (a qualifier or
+  the unit's own name, otherwise refuse).
+- `parser_depth_limit` is the nesting count of block constructs from the
+  outermost procedure, interface or type body, with the same 256 limit.
+- Any `ERROR` or `MISSING` node refuses as `unadmitted_fortran_construct` only
+  when no more specific refusal applies; the earliest refusal position wins and
+  a token refusal precedes a tree refusal at one position.
+- The grammar cannot read three spellings the lexical subset admits, so the
+  text handed to it is rewritten in place at identical byte offsets: a name or
+  number split across a `&` continuation is glued, an unterminated literal is
+  closed at its line end, and the `abstract` of `abstract interface` is blanked.
+  Fact ranges still come from lexer tokens.
+- `testdrive_parse_degraded/include_statement.f90` parses without any `ERROR`
+  node under the grammar. The legacy refusal is the statement-start
+  `include 'file'` rule (`include_statement`), which the token-stream check
+  reproduces; the declared subset stays authoritative.
+
+The migration verdict is `CLASSIFIED`. The in-process differential matched the
+legacy parser on all 9 committed fixture sources and on 252 branch sources
+covering every refusal class, every anchor variation, the 255/256/257 depth
+boundary and near-misses. On the 80 distinct free-form Fortran files found on
+this machine (no file outside this repository's own fixtures uses test-drive),
+75 are identical and 5 differ, all legacy refusals that the grammar reads
+correctly:
+
+- 2 files: an `else if (...) then` chain made the legacy parser count a block
+  opener that no `end if` closes (the numpy f2py `gh25286.f90` and the
+  Pygments `zmlrpc.f90` example).
+- 2 files: a typed function statement (`type(c_ptr) function f(...)`) inside an
+  `interface` block was not recognised as a procedure opener (GCC libgomp
+  `openacc.f90`, two versions).
+- 1 file: a derived-type definition with attributes (`type, private, bind(c) ::
+  a`) was read as an ordinary statement (numpy `accesstype.f90`).
+
+The same root causes, plus named constructs (`outer: do ...`), a variable
+named `end`, and `enum` blocks, are pinned by tests. Four divergences go the
+other way and are declared: a syntax error inside a region the legacy parser
+skipped unread now refuses the file (`x = = 1`, `end test_x` without a
+keyword), an alternate-return dummy (`subroutine s(a, *)`) is a grammar gap
+that now refuses, and a non-ASCII identifier byte now refuses. Gate 2 evidence
+must be re-checked against ADR-0058 before any completion promotion; the
+status above is unchanged.
+
+The legacy parser and the differential were deleted on 2026-10-22 after the
+maintainer accepted the classification; the pinned cases remain as plain tests
+of the Tree-sitter reader.

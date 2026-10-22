@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 
 pub mod ada;
 pub mod assembly;
+pub(crate) mod binding;
 pub(crate) mod bounded_json;
 pub(crate) mod bounded_xml;
 pub mod cpp;
@@ -29,7 +30,6 @@ pub mod rust;
 pub mod sql;
 pub mod swift;
 pub mod syntax;
-pub mod tree_sitter;
 pub mod tsjs;
 pub mod visual_basic;
 
@@ -1313,5 +1313,79 @@ setup(name="second-project", package_dir={"": "second-src"})
                 "{method_kind} must be method-like or it loses containment"
             );
         }
+    }
+
+    /// Migration evidence tool: hash every parse output under a read-only
+    /// corpus so a frontend change can be compared file by file against an
+    /// earlier build. Writes `<corpus-relative path>\t<sha256>` lines; files
+    /// that are not UTF-8 are skipped and counted.
+    #[test]
+    #[ignore = "set REPOGRAMMAR_PARSE_SNAPSHOT_{LANGUAGE,CORPUS,OUT}"]
+    fn parse_snapshot_of_external_corpus() {
+        use sha2::{Digest, Sha256};
+        use std::path::{Path, PathBuf};
+
+        fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
+            let mut entries = std::fs::read_dir(directory)
+                .expect("read corpus directory")
+                .map(|entry| entry.expect("corpus entry").path())
+                .collect::<Vec<_>>();
+            entries.sort();
+            for entry in entries {
+                if entry.is_dir() {
+                    walk(&entry, found);
+                } else {
+                    found.push(entry);
+                }
+            }
+        }
+
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        }
+
+        let variable = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name}"));
+        let (language, admits): (Language, fn(&str) -> bool) =
+            match variable("REPOGRAMMAR_PARSE_SNAPSHOT_LANGUAGE").as_str() {
+                "csharp" => (Language::CSharp, |path| path.ends_with(".cs")),
+                "go" => (Language::Go, |path| path.ends_with("_test.go")),
+                other => panic!("unsupported snapshot language {other}"),
+            };
+        let corpus = PathBuf::from(variable("REPOGRAMMAR_PARSE_SNAPSHOT_CORPUS"));
+        let mut paths = Vec::new();
+        walk(&corpus, &mut paths);
+        let parser = RepoGrammarSourceParser::default();
+        let (mut lines, mut skipped) = (String::new(), 0);
+        for path in paths {
+            let relative = path
+                .strip_prefix(&corpus)
+                .expect("corpus-relative path")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !admits(&relative) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                skipped += 1;
+                continue;
+            };
+            let document = SourceDocument {
+                path: &relative,
+                language: language.clone(),
+                content_hash: ContentHash::new(format!(
+                    "sha256:{}",
+                    hex(&Sha256::digest(text.as_bytes()))
+                ))
+                .expect("hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("revision"),
+                text: &text,
+            };
+            let output =
+                parser.parse_with_context_output(document, &ParserProjectContext::default());
+            let digest = hex(&Sha256::digest(format!("{output:?}").as_bytes()));
+            lines.push_str(&format!("{relative}\t{digest}\n"));
+        }
+        std::fs::write(variable("REPOGRAMMAR_PARSE_SNAPSHOT_OUT"), lines).expect("write snapshot");
+        eprintln!("skipped {skipped} non-UTF-8 files");
     }
 }

@@ -5,12 +5,14 @@
 //! prohibitions all name running PHP or Composer and are unreached: nothing
 //! runs.
 //!
-//! This is a hand-written lexer and recursive-descent parser over the declared
-//! PHP subset of ADR-0047 D4, not a text scan. It reads only files whose bytes
-//! begin with the `<?php` prologue; every other `.php` file is HTML output
-//! with no PHP code region and never crosses the source-store boundary. The
-//! anchor is a question about the parsed declaration structure: a named,
-//! non-abstract class whose in-file `extends` chain terminates at a
+//! Declarations come from the pinned Tree-sitter PHP grammar (ADR-0058), with
+//! the declared PHP subset of ADR-0047 D4 applied over the tree and the
+//! subset's own lexer kept as the lexical gate; it is not a text scan. A tree
+//! that needed error recovery refuses the file. It reads only files whose
+//! bytes begin with the `<?php` prologue; every other `.php` file is HTML
+//! output with no PHP code region and never crosses the source-store
+//! boundary. The anchor is a question about the parsed declaration structure:
+//! a named, non-abstract class whose in-file `extends` chain terminates at a
 //! `TestCase`-suffixed name, and a directly declared `public`, non-static,
 //! non-abstract, zero-parameter method named `test*` or marked `@test` or
 //! `#[Test]`.
@@ -337,7 +339,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         token.start += code_start;
         token.end += code_start;
     }
-    let parsed = syntax::parse(document.text, &lexed);
+    let parsed = syntax::parse(document.text, &lexed)?;
     if let Some(abstention) = parsed.abstention {
         return abstain(module, units, abstention, document.path);
     }
@@ -951,6 +953,33 @@ mod tests {
     }
 
     #[test]
+    fn a_syntax_error_in_a_skipped_region_refuses_the_whole_file() {
+        // ADR-0058: an `ERROR` or `MISSING` node anywhere refuses the file as
+        // the generic unadmitted class, including in a body, parameter list,
+        // property default, or constant value that the declared subset only
+        // admits for its extent. Such source is not PHP, and a recovered
+        // anchor cannot be told apart from a real one.
+        for (region, member) in [
+            ("body", "public function testB(): void { $x = := 1; }"),
+            ("parameters", "public function testB(int $x = ): void {}"),
+            ("property default", "public $x = := 1;"),
+            ("constant value", "const X = := 1;"),
+        ] {
+            let source = format!(
+                "<?php\nuse PHPUnit\\Framework\\TestCase;\nfinal class ATest extends TestCase\n{{\n    public function testA(): void {{}}\n    {member}\n}}\n"
+            );
+            let parsed = output("tests/ATest.php", &source);
+            assert_eq!(test_methods(&parsed), 0, "{region}");
+            assert_eq!(
+                unknown_kinds(&parsed),
+                vec!["unadmitted_php_construct".to_string()],
+                "{region}"
+            );
+            assert_eq!(parsed.report.units.len(), 1, "{region}");
+        }
+    }
+
+    #[test]
     fn anchors_inside_strings_comments_and_heredocs_never_form() {
         let parsed = output(
             "tests/LiteralsTest.php",
@@ -1341,5 +1370,59 @@ mod tests {
                 "framework:phpunit.test_method"
             ]
         );
+    }
+
+    /// behaviour is pinned here; these are not in the equality corpus.
+    #[test]
+    fn declared_divergences_are_pinned() {
+        let anchor = "class A extends TestCase\n{\n    public function testA(): void {}\n}\n";
+        for (name, prefix_or_body) in [
+            // ADR-0058 syntax_error_in_skipped_region: a body the hand-written
+            // parser skipped by brace balance.
+            (
+                "body_syntax_error",
+                "<?php\nclass A extends TestCase\n{\n    public function testA(): void { $x = := 1; }\n}\n".to_string(),
+            ),
+            (
+                "parameter_syntax_error",
+                "<?php\nclass A extends TestCase\n{\n    public function testA(int $x = ): void {}\n}\n".to_string(),
+            ),
+            (
+                "property_default_syntax_error",
+                "<?php\nclass A extends TestCase\n{\n    public $x = := 1;\n    public function testA(): void {}\n}\n".to_string(),
+            ),
+            (
+                "constant_syntax_error",
+                format!("<?php\nconst A = := 1;\n{anchor}"),
+            ),
+            // Grammar 0.25.1 reads only one `declare` directive, though PHP
+            // admits a list; the list sits in a region the old parser
+            // skipped.
+            (
+                "declare_directive_list",
+                format!("<?php\ndeclare(strict_types=1, ticks=1);\n{anchor}"),
+            ),
+            // A bodiless free function is not PHP; the grammar rejects it.
+            ("bodiless_free_function", format!("<?php\nfunction helper();\n{anchor}")),
+            // A stray `;` in a class body is not PHP either.
+            (
+                "stray_semicolon_in_class_body",
+                "<?php\nclass A extends TestCase\n{\n    ;\n    public function testA(): void {}\n}\n".to_string(),
+            ),
+            // `?>` inside a line comment ends PHP mode; the grammar ends
+            // the PHP region there.
+            (
+                "close_tag_in_line_comment",
+                format!("<?php\n// ends php mode ?>\n{anchor}"),
+            ),
+        ] {
+            let path = "tests/DivergenceTest.php";
+            let new = output(path, &prefix_or_body);
+            assert!(
+                !new.report.diagnostics.is_empty(),
+                "{name}: the grammar must refuse the whole file"
+            );
+            assert_eq!(unknown_kinds(&new), vec!["unadmitted_php_construct"], "{name}");
+        }
     }
 }

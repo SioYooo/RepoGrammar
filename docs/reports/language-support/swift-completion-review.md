@@ -238,3 +238,72 @@ ADR-0048, the module test suites, and prerequisite
 source semantics, API compatibility, or family; and the source anchor proves
 a declaration's shape and import binding, not that `XCTestCase` resolves to
 the platform's XCTest module or that the file's tests compile, run, or pass.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The XCTest frontend now reads declarations from the pinned `tree-sitter-swift`
+0.7.4 grammar. The ADR-0048 lexer stays the lexical-subset gate and runs first,
+so every lexical refusal (open literals, raw strings, non-ASCII code, regex
+position, conditional compilation, unadmitted `#` forms, token ceilings) is
+decided exactly as before. The grammar supplies the declaration structure, and
+the remaining refusal classes (attribute arguments, generics, accessors, member
+and file shapes, single-line headers, brace balance, nesting and header
+ceilings) are read off the tree and the token stream with a left-to-right
+precedence: the earliest refusal wins, a token-level refusal precedes a tree
+refusal at one position, an unclosed brace refuses at end of input, and any
+`ERROR` or `MISSING` node refuses the file as `unadmitted_file_construct` only
+when no more specific refusal applies. Refusals about a node kind the reader
+does not admit are discarded in a tree that has an `ERROR` or `MISSING` node,
+because error recovery can surface a misplaced node of any kind. The anchor
+rule, `swift.xctest.test_method` family claim and `swift_unknown_kind`
+vocabulary are unchanged; `xctest.rs` changed only to propagate the grammar
+load error.
+
+The migration verdict is `CLASSIFIED`. The 8 committed fixtures and 115
+branch-corpus sources (every refusal class, every anchor variation and
+near-misses) are identical in the full `SourceParseOutput`, compared in
+process against the legacy parser. The legacy parser and its differential
+were deleted on 2026-10-22 after the maintainer accepted the classification.
+
+On 1,084 distinct Swift files found on the development machine (1,507 `.swift`
+files outside this repository, deduplicated by content; one is a scratch
+sample of this work and is excluded from the counts below), 603 files are
+admitted by both parsers with identical structure and 101 differ:
+
+- 59 `unknown_removed`. 53 are files the legacy parser refused with
+  `unbalanced_block_structure` only because it read an `init` or `deinit`
+  head as if a function name followed the keyword, so it refused every class
+  that declared an initializer; the grammar admits them and they never anchor.
+  6 are files the legacy parser refused for a multi-line property initializer
+  or method chain, which its line-bounded property head misread as a following
+  member.
+- 34 `refusal_class_changed`, all refusals before and after. 29 of them
+  were hidden behind the same `init` defect and now report the next real
+  refusal (17 `unadmitted_accessor`, 7 `generic_declaration`, 4
+  `unadmitted_member_shape`, 1 `unadmitted_attribute_argument`); 3 hit a
+  grammar gap; 1 moved from `unadmitted_member_shape` to
+  `unadmitted_accessor`; 1 moved from `generic_declaration` to the generic
+  class because a grammar gap leaves the file in error.
+- 8 `unknown_added` (11 once the `init` defect is repaired in the legacy
+  parser): valid Swift that tree-sitter-swift 0.7.4 cannot read, so the file now
+  abstains. Of the 11, 3 use a labeled trailing closure on its own line
+  (`Button { } label: { }`), 4 use Swift 5.10/6 forms (`sending`,
+  `@isolated(any)`, `nonisolated(unsafe)` in a body, `~Type.self`), 3 use an
+  empty tuple expression in an argument or `as?` position (`f(())`,
+  `value: ()`), and 1 has an error node at a `return` statement that was not
+  isolated. The direction is conservative: no file gains an anchor from a
+  misparse.
+- 0 `anchor_changed` and 0 `range_shift`: where both parsers admit a file,
+  imports, classes, method ranges and shape flags are identical.
+
+No legacy parser panic and no tree-reader panic occurred. Differences that
+tests pin instead of comparing: a syntax error inside a body the legacy parser
+skipped by brace depth now refuses the file (the declared
+`syntax_error_in_skipped_region`), two consecutive declarations on one line and
+`#warning` inside a class body are grammar errors that now refuse under the
+generic class, and the unreadable valid forms above. Not reproduced because
+they are legacy misparses of valid Swift or of invalid Swift: the line-bounded
+property head, a file ending in a `var`/`let` head without a newline, extra
+words after an `import` path, and a `where` clause after a class inheritance
+list. Gate 2 evidence must be re-checked against ADR-0058 before any
+completion promotion; the status above is unchanged.

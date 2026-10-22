@@ -1,6 +1,6 @@
 # ADR-0051: Bounded Fortran test-drive frontend
 
-- Status: Accepted (maintainer-ordered language-set completion, 2026-09-04)
+- Status: Accepted (maintainer-ordered language-set completion, 2026-09-04); hand-written parser and no-dependency clauses amended by ADR-0058 (see the [fortran completion review](../reports/language-support/fortran-completion-review.md))
 - Date: 2026-09-04
 - Scope: Fortran in ADR-0020; records the framework-backlog entry and admits one
   family-bearing frontend over one signature shape
@@ -194,6 +194,12 @@ existing Rust core and nothing else. It adds no crate, grammar, toolchain, or
 downloaded artifact, and it does not reserve the right to add one without a
 superseding ADR. ADR-0034's execution prohibitions and Flang `NO_GO` verdict
 remain in force. The `fpm.toml` inventory scope is unchanged.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-fortran` 0.6.0
+grammar crate, with the lexer kept as the lexical-subset gate. This D5
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 

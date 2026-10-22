@@ -14,7 +14,8 @@
 //!
 //! This module owns the claim, not the syntax. `super::syntax` decides what
 //! the token stream is and refuses whatever falls outside the declared Swift
-//! subset; everything here is the ADR-0048 D2 rule applied to the
+//! subset (reading declarations from the Tree-sitter grammar under
+//! ADR-0058); everything here is the ADR-0048 D2 rule applied to the
 //! declarations that survived. The separation is deliberate: a widened claim
 //! and a widened grammar are different decisions and must not be made in the
 //! same place.
@@ -97,7 +98,7 @@ pub fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, P
     // The parser abstains rather than recovering. Outside the declared subset
     // there is no partial tree to read, so the file keeps its module unit,
     // records why, and yields no anchor at all.
-    let parsed = match syntax::parse_file(document.text) {
+    let parsed = match syntax::parse_file(document.text)? {
         Ok(parsed) => parsed,
         Err(refusal) => {
             facts.push(unknown_fact(

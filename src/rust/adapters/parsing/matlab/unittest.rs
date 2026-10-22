@@ -3,12 +3,15 @@
 //! Nothing here invokes MATLAB or Octave, opens a project, or evaluates code.
 //! ADR-0037's prohibitions are carried forward.
 //!
-//! This is a recursive-descent parser over a declared subset, not a line
-//! scanner. It lexes the whole file once, then descends
-//! `classdef` -> `methods` -> `function` -> statement region, and it accepts or
-//! refuses each construct against a grammar. Outside the declared subset it
-//! abstains: it never recovers, never resumes, and never guesses a block
-//! boundary.
+//! Declarations come from the pinned Tree-sitter MATLAB grammar (ADR-0058),
+//! with the ADR-0046 declared subset applied over the tree. The lexer below
+//! stays the lexical gate and runs first: it decides every lexical refusal,
+//! reads the `classdef`, `methods`, and `function` header statements, and
+//! supplies the command-syntax trigger. The grammar supplies block extents and
+//! nesting, which `methods` blocks a class holds and which `function`
+//! declarations a block holds. Outside the declared subset the frontend
+//! abstains and never guesses a block boundary; a tree that needed error
+//! recovery keeps only the declarations whose header precedes the failure.
 //!
 //! MATLAB's tick is overloaded exactly the way Ada's is, and it is decidable the
 //! same way -- but the rule here is whitespace-sensitive rather than
@@ -39,6 +42,7 @@ use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
     SourceDocument, SourceParseOutput, SourceParser,
 };
+use tree_sitter::{Node, Parser as TreeParser};
 
 pub const MATLAB_ANCHOR_ENGINE: &str = "repogrammar-matlab-unittest-parser";
 pub const MATLAB_ANCHOR_METHOD: &str = "bounded_matlab_unittest_class_v2";
@@ -52,6 +56,9 @@ const MAX_UNITS: usize = 4_096;
 /// blocks anywhere near this deep, so exceeding it is a degraded parse rather
 /// than a stack overflow.
 const MAX_BLOCK_DEPTH: usize = 256;
+/// How many missing block terminators the Tree-sitter read closes at end of file
+/// before it gives up on recovering declarations from a broken tree.
+const MAX_END_REPAIRS: usize = 8;
 
 /// MATLAB's reserved words. These can never name a variable, so a statement
 /// beginning with one is never command syntax.
@@ -77,17 +84,6 @@ const RESERVED_WORDS: &[&str] = &[
     "try",
     "while",
 ];
-
-/// Statement keywords that open a block terminated by `end` inside a function
-/// body. `methods`, `properties`, `events`, `enumeration`, and `arguments` are
-/// deliberately absent: they are contextual, and treating them as unconditional
-/// openers invents a block for `methods = getMethods(x);`.
-const STATEMENT_BLOCK_OPENERS: &[&str] = &[
-    "if", "for", "while", "switch", "try", "parfor", "spmd", "function",
-];
-
-/// Keywords that continue an already-open block rather than opening a new one.
-const BLOCK_CONTINUATIONS: &[&str] = &["elseif", "else", "case", "otherwise", "catch"];
 
 /// Block terminators and openers that exist in Octave and not in MATLAB. In
 /// MATLAB each is an ordinary identifier, so the two dialects disagree about
@@ -205,7 +201,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             abstention: Some(abstention),
             ..FileParse::default()
         },
-        None => parse_tokens(document.text, &lexed.tokens),
+        None => tree_sitter_matlab_file(document.text, &lexed)?,
     };
 
     if let Some(abstention) = parsed.abstention {
@@ -376,6 +372,10 @@ struct Lexed {
     tokens: Vec<Token>,
     unterminated_block_comment: bool,
     unterminated_text: bool,
+    /// Byte ranges of character arrays and strings left open at end of line.
+    unterminated_text_spans: Vec<(usize, usize)>,
+    /// Where an unclosed `%{` block comment begins.
+    unterminated_block_comment_from: Option<usize>,
     divergence: Option<Abstention>,
 }
 
@@ -414,6 +414,7 @@ fn command_abstention(kind: &'static str) -> Abstention {
 fn lex(text: &str) -> Lexed {
     let mut lexed = Lexed::default();
     let mut in_block_comment = false;
+    let mut block_comment_from = 0usize;
     let mut line_start = 0usize;
     for raw in text.split_inclusive('\n') {
         let line_end = line_start + raw.len();
@@ -430,6 +431,7 @@ fn lex(text: &str) -> Lexed {
         }
         if trimmed == "%{" {
             in_block_comment = true;
+            block_comment_from = line_start;
             line_start = line_end;
             continue;
         }
@@ -446,6 +448,7 @@ fn lex(text: &str) -> Lexed {
         line_start = line_end;
     }
     lexed.unterminated_block_comment = in_block_comment;
+    lexed.unterminated_block_comment_from = in_block_comment.then_some(block_comment_from);
     lexed
 }
 
@@ -574,6 +577,9 @@ impl LineLexer<'_, '_> {
                 let (end, closed, escaped) = lex_quoted(bytes, index, byte);
                 if !closed {
                     self.lexed.unterminated_text = true;
+                    self.lexed
+                        .unterminated_text_spans
+                        .push((self.offset + index, self.offset + end));
                 }
                 if escaped && byte == b'"' {
                     // Octave honours backslash escapes inside double quotes and
@@ -707,287 +713,175 @@ struct FileParse {
     observations: Vec<Abstention>,
 }
 
-/// How a descent ended.
-enum Halt {
-    /// The token stream does not match the block grammar.
+// ---------------------------------------------------------------------------
+// Tree-sitter syntax layer (ADR-0058)
+// ---------------------------------------------------------------------------
+
+fn tree_sitter_matlab_file(text: &str, lexed: &Lexed) -> Result<FileParse, ParseError> {
+    let mut parser = TreeParser::new();
+    parser
+        .set_language(&tree_sitter_matlab::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load MATLAB grammar: {error}")))?;
+    let source = grammar_view(text, lexed);
+    let parse_failed = || ParseError::Internal("Tree-sitter MATLAB parse failed".to_string());
+    let mut tree = parser
+        .parse(source.as_bytes(), None)
+        .ok_or_else(parse_failed)?;
+    // A block left open at end of file leaves a recovered tree with no
+    // `methods` or `function` nodes. Closing the blocks reads the declarations
+    // the file did declare, and the read still fails at the end of the file.
+    let mut repaired = false;
+    if tree.root_node().has_error() {
+        for count in 1..=MAX_END_REPAIRS {
+            let closed = format!("{source}{}", "end\n".repeat(count));
+            let candidate = parser
+                .parse(closed.as_bytes(), None)
+                .ok_or_else(parse_failed)?;
+            if !candidate.root_node().has_error() {
+                tree = candidate;
+                repaired = true;
+                break;
+            }
+        }
+    }
+    Ok(parse_tree(text, &lexed.tokens, tree.root_node(), repaired))
+}
+
+/// The text the grammar reads, with byte offsets identical to `text`. The lexer
+/// is authoritative for the lexical subset and has already reported a
+/// character array or block comment left open as a degraded parse, so those
+/// runs are neutralised rather than allowed to turn the rest of the file into
+/// one recovered region. The grammar also needs a final line break to close the
+/// last statement.
+fn grammar_view(text: &str, lexed: &Lexed) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    for &(start, end) in &lexed.unterminated_text_spans {
+        bytes[start] = b'0';
+        bytes[start + 1..end].fill(b' ');
+    }
+    if let Some(start) = lexed.unterminated_block_comment_from {
+        for byte in &mut bytes[start..] {
+            if !matches!(*byte, b'\n' | b'\r') {
+                *byte = b' ';
+            }
+        }
+    }
+    if bytes.last().is_some_and(|byte| *byte != b'\n') {
+        bytes.push(b'\n');
+    }
+    // Only ASCII bytes were replaced, over whole characters, so the text is
+    // still valid UTF-8.
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
+}
+
+/// How a left-to-right read of the file ends. The earliest position wins, and
+/// at one position a construct outside the subset precedes a structural
+/// failure, exactly as in the retired descent.
+#[derive(Clone, Copy)]
+enum Cause {
+    /// The block grammar does not close. Declarations whose header precedes the
+    /// failure point are still real.
     Structural,
     /// A construct outside the declared subset. The file abstains.
     Outside(Abstention),
 }
 
-type Step = Result<(), Halt>;
-
-struct Parser<'a> {
-    text: &'a str,
-    tokens: &'a [Token],
-    index: usize,
-    /// Descent depth, bounded because repository contents are untrusted: a file
-    /// of ten thousand nested `if`s must degrade, not overflow the stack.
-    depth: usize,
-    out: FileParse,
-}
-
-fn parse_tokens(text: &str, tokens: &[Token]) -> FileParse {
-    let mut parser = Parser {
-        text,
-        tokens,
-        index: 0,
-        depth: 0,
-        out: FileParse::default(),
+/// The ADR-0046 declared-subset policy, read off a Tree-sitter MATLAB tree
+/// (ADR-0058).
+///
+/// The lexer stays the lexical gate and the statement-level reader for the two
+/// things a grammar cannot decide: the command-syntax ambiguity (D4b) and the
+/// `classdef`, `methods`, and `function` header statements. The grammar supplies
+/// block extents and nesting: which `methods` blocks a class holds and which
+/// `function` declarations a block holds. An `ERROR` or `MISSING` node ends the
+/// read at the end of that node as a structural failure, so a declaration after
+/// a recovered region never yields an anchor.
+fn parse_tree(text: &str, tokens: &[Token], root: Node<'_>, repaired: bool) -> FileParse {
+    let mut out = FileParse::default();
+    // ADR-0046 D1: only a file that opens with `classdef` carries the anchor.
+    let Some(head_index) = tokens
+        .iter()
+        .position(|token| !matches!(token.kind, TokenKind::Separator | TokenKind::LineBreak))
+    else {
+        return out;
     };
-    match parser.parse_file() {
-        Ok(()) => {}
-        Err(Halt::Structural) => parser.out.structural_failure = true,
-        Err(Halt::Outside(abstention)) => {
-            parser.out.abstention = Some(abstention);
-            parser.out.anchors.clear();
-            parser.out.unbound_test_block = false;
-            parser.out.observations.clear();
-        }
+    let head = tokens[head_index];
+    if head.kind != TokenKind::Word || token_word(text, &head) != "classdef" {
+        return out;
     }
-    parser.out
-}
+    let header = statement_span(text, tokens, head_index);
+    let derives_test_case = if header.balanced {
+        class_derives_test_case(text, tokens, head_index + 1, header.end)
+    } else {
+        Err(())
+    };
+    let Ok(derives_test_case) = derives_test_case else {
+        out.structural_failure = true;
+        return out;
+    };
 
-impl<'a> Parser<'a> {
-    fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.index)
-    }
-
-    fn word(&self, token: &Token) -> &'a str {
-        &self.text[token.start..token.end]
-    }
-
-    fn peek_word(&self) -> Option<&'a str> {
-        self.peek().and_then(|token| {
-            (token.kind == TokenKind::Word).then(|| &self.text[token.start..token.end])
-        })
-    }
-
-    fn skip_separators(&mut self) {
-        while self
-            .peek()
-            .is_some_and(|token| matches!(token.kind, TokenKind::Separator | TokenKind::LineBreak))
-        {
-            self.index += 1;
-        }
-    }
-
-    /// The extent of the statement beginning at `self.index`, ending at the
-    /// first `;`, `,`, or line break outside brackets. A line break inside `[]`
-    /// or `{}` is a row separator, not a statement end.
-    fn statement_span(&self) -> StatementSpan {
-        let mut depth = 0usize;
-        let mut cursor = self.index;
-        let mut balanced = true;
-        let mut depth_zero_end = None;
-        while cursor < self.tokens.len() {
-            let token = self.tokens[cursor];
-            match token.kind {
-                TokenKind::Open => depth += 1,
-                TokenKind::Close => {
-                    if depth == 0 {
-                        balanced = false;
-                    } else {
-                        depth -= 1;
-                    }
-                }
-                TokenKind::Separator | TokenKind::LineBreak if depth == 0 => {
-                    return StatementSpan {
-                        end: cursor,
-                        balanced,
-                        depth_zero_end,
-                    };
-                }
-                TokenKind::Word if depth == 0 && self.word(&token) == "end" => {
-                    depth_zero_end.get_or_insert(cursor);
-                }
-                _ => {}
-            }
-            cursor += 1;
-        }
-        StatementSpan {
-            end: cursor,
-            balanced: balanced && depth == 0,
-            depth_zero_end,
-        }
-    }
-
-    /// ADR-0046 D1: a `classdef` must be the first construct in its file, so a
-    /// file that does not open with one can never carry the admitted anchor and
-    /// receives no structural claim at all.
-    fn parse_file(&mut self) -> Step {
-        self.skip_separators();
-        if self.peek_word() != Some("classdef") {
-            return Ok(());
-        }
-        self.parse_classdef()
-    }
-
-    fn parse_classdef(&mut self) -> Step {
-        let header = *self.peek().ok_or(Halt::Structural)?;
-        let span = self.statement_span();
-        if !span.balanced {
-            return Err(Halt::Structural);
-        }
-        let derives_test_case = self.classdef_derives_test_case(self.index + 1, span.end)?;
-        if derives_test_case {
-            let (start, end) = line_bounds(self.text, header.start);
-            self.out.anchors.push(Anchor {
+    let mut causes: Vec<(usize, Cause)> = Vec::new();
+    let mut anchors: Vec<(usize, Anchor)> = Vec::new();
+    let mut observations: Vec<(usize, Abstention)> = Vec::new();
+    let mut unbound: Vec<usize> = Vec::new();
+    if derives_test_case {
+        let (start, end) = line_bounds(text, head.start);
+        anchors.push((
+            head.start,
+            Anchor {
                 kind: AnchorKind::TestClass,
                 start,
                 end,
-            });
-        }
-        self.index = span.end;
-
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek().copied() else {
-                return Err(Halt::Structural);
-            };
-            if token.kind != TokenKind::Word {
-                return Err(Halt::Outside(unadmitted_classdef_construct()));
-            }
-            match self.word(&token) {
-                "end" => {
-                    self.index += 1;
-                    return Ok(());
-                }
-                "methods" => self.parse_methods_block(derives_test_case)?,
-                "properties" | "events" | "enumeration" => self.parse_opaque_block()?,
-                _ => return Err(Halt::Outside(unadmitted_classdef_construct())),
-            }
-        }
+            },
+        ));
     }
 
-    /// `classdef [ (attrs) ] Name [ < Base [ & Base ]* ]`. Attributes are parsed
-    /// so the header is exact; ADR-0046 D2b keeps `Abstract` out of the claim.
-    fn classdef_derives_test_case(&self, mut cursor: usize, end: usize) -> Result<bool, Halt> {
-        if self
-            .tokens
-            .get(cursor)
-            .is_some_and(|token| token.byte == b'(')
-        {
-            cursor = self.skip_bracketed(cursor, end)?;
+    // Only the first construct is read: a local function after the class is
+    // outside the declared subset, so it is neither anchored nor checked.
+    let scope = match first_construct(root) {
+        Some(node) if node.kind() == "class_definition" => node,
+        _ => root,
+    };
+    let mut blocks: Vec<Node<'_>> = Vec::new();
+    let mut functions: Vec<Node<'_>> = Vec::new();
+    walk(scope, |node| {
+        // The anonymous keyword leaf of a block shares the block's kind name.
+        if !node.is_named() {
+            return false;
         }
-        // The class name.
-        let name = self.tokens.get(cursor).ok_or(Halt::Structural)?;
-        if name.kind != TokenKind::Word {
-            return Err(Halt::Structural);
+        match node.kind() {
+            "methods" | "properties" | "events" | "enumeration" => {
+                blocks.push(node);
+                // Only a `methods` block holds functions.
+                return node.kind() == "methods";
+            }
+            "function_definition" => functions.push(node),
+            _ => {}
         }
-        cursor += 1;
-        let Some(separator) = self.tokens.get(cursor) else {
-            return Ok(false);
+        true
+    });
+
+    for block in blocks.iter().filter(|block| block.kind() == "methods") {
+        let keyword = token_index_at(tokens, block.start_byte());
+        let Some(token) = tokens
+            .get(keyword)
+            .filter(|token| token.start == block.start_byte())
+        else {
+            continue;
         };
-        if separator.kind != TokenKind::Symbol || separator.byte != b'<' || cursor >= end {
-            return Ok(false);
-        }
-        cursor += 1;
-        let mut derives = false;
-        while cursor < end {
-            let (base, next) = self.read_dotted_name(cursor, end)?;
-            if base == TEST_CASE_BASE {
-                derives = true;
-            }
-            cursor = next;
-            match self.tokens.get(cursor) {
-                Some(token) if token.byte == b'&' && cursor < end => cursor += 1,
-                _ => break,
-            }
-        }
-        Ok(derives)
-    }
-
-    fn read_dotted_name(&self, mut cursor: usize, end: usize) -> Result<(String, usize), Halt> {
-        let mut name = String::new();
-        loop {
-            let token = self.tokens.get(cursor).ok_or(Halt::Structural)?;
-            if cursor >= end || token.kind != TokenKind::Word {
-                return Err(Halt::Structural);
-            }
-            name.push_str(self.word(token));
-            cursor += 1;
-            match self.tokens.get(cursor) {
-                Some(dot) if dot.kind == TokenKind::Symbol && dot.byte == b'.' && cursor < end => {
-                    name.push('.');
-                    cursor += 1;
-                }
-                _ => return Ok((name, cursor)),
-            }
-        }
-    }
-
-    fn skip_bracketed(&self, cursor: usize, end: usize) -> Result<usize, Halt> {
-        let mut depth = 0usize;
-        let mut index = cursor;
-        while index < end {
-            match self.tokens[index].kind {
-                TokenKind::Open => depth += 1,
-                TokenKind::Close => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return Ok(index + 1);
-                    }
-                }
-                _ => {}
-            }
-            index += 1;
-        }
-        Err(Halt::Structural)
-    }
-
-    /// Attribute names of a `( … )` list, each paired with whether it carried a
-    /// `= value`.
-    fn attribute_list(&self, cursor: usize, end: usize) -> Vec<(&'a str, bool)> {
-        let mut attributes = Vec::new();
-        let mut depth = 0usize;
-        let mut index = cursor;
-        let mut pending: Option<&'a str> = None;
-        let mut valued = false;
-        while index < end {
-            let token = self.tokens[index];
-            match token.kind {
-                TokenKind::Open => depth += 1,
-                TokenKind::Close => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                TokenKind::Word if depth == 1 && pending.is_none() => {
-                    pending = Some(self.word(&token));
-                }
-                TokenKind::Assign if depth == 1 => valued = true,
-                TokenKind::Separator if depth == 1 => {
-                    if let Some(name) = pending.take() {
-                        attributes.push((name, valued));
-                    }
-                    valued = false;
-                }
-                _ => {}
-            }
-            index += 1;
-        }
-        if let Some(name) = pending.take() {
-            attributes.push((name, valued));
-        }
-        attributes
-    }
-
-    fn parse_methods_block(&mut self, derives_test_case: bool) -> Step {
-        let span = self.statement_span();
+        let span = statement_span(text, tokens, keyword);
         if !span.balanced {
-            return Err(Halt::Structural);
+            causes.push((token.start, Cause::Structural));
+            continue;
         }
         let mut is_test = false;
         let mut valued_test = false;
         let mut is_abstract = false;
-        if self
-            .tokens
-            .get(self.index + 1)
+        if tokens
+            .get(keyword + 1)
             .is_some_and(|token| token.byte == b'(')
         {
-            for (name, valued) in self.attribute_list(self.index + 1, span.end) {
+            for (name, valued) in attribute_list(text, tokens, keyword + 1, span.end) {
                 match name {
                     "Test" if valued => valued_test = true,
                     "Test" => is_test = true,
@@ -996,266 +890,609 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        self.index = span.end;
-
         if valued_test && !is_test {
             // `methods (Test = <expr>)` needs the expression evaluated to know
             // whether the block is a test block, and this frontend evaluates
             // nothing.
-            self.out.observations.push(Abstention {
-                reason: UnknownReasonCode::InsufficientSupport,
-                claim: "matlab_test_attribute_value",
-                kind: "test_attribute_with_value",
-                note: "a methods block sets the Test attribute to an expression, which cannot be read without evaluating it",
-            });
+            observations.push((
+                token.start,
+                Abstention {
+                    reason: UnknownReasonCode::InsufficientSupport,
+                    claim: "matlab_test_attribute_value",
+                    kind: "test_attribute_with_value",
+                    note: "a methods block sets the Test attribute to an expression, which cannot be read without evaluating it",
+                },
+            ));
         }
         if is_test && !derives_test_case {
-            self.out.unbound_test_block = true;
+            unbound.push(token.start);
         }
         if is_test && is_abstract {
             // An abstract method has no implementation, so the declaring class
             // declares no runnable test.
-            self.out.observations.push(Abstention {
-                reason: UnknownReasonCode::InsufficientSupport,
-                claim: "matlab_abstract_test_methods",
-                kind: "abstract_test_methods_block",
-                note: "a Test methods block is declared Abstract, so its members are signatures rather than test implementations",
-            });
+            observations.push((
+                token.start,
+                Abstention {
+                    reason: UnknownReasonCode::InsufficientSupport,
+                    claim: "matlab_abstract_test_methods",
+                    kind: "abstract_test_methods_block",
+                    note: "a Test methods block is declared Abstract, so its members are signatures rather than test implementations",
+                },
+            ));
         }
         let anchors_tests = is_test && derives_test_case && !is_abstract;
-
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek().copied() else {
-                return Err(Halt::Structural);
+        for function in children_through_errors(*block)
+            .into_iter()
+            .filter(|child| child.kind() == "function_definition")
+        {
+            let keyword = token_index_at(tokens, function.start_byte());
+            let Some(token) = tokens
+                .get(keyword)
+                .filter(|token| token.start == function.start_byte())
+            else {
+                continue;
             };
-            if token.kind == TokenKind::Word && self.word(&token) == "end" {
-                self.index += 1;
-                return Ok(());
-            }
-            if token.kind == TokenKind::Word && self.word(&token) == "function" {
-                self.parse_function(anchors_tests)?;
+            let span = statement_span(text, tokens, keyword);
+            if !span.balanced
+                || span.depth_zero_end.is_some()
+                || !function_header_is_admitted(text, tokens, keyword + 1, span.end)
+            {
+                causes.push((token.start, Cause::Structural));
                 continue;
             }
-            // A bare method signature: the body lives in an `@Class` folder or
-            // the block is abstract. It declares no implementation and never
-            // anchors.
-            let span = self.statement_span();
-            if !span.balanced || span.depth_zero_end.is_some() {
-                return Err(Halt::Structural);
+            if anchors_tests {
+                let (start, end) = line_bounds(text, token.start);
+                anchors.push((
+                    token.start,
+                    Anchor {
+                        kind: AnchorKind::TestMethod,
+                        start,
+                        end,
+                    },
+                ));
             }
-            if span.end == self.index {
-                return Err(Halt::Structural);
-            }
-            self.index = span.end;
         }
     }
 
-    /// `properties`, `events`, and `enumeration` bodies hold declarations, not
-    /// statements. They are consumed for their extent only.
-    fn parse_opaque_block(&mut self) -> Step {
-        let span = self.statement_span();
-        if !span.balanced {
-            return Err(Halt::Structural);
+    for function in &functions {
+        if let Some(cause) = command_ambiguity(text, tokens, *function) {
+            causes.push(cause);
         }
-        self.index = span.end;
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek().copied() else {
-                return Err(Halt::Structural);
-            };
-            if token.kind == TokenKind::Word && self.word(&token) == "end" {
-                self.index += 1;
-                return Ok(());
+    }
+    for block in &blocks {
+        if let Some(position) = opaque_statement_failure(text, tokens, *block) {
+            causes.push((position, Cause::Structural));
+        }
+    }
+    if let Some(position) = region_depth_violation(scope) {
+        causes.push((position, Cause::Structural));
+    }
+    // Error recovery decides where a recovered region ends, which is not where a
+    // left-to-right read fails, so a construct outside the subset that the
+    // token stream proves outranks it. Headers and depth are exact positions.
+    let mut recovery = None;
+    if repaired {
+        causes.push((text.len(), Cause::Structural));
+    } else if root.has_error() {
+        recovery = Some(first_error_end(root).unwrap_or(text.len()));
+        if let Some(position) = unadmitted_body_construct(text, tokens, header.end, &blocks) {
+            causes.push((position, Cause::Outside(unadmitted_classdef_construct())));
+        }
+    }
+    let mut halt = causes
+        .iter()
+        .copied()
+        .min_by_key(|(position, cause)| (*position, matches!(cause, Cause::Structural)));
+    if let Some(failure) = recovery {
+        halt = match halt {
+            Some((position, cause))
+                if matches!(cause, Cause::Outside(_)) || position <= failure =>
+            {
+                Some((position, cause))
             }
-            let span = self.statement_span();
-            if !span.balanced || span.depth_zero_end.is_some() || span.end == self.index {
-                return Err(Halt::Structural);
-            }
-            self.index = span.end;
+            _ => Some((failure, Cause::Structural)),
+        };
+    }
+    let limit = match halt {
+        Some((_, Cause::Outside(abstention))) => {
+            // A diverged reading unproves every block boundary, so no anchor it
+            // already collected may be reported as if the file were admitted.
+            out.abstention = Some(abstention);
+            return out;
+        }
+        Some((position, Cause::Structural)) => {
+            out.structural_failure = true;
+            position
+        }
+        None => usize::MAX,
+    };
+    out.anchors = anchors
+        .into_iter()
+        .filter(|(position, _)| *position < limit)
+        .map(|(_, anchor)| anchor)
+        .collect();
+    out.observations = observations
+        .into_iter()
+        .filter(|(position, _)| *position < limit)
+        .map(|(_, observation)| observation)
+        .collect();
+    out.unbound_test_block = unbound.iter().any(|position| *position < limit);
+    out
+}
+
+/// The first named node that is not a comment.
+fn first_construct(root: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = root.walk();
+    let first = root
+        .named_children(&mut cursor)
+        .find(|node| node.kind() != "comment");
+    first
+}
+
+/// Children of `node`, looking one level into recovery `ERROR` nodes.
+fn children_through_errors(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    let mut found = Vec::new();
+    for child in node.named_children(&mut cursor) {
+        if child.is_error() {
+            let mut inner = child.walk();
+            found.extend(child.named_children(&mut inner));
+        } else {
+            found.push(child);
         }
     }
+    found
+}
 
-    /// `function [out, …] = name[.accessor](args)`, then a statement region,
-    /// then `end`.
-    fn parse_function(&mut self, anchors_tests: bool) -> Step {
-        let keyword = *self.peek().ok_or(Halt::Structural)?;
-        let span = self.statement_span();
-        if !span.balanced || span.depth_zero_end.is_some() {
-            return Err(Halt::Structural);
-        }
-        self.parse_function_header(self.index + 1, span.end)?;
-        self.index = span.end;
-        if anchors_tests {
-            let (start, end) = line_bounds(self.text, keyword.start);
-            self.out.anchors.push(Anchor {
-                kind: AnchorKind::TestMethod,
-                start,
-                end,
-            });
-        }
-        self.parse_statement_region(true)?;
-        self.expect_end()
-    }
-
-    fn parse_function_header(&self, mut cursor: usize, end: usize) -> Step {
-        let assignment = (cursor..end).find(|index| self.tokens[*index].kind == TokenKind::Assign);
-        if let Some(assignment) = assignment {
-            cursor = assignment + 1;
-        }
-        // The function name, optionally a `get.`/`set.` property accessor.
-        let (_, next) = self.read_dotted_name(cursor, end)?;
-        cursor = next;
-        if cursor < end {
-            let token = self.tokens.get(cursor).ok_or(Halt::Structural)?;
-            if token.byte != b'(' {
-                return Err(Halt::Structural);
-            }
-            cursor = self.skip_bracketed(cursor, end)?;
-        }
-        if cursor < end {
-            return Err(Halt::Structural);
-        }
-        Ok(())
-    }
-
-    fn expect_end(&mut self) -> Step {
-        self.skip_separators();
-        match self.peek().copied() {
-            Some(token) if token.kind == TokenKind::Word && self.word(&token) == "end" => {
-                self.index += 1;
-                Ok(())
-            }
-            _ => Err(Halt::Structural),
-        }
-    }
-
-    /// A run of statements up to the `end` that closes the enclosing block. The
-    /// parser recognises block structure and deliberately leaves expressions
-    /// unparsed; that opacity is what D4b's command-syntax bound protects.
-    fn parse_statement_region(&mut self, function_body: bool) -> Step {
-        if self.depth >= MAX_BLOCK_DEPTH {
-            return Err(Halt::Structural);
-        }
-        self.depth += 1;
-        let region = self.statement_region_body(function_body);
-        self.depth -= 1;
-        region
-    }
-
-    fn statement_region_body(&mut self, function_body: bool) -> Step {
-        let mut first_statement = function_body;
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek().copied() else {
-                return Ok(());
-            };
-            if token.kind == TokenKind::Word {
-                let word = self.word(&token);
-                if word == "end" {
-                    return Ok(());
+/// Document-order walk without recursion, because repository contents are
+/// untrusted and a deeply nested file must not overflow the stack. `visit`
+/// returns whether to descend into the node.
+fn walk<'t>(root: Node<'t>, mut visit: impl FnMut(Node<'t>) -> bool) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if visit(node) {
+            for index in (0..node.child_count()).rev() {
+                if let Some(child) = node.child(index) {
+                    stack.push(child);
                 }
-                if STATEMENT_BLOCK_OPENERS.contains(&word) {
-                    self.parse_nested_block(word)?;
-                    first_statement = false;
-                    continue;
-                }
-                if word == "arguments" && first_statement && self.opens_arguments_block() {
-                    self.parse_nested_block(word)?;
-                    continue;
-                }
-                if BLOCK_CONTINUATIONS.contains(&word) {
-                    let span = self.statement_span();
-                    if !span.balanced || span.depth_zero_end.is_some() {
-                        return Err(Halt::Structural);
+            }
+        }
+    }
+}
+
+/// Where the recovered region ends: the end of the innermost `ERROR` node, or
+/// the start of a `MISSING` token, whichever comes first.
+fn first_error_end(root: Node<'_>) -> Option<usize> {
+    let mut earliest: Option<usize> = None;
+    walk(root, |node| {
+        if !node.has_error() && !node.is_missing() {
+            return false;
+        }
+        let position = if node.is_missing() {
+            Some(node.start_byte())
+        } else if node.is_error() && !has_error_child(node) {
+            Some(node.end_byte())
+        } else {
+            None
+        };
+        if let Some(position) = position {
+            earliest = Some(earliest.map_or(position, |current| current.min(position)));
+        }
+        true
+    });
+    earliest
+}
+
+fn has_error_child(node: Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .any(|child| child.has_error() || child.is_missing());
+    found
+}
+
+/// The start of the first block that nests deeper than `MAX_BLOCK_DEPTH`.
+/// Every statement region is one level: a function body, and each nested
+/// `if`, `for`/`parfor`, `while`, `switch`, `try`, `spmd`, or `arguments` block.
+/// `elseif`, `else`, `case`, `otherwise`, and `catch` clauses are continuations
+/// and add none.
+fn region_depth_violation(scope: Node<'_>) -> Option<usize> {
+    let mut stack = vec![(scope, 0usize)];
+    let mut earliest: Option<usize> = None;
+    while let Some((node, depth)) = stack.pop() {
+        let depth = depth
+            + usize::from(matches!(
+                node.kind(),
+                "function_definition"
+                    | "if_statement"
+                    | "for_statement"
+                    | "while_statement"
+                    | "switch_statement"
+                    | "try_statement"
+                    | "spmd_statement"
+                    | "arguments_statement"
+            ));
+        if depth > MAX_BLOCK_DEPTH {
+            earliest = Some(earliest.map_or(node.start_byte(), |c| c.min(node.start_byte())));
+            continue;
+        }
+        for index in 0..node.child_count() {
+            if let Some(child) = node.child(index) {
+                stack.push((child, depth));
+            }
+        }
+    }
+    earliest
+}
+
+/// D4b: a statement whose command reading and expression reading differ in
+/// block structure makes the file's block extents unproven. The grammar's
+/// scanner commits to one reading, so the lexer's over-approximating trigger
+/// decides, at every statement start inside the function's body.
+fn command_ambiguity(text: &str, tokens: &[Token], function: Node<'_>) -> Option<(usize, Cause)> {
+    let keyword = token_index_at(tokens, function.start_byte());
+    tokens
+        .get(keyword)
+        .filter(|token| token.start == function.start_byte())?;
+    let mut index = statement_span(text, tokens, keyword).end;
+    let mut at_start = true;
+    let mut first_statement = true;
+    let mut depth = 0usize;
+    while let Some(token) = tokens.get(index) {
+        if token.start >= function.end_byte() {
+            break;
+        }
+        match token.kind {
+            TokenKind::Separator | TokenKind::LineBreak if depth == 0 => at_start = true,
+            kind => {
+                if at_start {
+                    at_start = false;
+                    // `arguments` leading a function body opens a block, not a
+                    // command.
+                    let opens_arguments = first_statement
+                        && token.kind == TokenKind::Word
+                        && token_word(text, token) == "arguments"
+                        && !tokens
+                            .get(index + 1)
+                            .is_some_and(|next| next.kind == TokenKind::Assign);
+                    first_statement = opens_arguments;
+                    if opens_arguments {
+                        let span = statement_span(text, tokens, index);
+                        if !span.balanced || span.depth_zero_end.is_some() {
+                            return Some((token.start, Cause::Structural));
+                        }
                     }
-                    self.index = span.end;
-                    first_statement = false;
-                    continue;
+                    if !opens_arguments && possible_command_syntax(text, tokens, index) {
+                        let span = statement_span(text, tokens, index);
+                        let kind = if !span.balanced {
+                            Some("command_syntax_bracket_balance")
+                        } else if span.depth_zero_end.is_some() {
+                            Some("command_syntax_end_keyword")
+                        } else {
+                            None
+                        };
+                        if let Some(kind) = kind {
+                            return Some((token.start, Cause::Outside(command_abstention(kind))));
+                        }
+                    }
+                }
+                match kind {
+                    TokenKind::Open => depth += 1,
+                    TokenKind::Close => depth = depth.saturating_sub(1),
+                    _ => {}
                 }
             }
-            self.parse_simple_statement()?;
-            first_statement = false;
         }
+        index += 1;
     }
+    None
+}
 
-    /// `arguments` is a keyword only as a function's leading block; elsewhere it
-    /// is an ordinary name, so `arguments = 3` opens nothing.
-    fn opens_arguments_block(&self) -> bool {
-        !self
-            .tokens
-            .get(self.index + 1)
-            .is_some_and(|token| token.kind == TokenKind::Assign)
+/// A `methods`, `properties`, `events`, or `enumeration` body outside its
+/// functions holds signatures and declarations that this frontend reads only
+/// for extent: each must be a non-empty, bracket-balanced statement that does
+/// not carry a bare `end`, because that `end` could close the block.
+fn opaque_statement_failure(text: &str, tokens: &[Token], block: Node<'_>) -> Option<usize> {
+    let first = token_index_at(tokens, block.start_byte());
+    let closing = token_index_at(tokens, block.end_byte()).checked_sub(1)?;
+    let closes = tokens.get(closing)?;
+    if closing <= first || closes.kind != TokenKind::Word || token_word(text, closes) != "end" {
+        return None;
     }
-
-    fn parse_nested_block(&mut self, word: &str) -> Step {
-        if word == "function" {
-            return self.parse_function(false);
+    let functions: Vec<(usize, usize)> = children_through_errors(block)
+        .into_iter()
+        .filter(|child| child.kind() == "function_definition")
+        .map(|child| (child.start_byte(), child.end_byte()))
+        .collect();
+    let mut index = statement_span(text, tokens, first).end;
+    loop {
+        index = skip_separator_tokens(tokens, index);
+        if index >= closing {
+            return None;
         }
-        let span = self.statement_span();
-        if !span.balanced || span.depth_zero_end.is_some() {
-            return Err(Halt::Structural);
+        let token = tokens[index];
+        if let Some((_, end)) = functions.iter().find(|(start, _)| *start == token.start) {
+            index = token_index_at(tokens, *end).max(index + 1);
+            continue;
         }
-        self.index = span.end;
-        self.parse_statement_region(false)?;
-        self.expect_end()
+        let span = statement_span(text, tokens, index);
+        if !span.balanced || span.depth_zero_end.is_some() || span.end == index {
+            return Some(token.start);
+        }
+        index = span.end;
     }
+}
 
-    fn parse_simple_statement(&mut self) -> Step {
-        let span = self.statement_span();
-        if !span.balanced {
-            if self.possible_command_syntax() {
-                return Err(Halt::Outside(command_abstention(
-                    "command_syntax_bracket_balance",
-                )));
+/// In a tree that needed recovery, the first token of the class body that is
+/// neither a block the grammar read nor the class's closing `end`.
+fn unadmitted_body_construct(
+    text: &str,
+    tokens: &[Token],
+    body_start: usize,
+    blocks: &[Node<'_>],
+) -> Option<usize> {
+    let mut index = body_start;
+    loop {
+        index = skip_separator_tokens(tokens, index);
+        let token = tokens.get(index)?;
+        if let Some(block) = blocks
+            .iter()
+            .find(|block| block.start_byte() == token.start)
+        {
+            index = token_index_at(tokens, block.end_byte()).max(index + 1);
+            continue;
+        }
+        if token.kind == TokenKind::Word
+            && matches!(
+                token_word(text, token),
+                "end" | "methods" | "properties" | "events" | "enumeration"
+            )
+        {
+            return None;
+        }
+        return Some(token.start);
+    }
+}
+
+fn token_word<'a>(text: &'a str, token: &Token) -> &'a str {
+    &text[token.start..token.end]
+}
+
+/// The first token that starts at or after `byte`.
+fn token_index_at(tokens: &[Token], byte: usize) -> usize {
+    tokens.partition_point(|token| token.start < byte)
+}
+
+fn skip_separator_tokens(tokens: &[Token], mut index: usize) -> usize {
+    while tokens
+        .get(index)
+        .is_some_and(|token| matches!(token.kind, TokenKind::Separator | TokenKind::LineBreak))
+    {
+        index += 1;
+    }
+    index
+}
+
+/// The extent of the statement beginning at token `index`, ending at the first
+/// `;`, `,`, or line break outside brackets. A line break inside `[]` or `{}`
+/// is a row separator, not a statement end.
+fn statement_span(text: &str, tokens: &[Token], index: usize) -> StatementSpan {
+    let mut depth = 0usize;
+    let mut cursor = index;
+    let mut balanced = true;
+    let mut depth_zero_end = None;
+    while cursor < tokens.len() {
+        let token = tokens[cursor];
+        match token.kind {
+            TokenKind::Open => depth += 1,
+            TokenKind::Close => {
+                if depth == 0 {
+                    balanced = false;
+                } else {
+                    depth -= 1;
+                }
             }
-            return Err(Halt::Structural);
-        }
-        if let Some(position) = span.depth_zero_end {
-            if self.possible_command_syntax() {
-                // Under the command reading `end` is an unquoted argument; under
-                // the expression reading it closes a block. Nothing in the file
-                // decides which, so the block extents are unproven.
-                return Err(Halt::Outside(command_abstention(
-                    "command_syntax_end_keyword",
-                )));
+            TokenKind::Separator | TokenKind::LineBreak if depth == 0 => {
+                return StatementSpan {
+                    end: cursor,
+                    balanced,
+                    depth_zero_end,
+                };
             }
-            if position != self.index {
-                return Err(Halt::Structural);
+            TokenKind::Word if depth == 0 && token_word(text, &token) == "end" => {
+                depth_zero_end.get_or_insert(cursor);
             }
+            _ => {}
         }
-        if span.end == self.index {
-            return Err(Halt::Structural);
-        }
-        self.index = span.end;
-        Ok(())
+        cursor += 1;
     }
+    StatementSpan {
+        end: cursor,
+        balanced: balanced && depth == 0,
+        depth_zero_end,
+    }
+}
 
-    /// The over-approximating command-syntax trigger: an unreserved identifier
-    /// at statement start, a blank, and something that is neither an assignment
-    /// nor a call's `(`. Over-detection only adds a divergence check;
-    /// under-detection would miscount an `end`.
-    fn possible_command_syntax(&self) -> bool {
-        let Some(head) = self.peek() else {
+/// The over-approximating command-syntax trigger: an unreserved identifier at
+/// statement start, a blank, and something that is neither an assignment nor a
+/// call's `(`. Over-detection only adds a divergence check; under-detection
+/// would miscount an `end`.
+fn possible_command_syntax(text: &str, tokens: &[Token], index: usize) -> bool {
+    let Some(head) = tokens.get(index) else {
+        return false;
+    };
+    if head.kind != TokenKind::Word || RESERVED_WORDS.contains(&token_word(text, head)) {
+        return false;
+    }
+    let Some(next) = tokens.get(index + 1) else {
+        return false;
+    };
+    if !next.blank_before {
+        return false;
+    }
+    // An assignment, a bare `foo` statement, and a `foo (…)` call are all
+    // decided without the workspace, so none of them is ambiguous.
+    let decided = matches!(
+        next.kind,
+        TokenKind::Assign | TokenKind::Separator | TokenKind::LineBreak
+    ) || (next.kind == TokenKind::Open && next.byte == b'(');
+    !decided
+}
+
+/// `classdef [ (attrs) ] Name [ < Base [ & Base ]* ]`. Attributes are skipped
+/// so the header is exact; ADR-0046 D2b keeps `Abstract` out of the claim.
+fn class_derives_test_case(
+    text: &str,
+    tokens: &[Token],
+    mut cursor: usize,
+    end: usize,
+) -> Result<bool, ()> {
+    if tokens.get(cursor).is_some_and(|token| token.byte == b'(') {
+        cursor = skip_bracketed(tokens, cursor, end)?;
+    }
+    // The class name.
+    let name = tokens.get(cursor).ok_or(())?;
+    if name.kind != TokenKind::Word {
+        return Err(());
+    }
+    cursor += 1;
+    let Some(separator) = tokens.get(cursor) else {
+        return Ok(false);
+    };
+    if separator.kind != TokenKind::Symbol || separator.byte != b'<' || cursor >= end {
+        return Ok(false);
+    }
+    cursor += 1;
+    let mut derives = false;
+    while cursor < end {
+        let (base, next) = read_dotted_name(text, tokens, cursor, end)?;
+        if base == TEST_CASE_BASE {
+            derives = true;
+        }
+        cursor = next;
+        match tokens.get(cursor) {
+            Some(token) if token.byte == b'&' && cursor < end => cursor += 1,
+            _ => break,
+        }
+    }
+    Ok(derives)
+}
+
+fn read_dotted_name(
+    text: &str,
+    tokens: &[Token],
+    mut cursor: usize,
+    end: usize,
+) -> Result<(String, usize), ()> {
+    let mut name = String::new();
+    loop {
+        let token = tokens.get(cursor).ok_or(())?;
+        if cursor >= end || token.kind != TokenKind::Word {
+            return Err(());
+        }
+        name.push_str(token_word(text, token));
+        cursor += 1;
+        match tokens.get(cursor) {
+            Some(dot) if dot.kind == TokenKind::Symbol && dot.byte == b'.' && cursor < end => {
+                name.push('.');
+                cursor += 1;
+            }
+            _ => return Ok((name, cursor)),
+        }
+    }
+}
+
+fn skip_bracketed(tokens: &[Token], cursor: usize, end: usize) -> Result<usize, ()> {
+    let mut depth = 0usize;
+    let mut index = cursor;
+    while index < end {
+        match tokens[index].kind {
+            TokenKind::Open => depth += 1,
+            TokenKind::Close => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(index + 1);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    Err(())
+}
+
+/// Attribute names of a `( … )` list, each paired with whether it carried a
+/// `= value`.
+fn attribute_list<'a>(
+    text: &'a str,
+    tokens: &[Token],
+    cursor: usize,
+    end: usize,
+) -> Vec<(&'a str, bool)> {
+    let mut attributes = Vec::new();
+    let mut depth = 0usize;
+    let mut index = cursor;
+    let mut pending: Option<&'a str> = None;
+    let mut valued = false;
+    while index < end {
+        let token = tokens[index];
+        match token.kind {
+            TokenKind::Open => depth += 1,
+            TokenKind::Close => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+            }
+            TokenKind::Word if depth == 1 && pending.is_none() => {
+                pending = Some(token_word(text, &token));
+            }
+            TokenKind::Assign if depth == 1 => valued = true,
+            TokenKind::Separator if depth == 1 => {
+                if let Some(name) = pending.take() {
+                    attributes.push((name, valued));
+                }
+                valued = false;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    if let Some(name) = pending.take() {
+        attributes.push((name, valued));
+    }
+    attributes
+}
+
+/// `function [out, …] = name[.accessor](args)`: the header statement between
+/// the keyword and its end.
+fn function_header_is_admitted(
+    text: &str,
+    tokens: &[Token],
+    mut cursor: usize,
+    end: usize,
+) -> bool {
+    if let Some(assignment) = (cursor..end).find(|index| tokens[*index].kind == TokenKind::Assign) {
+        cursor = assignment + 1;
+    }
+    // The function name, optionally a `get.`/`set.` property accessor.
+    let Ok((_, next)) = read_dotted_name(text, tokens, cursor, end) else {
+        return false;
+    };
+    cursor = next;
+    if cursor < end {
+        let Some(token) = tokens.get(cursor) else {
             return false;
         };
-        if head.kind != TokenKind::Word || RESERVED_WORDS.contains(&self.word(head)) {
+        if token.byte != b'(' {
             return false;
         }
-        let Some(next) = self.tokens.get(self.index + 1) else {
+        let Ok(next) = skip_bracketed(tokens, cursor, end) else {
             return false;
         };
-        if !next.blank_before {
-            return false;
-        }
-        // An assignment, a bare `foo` statement, and a `foo (…)` call are all
-        // decided without the workspace, so none of them is ambiguous.
-        let decided = matches!(
-            next.kind,
-            TokenKind::Assign | TokenKind::Separator | TokenKind::LineBreak
-        ) || (next.kind == TokenKind::Open && next.byte == b'(');
-        !decided
+        cursor = next;
     }
+    cursor >= end
 }
 
 struct StatementSpan {
@@ -1923,5 +2160,109 @@ mod tests {
             Err(ParseError::UnsupportedLanguage)
         );
         assert!(is_matlab_source_path("tests/CatalogTest.m"));
+    }
+
+    fn pinned_summary(parsed: &SourceParseOutput) -> String {
+        let anchors = parsed
+            .report
+            .units
+            .iter()
+            .map(|unit| {
+                format!(
+                    "{}:{}-{}",
+                    unit.kind.as_str(),
+                    unit.range.start_byte,
+                    unit.range.end_byte
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "units[{anchors}] unknown[{}] diagnostics={}",
+            unknown_kinds(parsed)
+                .iter()
+                .map(|kind| format!("matlab_unknown_kind={kind}"))
+                .collect::<Vec<_>>()
+                .join(","),
+            parsed.report.diagnostics.len()
+        )
+    }
+
+    fn pinned_class(body: &str) -> String {
+        format!(
+            "classdef CatalogTest < matlab.unittest.TestCase\n    methods (Test)\n        function loadsCatalog(testCase)\n{body}\n        end\n        function filtersCatalog(testCase)\n        end\n        function sortsCatalog(testCase)\n        end\n    end\nend\n"
+        )
+    }
+
+    fn pinned_methods(header: &str, attrs: &str, tail: &str) -> String {
+        format!(
+            "classdef CatalogTest < matlab.unittest.TestCase\n    methods{attrs}\n{header}\n        end\n{tail}    end\nend\n"
+        )
+    }
+
+    /// Inputs the Tree-sitter frontend reads differently from the retired
+    /// hand-written parser by design (ADR-0058, accepted 2026-10-22), with the
+    /// current summary pinned. Each is invalid MATLAB the retired parser skipped
+    /// or read leniently, except the empty attribute list, which is valid MATLAB
+    /// the grammar rejects.
+    #[test]
+    fn grammar_reading_divergences_are_pinned() {
+        let func = "        function f(testCase)\n        end\n";
+        let sig = |header: &str| pinned_methods(header, " (Test)", "");
+        let cases: Vec<(&str, String, &str)> = vec![
+            (
+                "empty_attribute_list",
+                format!("classdef CatalogTest < matlab.unittest.TestCase\n    methods ()\n{func}{func}    end\nend\n"),
+                "units[matlab_test_class:0-48,module:0-157] unknown[] diagnostics=1",
+            ),
+            (
+                "uppercase_function",
+                sig("        FUNCTION f(testCase)"),
+                "units[matlab_test_class:0-48,module:0-120] unknown[] diagnostics=1",
+            ),
+            (
+                "extra_end_after_class",
+                format!("{}end\n", pinned_class("            x = 1;")),
+                "units[matlab_test_class:0-48,module:0-260,matlab_test_method:67-107,matlab_test_method:138-180,matlab_test_method:192-232] unknown[] diagnostics=1",
+            ),
+            (
+                "unbalanced_bracket",
+                pinned_class("            x = [1 2;"),
+                "units[matlab_test_class:0-48,module:0-259] unknown[] diagnostics=1",
+            ),
+            (
+                "unbalanced_brace",
+                pinned_class("            x = {1, 2;"),
+                "units[matlab_test_class:0-48,module:0-260] unknown[] diagnostics=1",
+            ),
+            (
+                "mismatched_bracket",
+                pinned_class("            x = (1 + 2];"),
+                "units[matlab_test_class:0-48,module:0-262,matlab_test_method:67-107] unknown[] diagnostics=1",
+            ),
+            (
+                "classdef_dangling_lt",
+                "classdef A <\n    methods (Test)\n        function t(testCase)\n        end\n    end\nend\n".to_string(),
+                "units[module:0-85] unknown[] diagnostics=1",
+            ),
+            (
+                "classdef_dangling_amp",
+                "classdef A < handle &\n    methods (Test)\n        function t(testCase)\n        end\n    end\nend\n".to_string(),
+                "units[module:0-94] unknown[] diagnostics=1",
+            ),
+            (
+                "function_without_name",
+                pinned_methods("        function = f", " (Test)", func),
+                "units[matlab_test_class:0-48,module:0-153,matlab_test_method:67-88] unknown[] diagnostics=1",
+            ),
+            (
+                "properties_missing_end",
+                "classdef A < matlab.unittest.TestCase\n    properties\n        x\n    methods (Test)\n        function t(testCase)\n        end\n    end\nend\n".to_string(),
+                "units[matlab_test_class:0-38,module:0-135] unknown[] diagnostics=1",
+            ),
+        ];
+        for (name, source, expected) in cases {
+            assert_eq!(pinned_summary(&output(&source)), expected, "{name}");
+        }
     }
 }

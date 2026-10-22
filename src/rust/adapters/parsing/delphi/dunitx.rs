@@ -123,7 +123,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         ));
     }
 
-    let parsed = pascal::parse_unit(document.text, &tokens);
+    let parsed = pascal::parse_unit(document.text, &tokens, &flags)?;
     let unresolved_attribute = parsed.attributed_without_uses;
 
     if parsed.abstained {
@@ -390,7 +390,7 @@ mod tests {
     fn attribute_text_in_comments_and_strings_never_anchors() {
         let parsed = output(&format!(
             "{UNIT_HEAD}  // [TestFixture]\n  {{ [TestFixture] }}\n  (* [Test] *)\n\
-               Sample = '[TestFixture]';\nimplementation\nend.\n"
+               TSample = Integer;\nconst\n  Sample = '[TestFixture]';\nimplementation\nend.\n"
         ));
         assert_eq!(tests(&parsed), 0);
         assert!(parsed
@@ -653,5 +653,117 @@ mod tests {
         }
         assert!(is_pascal_unit_path("tests/Tests.Catalog.pas"));
         assert!(is_pascal_unit_path("tests/Tests.Catalog.PAS"));
+    }
+
+    fn unit_with(uses: &str, body: &str) -> String {
+        format!(
+            "unit Tests.Catalog;\ninterface\nuses {uses};\ntype\n{body}\nimplementation\nend.\n"
+        )
+    }
+
+    fn dunitx_unit(body: &str) -> String {
+        unit_with("System.SysUtils, DUnitX.TestFramework", body)
+    }
+
+    #[test]
+    fn a_syntax_error_after_the_class_refuses_the_file() {
+        // Declared divergence `syntax_error_in_skipped_region`: the legacy
+        // parser never read past `implementation`, so garbage there was
+        // invisible to it. The grammar sees it, and any ERROR node outside a
+        // class declaration refuses the file.
+        let source = dunitx_unit(
+            "  [TestFixture]\n  TA = class\n  public\n    [Test]\n    procedure A;\n  end;\n",
+        )
+        .replace("end.\n", "procedure ) ( ;;; begin begin\nend.\n");
+        let parsed = output(&source);
+        assert_eq!(tests(&parsed), 0);
+        assert!(parsed
+            .report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("outside the admitted subset")));
+    }
+
+    fn fixture_after(preamble: &str) -> String {
+        dunitx_unit(&format!(
+            "{preamble}  [TestFixture]\n  TA = class\n  public\n    [Test]\n    procedure A;\n  end;\n"
+        ))
+    }
+
+    #[test]
+    fn a_fixture_after_a_record_or_interface_is_anchored() {
+        // The legacy parser skipped a non-class type to its first `;`, which sits
+        // inside a record or interface body, and then lost the rest of the type
+        // section. Declared as a legacy limitation, not reproduced.
+        for preamble in [
+            "  TRec = record\n    X: Integer;\n  end;\n",
+            "  TRec = record\n  end;\n",
+            "  IFoo = interface\n    procedure P;\n  end;\n",
+        ] {
+            assert_eq!(tests(&output(&fixture_after(preamble))), 1, "{preamble}");
+        }
+    }
+
+    #[test]
+    fn an_abstaining_class_does_not_hide_the_next_fixture() {
+        // The last field may omit its `;` in Pascal, which is outside the
+        // declared subset, so that class abstains. The legacy parser then lost
+        // its place and also dropped the following fixture.
+        let parsed = output(&fixture_after(
+            "  TPlain = class\n    FX: Integer\n  end;\n",
+        ));
+        assert_eq!(tests(&parsed), 1);
+        assert_eq!(parsed.report.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn a_record_nested_in_a_fixture_does_not_hide_later_tests() {
+        let parsed = output(&dunitx_unit(
+            "  [TestFixture]\n  TA = class\n  public\n    type TR = record X: Integer; end;\n    [Test]\n    procedure A;\n  end;\n",
+        ));
+        assert_eq!(tests(&parsed), 1);
+    }
+
+    #[test]
+    fn a_class_sealed_header_is_a_grammar_gap_that_abstains() {
+        // tree-sitter-pascal 0.10.2 does not accept `class sealed`. The ERROR
+        // node sits inside the class, so the class abstains with a diagnostic
+        // instead of the legacy silent loss.
+        let parsed = output(&dunitx_unit(
+            "  [TestFixture]\n  TA = class sealed\n  public\n    [Test]\n    procedure A;\n  end;\n",
+        ));
+        assert_eq!(tests(&parsed), 0);
+        assert_eq!(parsed.report.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn an_ancestor_list_after_an_abstract_class_is_part_of_the_header() {
+        let parsed = output(&dunitx_unit(
+            "  [TestFixture]\n  TA = class abstract(TObject)\n  public\n    [Test]\n    procedure A;\n  end;\n",
+        ));
+        assert_eq!(tests(&parsed), 1);
+    }
+
+    #[test]
+    fn a_uses_clause_with_an_in_file_clause_does_not_refuse_the_file() {
+        // The grammar has no `in 'file'` production; the lexer reads the uses
+        // clause, so the gap is not an error of the declarations.
+        let parsed = output(&unit_with(
+            "System.SysUtils in 'x.pas', DUnitX.TestFramework",
+            "  [TestFixture]\n  TA = class\n  public\n    [Test]\n    procedure A;\n  end;\n",
+        ));
+        assert_eq!(tests(&parsed), 1);
+        assert!(parsed.report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn an_attribute_before_a_visibility_keyword_abstains_the_class() {
+        // Not valid Object Pascal: an attribute must precede a declaration.
+        // The legacy parser skipped the dangling attribute silently.
+        let parsed = output(&dunitx_unit(
+            "  [TestFixture]\n  TA = class\n  public\n    [Test]\n  private\n    procedure A;\n  end;\n",
+        ));
+        assert_eq!(tests(&parsed), 0);
+        assert_eq!(parsed.report.diagnostics.len(), 1);
     }
 }

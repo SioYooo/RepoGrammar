@@ -34,10 +34,28 @@ libc = "0.2.186"
 # structural code-unit extraction without executing Cargo, rustc, build scripts,
 # or procedural macros.
 tree-sitter = "0.27"
+# Production (ADR-0058): pinned Tree-sitter Ada grammar for the AUnit frontend.
+tree-sitter-ada = "=0.1.0"
 tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
+# Production (ADR-0058): pinned Tree-sitter Fortran grammar for the test-drive frontend.
+tree-sitter-fortran = "=0.6.0"
+# Production (ADR-0058): pinned Tree-sitter Go grammar for the Go testing frontend.
+tree-sitter-go = "=0.25.0"
 tree-sitter-java = "0.23"
+# Production (ADR-0058): pinned Tree-sitter MATLAB grammar for the matlab.unittest frontend.
+tree-sitter-matlab = "=1.3.1"
+# Production (ADR-0058): pinned Tree-sitter Pascal grammar for the Delphi DUnitX frontend.
+tree-sitter-pascal = "=0.10.2"
+# Production (ADR-0058): pinned Tree-sitter PHP grammar for the PHPUnit frontend.
+tree-sitter-php = "=0.25.1"
+# Production (ADR-0058): pinned Tree-sitter R grammar for the R testthat frontend.
+tree-sitter-r = "=1.3.0"
+# Production (ADR-0058): pinned Tree-sitter Ruby grammar for the Minitest frontend.
+tree-sitter-ruby = "=0.23.1"
 tree-sitter-rust = "0.24"
+# Production (ADR-0058): pinned Tree-sitter Swift grammar for the Swift XCTest frontend.
+tree-sitter-swift = "=0.7.4"
 # Production: native filesystem wakeup hints; ADR-0053 retains fingerprint fallback.
 notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }

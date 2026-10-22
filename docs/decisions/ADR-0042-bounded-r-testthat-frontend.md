@@ -1,6 +1,6 @@
 # ADR-0042: Bounded R testthat frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [r completion review](../reports/language-support/r-completion-review.md))
 - Date: 2026-08-15
 - Scope: R in ADR-0020; admits a family-bearing frontend over one call shape
 - Refines: ADR-0036 (authorizes the R source unit it declined to authorize)
@@ -376,6 +376,12 @@ forward unchanged.
 Input is untrusted. The frontend keeps ADR-0036's input-byte limit, bounds the
 number of emitted units, and bounds recursion depth; all three abstain with a
 typed `UNKNOWN` rather than degrading silently or failing unsafely.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-r` 1.3.0
+grammar crate, with the lexer kept as the lexical-subset gate. This D6
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 

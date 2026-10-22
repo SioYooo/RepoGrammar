@@ -1,8 +1,10 @@
-//! Bounded Object Pascal lexer and declaration parser.
+//! Bounded Object Pascal lexer and declaration reader.
 //!
-//! This is a parser, not a scanner: it produces a token stream and consumes
-//! grammar productions, so the extent of a class body comes from the grammar
-//! rather than from line position. That is what lets a nested type inside a
+//! The hand-written lexer is the lexical-subset gate: it classifies comments,
+//! strings and compiler directives and tracks conditional-compilation depth.
+//! Declarations are read off the pinned `tree-sitter-pascal` tree (ADR-0058),
+//! so the extent of a class body comes from the grammar rather than from line
+//! position. That is what lets a nested type inside a
 //! fixture close its own `end` without ending the fixture -- the false negative
 //! ADR-0044 D2 had to record while the frontend was line-oriented.
 //!
@@ -19,6 +21,9 @@
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct LexFlags {
     pub unterminated_block_comment: bool,
+    /// Byte offset of the comment opener that never closes. Everything from
+    /// here to end of file is comment, so the grammar parses only the prefix.
+    pub unterminated_comment_start: Option<usize>,
     /// `{$MODE}` / `{$MODESWITCH}` re-selects the dialect, which is exactly what
     /// this frontend does not evaluate.
     pub dialect_selector: bool,
@@ -109,6 +114,7 @@ pub(crate) fn lex(text: &str) -> (Vec<Token>, LexFlags) {
                 Some(end) => index = end + 1,
                 None => {
                     flags.unterminated_block_comment = true;
+                    flags.unterminated_comment_start = Some(index);
                     index = bytes.len();
                 }
             }
@@ -119,6 +125,7 @@ pub(crate) fn lex(text: &str) -> (Vec<Token>, LexFlags) {
                 Some(offset) => index = index + 2 + offset + 2,
                 None => {
                     flags.unterminated_block_comment = true;
+                    flags.unterminated_comment_start = Some(index);
                     index = bytes.len();
                 }
             }
@@ -189,6 +196,9 @@ pub(crate) fn lex(text: &str) -> (Vec<Token>, LexFlags) {
     (tokens, flags)
 }
 
+use crate::ports::parser::ParseError;
+use tree_sitter::{Node, Parser};
+
 /// A `[TestFixture]` class declaration and the admitted test procedures the
 /// grammar found inside its body.
 #[derive(Debug, PartialEq, Eq)]
@@ -220,48 +230,351 @@ pub(crate) struct UnitParse {
 
 const DUNITX_UNIT: &str = "dunitx.testframework";
 
-pub(crate) fn parse_unit(text: &str, tokens: &[Token]) -> UnitParse {
-    Parser {
-        text,
-        tokens,
-        at: 0,
-        out: UnitParse::default(),
+/// Reads the admitted declarations off the Tree-sitter tree. The lexer's
+/// token stream stays the source of the `uses` binding, the attribute
+/// spelling scan and the conditional-compilation depth, because those are
+/// lexical facts the grammar does not carry.
+pub(crate) fn parse_unit(
+    text: &str,
+    tokens: &[Token],
+    flags: &LexFlags,
+) -> Result<UnitParse, ParseError> {
+    let view = TokenView { text, tokens };
+    let mut out = UnitParse {
+        uses_dunitx: view.scan_uses_clauses(),
+        ..UnitParse::default()
+    };
+    // An unterminated comment swallows the rest of the file, exactly as the
+    // lexer read it, so the grammar sees only the prefix.
+    let parsed_text = flags
+        .unterminated_comment_start
+        .map_or(text, |start| &text[..start]);
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_pascal::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load Pascal grammar: {error}")))?;
+    let tree = parser
+        .parse(parsed_text, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter Pascal parse failed".to_string()))?;
+    let root = tree.root_node();
+
+    let section_limit =
+        first_of_kind(root, "implementation").map_or(usize::MAX, |node| node.start_byte());
+    let mut declarations = Vec::new();
+    collect_type_declarations(root, section_limit, &mut declarations);
+
+    // An ERROR or MISSING node inside a class declaration abstains that class,
+    // the way the legacy parser abstained on a construct outside the subset.
+    // Anywhere else it refuses the whole file (ADR-0058). An error whose span
+    // holds a token under conditional compilation is the more specific
+    // refusal: the define that selects the branch is unevaluated.
+    let truncated = flags.unterminated_comment_start.is_some();
+    let mut class_error = vec![None::<ErrorCause>; declarations.len()];
+    let mut file_error = None::<ErrorCause>;
+    for (start, end) in error_spans(root) {
+        let owner = declarations.iter().position(|declaration| {
+            class_node(*declaration)
+                .is_some_and(|class| class.start_byte() <= start && start < class.end_byte())
+        });
+        let cause = if view.conditional_between(start, end) {
+            ErrorCause::Conditional
+        } else {
+            ErrorCause::Syntax
+        };
+        let slot = match owner {
+            Some(index) => &mut class_error[index],
+            // The prefix of a file cut by an unterminated comment is
+            // incomplete by construction, so only class-level errors count.
+            None if truncated => continue,
+            None => &mut file_error,
+        };
+        *slot = Some(slot.map_or(cause, |known| known.max(cause)));
     }
-    .run()
+
+    if let Some(cause) = file_error {
+        cause.record(&mut out);
+    } else {
+        for (declaration, cause) in declarations.iter().zip(class_error) {
+            read_declaration(&view, *declaration, cause, &mut out);
+        }
+    }
+    if !out.uses_dunitx {
+        out.attributed_without_uses = view.any_dunitx_attribute_spelling();
+        out.fixtures.clear();
+    }
+    Ok(out)
 }
 
-struct Parser<'a> {
+fn first_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == kind {
+            return Some(child);
+        }
+        if let Some(found) = first_of_kind(child, kind) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Every `declType` of a type section outside a class body and before the
+/// `implementation` section. Nested types are read by their enclosing class.
+fn collect_type_declarations<'t>(node: Node<'t>, limit: usize, out: &mut Vec<Node<'t>>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "declClass" => {}
+            "declTypes" if child.start_byte() < limit => {
+                let mut inner = child.walk();
+                out.extend(
+                    child
+                        .children(&mut inner)
+                        .filter(|member| member.kind() == "declType"),
+                );
+            }
+            _ => collect_type_declarations(child, limit, out),
+        }
+    }
+}
+
+fn class_node(declaration: Node<'_>) -> Option<Node<'_>> {
+    declaration
+        .child_by_field_name("type")
+        .filter(|node| node.kind() == "declClass")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ErrorCause {
+    Syntax,
+    Conditional,
+}
+
+impl ErrorCause {
+    fn record(self, out: &mut UnitParse) {
+        match self {
+            Self::Syntax => out.abstained = true,
+            Self::Conditional => out.skipped_conditional = true,
+        }
+    }
+}
+
+/// Byte span of every `ERROR` and `MISSING` node. A `uses` clause is read by
+/// the lexer, so the grammar's own gaps there (`uses A in 'a.pas'`) are not
+/// errors of the declarations this frontend reads.
+fn error_spans(root: Node<'_>) -> Vec<(usize, usize)> {
+    fn walk(node: Node<'_>, out: &mut Vec<(usize, usize)>) {
+        if node.kind() == "declUses" {
+            return;
+        }
+        if node.is_error() || node.is_missing() {
+            out.push((node.start_byte(), node.end_byte()));
+        }
+        if !node.has_error() {
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out
+}
+
+fn read_declaration(
+    view: &TokenView<'_>,
+    declaration: Node<'_>,
+    class_error: Option<ErrorCause>,
+    out: &mut UnitParse,
+) {
+    let Some(class) = class_node(declaration) else {
+        return;
+    };
+    let mut cursor = class.walk();
+    let children: Vec<Node<'_>> = class.children(&mut cursor).collect();
+    let Some(keyword) = children.iter().find(|child| child.kind() == "kClass") else {
+        return;
+    };
+    let parent_open = children.iter().find(|child| child.kind() == "(");
+    if !children.iter().any(|child| child.kind() == "kEnd") {
+        // `class;` is a forward declaration and opens no body, but a forward
+        // declaration with an ancestor list is outside the declared subset.
+        out.abstained |= parent_open.is_some();
+        if let Some(cause) = class_error {
+            cause.record(out);
+        }
+        return;
+    }
+    if let Some(cause) = class_error {
+        cause.record(out);
+        return;
+    }
+    let attributes = view.attributes(declaration);
+    if !attributes
+        .iter()
+        .any(|attribute| attribute.name == "testfixture")
+    {
+        return;
+    }
+    // The fixture's header ends at the ancestor list only when the list
+    // directly follows `class`.
+    let header_end = match (
+        parent_open,
+        children.iter().find(|child| child.kind() == ")"),
+    ) {
+        (Some(open), Some(close)) if keyword.next_sibling() == Some(*open) => close.end_byte(),
+        _ => keyword.end_byte(),
+    };
+    if view.depth_at(keyword.start_byte()) > 0 {
+        out.skipped_conditional = true;
+        return;
+    }
+    let decl_start = attributes
+        .first()
+        .map(|attribute| attribute.start)
+        .or_else(|| {
+            declaration
+                .child_by_field_name("name")
+                .map(|name| name.start_byte())
+        })
+        .unwrap_or(declaration.start_byte());
+    let mut tests = Vec::new();
+    for member in &children {
+        match member.kind() {
+            "declProc" => read_method(view, *member, out, &mut tests),
+            "declSection" => {
+                let mut inner = member.walk();
+                for entry in member.children(&mut inner) {
+                    if entry.kind() == "declProc" {
+                        read_method(view, entry, out, &mut tests);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out.fixtures.push(FixtureDecl {
+        start: decl_start,
+        end: header_end,
+        tests,
+    });
+}
+
+/// An attributed `procedure` member. Functions, constructors and destructors
+/// are members but never tests.
+fn read_method(
+    view: &TokenView<'_>,
+    method: Node<'_>,
+    out: &mut UnitParse,
+    tests: &mut Vec<TestDecl>,
+) {
+    let mut cursor = method.walk();
+    let children: Vec<Node<'_>> = method.children(&mut cursor).collect();
+    let Some(keyword) = children.iter().find(|child| child.kind() == "kProcedure") else {
+        return;
+    };
+    let attributes = view.attributes(method);
+    if !attributes.iter().any(|attribute| attribute.name == "test") {
+        return;
+    }
+    let Some(semicolon) = children.iter().find(|child| child.kind() == ";") else {
+        return;
+    };
+    if attributes.iter().any(|attribute| attribute.conditional)
+        || view.depth_at(keyword.start_byte()) > 0
+    {
+        out.skipped_conditional = true;
+        return;
+    }
+    tests.push(TestDecl {
+        start: attributes
+            .first()
+            .map_or(keyword.start_byte(), |attribute| attribute.start),
+        end: semicolon.end_byte(),
+    });
+}
+
+struct AttributeRef {
+    name: String,
+    start: usize,
+    conditional: bool,
+}
+
+/// Lexical facts the grammar does not carry, read from the token stream.
+struct TokenView<'a> {
     text: &'a str,
     tokens: &'a [Token],
-    at: usize,
-    out: UnitParse,
 }
 
-impl<'a> Parser<'a> {
-    fn run(mut self) -> UnitParse {
-        self.out.uses_dunitx = self.scan_uses_clauses();
-        self.at = 0;
-        while self.at < self.tokens.len() {
-            if self.ident_is(self.at, "type") {
-                self.at += 1;
-                self.parse_type_section();
-                continue;
-            }
-            if self.ident_is(self.at, "implementation") {
+impl TokenView<'_> {
+    /// The `[...]` groups of a declaration's `rttiAttributes`, in source order.
+    fn attributes(&self, declaration: Node<'_>) -> Vec<AttributeRef> {
+        let mut cursor = declaration.walk();
+        let Some(list) = declaration
+            .children(&mut cursor)
+            .find(|child| child.kind() == "rttiAttributes")
+        else {
+            return Vec::new();
+        };
+        let mut inner = list.walk();
+        list.children(&mut inner)
+            .filter(|child| child.kind() == "[")
+            .filter_map(|open| {
+                let index = self.token_index(open.start_byte())?;
+                Some(AttributeRef {
+                    name: self.attribute_name_at(index)?,
+                    start: open.start_byte(),
+                    conditional: self.tokens[index].conditional_depth > 0,
+                })
+            })
+            .collect()
+    }
+
+    fn token_index(&self, start: usize) -> Option<usize> {
+        self.tokens
+            .binary_search_by_key(&start, |token| token.start)
+            .ok()
+    }
+
+    /// True when a token inside `start..end`, or just before an empty span,
+    /// sits under conditional compilation.
+    fn conditional_between(&self, start: usize, end: usize) -> bool {
+        let first = self.tokens.partition_point(|token| token.end <= start);
+        let inside = self.tokens[first..]
+            .iter()
+            .take_while(|token| token.start < end.max(start + 1))
+            .any(|token| token.conditional_depth > 0);
+        let before = start == end
+            && first
+                .checked_sub(1)
+                .is_some_and(|index| self.tokens[index].conditional_depth > 0);
+        inside || before
+    }
+
+    fn depth_at(&self, start: usize) -> usize {
+        self.token_index(start)
+            .map_or(0, |index| self.tokens[index].conditional_depth)
+    }
+
+    /// `[Name]` or `[Name(...)]`, lowercased. A qualified `[Unit.Name]` keeps
+    /// only its last selector, the way the attribute resolves.
+    fn attribute_name_at(&self, open: usize) -> Option<String> {
+        let mut last = None;
+        for index in open + 1..self.tokens.len() {
+            if self.tokens[index].kind == TokenKind::Ident {
+                last = Some(self.lower(index));
+            } else if !self.punct_is(index, b'.') {
                 break;
             }
-            self.at += 1;
         }
-        if !self.out.uses_dunitx {
-            self.out.attributed_without_uses = self.any_dunitx_attribute_spelling();
-            self.out.fixtures.clear();
-        }
-        self.out
+        last
     }
 
     /// A `uses` clause naming `DUnitX.TestFramework`. The dialect evidence is
     /// this import, never the file suffix, which ADR-0032 forbids as an oracle.
-    fn scan_uses_clauses(&mut self) -> bool {
+    fn scan_uses_clauses(&self) -> bool {
         let mut index = 0usize;
         while index < self.tokens.len() {
             if !self.ident_is(index, "uses") {
@@ -271,8 +584,7 @@ impl<'a> Parser<'a> {
             index += 1;
             let mut qualified = String::new();
             while index < self.tokens.len() {
-                let token = self.tokens[index];
-                match token.kind {
+                match self.tokens[index].kind {
                     TokenKind::Ident => qualified.push_str(&self.lower(index)),
                     TokenKind::Punct if self.punct_is(index, b'.') => qualified.push('.'),
                     TokenKind::Punct if self.punct_is(index, b',') => qualified.clear(),
@@ -300,378 +612,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_type_section(&mut self) {
-        loop {
-            let attributes = self.collect_attributes();
-            let Some(name) = self.peek_ident() else {
-                return;
-            };
-            let _ = name;
-            let decl_start = attributes
-                .first()
-                .map(|attribute| attribute.start)
-                .unwrap_or(self.tokens[self.at].start);
-            self.at += 1;
-            // Generic parameter lists are consumed as opaque punctuation.
-            if self.punct_is(self.at, b'<') {
-                self.skip_balanced(b'<', b'>');
-            }
-            if !self.punct_is(self.at, b'=') {
-                return;
-            }
-            self.at += 1;
-            let is_fixture = attributes
-                .iter()
-                .any(|attribute| attribute.name == "testfixture");
-            self.parse_type_rhs(decl_start, is_fixture);
-            if self.at >= self.tokens.len() || !self.starts_type_decl() {
-                return;
-            }
-        }
-    }
-
-    fn starts_type_decl(&self) -> bool {
-        let mut index = self.at;
-        while self.punct_is(index, b'[') {
-            let Some(close) = self.matching(index, b'[', b']') else {
-                return false;
-            };
-            index = close + 1;
-        }
-        self.tokens
-            .get(index)
-            .is_some_and(|token| token.kind == TokenKind::Ident)
-    }
-
-    fn parse_type_rhs(&mut self, decl_start: usize, is_fixture: bool) {
-        if !self.ident_is(self.at, "class") {
-            self.skip_to_semicolon();
-            return;
-        }
-        let class_keyword = self.at;
-        self.at += 1;
-        // `class;` is a forward declaration and `class of X` is a metaclass.
-        // Neither opens a body, and neither is the fixture.
-        if self.punct_is(self.at, b';') || self.ident_is(self.at, "of") {
-            self.skip_to_semicolon();
-            return;
-        }
-        let mut header_end = self.tokens[class_keyword].end;
-        if self.punct_is(self.at, b'(') {
-            if let Some(close) = self.matching(self.at, b'(', b')') {
-                header_end = self.tokens[close].end;
-                self.at = close + 1;
-            } else {
-                self.out.abstained = true;
-                self.at = self.tokens.len();
-                return;
-            }
-        }
-        let conditional = self.tokens[class_keyword].conditional_depth > 0;
-        match self.parse_class_body() {
-            Some(tests) => {
-                if is_fixture {
-                    if conditional {
-                        self.out.skipped_conditional = true;
-                    } else {
-                        self.out.fixtures.push(FixtureDecl {
-                            start: decl_start,
-                            end: header_end,
-                            tests,
-                        });
-                    }
-                }
-            }
-            None => self.out.abstained = true,
-        }
-        self.skip_to_semicolon();
-    }
-
-    /// Members until the class's own `end`. Returns `None` when the body holds a
-    /// construct outside the declared subset, in which case the class yields no
-    /// anchor at all rather than a partly-understood one.
-    fn parse_class_body(&mut self) -> Option<Vec<TestDecl>> {
-        let mut tests = Vec::new();
-        loop {
-            let attributes = self.collect_attributes();
-            if self.at >= self.tokens.len() {
-                return None;
-            }
-            if self.ident_is(self.at, "end") {
-                self.at += 1;
-                return Some(tests);
-            }
-            if self.consume_visibility() || self.consume_section_keyword() {
-                continue;
-            }
-            let is_class_member = self.ident_is(self.at, "class");
-            if is_class_member {
-                self.at += 1;
-            }
-            if self.at >= self.tokens.len() {
-                return None;
-            }
-            // A nested type declaration recurses, so its own `end` closes it and
-            // not the enclosing fixture.
-            if self.tokens[self.at].kind == TokenKind::Ident && self.nested_type_ahead() {
-                let start = self.tokens[self.at].start;
-                self.at += 1;
-                if self.punct_is(self.at, b'<') {
-                    self.skip_balanced(b'<', b'>');
-                }
-                self.at += 1;
-                self.parse_type_rhs(start, false);
-                continue;
-            }
-            let method = self.method_kind();
-            match method {
-                Some(MethodKind::Procedure) | Some(MethodKind::Function) => {
-                    let decl_start = attributes
-                        .first()
-                        .map(|attribute| attribute.start)
-                        .unwrap_or(self.tokens[self.at].start);
-                    let conditional = attributes.iter().any(|attribute| attribute.conditional)
-                        || self.tokens[self.at].conditional_depth > 0;
-                    self.at += 1;
-                    if self.at >= self.tokens.len() || self.tokens[self.at].kind != TokenKind::Ident
-                    {
-                        return None;
-                    }
-                    self.at += 1;
-                    if self.punct_is(self.at, b'(') {
-                        let close = self.matching(self.at, b'(', b')')?;
-                        self.at = close + 1;
-                    }
-                    let decl_end = self.skip_to_semicolon()?;
-                    self.consume_method_directives();
-                    let is_test = attributes.iter().any(|attribute| attribute.name == "test");
-                    if is_test && method == Some(MethodKind::Procedure) {
-                        if conditional {
-                            self.out.skipped_conditional = true;
-                        } else {
-                            tests.push(TestDecl {
-                                start: decl_start,
-                                end: decl_end,
-                            });
-                        }
-                    }
-                }
-                None => {
-                    // Fields and properties: an identifier list, a type run, and
-                    // a terminator. The type is never interpreted.
-                    if self.tokens[self.at].kind != TokenKind::Ident {
-                        return None;
-                    }
-                    self.skip_to_semicolon()?;
-                }
-            }
-        }
-    }
-
-    fn nested_type_ahead(&self) -> bool {
-        let mut index = self.at + 1;
-        if self.punct_is(index, b'<') {
-            let Some(close) = self.matching(index, b'<', b'>') else {
-                return false;
-            };
-            index = close + 1;
-        }
-        self.punct_is(index, b'=')
-    }
-
-    fn method_kind(&self) -> Option<MethodKind> {
-        if self.ident_is(self.at, "procedure") {
-            Some(MethodKind::Procedure)
-        } else if self.ident_is(self.at, "function")
-            || self.ident_is(self.at, "constructor")
-            || self.ident_is(self.at, "destructor")
-        {
-            Some(MethodKind::Function)
-        } else {
-            None
-        }
-    }
-
-    fn consume_method_directives(&mut self) {
-        while self.at < self.tokens.len() && self.tokens[self.at].kind == TokenKind::Ident {
-            const DIRECTIVES: &[&str] = &[
-                "overload",
-                "virtual",
-                "override",
-                "abstract",
-                "reintroduce",
-                "static",
-                "inline",
-                "stdcall",
-                "cdecl",
-                "register",
-                "safecall",
-                "pascal",
-                "varargs",
-                "deprecated",
-                "experimental",
-                "platform",
-                "final",
-                "dynamic",
-                "message",
-            ];
-            let name = self.lower(self.at);
-            if !DIRECTIVES.contains(&name.as_str()) {
-                return;
-            }
-            self.at += 1;
-            while self.at < self.tokens.len() && !self.punct_is(self.at, b';') {
-                self.at += 1;
-            }
-            self.at += 1;
-        }
-    }
-
-    fn consume_visibility(&mut self) -> bool {
-        if self.ident_is(self.at, "strict") {
-            self.at += 1;
-        } else if !(self.ident_is(self.at, "private")
-            || self.ident_is(self.at, "protected")
-            || self.ident_is(self.at, "public")
-            || self.ident_is(self.at, "published")
-            || self.ident_is(self.at, "automated"))
-        {
-            return false;
-        }
-        if self.ident_is(self.at, "private")
-            || self.ident_is(self.at, "protected")
-            || self.ident_is(self.at, "public")
-            || self.ident_is(self.at, "published")
-            || self.ident_is(self.at, "automated")
-        {
-            self.at += 1;
-        }
-        true
-    }
-
-    fn consume_section_keyword(&mut self) -> bool {
-        if self.ident_is(self.at, "var")
-            || self.ident_is(self.at, "const")
-            || self.ident_is(self.at, "threadvar")
-        {
-            self.at += 1;
-            return true;
-        }
-        if self.ident_is(self.at, "type") && !self.nested_type_after_keyword() {
-            self.at += 1;
-            return true;
-        }
-        if self.ident_is(self.at, "property") {
-            self.skip_to_semicolon();
-            return true;
-        }
-        false
-    }
-
-    fn nested_type_after_keyword(&self) -> bool {
-        false
-    }
-
-    fn collect_attributes(&mut self) -> Vec<AttributeRef> {
-        let mut attributes = Vec::new();
-        while self.punct_is(self.at, b'[') {
-            let Some(close) = self.matching(self.at, b'[', b']') else {
-                return attributes;
-            };
-            if let Some(name) = self.attribute_name_at(self.at) {
-                attributes.push(AttributeRef {
-                    name,
-                    start: self.tokens[self.at].start,
-                    conditional: self.tokens[self.at].conditional_depth > 0,
-                });
-            }
-            self.at = close + 1;
-        }
-        attributes
-    }
-
-    /// `[Name]` or `[Name(...)]`, lowercased. A qualified `[Unit.Name]` keeps
-    /// only its last selector, the way the attribute resolves.
-    fn attribute_name_at(&self, open: usize) -> Option<String> {
-        let mut index = open + 1;
-        let mut last = None;
-        while index < self.tokens.len() {
-            let token = self.tokens[index];
-            if token.kind == TokenKind::Ident {
-                last = Some(self.lower(index));
-                index += 1;
-                continue;
-            }
-            if self.punct_is(index, b'.') {
-                index += 1;
-                continue;
-            }
-            break;
-        }
-        last
-    }
-
-    fn skip_to_semicolon(&mut self) -> Option<usize> {
-        let mut depth = 0usize;
-        while self.at < self.tokens.len() {
-            if self.punct_is(self.at, b'(') || self.punct_is(self.at, b'[') {
-                depth += 1;
-            } else if self.punct_is(self.at, b')') || self.punct_is(self.at, b']') {
-                depth = depth.saturating_sub(1);
-            } else if depth == 0 && self.punct_is(self.at, b';') {
-                let end = self.tokens[self.at].end;
-                self.at += 1;
-                return Some(end);
-            } else if depth == 0 && self.ident_is(self.at, "end") {
-                return None;
-            }
-            self.at += 1;
-        }
-        None
-    }
-
-    fn skip_balanced(&mut self, open: u8, close: u8) {
-        if let Some(end) = self.matching(self.at, open, close) {
-            self.at = end + 1;
-        } else {
-            self.at = self.tokens.len();
-        }
-    }
-
-    fn matching(&self, from: usize, open: u8, close: u8) -> Option<usize> {
-        let mut depth = 0usize;
-        let mut index = from;
-        while index < self.tokens.len() {
-            if self.punct_is(index, open) {
-                depth += 1;
-            } else if self.punct_is(index, close) {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            index += 1;
-        }
-        None
-    }
-
-    fn peek_ident(&self) -> Option<&Token> {
-        self.tokens
-            .get(self.at)
-            .filter(|token| token.kind == TokenKind::Ident)
-    }
-
     fn ident_is(&self, index: usize, word: &str) -> bool {
-        self.tokens
-            .get(index)
-            .is_some_and(|token| token.kind == TokenKind::Ident)
-            && self.lower(index) == word
+        self.tokens[index].kind == TokenKind::Ident && self.lower(index) == word
     }
 
     fn punct_is(&self, index: usize, byte: u8) -> bool {
-        self.tokens.get(index).is_some_and(|token| {
-            token.kind == TokenKind::Punct && self.text.as_bytes().get(token.start) == Some(&byte)
-        })
+        let token = self.tokens[index];
+        token.kind == TokenKind::Punct && self.text.as_bytes().get(token.start) == Some(&byte)
     }
 
     /// Object Pascal is case-insensitive, so every keyword and attribute
@@ -680,16 +627,4 @@ impl<'a> Parser<'a> {
         let token = self.tokens[index];
         self.text[token.start..token.end].to_ascii_lowercase()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MethodKind {
-    Procedure,
-    Function,
-}
-
-struct AttributeRef {
-    name: String,
-    start: usize,
-    conditional: bool,
 }

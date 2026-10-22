@@ -14,6 +14,10 @@
 //! processor, repository code, or a child process. ADR-0034's execution
 //! prohibitions all name running Fortran tooling, and nothing runs.
 //!
+//! The declaration structure is read from the pinned Tree-sitter Fortran
+//! grammar (ADR-0058); the ADR-0051 lexer stays the lexical-subset gate and
+//! every refusal class is reproduced from the token stream or the tree.
+//!
 //! Outside the declared subset the parser abstains for the whole file: it
 //! never guesses, never recovers, and never resynchronizes past a refusal.
 //! Input is untrusted, so bytes, block depth, module nesting, and unit counts
@@ -28,7 +32,7 @@
 //! replacement fact discharges the same obligation.
 
 use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
-use super::free_form::{self, ident_is, lower, LexAbstention, Token, TokenKind};
+use super::free_form::{self, ident_is, LexAbstention, Token, TokenKind};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
     SemanticFact, SemanticFactKind, SourceRange, SymbolId, UnknownReasonCode,
@@ -39,6 +43,7 @@ use crate::ports::parser::{
     SourceDocument, SourceParseOutput, SourceParser,
 };
 use std::collections::BTreeMap;
+use tree_sitter::{Node, Parser as TsParser};
 
 pub const FORTRAN_ANCHOR_ENGINE: &str = "repogrammar-fortran-testdrive-parser";
 pub const FORTRAN_ANCHOR_METHOD: &str = "bounded_fortran_testdrive_v1";
@@ -327,7 +332,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             }),
             ..FileParse::default()
         },
-        None => parse_tokens(document.text, &tokens),
+        None => parse_tokens(document.text, &tokens)?,
     };
 
     if let Some(kind) = parsed.abstention {
@@ -524,8 +529,6 @@ impl AbstainKind {
     }
 }
 
-type Parsed<T> = Result<T, AbstainKind>;
-
 /// The scoping unit a subroutine is declared in. Only module subprograms and
 /// external (top-level) subroutines can be test-drive tests; internal
 /// procedures and interface bodies never anchor (ADR-0051 D2).
@@ -546,25 +549,16 @@ struct DeclInfo {
     other_attr: bool,
 }
 
-struct Parser<'a> {
-    text: &'a str,
-    tokens: Vec<Token>,
-    position: usize,
-}
-
-fn parse_tokens(text: &str, tokens: &[Token]) -> FileParse {
-    let mut parser = Parser {
-        text,
-        tokens: tokens.to_vec(),
-        position: 0,
-    };
-    let mut result = FileParse::default();
-    if let Err(kind) = parser.parse_program_units(&mut result) {
-        result.anchors.clear();
-        result.test_shape_without_use = false;
-        result.abstention = Some(kind);
-    }
-    result
+fn parse_tokens(text: &str, tokens: &[Token]) -> Result<FileParse, ParseError> {
+    let source = grammar_source(text, tokens);
+    let mut parser = TsParser::new();
+    parser
+        .set_language(&tree_sitter_fortran::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load Fortran grammar: {error}")))?;
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter Fortran parse failed".to_string()))?;
+    Ok(read_file(&source, tokens, tree.root_node()))
 }
 
 /// Statement keywords that open a block construct and therefore mark the start
@@ -580,1033 +574,797 @@ const BODY_OPENER_KEYWORDS: [&str; 8] = [
     "critical",
 ];
 
-impl<'a> Parser<'a> {
-    fn peek(&self) -> Option<Token> {
-        self.tokens.get(self.position).copied()
-    }
+/// Tree node kinds that open a nested construct counted against
+/// [`MAX_BLOCK_DEPTH`]. `if`, `where`, and `forall` count only in their block
+/// form, which is the form that owns an `end_*_statement` child.
+const BLOCK_NODE_KINDS: [&str; 10] = [
+    "subroutine",
+    "function",
+    "interface",
+    "derived_type_definition",
+    "do_loop",
+    "select_case_statement",
+    "select_type_statement",
+    "associate_statement",
+    "block_construct",
+    "coarray_critical_statement",
+];
+const BLOCK_FORM_KINDS: [&str; 3] = ["if_statement", "where_statement", "forall_statement"];
 
-    fn peek_at(&self, offset: usize) -> Option<Token> {
-        self.tokens.get(self.position + offset).copied()
-    }
-
-    fn bump(&mut self) -> Option<Token> {
-        let token = self.peek();
-        if token.is_some() {
-            self.position += 1;
-        }
-        token
-    }
-
-    fn skip_separators(&mut self) {
-        while matches!(
-            self.peek().map(|token| token.kind),
-            Some(TokenKind::Newline) | Some(TokenKind::Semicolon)
-        ) {
-            self.position += 1;
-        }
-    }
-
-    fn ident_is_at(&self, offset: usize, expected: &str) -> bool {
-        self.peek_at(offset)
-            .is_some_and(|token| ident_is(self.text, token, expected))
-    }
-
-    /// True at a derived-type definition statement (`type [::] name`), as
-    /// opposed to a `type(...)` type-spec in a declaration.
-    fn at_type_definition(&self) -> bool {
-        match self.peek_at(1).map(|token| token.kind) {
-            Some(TokenKind::Ident) => !self.ident_is_at(1, "is"),
-            Some(TokenKind::DoubleColon) => self
-                .peek_at(2)
-                .is_some_and(|token| token.kind == TokenKind::Ident),
-            _ => false,
+/// True for each token that begins a statement: the first token, and the token
+/// after a newline or `;` at parenthesis depth zero.
+fn statement_starts(tokens: &[Token]) -> Vec<bool> {
+    let mut starts = Vec::with_capacity(tokens.len());
+    let mut at_start = true;
+    let mut paren_depth = 0usize;
+    for token in tokens {
+        starts.push(at_start);
+        match token.kind {
+            TokenKind::Newline | TokenKind::Semicolon if paren_depth == 0 => at_start = true,
+            TokenKind::LParen => {
+                paren_depth += 1;
+                at_start = false;
+            }
+            TokenKind::RParen => {
+                paren_depth = paren_depth.saturating_sub(1);
+                at_start = false;
+            }
+            _ => at_start = false,
         }
     }
+    starts
+}
 
-    /// Tokens in the type-definition header (`type`, the optional `::`, the
-    /// name) that the caller consumes before skipping to `end type`.
-    fn type_definition_header_len(&self) -> usize {
-        if self.peek_at(1).map(|token| token.kind) == Some(TokenKind::DoubleColon) {
-            3
-        } else {
-            2
+/// Same-length text handed to the grammar. The grammar cannot read three
+/// spellings the ADR-0051 lexical subset admits, so each is rewritten in place
+/// without moving any byte offset: a name or number split across a `&`
+/// continuation is glued into one token, an unterminated quoted literal is
+/// closed at its line end, and the `abstract` of `abstract interface` is
+/// blanked. Fact ranges always come from the lexer tokens, never from here.
+fn grammar_source(text: &str, tokens: &[Token]) -> String {
+    let bytes = text.as_bytes();
+    let mut out = bytes.to_vec();
+    let starts = statement_starts(tokens);
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            TokenKind::Ident | TokenKind::Number
+                if bytes[token.start..token.end].contains(&b'&') =>
+            {
+                let mut glued = Vec::with_capacity(token.end - token.start);
+                let mut cursor = token.start;
+                while cursor < token.end {
+                    match free_form::continuation_end(bytes, cursor) {
+                        Some(resume) if bytes[cursor] == b'&' => cursor = resume,
+                        _ => {
+                            glued.push(bytes[cursor]);
+                            cursor += 1;
+                        }
+                    }
+                }
+                glued.resize(token.end - token.start, b' ');
+                out[token.start..token.end].copy_from_slice(&glued);
+            }
+            TokenKind::Str if !free_form::string_end(bytes, token.start).1 => {
+                if token.end - token.start >= 2 {
+                    out[token.start + 1..token.end - 1].fill(b' ');
+                    out[token.end - 1] = bytes[token.start];
+                } else {
+                    // A lone quote cannot be closed in place; any operand
+                    // keeps the statement well-formed.
+                    out[token.start] = b'0';
+                }
+            }
+            TokenKind::Ident
+                if starts[index]
+                    && ident_is(text, *token, "abstract")
+                    && tokens
+                        .get(index + 1)
+                        .is_some_and(|next| ident_is(text, *next, "interface")) =>
+            {
+                out[token.start..token.end].fill(b' ');
+            }
+            _ => {}
+        }
+    }
+    // Only ASCII bytes inside tokens are rewritten, and the lexer admits no
+    // non-ASCII byte in code position; a rewritten string literal keeps its
+    // multi-byte content out of the replaced range only when it is blanked.
+    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+}
+
+/// Index of the first token that starts at or after `byte`.
+fn token_at(tokens: &[Token], byte: usize) -> usize {
+    tokens.partition_point(|token| token.start < byte)
+}
+
+struct Reader<'a> {
+    /// The grammar-normalized text, so node ranges index it; token ranges
+    /// index the original text, which has identical offsets.
+    source: &'a str,
+    tokens: &'a [Token],
+    /// Refusals as `(position, kind)`; the earliest position wins and, at one
+    /// position, the earlier-recorded token refusal wins.
+    refusals: Vec<(usize, AbstainKind)>,
+    result: FileParse,
+}
+
+/// Declarations are read off the tree; every ADR-0051 refusal is reproduced
+/// from the token stream and the tree. As in a left-to-right parse the earliest
+/// refusal wins, and a bare `ERROR` or `MISSING` node refuses the file as the
+/// generic unadmitted class only when no more specific refusal applies.
+fn read_file(source: &str, tokens: &[Token], root: Node<'_>) -> FileParse {
+    let mut reader = Reader {
+        source,
+        tokens,
+        refusals: Vec::new(),
+        result: FileParse::default(),
+    };
+    reader.token_refusals(root);
+    reader.depth_refusal(root);
+    for child in reader.children(root) {
+        match child.kind() {
+            "module" => reader.module(child),
+            "program" => reader.program(child),
+            "subroutine" => reader.subroutine(child, Scope::TopLevel, false),
+            "function" => reader.generic_procedure(child),
+            _ => reader.refuse(child.start_byte(), AbstainKind::Unadmitted),
+        }
+    }
+    reader.refusals.sort_by_key(|(position, _)| *position);
+    let abstention = match reader.refusals.first() {
+        Some((_, kind)) => Some(*kind),
+        None => first_error(root).map(|_| AbstainKind::Unadmitted),
+    };
+    let mut result = reader.result;
+    if abstention.is_some() {
+        result.anchors.clear();
+        result.test_shape_without_use = false;
+        result.abstention = abstention;
+    }
+    result
+}
+
+/// The first `ERROR` or `MISSING` node in document order.
+fn first_error(root: Node<'_>) -> Option<usize> {
+    if !root.has_error() {
+        return None;
+    }
+    let mut cursor = root.walk();
+    let mut node = root;
+    loop {
+        if node.is_error() || node.is_missing() {
+            return Some(node.start_byte());
+        }
+        let mut next = None;
+        for child in node.children(&mut cursor) {
+            if child.has_error() {
+                next = Some(child);
+                break;
+            }
+        }
+        match next {
+            Some(child) => node = child,
+            None => return Some(node.start_byte()),
+        }
+    }
+}
+
+impl<'a> Reader<'a> {
+    fn refuse(&mut self, position: usize, kind: AbstainKind) {
+        self.refusals.push((position, kind));
+    }
+
+    /// Named children without comments, which the grammar parses as nodes.
+    fn children<'t>(&self, node: Node<'t>) -> Vec<Node<'t>> {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .filter(|child| child.kind() != "comment")
+            .collect()
+    }
+
+    fn node_text(&self, node: Node<'_>) -> String {
+        self.source[node.byte_range()]
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    }
+
+    /// Lowercased text of a node's `name`-like child, when present.
+    fn name_of(&self, node: Node<'_>, kind: &str) -> Option<String> {
+        self.children(node)
+            .into_iter()
+            .find(|child| child.kind() == kind)
+            .map(|name| self.node_text(name))
+    }
+
+    fn first_token(&self, node: Node<'_>) -> Option<Token> {
+        self.tokens
+            .get(token_at(self.tokens, node.start_byte()))
+            .copied()
+    }
+
+    // -- token-stream refusals ------------------------------------------------
+
+    /// `include 'file'` and a labeled `do` at a statement start, found in the
+    /// token stream so tree error recovery cannot move them.
+    fn token_refusals(&mut self, root: Node<'_>) {
+        let starts = statement_starts(self.tokens);
+        for (index, token) in self.tokens.iter().enumerate() {
+            if !starts[index] || token.kind != TokenKind::Ident {
+                continue;
+            }
+            let next = self.tokens.get(index + 1).map(|next| next.kind);
+            let text = self.source_text_of(*token);
+            if text.eq_ignore_ascii_case("include") && next == Some(TokenKind::Str) {
+                let kind = include_refusal_kind(root, token.start);
+                self.refuse(token.start, kind);
+            } else if text.eq_ignore_ascii_case("do") && next == Some(TokenKind::Number) {
+                // A labeled DO terminates at its label rather than an
+                // `end do`, which this frontend does not track.
+                self.refuse(token.start, AbstainKind::Unadmitted);
+            }
         }
     }
 
-    /// Advance past the remainder of the current statement: up to a `;`, a
-    /// newline, or end of file, all at parenthesis depth zero.
-    fn skip_statement(&mut self) {
+    fn source_text_of(&self, token: Token) -> String {
+        self.source[token.start..token.end]
+            .chars()
+            .filter(|character| !matches!(character, '&' | ' ' | '\t' | '\r' | '\n'))
+            .collect()
+    }
+
+    /// Nesting depth of constructs, counted from the outermost procedure,
+    /// interface, or type body as the legacy skipper did.
+    fn depth_refusal(&mut self, root: Node<'_>) {
+        let mut stack = vec![(root, 0usize, 0usize)];
+        while let Some((node, count, offset)) = stack.pop() {
+            let mut count = count;
+            let mut offset = offset;
+            let counts = BLOCK_NODE_KINDS.contains(&node.kind())
+                || (BLOCK_FORM_KINDS.contains(&node.kind())
+                    && self
+                        .children(node)
+                        .iter()
+                        .any(|child| child.kind().starts_with("end_")));
+            if counts {
+                count += 1;
+                if count == 1 {
+                    offset = usize::from(BLOCK_NODE_KINDS[..4].contains(&node.kind()));
+                }
+                if count - offset > MAX_BLOCK_DEPTH {
+                    self.refuse(node.start_byte(), AbstainKind::DepthLimit);
+                    return;
+                }
+            }
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.named_children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                stack.push((child, count, offset));
+            }
+        }
+    }
+
+    // -- program units ----------------------------------------------------
+
+    /// A procedure's first token must be `subroutine`/`function` after only
+    /// `pure`/`impure`/`elemental`/`recursive` prefixes; a typed function or a
+    /// `module` prefix is outside the subset.
+    fn procedure_prefix_is_admitted(&self, node: Node<'_>) -> bool {
+        let mut index = token_at(self.tokens, node.start_byte());
+        while let Some(token) = self.tokens.get(index) {
+            if token.kind != TokenKind::Ident {
+                return false;
+            }
+            let word = self.source_text_of(*token).to_ascii_lowercase();
+            match word.as_str() {
+                "pure" | "impure" | "elemental" | "recursive" => index += 1,
+                "subroutine" | "function" => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// The closing `end` statement of a unit or spec construct, if the grammar
+    /// found one.
+    fn end_statement<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        self.children(node)
+            .into_iter()
+            .rev()
+            .find(|child| child.kind().starts_with("end_"))
+    }
+
+    /// Reproduce the legacy closing-`end` rule: after `end`, a qualifier from
+    /// `qualifiers` (with any trailing name), or the construct's own name.
+    fn check_end(&mut self, node: Node<'_>, qualifiers: &[&str], name: Option<&str>) {
+        let Some(end) = self.end_statement(node) else {
+            return;
+        };
+        let index = token_at(self.tokens, end.start_byte());
+        let Some(next) = self.tokens.get(index + 1).copied() else {
+            return;
+        };
+        if next.kind != TokenKind::Ident {
+            return;
+        }
+        let qualifier = self.source_text_of(next).to_ascii_lowercase();
+        if !qualifiers.contains(&qualifier.as_str()) && Some(qualifier.as_str()) != name {
+            self.refuse(next.start, AbstainKind::Unadmitted);
+        }
+    }
+
+    /// Byte offset just past the closing `end` statement's last token.
+    fn end_offset(&self, node: Node<'_>) -> Option<usize> {
+        let end = self.end_statement(node)?;
+        let mut index = token_at(self.tokens, end.start_byte());
         let mut paren_depth = 0usize;
-        while let Some(token) = self.peek() {
+        let mut last = self.tokens.get(index)?.end;
+        while let Some(token) = self.tokens.get(index) {
             match token.kind {
                 TokenKind::LParen => paren_depth += 1,
                 TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
                 TokenKind::Newline | TokenKind::Semicolon if paren_depth == 0 => break,
                 _ => {}
             }
-            self.position += 1;
+            last = token.end;
+            index += 1;
         }
+        Some(last)
     }
 
-    fn skip_balanced_group(&mut self) {
-        let mut paren_depth = 0usize;
-        while let Some(token) = self.peek() {
-            self.position += 1;
-            match token.kind {
-                TokenKind::LParen => paren_depth += 1,
-                TokenKind::RParen => {
-                    paren_depth = paren_depth.saturating_sub(1);
-                    if paren_depth == 0 {
-                        return;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // -- file-level program units ------------------------------------------
-
-    fn parse_program_units(&mut self, result: &mut FileParse) -> Parsed<()> {
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Ok(());
-            };
-            if token.kind != TokenKind::Ident {
-                return Err(AbstainKind::Unadmitted);
-            }
-            let keyword = lower(self.text, token);
-            match keyword.as_str() {
-                "module" => {
-                    if ["procedure", "function", "subroutine"]
-                        .iter()
-                        .any(|next| self.ident_is_at(1, next))
-                    {
-                        // A `module procedure`-style separate-module prefix
-                        // belongs to submodules, which are outside the
-                        // admitted subset.
-                        return Err(AbstainKind::Unadmitted);
-                    }
-                    self.parse_module(result)?;
-                }
-                "program" => self.parse_program()?,
-                "subroutine" => {
-                    let start = token.start;
-                    self.parse_subroutine(Scope::TopLevel, false, start, result)?;
-                }
-                "function" => {
-                    self.parse_generic_procedure()?;
-                }
-                "pure" | "impure" | "elemental" | "recursive" => {
-                    let start = token.start;
-                    if let Some(kind) = self.consume_prefixes()? {
-                        if kind == "subroutine" {
-                            self.parse_subroutine(Scope::TopLevel, false, start, result)?;
-                        } else {
-                            self.parse_generic_procedure()?;
-                        }
-                    } else {
-                        // Prefix words that name no procedure are a
-                        // statement outside the admitted subset.
-                        return Err(AbstainKind::Unadmitted);
-                    }
-                }
-                _ => return Err(AbstainKind::Unadmitted),
-            }
-        }
-    }
-
-    /// Consume procedure prefix keywords. Returns the `subroutine`/
-    /// `function` keyword that follows, or `None` when the statement ends
-    /// without one.
-    fn consume_prefixes(&mut self) -> Parsed<Option<String>> {
-        while let Some(token) = self.peek() {
-            if token.kind == TokenKind::Ident {
-                let keyword = lower(self.text, token);
-                match keyword.as_str() {
-                    "pure" | "impure" | "elemental" | "recursive" => {
-                        self.position += 1;
-                    }
-                    "subroutine" | "function" => return Ok(Some(keyword)),
-                    _ => return Ok(None),
-                }
-            } else {
-                return Ok(None);
-            }
-        }
-        Ok(None)
-    }
-
-    fn parse_module(&mut self, result: &mut FileParse) -> Parsed<()> {
-        self.position += 1; // `module`
-        let Some(name) = self.peek().filter(|token| token.kind == TokenKind::Ident) else {
-            return Err(AbstainKind::Unadmitted);
-        };
-        let name = lower(self.text, name);
-        self.position += 1;
-        self.skip_statement();
+    fn module(&mut self, node: Node<'_>) {
+        let name = self.name_of_statement(node, "module_statement");
+        let children = self.children(node);
         let mut use_proven = false;
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Err(AbstainKind::Unadmitted);
-            };
-            if token.kind != TokenKind::Ident {
-                return Err(AbstainKind::Unadmitted);
-            }
-            match lower(self.text, token).as_str() {
-                "use" => {
-                    if self.parse_use()?.proves {
-                        use_proven = true;
-                    }
-                }
-                "implicit" | "public" | "private" | "import" => self.skip_statement(),
-                "include" if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::Str) => {
-                    return Err(AbstainKind::IncludeStatement);
-                }
-                "interface" => {
-                    self.skip_statement();
-                    self.skip_to_construct_end(&["interface"], None)?;
-                }
-                "abstract" if self.ident_is_at(1, "interface") => {
-                    self.position += 2;
-                    self.skip_statement();
-                    self.skip_to_construct_end(&["interface"], None)?;
-                }
-                "type" => {
-                    if self.at_type_definition() {
-                        self.position += self.type_definition_header_len();
-                        self.skip_statement();
-                        self.skip_to_construct_end(&["type"], None)?;
-                    } else {
-                        self.skip_statement();
-                    }
-                }
-                "contains" => {
-                    self.position += 1;
-                    self.parse_module_subprograms(use_proven, &name, result)?;
-                    return Ok(());
-                }
-                "end" => {
-                    self.expect_construct_end(&["module"], Some(&name))?;
-                    return Ok(());
-                }
-                // A module nested inside a module is illegal Fortran and
-                // outside the one-level nesting budget either way.
-                "module" => return Err(AbstainKind::Unadmitted),
-                _ => self.skip_statement(),
+        for child in &children {
+            if child.kind() == "use_statement" && self.use_proves(*child) {
+                use_proven = true;
             }
         }
-    }
-
-    fn parse_module_subprograms(
-        &mut self,
-        module_use_proven: bool,
-        module_name: &str,
-        result: &mut FileParse,
-    ) -> Parsed<()> {
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Err(AbstainKind::Unadmitted);
-            };
-            if token.kind != TokenKind::Ident {
-                return Err(AbstainKind::Unadmitted);
-            }
-            match lower(self.text, token).as_str() {
-                "subroutine" => {
-                    let start = token.start;
-                    self.parse_subroutine(Scope::Module, module_use_proven, start, result)?;
-                }
-                "function" => self.parse_generic_procedure()?,
-                "pure" | "impure" | "elemental" | "recursive" => {
-                    let start = token.start;
-                    if let Some(kind) = self.consume_prefixes()? {
-                        if kind == "subroutine" {
-                            self.parse_subroutine(Scope::Module, module_use_proven, start, result)?;
-                        } else {
-                            self.parse_generic_procedure()?;
-                        }
-                    } else {
-                        return Err(AbstainKind::Unadmitted);
-                    }
-                }
-                "end" => {
-                    self.expect_construct_end(&["module"], Some(module_name))?;
-                    return Ok(());
-                }
-                _ => return Err(AbstainKind::Unadmitted),
-            }
-        }
-    }
-
-    fn parse_program(&mut self) -> Parsed<()> {
-        self.position += 1; // `program`
-        self.skip_statement();
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Err(AbstainKind::Unadmitted);
-            };
-            if token.kind != TokenKind::Ident {
-                return Err(AbstainKind::Unadmitted);
-            }
-            match lower(self.text, token).as_str() {
-                "use" | "implicit" | "public" | "private" | "import" => self.skip_statement(),
-                "include" if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::Str) => {
-                    return Err(AbstainKind::IncludeStatement);
-                }
-                "interface" => {
-                    self.skip_statement();
-                    self.skip_to_construct_end(&["interface"], None)?;
-                }
-                "abstract" if self.ident_is_at(1, "interface") => {
-                    self.position += 2;
-                    self.skip_statement();
-                    self.skip_to_construct_end(&["interface"], None)?;
-                }
-                "type" => {
-                    if self.at_type_definition() {
-                        self.position += self.type_definition_header_len();
-                        self.skip_statement();
-                        self.skip_to_construct_end(&["type"], None)?;
-                    } else {
-                        self.skip_statement();
-                    }
-                }
-                "contains" => {
-                    self.position += 1;
-                    // Internal procedures of a program can never be passed as
-                    // test-drive entries, so their bodies are skipped without
-                    // candidate analysis (ADR-0051 D2).
-                    loop {
-                        self.skip_separators();
-                        let Some(token) = self.peek() else {
-                            return Err(AbstainKind::Unadmitted);
-                        };
-                        if token.kind != TokenKind::Ident {
-                            return Err(AbstainKind::Unadmitted);
-                        }
-                        match lower(self.text, token).as_str() {
-                            "subroutine" | "function" => self.parse_generic_procedure()?,
-                            "pure" | "impure" | "elemental" | "recursive" => {
-                                if self.consume_prefixes()?.is_none() {
-                                    return Err(AbstainKind::Unadmitted);
-                                }
-                                self.parse_generic_procedure()?;
+        for child in children {
+            match child.kind() {
+                "module_statement" => {}
+                "end_module_statement" => {}
+                "internal_procedures" => {
+                    for procedure in self.children(child) {
+                        match procedure.kind() {
+                            "contains_statement" => {}
+                            "subroutine" => {
+                                self.subroutine(procedure, Scope::Module, use_proven);
                             }
-                            "end" => {
-                                self.expect_construct_end(&["program"], None)?;
-                                return Ok(());
-                            }
-                            _ => return Err(AbstainKind::Unadmitted),
+                            "function" => self.generic_procedure(procedure),
+                            _ => self.refuse(procedure.start_byte(), AbstainKind::Unadmitted),
                         }
                     }
                 }
-                "end" => {
-                    self.expect_construct_end(&["program"], None)?;
-                    return Ok(());
+                "module" => self.refuse(child.start_byte(), AbstainKind::Unadmitted),
+                _ => self.spec_statement(child, true),
+            }
+        }
+        self.check_end(node, &["module"], name.as_deref());
+    }
+
+    fn program(&mut self, node: Node<'_>) {
+        let mut in_spec = true;
+        for child in self.children(node) {
+            match child.kind() {
+                "program_statement" | "end_program_statement" => {}
+                "internal_procedures" => {
+                    in_spec = false;
+                    for procedure in self.children(child) {
+                        match procedure.kind() {
+                            "contains_statement" => {}
+                            "subroutine" | "function" => self.generic_procedure(procedure),
+                            _ => self.refuse(procedure.start_byte(), AbstainKind::Unadmitted),
+                        }
+                    }
                 }
-                keyword if BODY_OPENER_KEYWORDS.contains(&keyword) => {
-                    // The executable body of the program began; the balanced
-                    // skipper owns everything from here to its `end`.
-                    self.skip_to_construct_end(&["program"], None)?;
-                    return Ok(());
+                _ if !in_spec => {}
+                _ => {
+                    if self.starts_body(child) {
+                        in_spec = false;
+                    } else {
+                        self.spec_statement(child, true);
+                    }
                 }
-                _ => self.skip_statement(),
+            }
+        }
+        self.check_end(node, &["program"], None);
+    }
+
+    fn starts_body(&self, node: Node<'_>) -> bool {
+        self.first_token(node).is_some_and(|token| {
+            token.kind == TokenKind::Ident
+                && BODY_OPENER_KEYWORDS
+                    .contains(&self.source_text_of(token).to_ascii_lowercase().as_str())
+        })
+    }
+
+    /// A spec-part statement that is not analysed for declarations: a
+    /// non-keyword first token refuses in module and program scope, and an
+    /// `interface` or type definition must close with its own `end`.
+    fn spec_statement(&mut self, node: Node<'_>, refuse_non_keyword: bool) {
+        match node.kind() {
+            "interface" => self.check_end(node, &["interface"], None),
+            "derived_type_definition" => self.check_end(node, &["type"], None),
+            _ => {
+                if refuse_non_keyword
+                    && self
+                        .first_token(node)
+                        .is_some_and(|token| token.kind != TokenKind::Ident)
+                {
+                    self.refuse(node.start_byte(), AbstainKind::Unadmitted);
+                }
             }
         }
     }
 
-    /// Parse one subroutine whose statement begins at `start`, deciding the
-    /// ADR-0051 D2 anchor and consuming through its closing `end`.
-    fn parse_subroutine(
-        &mut self,
-        scope: Scope,
-        module_use_proven: bool,
-        start: usize,
-        result: &mut FileParse,
-    ) -> Parsed<()> {
-        self.position += 1; // `subroutine`
-        let Some(name_token) = self.peek().filter(|token| token.kind == TokenKind::Ident) else {
-            return Err(AbstainKind::Unadmitted);
+    fn name_of_statement(&self, unit: Node<'_>, statement_kind: &str) -> Option<String> {
+        self.children(unit)
+            .into_iter()
+            .find(|child| child.kind() == statement_kind)
+            .and_then(|statement| self.name_of(statement, "name"))
+    }
+
+    fn generic_procedure(&mut self, node: Node<'_>) {
+        if !self.procedure_prefix_is_admitted(node) {
+            self.refuse(node.start_byte(), AbstainKind::Unadmitted);
+            return;
+        }
+        let statement_kind = if node.kind() == "function" {
+            "function_statement"
+        } else {
+            "subroutine_statement"
         };
-        let name = lower(self.text, name_token);
-        self.position += 1;
-        let dummies = self.parse_dummy_list();
-        self.skip_statement();
+        let name = self.name_of_statement(node, statement_kind);
+        self.check_end(node, &["subroutine", "function"], name.as_deref());
+    }
 
+    /// One subroutine at module or top-level scope: decide the ADR-0051 D2
+    /// anchor from its dummy list, its declarations, and its `use` proof.
+    fn subroutine(&mut self, node: Node<'_>, scope: Scope, module_use_proven: bool) {
+        if !self.procedure_prefix_is_admitted(node) {
+            self.refuse(node.start_byte(), AbstainKind::Unadmitted);
+            return;
+        }
+        let children = self.children(node);
+        let Some(statement) = children
+            .iter()
+            .find(|child| child.kind() == "subroutine_statement")
+        else {
+            return;
+        };
+        let name = self.name_of(*statement, "name").unwrap_or_default();
+        let dummies = self.dummy_list(*statement);
         let mut own_use_proven = false;
         let mut declarations = BTreeMap::<String, DeclInfo>::new();
-        let end = loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Err(AbstainKind::Unadmitted);
+        for child in &children {
+            match child.kind() {
+                "subroutine_statement" => continue,
+                "internal_procedures" => break,
+                kind if kind.starts_with("end_") => break,
+                _ => {}
+            }
+            // A non-keyword first token or a block opener ends the declaration
+            // part; the rest of the body is skipped.
+            let Some(first) = self.first_token(*child) else {
+                break;
             };
-            // A non-keyword first token (a statement label's number, an
-            // assignment) means the executable body has begun; the balanced
-            // skipper owns everything from here to the closing `end`.
-            let keyword = if token.kind == TokenKind::Ident {
-                lower(self.text, token)
-            } else {
-                break self.skip_to_construct_end(&["subroutine"], Some(&name))?;
-            };
-            match keyword.as_str() {
-                "use" => {
-                    if self.parse_use()?.proves {
+            if first.kind != TokenKind::Ident || self.starts_body(*child) {
+                break;
+            }
+            match child.kind() {
+                "use_statement" => {
+                    if self.use_proves(*child) {
                         own_use_proven = true;
                     }
                 }
-                "implicit" | "public" | "private" | "import" => self.skip_statement(),
-                "include" if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::Str) => {
-                    return Err(AbstainKind::IncludeStatement);
+                "interface" | "derived_type_definition" => self.spec_statement(*child, false),
+                "include_statement" => {}
+                "variable_declaration" if self.is_type_declaration(*child) => {
+                    self.type_declaration(*child, &mut declarations);
                 }
-                "interface" => {
-                    self.skip_statement();
-                    self.skip_to_construct_end(&["interface"], None)?;
-                }
-                "abstract" if self.ident_is_at(1, "interface") => {
-                    self.position += 2;
-                    self.skip_statement();
-                    self.skip_to_construct_end(&["interface"], None)?;
-                }
-                "type" => {
-                    if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::LParen) {
-                        self.parse_type_declaration(&mut declarations);
-                    } else if self.at_type_definition() {
-                        self.position += self.type_definition_header_len();
-                        self.skip_statement();
-                        self.skip_to_construct_end(&["type"], None)?;
-                    } else {
-                        self.skip_statement();
-                    }
-                }
-                "contains" => {
-                    // Internal procedures follow; they never anchor, and the
-                    // shared block skip keeps their own nesting balanced.
-                    self.position += 1;
-                    break self.skip_to_construct_end(&["subroutine"], Some(&name))?;
-                }
-                "end" => {
-                    break self.expect_construct_end(&["subroutine"], Some(&name))?;
-                }
-                keyword if BODY_OPENER_KEYWORDS.contains(&keyword) => {
-                    break self.skip_to_construct_end(&["subroutine"], Some(&name))?;
-                }
-                _ => {
-                    self.scan_generic_declaration(&mut declarations);
-                }
+                _ => self.generic_declaration(*child, &mut declarations),
             }
-        };
+        }
+        self.check_end(node, &["subroutine"], Some(name.as_str()));
 
         let Some(first_dummy) = dummies.first() else {
-            return Ok(());
+            return;
         };
         if !name.starts_with("test_") {
-            return Ok(());
+            return;
         }
         let Some(decl) = declarations.get(first_dummy) else {
-            return Ok(());
+            return;
         };
-        let interface_shape = decl.error_interface && decl.intent_out && !decl.other_attr;
-        if !interface_shape {
-            return Ok(());
+        if !(decl.error_interface && decl.intent_out && !decl.other_attr) {
+            return;
         }
         if own_use_proven || (scope == Scope::Module && module_use_proven) {
-            result.anchors.push(Anchor { start, end });
+            let (Some(first), Some(end)) = (self.first_token(node), self.end_offset(node)) else {
+                return;
+            };
+            self.result.anchors.push(Anchor {
+                start: first.start,
+                end,
+            });
         } else {
-            result.test_shape_without_use = true;
+            self.result.test_shape_without_use = true;
         }
-        Ok(())
     }
 
-    /// The dummy-argument name list of a procedure statement, lowercased.
-    /// Empty when the list is absent, unparseable, or empty.
-    fn parse_dummy_list(&mut self) -> Vec<String> {
-        if self.peek().map(|token| token.kind) != Some(TokenKind::LParen) {
+    /// The dummy-argument names of a procedure statement; empty when the list
+    /// is absent, empty, or outside the admitted all-identifier shape.
+    fn dummy_list(&self, statement: Node<'_>) -> Vec<String> {
+        let Some(parameters) = self
+            .children(statement)
+            .into_iter()
+            .find(|child| child.kind() == "parameters")
+        else {
             return Vec::new();
-        }
-        self.position += 1;
-        let mut dummies = Vec::new();
-        loop {
-            match self.peek().map(|token| token.kind) {
-                Some(TokenKind::Ident) => {
-                    let token = self.bump().expect("checked");
-                    dummies.push(lower(self.text, token));
-                }
-                Some(TokenKind::Comma) => {
-                    self.position += 1;
-                }
-                Some(TokenKind::RParen) => {
-                    self.position += 1;
-                    return dummies;
-                }
-                _ => {
-                    // A dummy list outside the admitted shape (alternate
-                    // returns, `*` lengths) yields no candidate facts.
-                    self.skip_statement();
-                    return Vec::new();
-                }
-            }
-        }
-    }
-
-    /// Skip a non-candidate procedure through its closing `end`.
-    fn parse_generic_procedure(&mut self) -> Parsed<()> {
-        self.position += 1; // `subroutine` or `function`
-        let name = self
-            .peek()
-            .filter(|token| token.kind == TokenKind::Ident)
-            .map(|token| lower(self.text, token));
-        if name.is_some() {
-            self.position += 1;
-        }
-        self.skip_statement();
-        self.skip_to_construct_end(&["subroutine", "function"], name.as_deref())?;
-        Ok(())
-    }
-
-    // -- use statements -----------------------------------------------------
-
-    fn parse_use(&mut self) -> Parsed<UseProof> {
-        self.position += 1; // `use`
-        let mut intrinsic = false;
-        if self.peek().map(|token| token.kind) == Some(TokenKind::Comma) {
-            self.position += 1;
-            if self.ident_is_at(0, "intrinsic") {
-                intrinsic = true;
-                self.position += 1;
-            } else if self.ident_is_at(0, "non_intrinsic") {
-                self.position += 1;
-            } else {
-                self.skip_statement();
-                return Ok(UseProof { proves: false });
-            }
-            if self.peek().map(|token| token.kind) != Some(TokenKind::DoubleColon) {
-                self.skip_statement();
-                return Ok(UseProof { proves: false });
-            }
-            self.position += 1;
-        } else if self.peek().map(|token| token.kind) == Some(TokenKind::DoubleColon) {
-            self.position += 1;
-        }
-        let Some(module) = self.peek().filter(|token| token.kind == TokenKind::Ident) else {
-            self.skip_statement();
-            return Ok(UseProof { proves: false });
         };
-        let module = lower(self.text, module);
-        self.position += 1;
-
-        let mut proof = UseProof { proves: false };
-        if self.peek().map(|token| token.kind) == Some(TokenKind::Comma) {
-            self.position += 1;
-            if self.ident_is_at(0, "only") {
-                self.position += 1;
-                if self.peek().map(|token| token.kind) == Some(TokenKind::Colon) {
-                    self.position += 1;
-                }
-                let mut bare_error_type = false;
-                let mut renamed_error_type = false;
-                loop {
-                    match self.peek().map(|token| token.kind) {
-                        Some(TokenKind::Newline) | Some(TokenKind::Semicolon) | None => break,
-                        Some(TokenKind::Comma) => {
-                            self.position += 1;
-                        }
-                        Some(TokenKind::Ident) => {
-                            let token = self.bump().expect("checked");
-                            if matches!(
-                                self.peek().map(|next| next.kind),
-                                Some(TokenKind::FatArrow)
-                            ) {
-                                self.position += 1;
-                                if let Some(right) =
-                                    self.peek().filter(|next| next.kind == TokenKind::Ident)
-                                {
-                                    if lower(self.text, right) == ERROR_TYPE_NAME {
-                                        renamed_error_type = true;
-                                    }
-                                    self.position += 1;
-                                }
-                            } else if lower(self.text, token) == ERROR_TYPE_NAME {
-                                bare_error_type = true;
-                            }
-                        }
-                        Some(TokenKind::LParen) => {
-                            // `operator(...)`-style items carry no entity name.
-                            self.skip_balanced_group();
-                        }
-                        _ => {
-                            self.skip_statement();
-                            break;
-                        }
-                    }
-                }
-                proof.proves = bare_error_type && !renamed_error_type;
-            } else {
-                // A rename list without `only:`: whether `error_type` stays
-                // accessible depends on rename-list details this frontend
-                // does not model, so the statement proves nothing.
-                self.skip_statement();
+        let mut dummies = Vec::new();
+        let mut cursor = parameters.walk();
+        for child in parameters.children(&mut cursor) {
+            match child.kind() {
+                "identifier" => dummies.push(self.node_text(child)),
+                "(" | ")" | "," | "comment" => {}
+                _ => return Vec::new(),
             }
-        } else {
-            proof.proves = true;
         }
-        self.skip_statement();
-        if module != TESTDRIVE_MODULE || intrinsic {
-            proof.proves = false;
-        }
-        Ok(proof)
+        dummies
     }
 
-    // -- declarations -------------------------------------------------------
+    // -- use statements and declarations ---------------------------------------
 
-    /// Parse one `type(...)` declaration statement, recording the declared
-    /// names. Only the exact ADR-0051 interface shape sets
-    /// `error_interface`; every other spelling records an ordinary
-    /// declaration so a first dummy declared elsewhere disqualifies the
-    /// candidate.
-    fn parse_type_declaration(&mut self, declarations: &mut BTreeMap<String, DeclInfo>) {
-        self.position += 1; // `type`
-        self.position += 1; // `(`
-        let mut content = Vec::new();
-        let mut paren_depth = 1usize;
-        while let Some(token) = self.peek() {
-            match token.kind {
-                TokenKind::LParen => paren_depth += 1,
-                TokenKind::RParen => {
-                    paren_depth -= 1;
-                    if paren_depth == 0 {
-                        self.position += 1;
-                        break;
+    /// True when a `use` statement proves `error_type` accessible from the
+    /// `testdrive` module: a plain `use testdrive`, or an `only` list naming
+    /// `error_type` bare and never renamed. Intrinsic, renamed-without-`only`,
+    /// and other-module forms prove nothing.
+    fn use_proves(&self, node: Node<'_>) -> bool {
+        let children = self.children(node);
+        let Some(module) = children.iter().find(|child| child.kind() == "module_name") else {
+            return false;
+        };
+        if self.node_text(*module) != TESTDRIVE_MODULE {
+            return false;
+        }
+        let index = token_at(self.tokens, node.start_byte());
+        if self.tokens.get(index + 1).map(|token| token.kind) == Some(TokenKind::Comma) {
+            let attribute = self
+                .tokens
+                .get(index + 2)
+                .map(|token| self.source_text_of(*token).to_ascii_lowercase());
+            // `use, intrinsic ::` never reaches the test-drive module, and an
+            // unknown attribute is unmodelled; only `non_intrinsic` may prove.
+            if attribute.as_deref() != Some("non_intrinsic") {
+                return false;
+            }
+        }
+        let only = children
+            .iter()
+            .find(|child| child.kind() == "included_items")
+            .filter(|items| {
+                self.first_token(**items)
+                    .and_then(|comma| self.tokens.get(token_at(self.tokens, comma.end)))
+                    .is_some_and(|token| self.source_text_of(*token).eq_ignore_ascii_case("only"))
+            });
+        let renames = children.iter().any(|child| child.kind() == "use_alias");
+        match only {
+            Some(items) => {
+                let mut bare = false;
+                let mut renamed = renames;
+                for item in self.children(*items) {
+                    match item.kind() {
+                        "identifier" => bare |= self.node_text(item) == ERROR_TYPE_NAME,
+                        "use_alias" => {
+                            renamed |= self.children(item).iter().any(|part| {
+                                part.kind() == "identifier"
+                                    && self.node_text(*part) == ERROR_TYPE_NAME
+                            });
+                        }
+                        _ => {}
                     }
                 }
-                TokenKind::Newline | TokenKind::Semicolon => break,
-                TokenKind::Ident => content.push(lower(self.text, token)),
-                _ => {}
+                bare && !renamed
             }
-            self.position += 1;
+            // A rename list without `only:` depends on rename details this
+            // frontend does not model.
+            None => !renames,
         }
-        let is_error_interface = content.len() == 1 && content[0] == ERROR_TYPE_NAME;
+    }
 
+    /// A `type(...)` declaration, as opposed to `class(...)` or an intrinsic
+    /// type, which the grammar also parses as `variable_declaration`.
+    fn is_type_declaration(&self, node: Node<'_>) -> bool {
+        self.children(node).first().is_some_and(|spec| {
+            spec.kind() == "derived_type"
+                && self
+                    .first_token(*spec)
+                    .is_some_and(|token| self.source_text_of(token).eq_ignore_ascii_case("type"))
+        })
+    }
+
+    /// Record a `type(...)` declaration. Only the exact ADR-0051 interface
+    /// shape sets `error_interface`; every other spelling records an ordinary
+    /// declaration so a first dummy declared elsewhere disqualifies it.
+    fn type_declaration(&self, node: Node<'_>, declarations: &mut BTreeMap<String, DeclInfo>) {
+        let children = self.children(node);
+        let spec = children[0];
+        let names_in_spec: Vec<String> = self.tokens[token_at(self.tokens, spec.start_byte())..]
+            .iter()
+            .take_while(|token| token.start < spec.end_byte())
+            .filter(|token| token.kind == TokenKind::Ident)
+            .skip(1)
+            .map(|token| self.source_text_of(*token).to_ascii_lowercase())
+            .collect();
         let mut info = DeclInfo {
-            error_interface: is_error_interface,
+            error_interface: names_in_spec == [ERROR_TYPE_NAME],
             ..DeclInfo::default()
         };
-        let mut has_attributes = false;
-        loop {
-            match self.peek().map(|token| token.kind) {
-                Some(TokenKind::Comma) => {
-                    has_attributes = true;
-                    self.position += 1;
-                    let Some(token) = self.peek() else {
-                        break;
-                    };
-                    if token.kind != TokenKind::Ident {
-                        self.skip_statement();
-                        return;
-                    }
-                    match lower(self.text, token).as_str() {
-                        "intent" => {
-                            self.position += 1;
-                            if self.peek().map(|next| next.kind) == Some(TokenKind::LParen) {
-                                self.position += 1;
-                                if let Some(value) =
-                                    self.peek().filter(|next| next.kind == TokenKind::Ident)
-                                {
-                                    info.intent_out |= lower(self.text, value) == "out";
-                                    self.position += 1;
-                                }
-                                while let Some(next) = self.peek() {
-                                    if matches!(
-                                        next.kind,
-                                        TokenKind::Newline | TokenKind::Semicolon
-                                    ) {
-                                        break;
-                                    }
-                                    self.position += 1;
-                                    if next.kind == TokenKind::RParen {
-                                        break;
-                                    }
-                                }
-                            } else {
-                                info.other_attr = true;
-                            }
-                        }
-                        "allocatable" => {
-                            info.allocatable = true;
-                            self.position += 1;
-                        }
-                        _ => {
-                            info.other_attr = true;
-                            self.position += 1;
-                            // An attribute may carry a `(...)` group.
-                            if self.peek().map(|next| next.kind) == Some(TokenKind::LParen) {
-                                self.skip_balanced_group();
-                            }
-                        }
-                    }
-                }
-                Some(TokenKind::DoubleColon) => {
-                    self.position += 1;
-                    self.record_names(declarations, info);
-                    self.skip_statement();
-                    return;
-                }
-                _ => {
-                    if !has_attributes {
-                        // Old-style declaration without `::`: the entity
-                        // names follow the type spec directly.
-                        self.record_names(declarations, info);
-                    }
-                    self.skip_statement();
-                    return;
-                }
+        for child in &children[1..] {
+            if child.kind() == "type_qualifier" {
+                self.apply_qualifier(*child, &mut info);
             }
         }
-        self.skip_statement();
-    }
-
-    fn record_names(&mut self, declarations: &mut BTreeMap<String, DeclInfo>, info: DeclInfo) {
-        loop {
-            match self.peek().map(|token| token.kind) {
-                Some(TokenKind::Ident) => {
-                    let token = self.bump().expect("checked");
-                    let name = lower(self.text, token);
-                    match declarations.get(&name) {
-                        Some(_) => {
-                            // A name declared twice is illegal Fortran; treat
-                            // the conflict as disqualifying rather than
-                            // deciding which declaration wins.
-                            declarations.insert(name, DeclInfo::default());
-                        }
-                        None => {
-                            declarations.insert(name, info);
-                        }
-                    }
-                    // Entity shapes like `(…)` or `*n` and initializers are
-                    // skipped by the caller's statement skip.
-                    if self.peek().map(|next| next.kind) == Some(TokenKind::LParen) {
-                        self.skip_balanced_group();
-                    }
-                }
-                Some(TokenKind::Comma) => {
-                    self.position += 1;
-                }
-                _ => return,
+        for child in &children[1..] {
+            let name = match child.kind() {
+                "type_qualifier" => continue,
+                "identifier" => Some(self.node_text(*child)),
+                _ => self
+                    .children(*child)
+                    .into_iter()
+                    .find(|part| part.kind() == "identifier")
+                    .map(|part| self.node_text(part)),
+            };
+            if let Some(name) = name {
+                record_name(declarations, name, info);
             }
         }
     }
 
-    /// A non-`type` specification statement: when it carries a `::` at
-    /// parenthesis depth zero, its entity names are declared with some other
-    /// type and must disqualify a first dummy. Statements without `::` are
-    /// skipped without recording.
-    fn scan_generic_declaration(&mut self, declarations: &mut BTreeMap<String, DeclInfo>) {
-        let start = self.position;
+    fn apply_qualifier(&self, qualifier: Node<'_>, info: &mut DeclInfo) {
+        let index = token_at(self.tokens, qualifier.start_byte());
+        let word = self
+            .tokens
+            .get(index)
+            .map(|token| self.source_text_of(*token).to_ascii_lowercase())
+            .unwrap_or_default();
+        match word.as_str() {
+            "intent" => {
+                if self.tokens.get(index + 1).map(|token| token.kind) == Some(TokenKind::LParen) {
+                    if let Some(value) = self
+                        .tokens
+                        .get(index + 2)
+                        .filter(|token| token.kind == TokenKind::Ident)
+                    {
+                        info.intent_out |= self.source_text_of(*value).eq_ignore_ascii_case("out");
+                    }
+                } else {
+                    info.other_attr = true;
+                }
+            }
+            "allocatable" => info.allocatable = true,
+            _ => info.other_attr = true,
+        }
+    }
+
+    /// A specification statement other than a `type(...)` declaration: when it
+    /// carries a `::` at parenthesis depth zero, its entity names are declared
+    /// with some other type and disqualify a first dummy.
+    fn generic_declaration(&self, node: Node<'_>, declarations: &mut BTreeMap<String, DeclInfo>) {
+        let first = token_at(self.tokens, node.start_byte());
+        let keyword = self
+            .tokens
+            .get(first)
+            .map(|token| self.source_text_of(*token).to_ascii_lowercase())
+            .unwrap_or_default();
+        if matches!(
+            keyword.as_str(),
+            "implicit" | "public" | "private" | "import"
+        ) {
+            return;
+        }
         let mut paren_depth = 0usize;
-        let mut double_colon = None;
-        let mut cursor = self.position;
-        while let Some(token) = self.tokens.get(cursor).copied() {
+        let mut index = first;
+        while let Some(token) = self.tokens.get(index) {
             match token.kind {
                 TokenKind::LParen => paren_depth += 1,
                 TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
                 TokenKind::DoubleColon if paren_depth == 0 => {
-                    double_colon = Some(cursor);
-                    break;
+                    self.record_names_from(index + 1, declarations);
+                    return;
                 }
-                TokenKind::Newline | TokenKind::Semicolon => break,
+                TokenKind::Newline | TokenKind::Semicolon => return,
                 _ => {}
             }
-            cursor += 1;
-        }
-        let Some(double_colon) = double_colon else {
-            self.skip_statement();
-            return;
-        };
-        self.position = double_colon + 1;
-        self.record_names(declarations, DeclInfo::default());
-        self.position = start;
-        self.skip_statement();
-    }
-
-    // -- balanced construct skipping ---------------------------------------
-
-    /// Skip statements until the `end` that closes the current construct.
-    ///
-    /// `qualifiers` names the `end`-keyword spellings that may close it (for
-    /// example `end interface`); `name` allows the `end <name>` form. Returns
-    /// the byte offset just past the closing `end` statement.
-    fn skip_to_construct_end(&mut self, qualifiers: &[&str], name: Option<&str>) -> Parsed<usize> {
-        let mut depth = 0usize;
-        loop {
-            self.skip_separators();
-            let Some(token) = self.peek() else {
-                return Err(AbstainKind::Unadmitted);
-            };
-            if token.kind != TokenKind::Ident {
-                self.skip_statement();
-                continue;
-            }
-            match lower(self.text, token).as_str() {
-                "end" => {
-                    if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::Equals) {
-                        // An assignment to a variable spelled `end`.
-                        self.skip_statement();
-                        continue;
-                    }
-                    if depth == 0 {
-                        return self.expect_construct_end(qualifiers, name);
-                    }
-                    depth -= 1;
-                    self.skip_statement();
-                }
-                // `endif`/`enddo` are legal free-form closers.
-                "endif" | "enddo" => {
-                    if depth == 0 {
-                        return Err(AbstainKind::Unadmitted);
-                    }
-                    depth -= 1;
-                    self.skip_statement();
-                }
-                "include" if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::Str) => {
-                    // INCLUDE pulls text from another file, so the visible
-                    // source is incomplete and the whole file abstains.
-                    return Err(AbstainKind::IncludeStatement);
-                }
-                "subroutine" | "function" => {
-                    depth += 1;
-                    if depth > MAX_BLOCK_DEPTH {
-                        return Err(AbstainKind::DepthLimit);
-                    }
-                    self.skip_statement();
-                }
-                "pure" | "impure" | "elemental" | "recursive" => {
-                    let save = self.position;
-                    if self.consume_prefixes()?.is_some() {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                        self.skip_statement();
-                    } else {
-                        self.position = save;
-                        self.skip_statement();
-                    }
-                }
-                "do" => match self.peek_at(1).map(|next| next.kind) {
-                    Some(TokenKind::Equals) => self.skip_statement(),
-                    Some(TokenKind::Number) => {
-                        // A labeled DO terminates at its label rather than an
-                        // `end do`, which this frontend does not track.
-                        return Err(AbstainKind::Unadmitted);
-                    }
-                    _ => {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                        self.skip_statement();
-                    }
-                },
-                "if" => {
-                    if self.peek_at(1).map(|next| next.kind) != Some(TokenKind::Equals)
-                        && self.statement_has_trailing_then(1)
-                    {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                "else" => {
-                    if self.ident_is_at(1, "if") && self.statement_has_trailing_then(2) {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                "select" => {
-                    if ["case", "type", "default"]
-                        .iter()
-                        .any(|next| self.ident_is_at(1, next))
-                    {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                "where" | "forall" => {
-                    if self.group_is_followed_by_statement_end(1) {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                "associate" => {
-                    if self.peek_at(1).map(|next| next.kind) == Some(TokenKind::LParen) {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                "block" | "critical" => {
-                    if matches!(
-                        self.peek_at(1).map(|next| next.kind),
-                        Some(TokenKind::Newline) | Some(TokenKind::Semicolon) | None
-                    ) {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                "interface" | "abstract" if token.kind == TokenKind::Ident => {
-                    if lower(self.text, token) == "abstract" && !self.ident_is_at(1, "interface") {
-                        // A name spelled `abstract` that opens no interface.
-                        self.skip_statement();
-                        continue;
-                    }
-                    depth += 1;
-                    if depth > MAX_BLOCK_DEPTH {
-                        return Err(AbstainKind::DepthLimit);
-                    }
-                    self.skip_statement();
-                }
-                "module" => {
-                    if self
-                        .peek_at(1)
-                        .is_some_and(|next| next.kind == TokenKind::Ident)
-                        && !["procedure", "function", "subroutine"]
-                            .iter()
-                            .any(|next| self.ident_is_at(1, next))
-                    {
-                        // A module nested inside a one-level construct is
-                        // illegal Fortran and exceeds the nesting budget.
-                        return Err(AbstainKind::Unadmitted);
-                    }
-                    self.skip_statement();
-                }
-                "type" => {
-                    if self.at_type_definition() {
-                        depth += 1;
-                        if depth > MAX_BLOCK_DEPTH {
-                            return Err(AbstainKind::DepthLimit);
-                        }
-                    }
-                    self.skip_statement();
-                }
-                _ => self.skip_statement(),
-            }
+            index += 1;
         }
     }
 
-    /// True when the `if` statement starting `offset` tokens ahead ends with
-    /// `then`, making it a block-opening `if`.
-    fn statement_has_trailing_then(&self, offset: usize) -> bool {
-        let mut cursor = self.position + offset;
-        let mut paren_depth = 0usize;
-        let mut last_was_then = false;
-        while let Some(token) = self.tokens.get(cursor).copied() {
+    fn record_names_from(&self, mut index: usize, declarations: &mut BTreeMap<String, DeclInfo>) {
+        while let Some(token) = self.tokens.get(index) {
             match token.kind {
-                TokenKind::LParen => {
-                    paren_depth += 1;
-                    last_was_then = false;
-                }
-                TokenKind::RParen => {
-                    paren_depth = paren_depth.saturating_sub(1);
-                    last_was_then = false;
-                }
-                TokenKind::Newline | TokenKind::Semicolon => break,
                 TokenKind::Ident => {
-                    last_was_then = paren_depth == 0 && ident_is(self.text, token, "then");
-                }
-                _ => last_was_then = false,
-            }
-            cursor += 1;
-        }
-        last_was_then
-    }
-
-    /// True when the parenthesis group starting `offset` tokens ahead is the
-    /// whole statement, the block-construct form of `where`/`forall`.
-    fn group_is_followed_by_statement_end(&self, offset: usize) -> bool {
-        let mut cursor = self.position + offset;
-        if self.tokens.get(cursor).map(|token| token.kind) != Some(TokenKind::LParen) {
-            return false;
-        }
-        let mut paren_depth = 0usize;
-        while let Some(token) = self.tokens.get(cursor).copied() {
-            match token.kind {
-                TokenKind::LParen => paren_depth += 1,
-                TokenKind::RParen => {
-                    paren_depth -= 1;
-                    if paren_depth == 0 {
-                        return matches!(
-                            self.tokens.get(cursor + 1).map(|next| next.kind),
-                            Some(TokenKind::Newline) | Some(TokenKind::Semicolon) | None
-                        );
-                    }
-                }
-                TokenKind::Newline | TokenKind::Semicolon => return false,
-                _ => {}
-            }
-            cursor += 1;
-        }
-        false
-    }
-
-    /// Consume a closing `end` statement and return the byte offset just past
-    /// its last token.
-    fn expect_construct_end(&mut self, qualifiers: &[&str], name: Option<&str>) -> Parsed<usize> {
-        let end_token = self.bump().expect("caller checked `end`");
-        let mut last_end = end_token.end;
-        if let Some(token) = self.peek() {
-            if token.kind == TokenKind::Ident {
-                let qualifier = lower(self.text, token);
-                if qualifiers.contains(&qualifier.as_str()) {
-                    self.position += 1;
-                    last_end = token.end;
-                    // The construct's own name may follow the qualifier.
-                    if let Some(trailing) = self.peek() {
-                        if trailing.kind == TokenKind::Ident {
-                            self.position += 1;
-                            last_end = trailing.end;
+                    record_name(
+                        declarations,
+                        self.source_text_of(*token).to_ascii_lowercase(),
+                        DeclInfo::default(),
+                    );
+                    index += 1;
+                    if self.tokens.get(index).map(|next| next.kind) == Some(TokenKind::LParen) {
+                        let mut paren_depth = 0usize;
+                        while let Some(inner) = self.tokens.get(index) {
+                            index += 1;
+                            match inner.kind {
+                                TokenKind::LParen => paren_depth += 1,
+                                TokenKind::RParen => {
+                                    paren_depth = paren_depth.saturating_sub(1);
+                                    if paren_depth == 0 {
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
-                } else if Some(qualifier.as_str()) == name {
-                    // `end <name>` closing the named construct itself.
-                    self.position += 1;
-                    last_end = token.end;
-                } else {
-                    return Err(AbstainKind::Unadmitted);
                 }
+                TokenKind::Comma => index += 1,
+                _ => return,
             }
         }
-        self.skip_statement();
-        if let Some(previous) = self.tokens.get(self.position.saturating_sub(1)) {
-            if previous.end > last_end {
-                last_end = previous.end;
-            }
-        }
-        Ok(last_end)
     }
 }
 
-#[derive(Debug)]
-struct UseProof {
-    proves: bool,
+/// A name declared twice is illegal Fortran; the conflict disqualifies rather
+/// than deciding which declaration wins.
+fn record_name(declarations: &mut BTreeMap<String, DeclInfo>, name: String, info: DeclInfo) {
+    match declarations.get(&name) {
+        Some(_) => {
+            declarations.insert(name, DeclInfo::default());
+        }
+        None => {
+            declarations.insert(name, info);
+        }
+    }
+}
+
+/// An `include` is a file-inclusion refusal wherever the legacy parse walked
+/// statements, and a plain unadmitted construct at program-unit level and
+/// among a module's or program's contained procedures.
+fn include_refusal_kind(root: Node<'_>, position: usize) -> AbstainKind {
+    let mut node = root
+        .descendant_for_byte_range(position, position + 1)
+        .unwrap_or(root);
+    loop {
+        match node.kind() {
+            "translation_unit" => return AbstainKind::Unadmitted,
+            "internal_procedures"
+                if matches!(
+                    node.parent().map(|parent| parent.kind()),
+                    Some("module") | Some("program")
+                ) =>
+            {
+                return AbstainKind::Unadmitted;
+            }
+            "module"
+            | "program"
+            | "subroutine"
+            | "function"
+            | "interface"
+            | "derived_type_definition"
+            | "internal_procedures" => {
+                return AbstainKind::IncludeStatement;
+            }
+            _ => {}
+        }
+        match node.parent() {
+            Some(parent) => node = parent,
+            None => return AbstainKind::Unadmitted,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2084,6 +1842,132 @@ end subroutine test_third
                 Err(ParseError::UnsupportedLanguage),
                 "{path}"
             );
+        }
+    }
+
+    const TEST_SUB: &str = "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end subroutine test_x\n";
+
+    fn in_module(use_line: &str, body: &str) -> String {
+        format!("module m\n  {use_line}\n  implicit none\ncontains\n{body}end module m\n")
+    }
+
+    /// Inputs where the Tree-sitter reader and the legacy parser legitimately
+    /// differ: `(name, text, anchors, refusal, class)`. `refusal` is the typed
+    /// unknown the new reader emits, if any.
+    fn divergence_corpus() -> Vec<(
+        &'static str,
+        String,
+        usize,
+        Option<&'static str>,
+        &'static str,
+    )> {
+        let sub = |statements: &str| {
+            in_module(
+                "use testdrive",
+                &format!("  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n    integer :: i\n{statements}  end subroutine test_x\n{TEST_SUB}"),
+            )
+        };
+        let unadmitted = Some("unadmitted_fortran_construct");
+        vec![
+            // Legacy misparses the grammar reads correctly (unknown_removed).
+            (
+                "else_if_chain",
+                sub("    if (i > 0) then\n      i = 1\n    else if (i < 0) then\n      i = 2\n    else\n      i = 3\n    end if\n"),
+                2,
+                None,
+                "legacy counted `else if (...) then` as a block opener",
+            ),
+            (
+                "named_do",
+                sub("    outer: do i = 1, 3\n      exit outer\n    end do outer\n"),
+                2,
+                None,
+                "legacy did not see a named construct's opener",
+            ),
+            (
+                "named_if",
+                sub("    chk: if (i > 0) then\n      i = 1\n    end if chk\n"),
+                2,
+                None,
+                "legacy did not see a named construct's opener",
+            ),
+            (
+                "variable_named_end",
+                sub("    end = 3\n"),
+                2,
+                None,
+                "legacy closed the unit at an assignment to a variable named end",
+            ),
+            (
+                "derived_type_with_attributes",
+                "module m\n  use testdrive\n  type, private, bind(c) :: a\n    integer :: i\n  end type a\ncontains\n".to_string() + TEST_SUB + "end module m\n",
+                1,
+                None,
+                "legacy read `type, attr :: name` as an ordinary statement",
+            ),
+            (
+                "typed_function_in_interface",
+                "module m\n  use testdrive\n  interface\n    type(c_ptr) function acc_malloc(bytes) bind(C)\n      integer :: bytes\n    end function\n  end interface\ncontains\n".to_string() + TEST_SUB + "end module m\n",
+                1,
+                None,
+                "legacy did not see a typed function statement as a procedure opener",
+            ),
+            (
+                "enum_block",
+                "module m\n  use testdrive\n  enum, bind(c)\n    enumerator :: a = 1\n  end enum\ncontains\n".to_string() + TEST_SUB + "end module m\n",
+                1,
+                None,
+                "legacy did not see an enum block's opener",
+            ),
+            // Syntax the grammar rejects where the legacy parser skipped the
+            // statement unread (unknown_added).
+            (
+                "syntax_error_in_skipped_body",
+                sub("    x = = 1\n"),
+                0,
+                unadmitted,
+                "syntax_error_in_skipped_region",
+            ),
+            (
+                "end_followed_by_the_unit_name_only",
+                in_module("use testdrive", "  subroutine test_x(error)\n    type(error_type), allocatable, intent(out) :: error\n  end test_x\n"),
+                0,
+                unadmitted,
+                "syntax_error_in_skipped_region",
+            ),
+            (
+                "alternate_return_dummy",
+                in_module("use testdrive", "  subroutine test_x(error, *)\n    type(error_type), intent(out) :: error\n  end subroutine test_x\n"),
+                0,
+                unadmitted,
+                "grammar gap: alternate return",
+            ),
+            (
+                "non_ascii_identifier",
+                "module m\n  integer :: caf\u{e9}\nend module m\n".to_string(),
+                0,
+                unadmitted,
+                "syntax_error_in_skipped_region",
+            ),
+        ]
+    }
+
+    #[test]
+    fn tree_sitter_reader_pins_the_inputs_the_legacy_parser_misread_or_skipped() {
+        for (name, text, anchors, refusal, _) in divergence_corpus() {
+            let current = output(&text);
+            assert_eq!(anchor_units(&current).len(), anchors, "{name}");
+            let kinds = unknown_kinds(&current);
+            match refusal {
+                Some(kind) => assert_eq!(kinds, vec![kind], "{name}"),
+                None => assert!(
+                    kinds.iter().all(|kind| matches!(
+                        *kind,
+                        "testdrive_module_binding" | "test_registration_unproven"
+                    )),
+                    "{name}: {kinds:?}"
+                ),
+            }
         }
     }
 }

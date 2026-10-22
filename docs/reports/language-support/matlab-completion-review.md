@@ -216,3 +216,64 @@ correct for the declared subset under either dialect, and it proves nothing
 about the release a repository targets. The next highest-value action is a
 no-execution, release-pinned frontend qualification with explicit license and
 redistribution evidence.
+
+## ADR-0058 frontend change — 2026-10-20
+
+The `matlab.unittest` frontend now reads block structure from the pinned
+`tree-sitter-matlab` 1.3.1 grammar. The ADR-0046 lexer stays the lexical-subset
+gate and runs first, and it still reads the `classdef`, `methods`, and
+`function` header statements and the command-syntax trigger (D4b). The grammar
+supplies which `methods` blocks a class holds, which `function` declarations a
+block holds, and where a tree needed error recovery. The anchor shape, the
+single `matlab_unittest.TestMethod` target, the unknown kinds and the family
+claim are unchanged. The `matlab.rs` package-definition inventory is not part of
+this change.
+
+How each refusal class is reproduced:
+
+- Dialect divergence (Octave `#`, `!`, backslash continuation, Octave block
+  keywords, escaped double-quoted strings): the unchanged lexer, before any
+  grammar is consulted.
+- Command syntax (D4b, `command_syntax_end_keyword`,
+  `command_syntax_bracket_balance`): the lexer's over-approximating trigger is
+  applied at every statement start inside each `function_definition` the tree
+  holds. A leading `arguments` block is a block, not a command.
+- `unadmitted_classdef_body_construct`: the first class-body token that is
+  neither a block the grammar read nor the class `end`, checked when the tree
+  needed recovery.
+- Structural failure (block does not close, unbalanced header or statement,
+  unadmitted header form, depth over 256, bare member statement with a bare
+  `end`): the legacy "keep declarations whose header precedes the failure"
+  semantics. The failure point is the end of the recovered region, an exact
+  header or depth position, or end of file when closing up to 8 blocks at end of
+  file makes the tree parse. Earliest position wins; at one position a
+  construct outside the subset precedes a structural failure, and a construct
+  the token stream proves outranks the position error recovery chooses.
+- Open character arrays and open block comments: the lexer still reports the
+  degraded parse. The grammar reads a copy with those runs neutralised, because
+  the lexer is authoritative for them and the legacy parse continued past them.
+
+The migration verdict is `CLASSIFIED`. The in-process differential against the
+retired parser is identical on all 5 committed fixtures, including the
+deliberately degraded one, and on 247 of 257 branch sources. The 10 remaining
+sources are pinned by `grammar_reading_divergences_are_pinned`. The retired
+parser and the differential were deleted on 2026-10-22 after the maintainer
+accepted the classification:
+
+- `unknown_added`: invalid MATLAB the legacy parser read leniently (a dangling
+  `<` or `&` in the class header, `function = f`, a `properties` block with no
+  `end`, an uppercase `FUNCTION`), and `syntax_error_in_skipped_region`
+  statement-body errors and a stray `end` after the class.
+- One grammar gap: tree-sitter-matlab rejects an empty attribute list,
+  `methods ()`. The class anchor and the diagnostic result are the same as the
+  legacy parse apart from the added degraded-parse diagnostic.
+
+A mutation exploration over 2,554 single-line deletions of the branch corpus
+found no difference on any source the grammar parses cleanly. All 359
+differences are on invalid MATLAB: 304 where the legacy parser raised no
+diagnostic (7 of them change the unit set, because the legacy parse nests or
+anchors a declaration a recovered tree does not), and 55 where it did. No
+installed MATLAB or Octave tree and no file on this machine contains
+`matlab.unittest.TestCase`, so there is no external corpus; 20 non-classdef
+`.m` files agree trivially. Gate 2 evidence must be re-checked against ADR-0058
+before any completion promotion; the status above is unchanged.

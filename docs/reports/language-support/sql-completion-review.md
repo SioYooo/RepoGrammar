@@ -152,3 +152,48 @@ ADR-0040, and
 `82ced893f81a954b64e20546dfc4ad81043b28e5`. Exact non-claim: parsing a
 `CREATE TABLE` shape proves neither dialect, order, validity, idempotence,
 extension availability, table identity, nor database behavior.
+
+## ADR-0058 frontend change — 2026-10-20
+
+Migration verdict: `BLOCKED`. No production change was made and the hand-written
+scanner stays authoritative. The pinned grammar (`tree-sitter-sequel` 0.3.11)
+cannot reproduce this frontend's statement boundaries without reimplementing
+the frontend.
+
+The ADR-0040 frontend has no syntax layer beyond its lexer: it splits a
+dialect-invariant token stream on top-level `;` and dispatches the first 12
+tokens. Its contract is bounded inventory, so every `;`-delimited chunk becomes
+a `sql_statement` unit whatever it says. `tree-sitter-sequel` is a full-syntax
+grammar, so it has the opposite contract: it models statements it knows and
+turns everything else into `ERROR` nodes that swallow neighbouring statements.
+
+An experiment (discarded, not committed) compared the legacy statement list with
+the tree's top-level `statement` nodes on 356 `.sql` files found on the
+maintainer machine and the four committed fixtures, after normalising the one
+trivial difference (tree ranges exclude the trailing `;`):
+
+- 213 files pass the lexical gate, so they are scanned today.
+- Only 55 of the 213 parse without any `ERROR` or `MISSING` node; 158 (74%) do
+  not. In those files the tree loses statements (for example 5 legacy units
+  against 1 tree statement for `REVOKE ... ON FUNCTION`/`ALTER DEFAULT
+  PRIVILEGES` migrations, and 19 against 15 or 6 against 2 for ordinary
+  SQLite/PostgreSQL schemas using `CHECK (... IS ...)` and similar).
+- Even in clean files the grammar's `create_table` node also covers `TEMP`
+  and `AS SELECT` forms that the admitted shape excludes, so the anchor
+  decision would still need the token-level dispatch.
+
+Honest options and why each fails the "no output change" rule:
+
+1. Refuse on `ERROR`/`MISSING` (the Go approach): degrades about 74% of
+   currently scanned files from per-statement inventory to a refusal. That is a
+   large `unknown_added` change, not an equivalent migration.
+2. Use the tree where clean and the lexer elsewhere: keeps the lexer splitter,
+   so the grammar supplies nothing the output depends on and adds a second
+   statement-boundary authority.
+3. Use the tree only for the anchor shape: it still needs the token dispatch to
+   exclude `TEMP` and `AS SELECT`, again duplicating the legacy logic.
+
+The lexical gate (PostgreSQL 16 / SQLite 3 invariance) is unchanged. Recommended
+follow-up: keep the scanner. Revisit only with a grammar whose recovery preserves
+statement boundaries, or after an ADR that accepts the file-level degradation of
+unparseable dialect syntax.

@@ -29,6 +29,40 @@ discover probe's -32601; B0-B3 scripted native controls PASS in round 2. Effects
 NOT_MEASURED; next is the held-out freeze plus budget/auth approval. Record: `docs/experiments/agent-adoption-native-host-requalification.md`;
 raw evidence under `/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`.
 
+## Tree-sitter frontend migration — 2026-10-20
+
+ADR-0058 (accepted) is implemented on the local branch
+`feat/tree-sitter-frontends`, merged into local `main` on 2026-10-22 and not
+pushed. Lane results:
+
+- Go is `EQUIVALENT`.
+- Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R and Ada are `CLASSIFIED`. The
+  maintainer accepted every classification on 2026-10-22, including Delphi's
+  `anchor_changed` additions; the legacy parsers and differentials were
+  deleted the same day, and each pinned difference is now a plain test of the
+  Tree-sitter frontend.
+- Assembly and SQL are `BLOCKED`, and their grammars were never added.
+- After every lane, the 179-root capture had 0 mismatches.
+
+The same branch also carries:
+
+- the shared binding engine (`adapters/parsing/binding.rs`, Phase 2a,
+  `QUALIFIED`);
+- C# role rows (Phase 2b, `QUALIFIED`): 6 of 9 C# roles are rows, and test
+  data shapes stay code;
+- a cached C# node query and a cursor-based capture ancestry, which removed a
+  cubic cost in nesting depth.
+
+The release binary grew from 22.3 MB to 38.6 MB, almost all grammar parse
+tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
+`adapters/parsing/tree_sitter.rs` was deleted on 2026-10-22 with maintainer approval.
+
+TS/JS goes in slices under ADR-0059 (Proposed) on `feat/tsjs-tree-sitter`,
+starting with the shared `ScopeGraphLite`. Evidence:
+`docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
+decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
+and `tsjs-scope-graph-tree.md`.
+
 ## Declarative language-pack spike — 2026-10-20
 
 The spike, merged into local `main` on 2026-10-20 and not pushed, moves C#

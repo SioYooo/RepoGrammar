@@ -210,6 +210,12 @@ context lives under `.agents/memories/`.
   [host-stage-attribution](experiments/host-stage-attribution.md).
 - C# declarative language-pack equivalence spike (QUALIFIED; ADR-0057
   accepted): [declarative-language-pack-spike](experiments/declarative-language-pack-spike.md).
+- Tree-sitter frontend migration protocol and per-lane verdicts (ADR-0058):
+  [tree-sitter-frontend-migration](experiments/tree-sitter-frontend-migration.md).
+- Language-neutral import-binding engine (Phase 2a, QUALIFIED):
+  [binding-engine](experiments/binding-engine.md).
+- Anchor role rows over the binding engine (Phase 2b, QUALIFIED):
+  [anchor-role-rows](experiments/anchor-role-rows.md).
 - One prioritized execution handoff and v0.6.0 go/no-go gates:
   [adoption/retrieval/release plan](plans/v0.6-adoption-retrieval-release-plan.md).
 

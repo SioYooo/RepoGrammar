@@ -10,21 +10,19 @@
 //! build constraint. ADR-0021's containment obligation is bound to routes that
 //! execute the Go toolchain and is unreached rather than waived: nothing runs.
 //!
-//! This is a hand-written recursive-descent parser over the declared Go subset
-//! in ADR-0050, not the string- and comment-aware scanner ADR-0041 admitted.
-//! The scanner's anchors answered "does this text appear at brace depth zero";
-//! a parser answers "is this a package-level declaration with this shape", and
-//! only the second question is the one the `go.testing.test_function` family
-//! claim rests on. That substitution is exactly what ADR-0050 authorizes and
-//! what discharges ADR-0021's no-text-matching requirement for this family:
-//! the parameter type is proven by a parse over the declared subset, the same
-//! route ADR-0042 through ADR-0046 took for their languages.
+//! Declarations come from the pinned Tree-sitter Go grammar (ADR-0058), with
+//! the ADR-0050 declared subset applied over the tree: the subset's lexer stays
+//! the lexical gate, and every ADR-0050 refusal is read off the tree and the
+//! token stream. An anchor therefore answers "is this a package-level
+//! declaration with this shape", never "does this text appear at brace depth
+//! zero", which is the question the `go.testing.test_function` family claim
+//! rests on and what discharges ADR-0021's no-text-matching requirement.
 //!
-//! The parser has two outcomes and no third. Either the whole file parses
+//! The frontend has two outcomes and no third. Either the whole file parses
 //! against the declared subset and its admitted declarations are reported, or
-//! the file is refused and contributes no anchor at all. There is no error
-//! recovery and no resynchronization, because a recovered anchor cannot be
-//! told apart from a real one. Input is untrusted, so the input size, the
+//! the file is refused and contributes no anchor at all. A tree that needed
+//! error recovery (`ERROR` or `MISSING` nodes) refuses the file, because a
+//! recovered anchor cannot be told apart from a real one. Input is untrusted, so the input size, the
 //! nesting depth, and the emitted unit and fact counts are all bounded.
 //!
 //! Every typed `UNKNOWN` this frontend can emit is declared exactly once in
@@ -35,6 +33,7 @@
 //! registry entry into certainty, and a count may fall only when a
 //! source-backed replacement fact discharges the same obligation.
 
+use super::super::binding::{BindingSpec, ImportScope};
 use super::super::{ir_edges_for_units, ir_nodes_for_units, sort_anchor_facts};
 use crate::core::model::{
     CodeUnit, CodeUnitId, CodeUnitKind, Evidence, FactCertainty, FactOrigin, Language, Provenance,
@@ -45,6 +44,7 @@ use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
     SourceDocument, SourceParseOutput, SourceParser,
 };
+use tree_sitter::{Node, Parser};
 
 pub const GO_ANCHOR_ENGINE: &str = "repogrammar-go-testing-parser";
 pub const GO_ANCHOR_METHOD: &str = "bounded_go_test_declaration_v2";
@@ -55,6 +55,13 @@ pub const GO_ANCHOR_METHOD: &str = "bounded_go_test_declaration_v2";
 pub const GO_TESTING_TEST_TARGET: &str = "go.testing.test_function";
 
 const TESTING_IMPORT_PATH: &str = "testing";
+/// Go qualified type names: `qualifier.Type`, with no accepted suffix.
+const GO_TYPE_NAMES: BindingSpec = BindingSpec {
+    separator: '.',
+    fully_qualified_names: false,
+    name_suffixes: &[""],
+    type_arguments: None,
+};
 const CGO_IMPORT_PATH: &str = "C";
 const MAX_FUNCTION_UNITS: usize = 4_096;
 const MAX_FACTS: usize = 16_384;
@@ -352,6 +359,17 @@ fn standing_obligations() -> impl Iterator<Item = &'static GoObligation> {
     GO_OBLIGATION_REGISTRY.iter().filter(|entry| entry.standing)
 }
 
+fn tree_sitter_go_file(text: &str) -> Result<Result<ParsedGoFile, Refusal>, ParseError> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_go::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load Go grammar: {error}")))?;
+    let tree = parser
+        .parse(text, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter Go parse failed".to_string()))?;
+    Ok(parse_go_file(text, tree.root_node()))
+}
+
 pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOutput, ParseError> {
     if document.language != Language::Go || !is_go_test_path(document.path) {
         return Err(ParseError::UnsupportedLanguage);
@@ -387,7 +405,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         return finish(units, facts, Vec::new());
     }
 
-    let file = match parse_go_file(document.text) {
+    let file = match tree_sitter_go_file(document.text)? {
         Ok(file) => file,
         Err(refusal) => return refused(units, facts, module, document.path, refusal),
     };
@@ -426,7 +444,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
             limit_hit = true;
             break;
         }
-        let family = admitted_anchor(declaration, &file.testing_binding, document.text);
+        let family = admitted_anchor(declaration, &file.imports);
         let kind = if family.is_some() {
             CodeUnitKind::GoTestFunction
         } else {
@@ -1197,500 +1215,369 @@ struct FunctionDecl {
     name: String,
     is_method: bool,
     has_results: bool,
-    /// The parameter list's inner tokens, parse-proven.
-    params: Vec<Token>,
+    /// `(qualifier, type name)` when the parameter list is exactly one
+    /// optionally named `*qualifier.Type` parameter, as Go AST field-name
+    /// semantics read it.
+    pointer_parameter: Option<(String, String)>,
     start: usize,
     end: usize,
 }
 
 struct ParsedGoFile {
     testing_binding: TestingBinding,
+    /// The file's import bindings, as the shared engine reads them.
+    imports: ImportScope,
     functions: Vec<FunctionDecl>,
     has_header_build_directive: bool,
 }
 
 /// The alias shape of one import specification.
+#[derive(Clone, Copy)]
 enum ImportAlias<'a> {
     None,
     Named(&'a str),
     Dot,
 }
 
-fn parse_go_file(text: &str) -> Result<ParsedGoFile, Refusal> {
+/// The ADR-0050 declared-subset policy, read off a Tree-sitter Go tree
+/// (ADR-0058).
+///
+/// The lexer still runs first and stays authoritative for the lexical subset
+/// and the header build directive, so every lexical refusal is unchanged. The
+/// grammar supplies the declaration structure, and the ADR-0050 parse refusals
+/// are read off the tree and the token stream. As in a left-to-right parse, the
+/// earliest refusal in source order wins; at one position a token-stream
+/// refusal precedes a tree refusal. Any `ERROR` or `MISSING` node refuses the
+/// file, so a recovered tree never yields an anchor. Error recovery decides
+/// where such a node sits, so it refuses as `UnadmittedConstruct` only when no
+/// token or structural refusal applies.
+fn parse_go_file(text: &str, root: Node<'_>) -> Result<ParsedGoFile, Refusal> {
     let (tokens, has_header_build_directive) = lex(text)?;
-    let mut parser = Parser {
-        text,
-        tokens,
-        position: 0,
-        depth: 0,
-    };
-    parser.file(has_header_build_directive)
+    let mut refusals = token_refusals(&tokens);
+    let mut testing_binding = TestingBinding::Absent;
+    // Local names decidable from source: explicit aliases, and the local name
+    // of an exact `testing` import. Default names of other paths come from the
+    // imported package's clause, which no source-local read can see.
+    let mut bound_names: Vec<String> = Vec::new();
+    let mut imports = ImportScope::default();
+    let mut functions = Vec::new();
+    let mut seen_package = false;
+    let mut cursor = root.walk();
+    for node in root.named_children(&mut cursor) {
+        let declaration_refusals = refusals.len();
+        match node.kind() {
+            "comment" => continue,
+            "package_clause" if !seen_package => seen_package = true,
+            _ if !seen_package => refusals.push((node.start_byte(), Refusal::UnadmittedConstruct)),
+            "import_declaration" => import_declaration(
+                text,
+                node,
+                &mut testing_binding,
+                &mut bound_names,
+                &mut imports,
+                &mut refusals,
+            ),
+            "function_declaration" | "method_declaration" => {
+                if let Some(function) = function_declaration(text, node, &tokens, &mut refusals) {
+                    functions.push(function);
+                }
+            }
+            "type_declaration" | "var_declaration" | "const_declaration" => continue,
+            _ => refusals.push((node.start_byte(), Refusal::UnadmittedConstruct)),
+        }
+        if refusals.len() == declaration_refusals {
+            end_of_declaration(&tokens, node.end_byte(), &mut refusals);
+        }
+    }
+    if !seen_package {
+        refusals.push((0, Refusal::UnadmittedConstruct));
+    }
+    // Stable: at one position the earlier-recorded token refusal wins.
+    refusals.sort_by_key(|(position, _)| *position);
+    if let Some((_, refusal)) = refusals.first() {
+        return Err(*refusal);
+    }
+    if root.has_error() {
+        return Err(Refusal::UnadmittedConstruct);
+    }
+    Ok(ParsedGoFile {
+        testing_binding,
+        imports,
+        functions,
+        has_header_build_directive,
+    })
 }
 
-struct Parser<'a> {
-    text: &'a str,
-    tokens: Vec<Token>,
-    position: usize,
-    depth: usize,
-}
-
-fn closer_for(kind: TokenKind) -> Option<TokenKind> {
-    match kind {
-        TokenKind::LParen => Some(TokenKind::RParen),
-        TokenKind::LBracket => Some(TokenKind::RBracket),
-        TokenKind::LBrace => Some(TokenKind::RBrace),
-        _ => None,
-    }
-}
-
-fn is_opener(kind: TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace
-    )
-}
-
-fn is_closer(kind: TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
-    )
-}
-
-impl<'a> Parser<'a> {
-    fn peek(&self) -> Option<Token> {
-        self.tokens.get(self.position).copied()
-    }
-
-    fn peek_kind(&self) -> Option<TokenKind> {
-        self.tokens.get(self.position).map(|token| token.kind)
-    }
-
-    fn text_of(&self, token: Token) -> &'a str {
-        &self.text[token.start..token.end]
-    }
-
-    fn at_keyword(&self, word: &str) -> bool {
-        match self.peek() {
-            Some(token) if token.kind == TokenKind::Keyword => self.text_of(token) == word,
-            _ => false,
-        }
-    }
-
-    fn at_decl_keyword(&self) -> bool {
-        match self.peek() {
-            Some(token) if token.kind == TokenKind::Keyword => {
-                matches!(
-                    self.text_of(token),
-                    "package" | "import" | "func" | "type" | "var" | "const"
-                )
-            }
-            _ => false,
-        }
-    }
-
-    fn advance(&mut self) -> Option<Token> {
-        let token = self.tokens.get(self.position).copied();
-        if token.is_some() {
-            self.position += 1;
-        }
-        token
-    }
-
-    fn expect_identifier(&mut self) -> Result<Token, Refusal> {
-        match self.peek() {
-            Some(token) if token.kind == TokenKind::Identifier => {
-                self.position += 1;
-                Ok(token)
-            }
-            _ => Err(Refusal::UnadmittedConstruct),
-        }
-    }
-
-    fn expect_keyword(&mut self, word: &str) -> Result<(), Refusal> {
-        if self.at_keyword(word) {
-            self.position += 1;
-            Ok(())
-        } else {
-            Err(Refusal::UnadmittedConstruct)
-        }
-    }
-
-    fn enter(&mut self) -> Result<(), Refusal> {
-        self.depth += 1;
-        if self.depth > MAX_PARSE_DEPTH {
-            return Err(Refusal::DepthLimit);
-        }
-        Ok(())
-    }
-
-    fn leave(&mut self) {
-        self.depth -= 1;
-    }
-
-    fn skip_semis(&mut self) {
-        while self.peek_kind() == Some(TokenKind::Semi) {
-            self.position += 1;
-        }
-    }
-
-    /// After a package clause, import, or function declaration: nothing but
-    /// separators or end of file may follow on the same line.
-    fn end_of_declaration(&mut self) -> Result<(), Refusal> {
-        match self.peek_kind() {
-            None => Ok(()),
-            Some(TokenKind::Semi) => {
-                self.skip_semis();
-                Ok(())
-            }
-            _ => Err(Refusal::UnadmittedConstruct),
-        }
-    }
-
-    fn file(&mut self, has_header_build_directive: bool) -> Result<ParsedGoFile, Refusal> {
-        self.skip_semis();
-        self.expect_keyword("package")?;
-        self.expect_identifier()?;
-        self.end_of_declaration()?;
-        let mut testing_binding = TestingBinding::Absent;
-        // Local names decidable from source: explicit aliases, and the local
-        // name of an exact `testing` import. Default names of other paths
-        // come from the imported package's clause, which no source-local
-        // read can see, so they are not tracked.
-        let mut bound_names: Vec<String> = Vec::new();
-        let mut functions = Vec::new();
-        loop {
-            self.skip_semis();
-            match self.peek_kind() {
-                None => break,
-                Some(TokenKind::Keyword) if self.at_keyword("import") => {
-                    self.import_decl(&mut testing_binding, &mut bound_names)?;
-                    self.end_of_declaration()?;
-                }
-                Some(TokenKind::Keyword) if self.at_keyword("func") => {
-                    functions.push(self.func_decl()?);
-                    self.end_of_declaration()?;
-                }
-                Some(TokenKind::Keyword)
-                    if self.at_keyword("type")
-                        || self.at_keyword("var")
-                        || self.at_keyword("const") =>
-                {
-                    self.skip_declaration()?;
-                }
-                _ => return Err(Refusal::UnadmittedConstruct),
-            }
-        }
-        Ok(ParsedGoFile {
-            testing_binding,
-            functions,
-            has_header_build_directive,
-        })
-    }
-
-    fn import_decl(
-        &mut self,
-        testing_binding: &mut TestingBinding,
-        bound_names: &mut Vec<String>,
-    ) -> Result<(), Refusal> {
-        self.advance(); // `import`
-        if self.peek_kind() == Some(TokenKind::LParen) {
-            self.advance();
-            loop {
-                self.skip_semis();
-                if self.peek_kind() == Some(TokenKind::RParen) {
-                    self.advance();
-                    break;
-                }
-                self.import_spec(testing_binding, bound_names)?;
-                match self.peek_kind() {
-                    Some(TokenKind::Semi) | Some(TokenKind::RParen) => {}
-                    _ => return Err(Refusal::UnadmittedConstruct),
+/// Bracket balance and nesting depth over the whole token stream. An unclosed
+/// opener refuses at its own position, because a left-to-right parse would
+/// swallow everything after it into one unproven extent.
+fn token_refusals(tokens: &[Token]) -> Vec<(usize, Refusal)> {
+    let mut open: Vec<Token> = Vec::new();
+    for token in tokens {
+        match token.kind {
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
+                open.push(*token);
+                if open.len() > MAX_PARSE_DEPTH {
+                    return vec![(token.start, Refusal::DepthLimit)];
                 }
             }
-        } else {
-            self.import_spec(testing_binding, bound_names)?;
-        }
-        Ok(())
-    }
-
-    fn import_spec(
-        &mut self,
-        testing_binding: &mut TestingBinding,
-        bound_names: &mut Vec<String>,
-    ) -> Result<(), Refusal> {
-        let alias = match self.peek_kind() {
-            Some(TokenKind::Dot) => {
-                self.advance();
-                ImportAlias::Dot
-            }
-            Some(TokenKind::Identifier) => {
-                let token = self.advance().expect("identifier");
-                ImportAlias::Named(self.text_of(token))
-            }
-            _ => ImportAlias::None,
-        };
-        let path_token = match self.peek_kind() {
-            Some(TokenKind::StringLiteral) => self.advance().expect("string"),
-            _ => return Err(Refusal::UnadmittedConstruct),
-        };
-        let path = unquote_interpreted(self.text, path_token)?;
-        if path == CGO_IMPORT_PATH {
-            return Err(Refusal::CgoImport);
-        }
-        if path == TESTING_IMPORT_PATH {
-            if !matches!(*testing_binding, TestingBinding::Absent) {
-                return Err(Refusal::DuplicateImportBinding);
-            }
-            *testing_binding = match alias {
-                ImportAlias::Named("_") => TestingBinding::Blank,
-                ImportAlias::Named(name) => TestingBinding::Qualified(name.to_string()),
-                ImportAlias::Dot => TestingBinding::Dot,
-                ImportAlias::None => TestingBinding::Qualified(TESTING_IMPORT_PATH.to_string()),
-            };
-            if let TestingBinding::Qualified(name) = &*testing_binding {
-                if bound_names.iter().any(|bound| bound == name) {
-                    return Err(Refusal::DuplicateImportBinding);
-                }
-                bound_names.push(name.clone());
-            }
-        } else if let ImportAlias::Named(name) = alias {
-            if name != "_" {
-                if bound_names.iter().any(|bound| bound == name) {
-                    return Err(Refusal::DuplicateImportBinding);
-                }
-                bound_names.push(name.to_string());
-            }
-        }
-        Ok(())
-    }
-
-    fn func_decl(&mut self) -> Result<FunctionDecl, Refusal> {
-        let start = self.advance().expect("func keyword").start;
-        let mut is_method = false;
-        if self.peek_kind() == Some(TokenKind::LParen) {
-            is_method = true;
-            let receiver = self.consume_group(true)?;
-            if receiver
-                .iter()
-                .any(|token| token.kind == TokenKind::LBracket)
-            {
-                // Array or instantiated generic: the receiver's type identity
-                // is not decidable from source alone.
-                return Err(Refusal::UndecidableReceiverType);
-            }
-        }
-        let name_token = self.expect_identifier()?;
-        let name = self.text_of(name_token).to_string();
-        if self.peek_kind() == Some(TokenKind::LBracket) {
-            // `func F[T any](...)`: a type-parameter list.
-            return Err(Refusal::GenericSignature);
-        }
-        let params = self.consume_group(true)?;
-        let mut has_results = false;
-        if self.peek_kind() != Some(TokenKind::LBrace) {
-            has_results = true;
-            if self.peek_kind() == Some(TokenKind::LParen) {
-                self.consume_group(true)?;
-            } else {
-                // A single result is a type: identifiers, keywords like
-                // `struct`/`interface`/`map`/`chan`, pointers, selectors, and
-                // balanced bracket groups. Anything else -- a stray closer, a
-                // comma, a semicolon, or a body that never opens -- refuses
-                // the file rather than being swallowed.
-                let mut closers: Vec<TokenKind> = Vec::new();
-                loop {
-                    let Some(token) = self.peek() else {
-                        return Err(Refusal::UnbalancedBraces);
-                    };
-                    match token.kind {
-                        TokenKind::LBrace if closers.is_empty() => break,
-                        TokenKind::Identifier
-                        | TokenKind::Keyword
-                        | TokenKind::Dot
-                        | TokenKind::Star => {
-                            self.position += 1;
-                        }
-                        kind if is_opener(kind) => {
-                            closers.push(closer_for(kind).expect("opener"));
-                            self.enter()?;
-                            self.position += 1;
-                        }
-                        kind if is_closer(kind) => {
-                            let Some(expected) = closers.pop() else {
-                                return Err(Refusal::UnbalancedBraces);
-                            };
-                            if kind != expected {
-                                return Err(Refusal::UnbalancedBraces);
-                            }
-                            self.leave();
-                            self.position += 1;
-                        }
-                        _ => return Err(Refusal::UnadmittedConstruct),
-                    }
-                }
-            }
-        }
-        if self.peek_kind() != Some(TokenKind::LBrace) {
-            // A body is part of the admitted subset; a body-less declaration
-            // is outside it.
-            return Err(Refusal::UnadmittedConstruct);
-        }
-        let end = self.consume_body()?;
-        Ok(FunctionDecl {
-            name,
-            is_method,
-            has_results,
-            params,
-            start,
-            end,
-        })
-    }
-
-    /// Consume a balanced `( ... )` group, returning the inner tokens.
-    ///
-    /// With `strict_semi` set, a semicolon inside the group refuses the file:
-    /// Go inserts one only after a line-ending token, and inside parentheses
-    /// that is always a syntax error, so this is exactly the language's own
-    /// line discipline.
-    fn consume_group(&mut self, strict_semi: bool) -> Result<Vec<Token>, Refusal> {
-        debug_assert_eq!(self.peek_kind(), Some(TokenKind::LParen));
-        self.advance();
-        self.enter()?;
-        let mut closers = vec![TokenKind::RParen];
-        let mut inner = Vec::new();
-        loop {
-            let Some(token) = self.peek() else {
-                return Err(Refusal::UnbalancedBraces);
-            };
-            match token.kind {
-                TokenKind::Semi if strict_semi => return Err(Refusal::UnadmittedConstruct),
-                kind if is_opener(kind) => {
-                    closers.push(closer_for(kind).expect("opener"));
-                    self.enter()?;
-                    inner.push(token);
-                    self.position += 1;
-                }
-                kind if is_closer(kind) => {
-                    let expected = closers.pop().expect("group is open");
-                    if kind != expected {
-                        return Err(Refusal::UnbalancedBraces);
-                    }
-                    self.leave();
-                    self.position += 1;
-                    if closers.is_empty() {
-                        return Ok(inner);
-                    }
-                    inner.push(token);
-                }
-                _ => {
-                    inner.push(token);
-                    self.position += 1;
-                }
-            }
-        }
-    }
-
-    /// Consume a function body `{ ... }` by bracket-stack skipping, returning
-    /// the end of the closing brace. Semicolons are statement separators here
-    /// and are always allowed.
-    fn consume_body(&mut self) -> Result<usize, Refusal> {
-        debug_assert_eq!(self.peek_kind(), Some(TokenKind::LBrace));
-        self.advance();
-        self.enter()?;
-        let mut closers = vec![TokenKind::RBrace];
-        loop {
-            let Some(token) = self.peek() else {
-                return Err(Refusal::UnbalancedBraces);
-            };
-            match token.kind {
-                kind if is_opener(kind) => {
-                    closers.push(closer_for(kind).expect("opener"));
-                    self.enter()?;
-                    self.position += 1;
-                }
-                kind if is_closer(kind) => {
-                    let expected = closers.pop().expect("body is open");
-                    if kind != expected {
-                        return Err(Refusal::UnbalancedBraces);
-                    }
-                    self.leave();
-                    self.position += 1;
-                    if closers.is_empty() {
-                        return Ok(token.end);
-                    }
-                }
-                _ => {
-                    self.position += 1;
-                }
-            }
-        }
-    }
-
-    /// Consume a `type`, `var`, or `const` declaration to its terminator.
-    ///
-    /// These declarations carry no anchor, so they are consumed, not parsed:
-    /// the run ends at a semicolon at nesting depth zero (which is where Go's
-    /// own semicolon insertion puts one), at end of file, or at the next
-    /// declaration keyword. A grouped form `type ( ... )` is consumed to its
-    /// closing parenthesis. Generic type declarations are skipped harmlessly;
-    /// only signatures are refused.
-    fn skip_declaration(&mut self) -> Result<(), Refusal> {
-        self.advance(); // the declaration keyword
-        if self.peek_kind() == Some(TokenKind::LParen) {
-            self.advance();
-            self.enter()?;
-            let mut closers = vec![TokenKind::RParen];
-            loop {
-                let Some(token) = self.peek() else {
-                    return Err(Refusal::UnbalancedBraces);
-                };
-                if is_opener(token.kind) {
-                    closers.push(closer_for(token.kind).expect("opener"));
-                    self.enter()?;
-                } else if is_closer(token.kind) {
-                    let expected = closers.pop().expect("group is open");
-                    if token.kind != expected {
-                        return Err(Refusal::UnbalancedBraces);
-                    }
-                    self.leave();
-                    if closers.is_empty() {
-                        self.position += 1;
-                        return Ok(());
-                    }
-                }
-                self.position += 1;
-            }
-        }
-        let mut closers: Vec<TokenKind> = Vec::new();
-        loop {
-            let Some(token) = self.peek() else {
-                return Ok(());
-            };
-            if closers.is_empty() {
-                if token.kind == TokenKind::Semi {
-                    self.position += 1;
-                    return Ok(());
-                }
-                if token.kind == TokenKind::Keyword && self.at_decl_keyword() {
-                    return Ok(());
-                }
-            }
-            if is_opener(token.kind) {
-                closers.push(closer_for(token.kind).expect("opener"));
-                self.enter()?;
-            } else if is_closer(token.kind) {
-                let Some(expected) = closers.pop() else {
-                    return Err(Refusal::UnbalancedBraces);
+            TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
+                let expected = match open.pop().map(|opener| opener.kind) {
+                    Some(TokenKind::LParen) => TokenKind::RParen,
+                    Some(TokenKind::LBracket) => TokenKind::RBracket,
+                    Some(_) => TokenKind::RBrace,
+                    None => return vec![(token.start, Refusal::UnbalancedBraces)],
                 };
                 if token.kind != expected {
-                    return Err(Refusal::UnbalancedBraces);
+                    return vec![(token.start, Refusal::UnbalancedBraces)];
                 }
-                self.leave();
             }
-            self.position += 1;
+            _ => {}
         }
     }
+    open.first()
+        .map(|opener| vec![(opener.start, Refusal::UnbalancedBraces)])
+        .unwrap_or_default()
+}
+
+/// After a package clause, import, or function declaration, nothing but a
+/// separator or end of file may follow on the same line.
+fn end_of_declaration(tokens: &[Token], end: usize, refusals: &mut Vec<(usize, Refusal)>) {
+    if let Some(next) = tokens.iter().find(|token| token.start >= end) {
+        if next.kind != TokenKind::Semi {
+            refusals.push((next.start, Refusal::UnadmittedConstruct));
+        }
+    }
+}
+
+fn import_declaration(
+    text: &str,
+    declaration: Node<'_>,
+    testing_binding: &mut TestingBinding,
+    bound_names: &mut Vec<String>,
+    imports: &mut ImportScope,
+    refusals: &mut Vec<(usize, Refusal)>,
+) {
+    let mut specs = Vec::new();
+    let mut cursor = declaration.walk();
+    for child in declaration.named_children(&mut cursor) {
+        match child.kind() {
+            "import_spec" => specs.push(child),
+            "import_spec_list" => {
+                let mut inner = child.walk();
+                specs.extend(
+                    child
+                        .named_children(&mut inner)
+                        .filter(|spec| spec.kind() == "import_spec"),
+                );
+            }
+            _ => {}
+        }
+    }
+    for spec in specs {
+        if let Err(refusal) = import_spec(text, spec, testing_binding, bound_names, imports) {
+            refusals.push((spec.start_byte(), refusal));
+            return;
+        }
+    }
+}
+
+fn import_spec(
+    text: &str,
+    spec: Node<'_>,
+    testing_binding: &mut TestingBinding,
+    bound_names: &mut Vec<String>,
+    imports: &mut ImportScope,
+) -> Result<(), Refusal> {
+    let alias = match spec.child_by_field_name("name") {
+        Some(name) if name.kind() == "dot" => ImportAlias::Dot,
+        Some(name) => ImportAlias::Named(&text[name.byte_range()]),
+        None => ImportAlias::None,
+    };
+    let path = spec
+        .child_by_field_name("path")
+        .filter(|path| path.kind() == "interpreted_string_literal")
+        .ok_or(Refusal::UnadmittedConstruct)?;
+    let path = unquote_interpreted(
+        text,
+        Token {
+            kind: TokenKind::StringLiteral,
+            start: path.start_byte(),
+            end: path.end_byte(),
+        },
+    )?;
+    bind_import(&path, alias, testing_binding, bound_names)?;
+    match alias {
+        ImportAlias::Named("_") => {}
+        ImportAlias::Named(name) => imports.alias(name.to_string(), path),
+        ImportAlias::Dot => imports.open(path),
+        // A default import's local name comes from the imported package
+        // clause, which no source-local read sees; only `testing` names itself.
+        ImportAlias::None if path == TESTING_IMPORT_PATH => imports.alias(path.clone(), path),
+        ImportAlias::None => {}
+    }
+    Ok(())
+}
+
+fn bind_import(
+    path: &str,
+    alias: ImportAlias<'_>,
+    testing_binding: &mut TestingBinding,
+    bound_names: &mut Vec<String>,
+) -> Result<(), Refusal> {
+    if path == CGO_IMPORT_PATH {
+        return Err(Refusal::CgoImport);
+    }
+    if path == TESTING_IMPORT_PATH {
+        if !matches!(*testing_binding, TestingBinding::Absent) {
+            return Err(Refusal::DuplicateImportBinding);
+        }
+        *testing_binding = match alias {
+            ImportAlias::Named("_") => TestingBinding::Blank,
+            ImportAlias::Named(name) => TestingBinding::Qualified(name.to_string()),
+            ImportAlias::Dot => TestingBinding::Dot,
+            ImportAlias::None => TestingBinding::Qualified(TESTING_IMPORT_PATH.to_string()),
+        };
+        if let TestingBinding::Qualified(name) = &*testing_binding {
+            if bound_names.iter().any(|bound| bound == name) {
+                return Err(Refusal::DuplicateImportBinding);
+            }
+            bound_names.push(name.clone());
+        }
+    } else if let ImportAlias::Named(name) = alias {
+        if name != "_" {
+            if bound_names.iter().any(|bound| bound == name) {
+                return Err(Refusal::DuplicateImportBinding);
+            }
+            bound_names.push(name.to_string());
+        }
+    }
+    Ok(())
+}
+
+/// One package-level declaration, refused exactly where ADR-0050's subset
+/// ends: a bracket in the receiver, a type-parameter list, a separator inside
+/// the signature, an unparenthesized result outside the admitted type tokens,
+/// or a missing body.
+fn function_declaration(
+    text: &str,
+    node: Node<'_>,
+    tokens: &[Token],
+    refusals: &mut Vec<(usize, Refusal)>,
+) -> Option<FunctionDecl> {
+    let refuse = |refusals: &mut Vec<(usize, Refusal)>, position: usize, refusal: Refusal| {
+        refusals.push((position, refusal));
+        None
+    };
+    let in_range = |start: usize, end: usize| {
+        tokens
+            .iter()
+            .filter(move |token| token.start >= start && token.end <= end)
+    };
+    let receiver = node.child_by_field_name("receiver");
+    if let Some(receiver) = receiver {
+        if let Some(bracket) = in_range(receiver.start_byte(), receiver.end_byte())
+            .find(|token| token.kind == TokenKind::LBracket)
+        {
+            return refuse(refusals, bracket.start, Refusal::UndecidableReceiverType);
+        }
+    }
+    let Some(name) = node.child_by_field_name("name") else {
+        return refuse(refusals, node.start_byte(), Refusal::UnadmittedConstruct);
+    };
+    if let Some(parameters) = node.child_by_field_name("type_parameters") {
+        return refuse(refusals, parameters.start_byte(), Refusal::GenericSignature);
+    }
+    let Some(parameters) = node.child_by_field_name("parameters") else {
+        return refuse(refusals, name.end_byte(), Refusal::UnadmittedConstruct);
+    };
+    let Some(body) = node.child_by_field_name("body") else {
+        // A `{` that error recovery left outside the declaration is still the
+        // body a left-to-right parse would consume; the token stream decides
+        // how it fails.
+        let next = tokens.iter().find(|token| token.start >= node.end_byte());
+        if next.is_some_and(|token| token.kind == TokenKind::LBrace) {
+            return None;
+        }
+        return refuse(refusals, node.end_byte(), Refusal::UnadmittedConstruct);
+    };
+    // Go inserts a semicolon only after a line-ending token; inside the
+    // signature that is always a syntax error, and so is a body on the next
+    // line.
+    if let Some(separator) =
+        in_range(node.start_byte(), body.start_byte()).find(|token| token.kind == TokenKind::Semi)
+    {
+        return refuse(refusals, separator.start, Refusal::UnadmittedConstruct);
+    }
+    let result = node.child_by_field_name("result");
+    if let Some(result) = result.filter(|result| result.kind() != "parameter_list") {
+        if let Some(token) = in_range(result.start_byte(), result.end_byte()).find(|token| {
+            !matches!(
+                token.kind,
+                TokenKind::Identifier
+                    | TokenKind::Keyword
+                    | TokenKind::Dot
+                    | TokenKind::Star
+                    | TokenKind::LParen
+                    | TokenKind::RParen
+                    | TokenKind::LBracket
+                    | TokenKind::RBracket
+                    | TokenKind::LBrace
+                    | TokenKind::RBrace
+            )
+        }) {
+            return refuse(refusals, token.start, Refusal::UnadmittedConstruct);
+        }
+    }
+    Some(FunctionDecl {
+        name: text[name.byte_range()].to_string(),
+        is_method: receiver.is_some(),
+        has_results: result.is_some(),
+        pointer_parameter: pointer_parameter(text, parameters),
+        start: node.start_byte(),
+        end: body.end_byte(),
+    })
+}
+
+fn named_non_comment_children<'tree>(node: Node<'tree>) -> Vec<Node<'tree>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|child| child.kind() != "comment")
+        .collect()
+}
+
+/// Exactly one parameter field, with at most one name and the type
+/// `*qualifier.Type`.
+fn pointer_parameter(text: &str, parameters: Node<'_>) -> Option<(String, String)> {
+    let [parameter] = named_non_comment_children(parameters)[..] else {
+        return None;
+    };
+    if parameter.kind() != "parameter_declaration" {
+        return None;
+    }
+    let mut cursor = parameter.walk();
+    if parameter
+        .children_by_field_name("name", &mut cursor)
+        .count()
+        > 1
+    {
+        return None;
+    }
+    let pointer = parameter
+        .child_by_field_name("type")
+        .filter(|kind| kind.kind() == "pointer_type")?;
+    let [qualified] = named_non_comment_children(pointer)[..] else {
+        return None;
+    };
+    if qualified.kind() != "qualified_type" {
+        return None;
+    }
+    let package = qualified.child_by_field_name("package")?;
+    let name = qualified.child_by_field_name("name")?;
+    Some((
+        text[package.byte_range()].to_string(),
+        text[name.byte_range()].to_string(),
+    ))
 }
 
 /// Decode an interpreted string literal the way Go's scanner does.
@@ -1845,47 +1732,19 @@ fn toolchain_family_for_name(name: &str) -> Option<TestFamily> {
 /// optionally named and whose type is exactly a pointer to the family's type
 /// letter in the file's own spelling of the `testing` package. Every part is
 /// read off tokens a parse produced; nothing is matched against text.
-fn admitted_anchor(
-    declaration: &FunctionDecl,
-    binding: &TestingBinding,
-    text: &str,
-) -> Option<TestFamily> {
+fn admitted_anchor(declaration: &FunctionDecl, imports: &ImportScope) -> Option<TestFamily> {
     if declaration.is_method || declaration.has_results {
         return None;
     }
     let family = toolchain_family_for_name(&declaration.name)?;
-    let TestingBinding::Qualified(local) = binding else {
-        return None;
-    };
-    let tokens = &declaration.params;
-    // A multiline parameter list carries a trailing comma, which is exactly
-    // where Go's semicolon rule puts one; it names no parameter.
-    let tokens = match tokens.split_last() {
-        Some((last, head)) if last.kind == TokenKind::Comma => head,
-        _ => tokens.as_slice(),
-    };
-    let (qualifier, type_name) = match tokens.len() {
-        4 if tokens[0].kind == TokenKind::Star
-            && tokens[1].kind == TokenKind::Identifier
-            && tokens[2].kind == TokenKind::Dot
-            && tokens[3].kind == TokenKind::Identifier =>
-        {
-            (tokens[1], tokens[3])
-        }
-        5 if tokens[0].kind == TokenKind::Identifier
-            && tokens[1].kind == TokenKind::Star
-            && tokens[2].kind == TokenKind::Identifier
-            && tokens[3].kind == TokenKind::Dot
-            && tokens[4].kind == TokenKind::Identifier =>
-        {
-            (tokens[2], tokens[4])
-        }
-        _ => return None,
-    };
-    let qualifier_text = &text[qualifier.start..qualifier.end];
-    let type_text = &text[type_name.start..type_name.end];
-    let letter = family.letter() as u8;
-    (qualifier_text == local && type_text.len() == 1 && type_text.as_bytes()[0] == letter)
+    let (qualifier, type_name) = declaration.pointer_parameter.as_ref()?;
+    imports
+        .denotes(
+            &GO_TYPE_NAMES,
+            &format!("{qualifier}.{type_name}"),
+            &family.letter().to_string(),
+            TESTING_IMPORT_PATH,
+        )
         .then_some(family)
 }
 
@@ -2924,5 +2783,40 @@ mod tests {
                 "{relative} must keep no declaration unit"
             );
         }
+    }
+
+    #[test]
+    fn a_syntax_error_inside_a_body_refuses_the_whole_file() {
+        // ADR-0058: an `ERROR` node anywhere refuses the file, including in a
+        // body the declared subset skips; such source does not compile.
+        let parsed = output(
+            "package catalog\n\nimport \"testing\"\n\nfunc TestLoads(t *testing.T) {\n\tx := := 1\n}\n",
+        );
+        assert_eq!(anchors(&parsed), 0);
+        assert_eq!(
+            unknown_kinds(&parsed),
+            vec!["unadmitted_construct".to_string()]
+        );
+        assert!(parsed
+            .report
+            .units
+            .iter()
+            .all(|unit| unit.kind == CodeUnitKind::Module));
+    }
+
+    #[test]
+    fn function_types_and_literals_in_declarations_do_not_refuse_the_file() {
+        // A `func` keyword inside a type, var, or const declaration is a type
+        // or literal, not a declaration; the grammar reads it as Go does.
+        let parsed = output(
+            "package catalog\n\nimport \"testing\"\n\n\
+             type readerFunc func([]byte) (int, error)\n\n\
+             var globalSkip = func(t testing.TB) {}\n\n\
+             var helper = func(a int) int {\n\treturn a\n}\n\n\
+             func TestLoads(t *testing.T) {}\n",
+        );
+        assert_eq!(anchors(&parsed), 1);
+        assert!(parsed.report.diagnostics.is_empty());
+        assert!(!unknown_kinds(&parsed).contains(&"unadmitted_construct".to_string()));
     }
 }

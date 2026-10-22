@@ -72,8 +72,13 @@ requested operation provenance. Incremental `sync` falls back to a full rebuild
 when an explicit worker is configured.
 
 Under [ADR-0042 D1–D5](../decisions/ADR-0042-bounded-r-testthat-frontend.md),
-only `tests/testthat/test-*.R`/`.r` source enters the bounded testthat parser;
-other R source stays unread inventory. The exact top-level call anchor requires
+only `tests/testthat/test-*.R`/`.r` source enters the bounded testthat frontend;
+other R source stays unread inventory. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the `test_that` calls
+are read from the pinned `tree-sitter-r` 1.3.0 grammar. The ADR-0042 lexer
+remains the lexical-subset gate, every ADR-0042 refusal class is applied over
+the tree and the token stream, and any `ERROR` or `MISSING` node refuses the
+file only when no more specific refusal applies. The exact top-level call anchor requires
 the declared subset and a repository DESCRIPTION testthat declaration; external
 binding, NSE and execution remain unknown. Exact `DESCRIPTION`, `NAMESPACE`
 and `renv.lock` separately enter the bounded `r-config` metadata adapter. Those
@@ -714,10 +719,15 @@ discovery classifies bounded
 `.go` inputs as `go` and root or nested `go.mod`/`go.work` as `go-config`, then
 stores their repo-relative path, strict hash, size, and language token in the
 normal file inventory. [ADR-0050 D1–D5](../decisions/ADR-0050-bounded-go-testing-frontend.md)
-admits only `*_test.go` source to the bounded declaration parser. Its declared
-subset emits owned units/IR, exact Test/Benchmark/Fuzz anchors and typed
-UNKNOWNs; other `.go` files stay unread inventory. Malformed or unadmitted
-source cannot contribute confident function anchors.
+admits only `*_test.go` source to the bounded declaration frontend. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md)
+the declaration structure comes from the pinned `tree-sitter-go` 0.25.0
+grammar. The ADR-0050 lexer remains the lexical-subset gate, every ADR-0050
+refusal class is applied over the tree and the token stream, and any `ERROR`
+or `MISSING` node refuses the file. The declared subset emits owned units/IR,
+exact Test/Benchmark/Fuzz anchors and typed UNKNOWNs; other `.go` files stay
+unread inventory. Malformed or unadmitted source cannot contribute confident
+function anchors.
 
 `go-config` uses a bounded, non-executing, file-local static parser. Every
 discovered config yields one `project_config` unit/IR node. A valid `go.mod`
@@ -762,8 +772,9 @@ support a family.
 The ADR-0050 parser records build-constraint uncertainty and refuses cgo
 imports; it never evaluates constraints, executes generators or treats a marker
 as runtime proof. It supersedes ADR-0041's auxiliary-only family boundary for
-this declared subset. ADR-0021's future version-pinned syntax fallback and
-opt-in sandboxed standard-library worker remain unimplemented and unadmitted.
+this declared subset. ADR-0058 admits the version-pinned Tree-sitter grammar
+as the syntax frontend; ADR-0021's opt-in sandboxed standard-library worker
+remains unimplemented and unadmitted.
 Default indexing must not execute `go/packages`, `go list`, gopls, cgo or
 repository build/test/generate commands. Environment/workspace selection,
 external types, dispatch and execution remain typed obligations/non-claims.
@@ -783,7 +794,13 @@ inventory.
 
 [ADR-0047 D1–D5](../decisions/ADR-0047-bounded-php-phpunit-frontend.md) admits
 the prologue-bearing PHPUnit subset and requires other `.php` inputs to remain
-zero-read inventory before source-store dispatch. Current code checks the
+zero-read inventory before source-store dispatch. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the declaration
+structure of admitted files comes from the pinned `tree-sitter-php` 0.25.1
+grammar (`LANGUAGE_PHP`). The ADR-0047 lexer remains the lexical-subset gate and
+runs first, every ADR-0047 refusal class is applied over the tree and the token
+stream, and any `ERROR` or `MISSING` node refuses the file only when no more
+specific refusal applies; the admission-contract drift below is unchanged. Current code checks the
 byte-level prologue only inside the parser after reading the source; this is
 [OPEN CONTRACT_DRIFT](../reports/language-support/php-completion-review.md#2026-10-14-open-admission-contract-drift),
 not a relaxed admission rule. Parser rejection prevents unsupported anchors
@@ -850,8 +867,13 @@ receive `language_specific_exclusion` only for Swift candidates and do not
 globally prune other languages.
 
 [ADR-0048 D1–D8](../decisions/ADR-0048-bounded-swift-xctest-frontend.md) admits
-Swift source to the file-local declared-subset XCTest parser, which produces
-owned units/IR, exact declaration anchors or typed abstention. `Package.swift`,
+Swift source to the file-local declared-subset XCTest frontend, which produces
+owned units/IR, exact declaration anchors or typed abstention. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the declaration
+structure comes from the pinned `tree-sitter-swift` 0.7.4 grammar. The ADR-0048
+lexer remains the lexical-subset gate and runs first, every ADR-0048 refusal
+class is applied over the tree and the token stream, and any `ERROR` or
+`MISSING` node refuses the file only when no more specific refusal applies. `Package.swift`,
 version-specific manifests and `.swift-version` remain unread inventory.
 Exact `Package.resolved` is the sole static-metadata
 exception: supplied UTF-8 bytes enter a bounded unique-member JSON reader for
@@ -873,7 +895,8 @@ SwiftPM data but must never evaluate manifests or run Swift, SwiftPM, Xcode,
 builds, tests, macros, plugins, generators, dependencies, children, or network
 access.
 ADR-0048 supersedes the earlier family closure for the declared
-`swift.xctest.test_method` subset only. SwiftSyntax/SourceKit remain
+`swift.xctest.test_method` subset only. ADR-0058 admits the Tree-sitter grammar
+as the in-process syntax frontend; SwiftSyntax/SourceKit remain
 unadmitted; source-visible XCTest anchors do not prove module-qualified
 superclass identity, target selection or runtime behavior.
 
@@ -888,7 +911,13 @@ other languages retain their own policy.
 
 [ADR-0049 D1–D5](../decisions/ADR-0049-bounded-ruby-minitest-frontend.md) admits
 only `test_*.rb`/`*_test.rb` under a `test/` or `tests/` path component to the
-bounded Minitest frontend. Other Ruby source and every accepted `ruby-config`
+bounded Minitest frontend. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the class and method
+structure comes from the pinned `tree-sitter-ruby` 0.23.1 grammar. The ADR-0049
+lexer remains the lexical-subset gate and runs first, every ADR-0049 refusal
+class is applied over the tree and the token stream, and any `ERROR` or
+`MISSING` node refuses the file only when no more specific refusal applies.
+Other Ruby source and every accepted `ruby-config`
 path except exact `Gemfile.lock` remain unread inventory. Exact lock bytes
 enter a bounded pure Rust
 parser, create one project-config unit, and may emit strict direct `rubygems`
@@ -912,7 +941,8 @@ external constant identity, runtime semantics or completed language readiness.
 The later dependency-and-sandbox qualification stage is documentation/evidence
 only. Production dependency/artifact admission and the sandboxed worker must
 land separately before an external frontend may use that boundary. The current
-ADR-0049 in-process parser admits no Prism/Ruby runtime. Before
+ADR-0049 in-process frontend, which reads the Tree-sitter grammar under
+ADR-0058, admits no Prism/Ruby runtime. Before
 spawning, a bounded project-model step may validate only the sole repository-
 root `.ruby-version` exact `4.0.6` plus optional LF and pass normalized profile
 metadata. Nested/absent/alternate/conflicting forms must become
@@ -950,9 +980,17 @@ not completed language support. Exact `.pas`/`.dpr`/`.dpk` persist as generic
 `object-pascal` inventory because source suffixes do not prove Delphi versus
 Free Pascal; exact `.dproj` alone is `delphi-config`. `.pp`/`.lpr`/`.lpi`/`.lpk`
 are not admitted. [ADR-0044 D1–D5](../decisions/ADR-0044-bounded-delphi-dunitx-frontend.md)
-admits `.pas` units to the declared-subset DUnitX parser; `.dpr` and `.dpk`
-remain unread. The source frontend yields owned units/IR, exact declaration
-anchors and typed uncertainty. The same bounded XML reader may create one project-config unit and runtime
+admits `.pas` units to the declared-subset DUnitX frontend; `.dpr` and `.dpk`
+remain unread. Under [ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the declaration structure
+comes from the pinned `tree-sitter-pascal` 0.10.2 grammar. The hand-written
+lexer remains the lexical-subset gate and still owns the `uses` binding, the
+attribute-spelling scan and the conditional-compilation depth, so a
+declaration under conditional compilation still anchors nothing. Every
+ADR-0044 refusal class is applied over the tree and the token stream; an
+`ERROR` or `MISSING` node inside a class declaration abstains that class, and
+elsewhere it refuses the file. The source frontend yields owned units/IR, exact
+declaration anchors and typed uncertainty.
+ The same bounded XML reader may create one project-config unit and runtime
 `delphi_package` manifest rows from literal direct-root `DCC_UsePackage`
 entries. Directness stays unknown; imports, properties, conditions, invalid
 values, and limits emit scoped `delphi_dependency_inventory` UNKNOWN. No
@@ -966,8 +1004,13 @@ admits only lowercase GNAT-default `.ads` specifications and `.adb` bodies as
 `ada`; GPR-configured alternative names such as `.ada` remain deferred. Exact
 lowercase `.gpr`, `alire.toml`, and `alire.lock` basenames are `ada-config`.
 [ADR-0045 D1–D4](../decisions/ADR-0045-bounded-ada-aunit-frontend.md) admits
-only `.adb` bodies to the bounded AUnit parser, which emits owned registration
-units/IR and exact anchors within its declared subset. `.ads` and GPR bytes
+only `.adb` bodies to the bounded AUnit frontend, which emits owned registration
+units/IR and exact anchors within its declared subset. Under
+[ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the compilation unit
+is read from the pinned `tree-sitter-ada` 0.1.0 grammar. The ADR-0045 lexer
+remains the lexical-subset gate, every ADR-0045 refusal class is applied over
+the tree and the token stream, and any `ERROR` or `MISSING` node refuses the
+body as `construct_outside_declared_subset`. `.ads` and GPR bytes
 remain unread inventory. Malformed/unadmitted bodies abstain and cannot
 contribute registration anchors.
 
@@ -997,8 +1040,13 @@ the documented GNU non-preprocessed lowercase forms: fixed `.f`, `.for`, and
 remain deferred because they invoke preprocessing by documented default; `.fi`,
 `.fii`, and other suffixes are likewise unproven.
 [ADR-0051 D1–D4](../decisions/ADR-0051-bounded-fortran-testdrive-frontend.md)
-admits only the free-form suffixes to the bounded test-drive parser; fixed-form
-source stays unread inventory. The declared subset produces owned units/IR,
+admits only the free-form suffixes to the bounded test-drive frontend; fixed-form
+source stays unread inventory. Under [ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) the
+declaration structure comes from the pinned `tree-sitter-fortran` 0.6.0
+grammar. The ADR-0051 free-form lexer remains the lexical-subset gate and runs
+first, every ADR-0051 refusal class is applied over the tree and the token
+stream, and any `ERROR` or `MISSING` node refuses the file only when no more
+specific refusal applies. The declared subset produces owned units/IR,
 exact signature anchors and typed obligations; preprocessing/include/unsupported
 source shapes abstain. Exact root/nested `fpm.toml` is
 `fortran-config` and enters one bounded file-local parser.
@@ -1024,8 +1072,12 @@ MATLAB is a bounded `structural_substrate`, not completed language support.
 A single pure classifier admits lowercase `.m` as `matlab` and exact root/nested
 `resources/mpackage.json` as `matlab-config`, and excludes candidates under an
 exact `codegen`, `slprj`, or `sccprj` path component as MathWorks
-code-generation output. Admitted `.m` bytes enter the bounded ADR-0046 parser,
-which anchors only `classdef` files whose `methods` blocks declare
+code-generation output. Admitted `.m` bytes enter the bounded ADR-0046 frontend,
+which under [ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md) reads block structure from the
+pinned `tree-sitter-matlab` 1.3.1 grammar. The ADR-0046 lexer remains the
+lexical-subset gate and runs first, every ADR-0046 refusal class is applied over
+the tree and the token stream, and structural failure keeps the
+declarations that precede it. The frontend anchors only `classdef` files whose `methods` blocks declare
 `matlab.unittest.TestCase` test methods. A non-classdef-first file yields only
 a module unit without a structural claim; malformed or unadmitted class syntax
 abstains with typed refusals. Package-definition bytes alone enter the shared bounded

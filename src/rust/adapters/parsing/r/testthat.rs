@@ -9,12 +9,13 @@
 //! restoration, or a repository script. ADR-0036's execution prohibitions all
 //! name running R and are unreached: nothing runs.
 //!
-//! This is a hand-written recursive-descent parser over the declared R subset
-//! in ADR-0042 D4, not a text scan. It lexes R's tokens -- comments, both quote
-//! styles, R 4.0 raw strings, backtick names, numbers, and the full operator
-//! set -- reproduces R's newline rule, and builds a real expression tree with
-//! R's own precedence and associativity. The anchor is then a question about
-//! that tree: *is this top-level expression itself the call?*
+//! The syntax layer is the pinned Tree-sitter R grammar (ADR-0058), read off
+//! the tree rather than scanned as text. The ADR-0042 lexer stays in front as
+//! the lexical-subset gate: it refuses the bytes and constructs outside the
+//! declared R subset -- unterminated quotes, malformed numbers and raw strings,
+//! `?`, `=>`, `_`, and any non-ASCII byte in code position -- and everything
+//! before the refusal is still read. The anchor is then a question about the
+//! tree: *is this top-level expression itself the call?*
 //!
 //! Asking the question structurally is the point. A byte scan cannot tell
 //! `test_that(...)` apart from `if (interactive()) test_that(...)`, because
@@ -25,9 +26,14 @@
 //! inside a string, and both branches of a Delphi `{$IFDEF}` -- each from asking
 //! whether text appears rather than whether a construct exists.
 //!
-//! Outside the declared subset the parser abstains: it never guesses, never
-//! recovers, and never resynchronizes to a later expression. Input is untrusted,
-//! so both the input size and the recursion depth are bounded.
+//! Outside the declared subset the frontend abstains: it never guesses, never
+//! recovers, and never resynchronizes to a later expression. Any Tree-sitter
+//! `ERROR` or `MISSING` node ends the read at its top-level expression, and the
+//! grammar's wider acceptance (`:=`, `**`, chained comparison, an assignment
+//! `=` inside an argument list, `x$` with no name, two expressions on one line)
+//! is refused where the legacy parser stopped. Input is untrusted, so both the
+//! input size and the legacy recursion depth are bounded; the tree is walked
+//! with an explicit stack, never by recursion.
 //!
 //! Every typed `UNKNOWN` this frontend can emit is declared exactly once in
 //! [`R_OBLIGATION_REGISTRY`], the lane's ADR-0020 gate 4 source-semantic
@@ -47,6 +53,7 @@ use crate::ports::parser::{
     ParseDiagnostic, ParseDiagnosticSeverity, ParseError, ParseReport, ParserProjectContext,
     SourceDocument, SourceParseOutput, SourceParser,
 };
+use tree_sitter::{Node as TsNode, Parser as TsParser};
 
 pub const R_ANCHOR_ENGINE: &str = "repogrammar-r-testthat-parser";
 pub const R_ANCHOR_METHOD: &str = "bounded_r_test_that_v2";
@@ -56,7 +63,8 @@ pub const R_TEST_THAT_TARGET: &str = "testthat.test_that";
 
 const CALLEE: &str = "test_that";
 const MAX_BLOCK_UNITS: usize = 4_096;
-/// Bound on recursive-descent nesting. Input is untrusted, and a file of
+/// Bound on the legacy recursive-descent nesting depth, which the Tree-sitter
+/// read reproduces. Input is untrusted, and a file of
 /// nothing but open parentheses must abstain rather than exhaust the stack.
 const MAX_PARSE_DEPTH: usize = 128;
 
@@ -365,7 +373,7 @@ pub(crate) fn parse_output(
         return finish(units, facts, Vec::new());
     }
 
-    let program = parse_program(document.text);
+    let program = parse_program(document.text)?;
 
     // Leaving the declared subset is a decidable, source-visible event, and it
     // makes a missing anchor uninformative: fewer admitted calls after that
@@ -939,808 +947,6 @@ fn exponent_end(bytes: &[u8], marker: usize) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Syntax tree
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-struct Node<'a> {
-    start: usize,
-    end: usize,
-    kind: NodeKind<'a>,
-}
-
-#[derive(Debug)]
-enum NodeKind<'a> {
-    /// A bare symbol. A backtick-quoted name is [`NodeKind::QuotedName`]
-    /// instead, so a callee spelled `` `test_that` `` is never a bare
-    /// identifier here.
-    Identifier(&'a str),
-    QuotedName(&'a str),
-    /// `raw` marks an R 4.0 raw string; `inner` is the literal's own text,
-    /// without its delimiters.
-    Str {
-        raw: bool,
-        inner: &'a str,
-    },
-    Number,
-    Brace(Vec<Node<'a>>),
-    Paren(Box<Node<'a>>),
-    Call {
-        callee: Box<Node<'a>>,
-        args: Vec<Arg<'a>>,
-    },
-    Index {
-        object: Box<Node<'a>>,
-        args: Vec<Arg<'a>>,
-    },
-    Unary(Box<Node<'a>>),
-    Binary {
-        op: TokenKind,
-        lhs: Box<Node<'a>>,
-        rhs: Box<Node<'a>>,
-    },
-    Function {
-        defaults: Vec<Node<'a>>,
-        body: Box<Node<'a>>,
-    },
-    If {
-        cond: Box<Node<'a>>,
-        then_branch: Box<Node<'a>>,
-        else_branch: Option<Box<Node<'a>>>,
-    },
-    For {
-        variable: &'a str,
-        sequence: Box<Node<'a>>,
-        body: Box<Node<'a>>,
-    },
-    While {
-        cond: Box<Node<'a>>,
-        body: Box<Node<'a>>,
-    },
-    Repeat(Box<Node<'a>>),
-    /// `break`, `next`, and an empty argument such as the first slot of
-    /// `m[, 1]`.
-    Atom,
-}
-
-/// One element of an R argument list. Both halves are optional: `f(a = )` has a
-/// name and no value, and `m[, 1]` has a first element with neither.
-#[derive(Debug)]
-struct Arg<'a> {
-    named: bool,
-    value: Option<Node<'a>>,
-}
-
-impl<'a> Node<'a> {
-    fn visit<'b>(&'b self, seen: &mut dyn FnMut(&'b Node<'a>)) {
-        seen(self);
-        match &self.kind {
-            NodeKind::Identifier(_)
-            | NodeKind::QuotedName(_)
-            | NodeKind::Str { .. }
-            | NodeKind::Number
-            | NodeKind::Atom => {}
-            NodeKind::Brace(items) => items.iter().for_each(|item| item.visit(seen)),
-            NodeKind::Paren(inner) | NodeKind::Unary(inner) | NodeKind::Repeat(inner) => {
-                inner.visit(seen)
-            }
-            NodeKind::Call { callee, args } => {
-                callee.visit(seen);
-                visit_args(args, seen);
-            }
-            NodeKind::Index { object, args } => {
-                object.visit(seen);
-                visit_args(args, seen);
-            }
-            NodeKind::Binary { lhs, rhs, .. } => {
-                lhs.visit(seen);
-                rhs.visit(seen);
-            }
-            NodeKind::Function { defaults, body } => {
-                defaults.iter().for_each(|item| item.visit(seen));
-                body.visit(seen);
-            }
-            NodeKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                cond.visit(seen);
-                then_branch.visit(seen);
-                if let Some(branch) = else_branch {
-                    branch.visit(seen);
-                }
-            }
-            NodeKind::For { sequence, body, .. } => {
-                sequence.visit(seen);
-                body.visit(seen);
-            }
-            NodeKind::While { cond, body } => {
-                cond.visit(seen);
-                body.visit(seen);
-            }
-        }
-    }
-}
-
-fn visit_args<'a, 'b>(args: &'b [Arg<'a>], seen: &mut dyn FnMut(&'b Node<'a>)) {
-    for arg in args {
-        if let Some(value) = &arg.value {
-            value.visit(seen);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------
-
-/// Binding powers, lowest first, in R's own order (`?Syntax`, and the
-/// precedence declarations of R's `gram.y`). `?` is not in the subset.
-mod bp {
-    pub(super) const ASSIGN: (u8, u8) = (7, 6);
-    pub(super) const EQ_ASSIGN: (u8, u8) = (9, 8);
-    pub(super) const RIGHT_ASSIGN: (u8, u8) = (10, 11);
-    pub(super) const TILDE: (u8, u8) = (12, 13);
-    pub(super) const OR: (u8, u8) = (14, 15);
-    pub(super) const AND: (u8, u8) = (16, 17);
-    pub(super) const NOT_PREFIX: u8 = 18;
-    pub(super) const COMPARE: (u8, u8) = (20, 21);
-    pub(super) const ADD: (u8, u8) = (24, 25);
-    pub(super) const MULTIPLY: (u8, u8) = (26, 27);
-    pub(super) const SPECIAL: (u8, u8) = (28, 29);
-    pub(super) const COLON: (u8, u8) = (32, 33);
-    pub(super) const SIGN_PREFIX: u8 = 34;
-    pub(super) const CARET: (u8, u8) = (37, 36);
-    pub(super) const COMPONENT: (u8, u8) = (38, 39);
-    pub(super) const NS_GET: (u8, u8) = (40, 41);
-    pub(super) const POSTFIX: u8 = 42;
-}
-
-fn infix_binding_power(kind: TokenKind) -> Option<(u8, u8)> {
-    Some(match kind {
-        TokenKind::Assign => bp::ASSIGN,
-        TokenKind::EqAssign => bp::EQ_ASSIGN,
-        TokenKind::RightAssign => bp::RIGHT_ASSIGN,
-        TokenKind::Tilde => bp::TILDE,
-        TokenKind::Or => bp::OR,
-        TokenKind::And => bp::AND,
-        TokenKind::Compare => bp::COMPARE,
-        TokenKind::Plus | TokenKind::Minus => bp::ADD,
-        TokenKind::Star | TokenKind::Slash => bp::MULTIPLY,
-        TokenKind::Special => bp::SPECIAL,
-        TokenKind::Colon => bp::COLON,
-        TokenKind::Caret => bp::CARET,
-        TokenKind::Dollar | TokenKind::At => bp::COMPONENT,
-        TokenKind::NsGet => bp::NS_GET,
-        _ => return None,
-    })
-}
-
-struct Parser<'a> {
-    text: &'a str,
-    tokens: Vec<Token>,
-    position: usize,
-    depth: usize,
-    /// Whether a newline currently terminates a complete expression.
-    ///
-    /// R eats newlines inside `(`, `[`, and `[[`, and treats them as statement
-    /// separators at top level and inside `{`. The stack restores the outer
-    /// rule when a group closes, so a `{` inside a call argument gets brace
-    /// behaviour and the argument list gets its own back afterwards.
-    newline_terminates: Vec<bool>,
-}
-
-type Parsed<T> = Result<T, Abstention>;
-
-impl<'a> Parser<'a> {
-    fn peek(&self) -> Option<TokenKind> {
-        self.tokens.get(self.position).map(|token| token.kind)
-    }
-
-    fn newlines_terminate(&self) -> bool {
-        self.newline_terminates.last().copied().unwrap_or(true)
-    }
-
-    /// Skip newlines, which R does wherever an expression is still required.
-    fn skip_newlines(&mut self) {
-        while self.peek() == Some(TokenKind::Newline) {
-            self.position += 1;
-        }
-    }
-
-    fn eat(&mut self, kind: TokenKind) -> bool {
-        if self.peek() == Some(kind) {
-            self.position += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn expect(&mut self, kind: TokenKind) -> Parsed<Token> {
-        match self.tokens.get(self.position) {
-            Some(token) if token.kind == kind => {
-                self.position += 1;
-                Ok(*token)
-            }
-            _ => Err(Abstention::unadmitted()),
-        }
-    }
-
-    fn enter(&mut self) -> Parsed<()> {
-        self.depth += 1;
-        if self.depth > MAX_PARSE_DEPTH {
-            return Err(Abstention::depth_limit());
-        }
-        Ok(())
-    }
-
-    fn leave(&mut self) {
-        self.depth -= 1;
-    }
-
-    /// Parse one expression whose operators bind at least `min_bp`.
-    ///
-    /// `allow_eq` mirrors R's split between `expr_or_assign` and `expr`: `=` is
-    /// an assignment at statement level and inside `(...)` grouping and blocks,
-    /// and is not available at all inside an argument list or a condition,
-    /// where it names an argument instead.
-    fn expression(&mut self, min_bp: u8, allow_eq: bool) -> Parsed<Node<'a>> {
-        self.enter()?;
-        let parsed = self.expression_inner(min_bp, allow_eq);
-        self.leave();
-        parsed
-    }
-
-    fn expression_inner(&mut self, min_bp: u8, allow_eq: bool) -> Parsed<Node<'a>> {
-        // An operand is required here, and R eats newlines wherever that is so.
-        self.skip_newlines();
-        let mut lhs = self.prefix(allow_eq)?;
-        let mut comparison_used = false;
-        loop {
-            if !self.newlines_terminate() {
-                self.skip_newlines();
-            }
-            let Some(kind) = self.peek() else { break };
-            match kind {
-                TokenKind::LParen | TokenKind::LBracket | TokenKind::LDoubleBracket => {
-                    if bp::POSTFIX < min_bp {
-                        break;
-                    }
-                    lhs = self.postfix(lhs, kind)?;
-                }
-                TokenKind::EqAssign if !allow_eq => break,
-                TokenKind::Dollar | TokenKind::At | TokenKind::NsGet => {
-                    let (left_bp, _) = infix_binding_power(kind).unwrap_or(bp::COMPONENT);
-                    if left_bp < min_bp {
-                        break;
-                    }
-                    self.position += 1;
-                    self.skip_newlines();
-                    let name = self.component_name()?;
-                    lhs = Node {
-                        start: lhs.start,
-                        end: name.end,
-                        kind: NodeKind::Binary {
-                            op: kind,
-                            lhs: Box::new(lhs),
-                            rhs: Box::new(name),
-                        },
-                    };
-                }
-                _ => {
-                    let Some((left_bp, right_bp)) = infix_binding_power(kind) else {
-                        break;
-                    };
-                    if left_bp < min_bp {
-                        break;
-                    }
-                    if kind == TokenKind::Compare {
-                        // R declares comparison non-associative, so `a < b < c`
-                        // is a syntax error rather than a nested comparison.
-                        if comparison_used {
-                            return Err(Abstention::unadmitted());
-                        }
-                        comparison_used = true;
-                    }
-                    self.position += 1;
-                    // An operator at end of line continues the expression.
-                    self.skip_newlines();
-                    let rhs = self.expression(right_bp, allow_eq)?;
-                    lhs = Node {
-                        start: lhs.start,
-                        end: rhs.end,
-                        kind: NodeKind::Binary {
-                            op: kind,
-                            lhs: Box::new(lhs),
-                            rhs: Box::new(rhs),
-                        },
-                    };
-                }
-            }
-        }
-        Ok(lhs)
-    }
-
-    fn component_name(&mut self) -> Parsed<Node<'a>> {
-        let Some(token) = self.tokens.get(self.position).copied() else {
-            return Err(Abstention::unadmitted());
-        };
-        let kind = match token.kind {
-            TokenKind::Identifier => NodeKind::Identifier(&self.text[token.start..token.end]),
-            TokenKind::BacktickName => NodeKind::QuotedName(string_inner(self.text, token, false)),
-            TokenKind::StringLiteral => NodeKind::Str {
-                raw: false,
-                inner: string_inner(self.text, token, false),
-            },
-            _ => return Err(Abstention::unadmitted()),
-        };
-        self.position += 1;
-        Ok(Node {
-            start: token.start,
-            end: token.end,
-            kind,
-        })
-    }
-
-    fn postfix(&mut self, lhs: Node<'a>, opener: TokenKind) -> Parsed<Node<'a>> {
-        self.position += 1;
-        self.newline_terminates.push(false);
-        let closer = if opener == TokenKind::LParen {
-            TokenKind::RParen
-        } else {
-            TokenKind::RBracket
-        };
-        // R's `[[` closes with two separate `]` tokens, which is what lets
-        // `x[[y[1]]]` nest correctly.
-        let closer_count = if opener == TokenKind::LDoubleBracket {
-            2
-        } else {
-            1
-        };
-        // An argument list never carries an assignment `=`; there it names an
-        // argument. A nested `(` or `{` inside one restores the statement rule.
-        let args = self.arguments(closer)?;
-        let mut end = 0usize;
-        for _ in 0..closer_count {
-            self.skip_newlines();
-            end = self.expect(closer)?.end;
-        }
-        self.newline_terminates.pop();
-        Ok(Node {
-            start: lhs.start,
-            end,
-            kind: if opener == TokenKind::LParen {
-                NodeKind::Call {
-                    callee: Box::new(lhs),
-                    args,
-                }
-            } else {
-                NodeKind::Index {
-                    object: Box::new(lhs),
-                    args,
-                }
-            },
-        })
-    }
-
-    /// R's `sublist`: comma-separated, elements may be empty, and an element
-    /// may be `name =` with or without a value.
-    fn arguments(&mut self, closer: TokenKind) -> Parsed<Vec<Arg<'a>>> {
-        self.enter()?;
-        let parsed = self.arguments_inner(closer);
-        self.leave();
-        parsed
-    }
-
-    fn arguments_inner(&mut self, closer: TokenKind) -> Parsed<Vec<Arg<'a>>> {
-        let mut args = Vec::new();
-        self.skip_newlines();
-        if self.peek() == Some(closer) {
-            return Ok(args);
-        }
-        loop {
-            self.skip_newlines();
-            let named = self.argument_name();
-            self.skip_newlines();
-            let value = match self.peek() {
-                Some(TokenKind::Comma) | None => None,
-                Some(kind) if kind == closer => None,
-                Some(_) => Some(self.expression(0, false)?),
-            };
-            args.push(Arg { named, value });
-            self.skip_newlines();
-            if !self.eat(TokenKind::Comma) {
-                break;
-            }
-        }
-        Ok(args)
-    }
-
-    /// Consume a leading `name =` when the element has one.
-    fn argument_name(&mut self) -> bool {
-        let Some(token) = self.tokens.get(self.position) else {
-            return false;
-        };
-        if !matches!(
-            token.kind,
-            TokenKind::Identifier
-                | TokenKind::StringLiteral
-                | TokenKind::BacktickName
-                | TokenKind::RawStringLiteral
-        ) {
-            return false;
-        }
-        let mut lookahead = self.position + 1;
-        while self.tokens.get(lookahead).map(|token| token.kind) == Some(TokenKind::Newline) {
-            lookahead += 1;
-        }
-        if self.tokens.get(lookahead).map(|token| token.kind) != Some(TokenKind::EqAssign) {
-            return false;
-        }
-        self.position = lookahead + 1;
-        true
-    }
-
-    fn prefix(&mut self, allow_eq: bool) -> Parsed<Node<'a>> {
-        let Some(token) = self.tokens.get(self.position).copied() else {
-            return Err(Abstention::unadmitted());
-        };
-        match token.kind {
-            TokenKind::Identifier => {
-                self.position += 1;
-                Ok(Node {
-                    start: token.start,
-                    end: token.end,
-                    kind: NodeKind::Identifier(&self.text[token.start..token.end]),
-                })
-            }
-            TokenKind::BacktickName => {
-                self.position += 1;
-                Ok(Node {
-                    start: token.start,
-                    end: token.end,
-                    kind: NodeKind::QuotedName(string_inner(self.text, token, false)),
-                })
-            }
-            TokenKind::StringLiteral | TokenKind::RawStringLiteral => {
-                self.position += 1;
-                let raw = token.kind == TokenKind::RawStringLiteral;
-                Ok(Node {
-                    start: token.start,
-                    end: token.end,
-                    kind: NodeKind::Str {
-                        raw,
-                        inner: string_inner(self.text, token, raw),
-                    },
-                })
-            }
-            TokenKind::Number => {
-                self.position += 1;
-                Ok(Node {
-                    start: token.start,
-                    end: token.end,
-                    kind: NodeKind::Number,
-                })
-            }
-            TokenKind::Break | TokenKind::Next => {
-                self.position += 1;
-                Ok(Node {
-                    start: token.start,
-                    end: token.end,
-                    kind: NodeKind::Atom,
-                })
-            }
-            TokenKind::LParen => {
-                self.position += 1;
-                self.newline_terminates.push(false);
-                let inner = self.expression(0, true)?;
-                self.skip_newlines();
-                let closer = self.expect(TokenKind::RParen)?;
-                self.newline_terminates.pop();
-                Ok(Node {
-                    start: token.start,
-                    end: closer.end,
-                    kind: NodeKind::Paren(Box::new(inner)),
-                })
-            }
-            TokenKind::LBrace => {
-                self.position += 1;
-                self.newline_terminates.push(true);
-                let items = self.block_body()?;
-                let closer = self.expect(TokenKind::RBrace)?;
-                self.newline_terminates.pop();
-                Ok(Node {
-                    start: token.start,
-                    end: closer.end,
-                    kind: NodeKind::Brace(items),
-                })
-            }
-            TokenKind::Minus | TokenKind::Plus => {
-                self.position += 1;
-                let operand = self.expression(bp::SIGN_PREFIX, allow_eq)?;
-                Ok(Node {
-                    start: token.start,
-                    end: operand.end,
-                    kind: NodeKind::Unary(Box::new(operand)),
-                })
-            }
-            TokenKind::Not => {
-                self.position += 1;
-                let operand = self.expression(bp::NOT_PREFIX, allow_eq)?;
-                Ok(Node {
-                    start: token.start,
-                    end: operand.end,
-                    kind: NodeKind::Unary(Box::new(operand)),
-                })
-            }
-            TokenKind::Tilde => {
-                self.position += 1;
-                let operand = self.expression(bp::TILDE.1, allow_eq)?;
-                Ok(Node {
-                    start: token.start,
-                    end: operand.end,
-                    kind: NodeKind::Unary(Box::new(operand)),
-                })
-            }
-            TokenKind::Function => self.function(token),
-            TokenKind::If => self.conditional(token),
-            TokenKind::For => self.for_loop(token),
-            TokenKind::While => self.while_loop(token),
-            TokenKind::Repeat => {
-                self.position += 1;
-                let body = self.expression(0, true)?;
-                Ok(Node {
-                    start: token.start,
-                    end: body.end,
-                    kind: NodeKind::Repeat(Box::new(body)),
-                })
-            }
-            _ => Err(Abstention::unadmitted()),
-        }
-    }
-
-    /// R's `formlist`: a symbol, optionally with a default.
-    fn function(&mut self, token: Token) -> Parsed<Node<'a>> {
-        self.position += 1;
-        self.skip_newlines();
-        self.expect(TokenKind::LParen)?;
-        self.newline_terminates.push(false);
-        let mut defaults = Vec::new();
-        self.skip_newlines();
-        if self.peek() != Some(TokenKind::RParen) {
-            loop {
-                self.skip_newlines();
-                self.expect(TokenKind::Identifier)?;
-                self.skip_newlines();
-                if self.eat(TokenKind::EqAssign) {
-                    defaults.push(self.expression(0, false)?);
-                }
-                self.skip_newlines();
-                if !self.eat(TokenKind::Comma) {
-                    break;
-                }
-            }
-        }
-        self.skip_newlines();
-        self.expect(TokenKind::RParen)?;
-        self.newline_terminates.pop();
-        // R eats newlines between the formals and the body.
-        self.skip_newlines();
-        let body = self.expression(0, true)?;
-        Ok(Node {
-            start: token.start,
-            end: body.end,
-            kind: NodeKind::Function {
-                defaults,
-                body: Box::new(body),
-            },
-        })
-    }
-
-    fn conditional(&mut self, token: Token) -> Parsed<Node<'a>> {
-        self.position += 1;
-        let cond = self.parenthesized_condition()?;
-        // R eats newlines between the condition and the body, so
-        // `if (x)\n  body` is one expression.
-        self.skip_newlines();
-        let then_branch = self.expression(0, true)?;
-        let mut end = then_branch.end;
-        let else_branch = if self.take_else() {
-            self.skip_newlines();
-            let branch = self.expression(0, true)?;
-            end = branch.end;
-            Some(Box::new(branch))
-        } else {
-            None
-        };
-        Ok(Node {
-            start: token.start,
-            end,
-            kind: NodeKind::If {
-                cond: Box::new(cond),
-                then_branch: Box::new(then_branch),
-                else_branch,
-            },
-        })
-    }
-
-    /// Consume an `else` if one belongs to the `if` just parsed.
-    ///
-    /// Inside a group, R eats the newlines before `else`; at top level it does
-    /// not, which is why `if (x) a` / newline / `else b` is an error there and
-    /// legal inside `{ }`. Newlines are only consumed once an `else` is known
-    /// to follow, so an `if` that ends a block leaves its separator alone.
-    fn take_else(&mut self) -> bool {
-        if self.newline_terminates.len() <= 1 {
-            return self.eat(TokenKind::Else);
-        }
-        let mut lookahead = self.position;
-        while self.tokens.get(lookahead).map(|token| token.kind) == Some(TokenKind::Newline) {
-            lookahead += 1;
-        }
-        if self.tokens.get(lookahead).map(|token| token.kind) == Some(TokenKind::Else) {
-            self.position = lookahead + 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn for_loop(&mut self, token: Token) -> Parsed<Node<'a>> {
-        self.position += 1;
-        self.skip_newlines();
-        self.expect(TokenKind::LParen)?;
-        self.newline_terminates.push(false);
-        self.skip_newlines();
-        let variable = self.expect(TokenKind::Identifier)?;
-        self.skip_newlines();
-        self.expect(TokenKind::In)?;
-        let sequence = self.expression(0, false)?;
-        self.skip_newlines();
-        self.expect(TokenKind::RParen)?;
-        self.newline_terminates.pop();
-        self.skip_newlines();
-        let body = self.expression(0, true)?;
-        Ok(Node {
-            start: token.start,
-            end: body.end,
-            kind: NodeKind::For {
-                variable: &self.text[variable.start..variable.end],
-                sequence: Box::new(sequence),
-                body: Box::new(body),
-            },
-        })
-    }
-
-    fn while_loop(&mut self, token: Token) -> Parsed<Node<'a>> {
-        self.position += 1;
-        let cond = self.parenthesized_condition()?;
-        self.skip_newlines();
-        let body = self.expression(0, true)?;
-        Ok(Node {
-            start: token.start,
-            end: body.end,
-            kind: NodeKind::While {
-                cond: Box::new(cond),
-                body: Box::new(body),
-            },
-        })
-    }
-
-    /// R's `cond`/`ifcond`: `'(' expr ')'`, never `expr_or_assign`, so
-    /// `if (x = 1)` is a syntax error rather than an assignment.
-    fn parenthesized_condition(&mut self) -> Parsed<Node<'a>> {
-        self.skip_newlines();
-        self.expect(TokenKind::LParen)?;
-        self.newline_terminates.push(false);
-        let cond = self.expression(0, false)?;
-        self.skip_newlines();
-        self.expect(TokenKind::RParen)?;
-        self.newline_terminates.pop();
-        Ok(cond)
-    }
-
-    /// R's `exprlist`: expressions separated by newlines or semicolons.
-    fn block_body(&mut self) -> Parsed<Vec<Node<'a>>> {
-        self.enter()?;
-        let parsed = self.statements(TokenKind::RBrace);
-        self.leave();
-        parsed
-    }
-
-    /// The whole file, one top-level expression at a time.
-    ///
-    /// Every expression completed before an abstention is proven, so it is
-    /// kept; the abstention says only that nothing *after* it was read. The
-    /// parser never skips ahead to look for a next expression, so no anchor
-    /// past the boundary can be invented.
-    fn program(&mut self) -> (Vec<Node<'a>>, Option<Abstention>) {
-        let mut items = Vec::new();
-        loop {
-            while matches!(
-                self.peek(),
-                Some(TokenKind::Newline) | Some(TokenKind::Semicolon)
-            ) {
-                self.position += 1;
-            }
-            if self.peek().is_none() {
-                return (items, None);
-            }
-            self.depth = 0;
-            match self.expression(0, true) {
-                Ok(item) => {
-                    let separated = matches!(
-                        self.peek(),
-                        None | Some(TokenKind::Newline) | Some(TokenKind::Semicolon)
-                    );
-                    items.push(item);
-                    if !separated {
-                        // Two expressions run together are not R.
-                        return (items, Some(Abstention::unadmitted()));
-                    }
-                }
-                Err(abstention) => return (items, Some(abstention)),
-            }
-        }
-    }
-
-    fn statements(&mut self, closer: TokenKind) -> Parsed<Vec<Node<'a>>> {
-        let mut items = Vec::new();
-        loop {
-            while matches!(
-                self.peek(),
-                Some(TokenKind::Newline) | Some(TokenKind::Semicolon)
-            ) {
-                self.position += 1;
-            }
-            match self.peek() {
-                None => break,
-                Some(kind) if kind == closer => break,
-                Some(_) => {}
-            }
-            let item = self.expression(0, true)?;
-            items.push(item);
-            // A complete expression must be followed by a separator; otherwise
-            // two expressions were run together and this is not R.
-            match self.peek() {
-                None => break,
-                Some(TokenKind::Newline) | Some(TokenKind::Semicolon) => {}
-                Some(kind) if kind == closer => break,
-                Some(_) => return Err(Abstention::unadmitted()),
-            }
-        }
-        Ok(items)
-    }
-}
-
-/// A string literal's own text, without its delimiters.
-///
-/// Both delimiter runs are ASCII by construction -- quotes, dashes, and one of
-/// `()`, `[]`, `{}` -- so the slice always lands on character boundaries.
-fn string_inner(text: &str, token: Token, raw: bool) -> &str {
-    let slice = &text[token.start..token.end];
-    if !raw {
-        return slice
-            .get(1..slice.len().saturating_sub(1))
-            .unwrap_or_default();
-    }
-    let bytes = slice.as_bytes();
-    let mut open = 2;
-    while bytes.get(open) == Some(&b'-') {
-        open += 1;
-    }
-    let dashes = open - 2;
-    open += 1;
-    let close = slice.len().saturating_sub(2 + dashes);
-    if close < open {
-        return "";
-    }
-    slice.get(open..close).unwrap_or_default()
-}
-
-// ---------------------------------------------------------------------------
 // What the tree proves
 // ---------------------------------------------------------------------------
 
@@ -1766,188 +972,664 @@ struct Program {
     abstention: Option<Abstention>,
 }
 
-fn parse_program(text: &str) -> Program {
-    let (tokens, lex_abstention) = lex(text);
-    let mut parser = Parser {
-        text,
-        tokens,
-        position: 0,
-        depth: 0,
-        newline_terminates: vec![true],
-    };
-    let (top_level, parse_abstention) = parser.program();
-    let mut anchors = Vec::new();
-    let mut rebinds_callee = false;
-    let mut conditional_registration = false;
-    let mut description_not_literal = false;
-    let mut dispatch_call = false;
-    let mut external_symbol_call = false;
-    for expression in &top_level {
-        if admitted_anchor(expression) {
-            anchors.push(TestThatBlock {
-                start: expression.start,
-                end: expression.end,
-            });
-        }
-        if let Some(args) = admitted_call_args(expression) {
-            let brace_body = args[1]
-                .value
-                .as_ref()
-                .is_some_and(|code| matches!(code.kind, NodeKind::Brace(_)));
-            description_not_literal |= brace_body && !description_is_plain_literal(&args[0]);
-        }
-        if matches!(
-            expression.kind,
-            NodeKind::If { .. }
-                | NodeKind::For { .. }
-                | NodeKind::While { .. }
-                | NodeKind::Repeat(_)
-        ) {
-            expression.visit(&mut |node| {
-                conditional_registration |= admitted_anchor(node);
-            });
-        }
-        expression.visit(&mut |node| {
-            rebinds_callee |= binds_callee(node);
-            dispatch_call |= is_dispatch_call(node);
-            external_symbol_call |= is_external_symbol_node(node);
-        });
-    }
+fn refuse<T>() -> Result<T, Abstention> {
+    Err(Abstention::unadmitted())
+}
 
-    Program {
-        anchors,
-        rebinds_callee,
-        conditional_registration,
-        description_not_literal,
-        dispatch_call,
-        external_symbol_call,
-        abstention: parse_abstention.or(lex_abstention),
+/// Everything one top-level expression contributes to the file's [`Program`].
+#[derive(Default)]
+struct ItemFacts {
+    anchor: bool,
+    description_not_literal: bool,
+    conditional_registration: bool,
+    rebinds_callee: bool,
+    dispatch_call: bool,
+    external_symbol_call: bool,
+}
+
+fn parse_program(text: &str) -> Result<Program, ParseError> {
+    // The lexer is the lexical-subset gate (ADR-0042 D4): bytes and constructs
+    // outside the subset end the parse where the lexer stopped, and everything
+    // before that point is still read. The proven prefix is exactly the text up
+    // to the last accepted token.
+    let (tokens, lex_abstention) = lex(text);
+    let proven = match lex_abstention {
+        Some(_) => tokens.last().map_or(0, |token| token.end),
+        None => text.len(),
+    };
+    let source = &text[..proven];
+
+    let mut parser = TsParser::new();
+    parser
+        .set_language(&tree_sitter_r::LANGUAGE.into())
+        .map_err(|error| ParseError::Internal(format!("load R grammar: {error}")))?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| ParseError::Internal("Tree-sitter R parse failed".to_string()))?;
+
+    let mut program = Program {
+        anchors: Vec::new(),
+        rebinds_callee: false,
+        conditional_registration: false,
+        description_not_literal: false,
+        dispatch_call: false,
+        external_symbol_call: false,
+        abstention: None,
+    };
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    // The last item read is merged one step late, because a following token can
+    // show that it never completed (see `continues_expression`).
+    let mut pending: Option<(usize, usize, ItemFacts)> = None;
+    for item in root.children(&mut cursor) {
+        if item.kind() == "comment" {
+            continue;
+        }
+        // A bare token at the top is error-recovery debris: the grammar placed
+        // no expression there, so everything from it on is the refused region.
+        let reached = if item.is_named() {
+            item.end_byte()
+        } else {
+            root.end_byte()
+        };
+        // R needs a newline or `;` between two expressions; the grammar does
+        // not, so the gap is checked here.
+        if let Some((start, ..)) = pending
+            .as_ref()
+            .filter(|(_, end, _)| !separated(source, *end, item.start_byte()))
+        {
+            let start = *start;
+            program.abstention = Some(depth_precedence(
+                Abstention::unadmitted(),
+                &tokens,
+                start,
+                reached,
+            ));
+            if continues_expression(&tokens, item.start_byte()) {
+                // The legacy parse took this token as part of the previous
+                // expression and failed inside it, so that expression is lost.
+                pending = None;
+            }
+            break;
+        }
+        if !item.is_named() {
+            program.abstention = Some(depth_precedence(
+                Abstention::unadmitted(),
+                &tokens,
+                item.start_byte(),
+                reached,
+            ));
+            break;
+        }
+        match analyze_item(source, item) {
+            Ok(facts) => {
+                if let Some((start, end, earlier)) = pending.take() {
+                    program.merge(start, end, earlier);
+                }
+                pending = Some((item.start_byte(), item.end_byte(), facts));
+            }
+            Err(abstention) => {
+                program.abstention = Some(error_precedence(abstention, item, &tokens));
+                break;
+            }
+        }
+    }
+    if let Some((start, end, facts)) = pending.take() {
+        program.merge(start, end, facts);
+    }
+    if program.abstention.is_none() {
+        program.abstention = lex_abstention;
+    }
+    Ok(program)
+}
+
+impl Program {
+    fn merge(&mut self, start: usize, end: usize, facts: ItemFacts) {
+        if facts.anchor {
+            self.anchors.push(TestThatBlock { start, end });
+        }
+        self.description_not_literal |= facts.description_not_literal;
+        self.conditional_registration |= facts.conditional_registration;
+        self.rebinds_callee |= facts.rebinds_callee;
+        self.dispatch_call |= facts.dispatch_call;
+        self.external_symbol_call |= facts.external_symbol_call;
     }
 }
 
-/// The ADR-0042 D2 shape, asked of the tree.
-///
-/// A partially parsed or recovered node can never reach here: the parser
-/// returns whole expressions or nothing.
-fn admitted_anchor(node: &Node<'_>) -> bool {
-    let Some(args) = admitted_call_args(node) else {
+/// Whether the legacy parser would have taken the token at `at` as a
+/// continuation of the expression before it: a postfix opener or any infix
+/// operator. Tree-sitter closes an unfinished expression early and leaves such
+/// a token as debris; the legacy parse failed inside the expression instead of
+/// completing it, so the earlier expression contributes nothing.
+fn continues_expression(tokens: &[Token], at: usize) -> bool {
+    let Ok(index) = tokens.binary_search_by_key(&at, |token| token.start) else {
         return false;
     };
-    description_is_plain_literal(&args[0])
-        && args[1]
-            .value
-            .as_ref()
-            .is_some_and(|code| matches!(code.kind, NodeKind::Brace(_)))
+    matches!(
+        tokens[index].kind,
+        TokenKind::LParen
+            | TokenKind::LBracket
+            | TokenKind::LDoubleBracket
+            | TokenKind::Dollar
+            | TokenKind::At
+            | TokenKind::NsGet
+            | TokenKind::Assign
+            | TokenKind::EqAssign
+            | TokenKind::RightAssign
+            | TokenKind::Tilde
+            | TokenKind::Or
+            | TokenKind::And
+            | TokenKind::Compare
+            | TokenKind::Plus
+            | TokenKind::Minus
+            | TokenKind::Star
+            | TokenKind::Slash
+            | TokenKind::Special
+            | TokenKind::Colon
+            | TokenKind::Caret
+    )
 }
 
-/// The arguments of a call that is the bare-identifier, exactly-two-positional
+/// Keep the legacy precedence between the two refusal classes: the first one
+/// in source order wins. Tree-sitter error recovery flattens unclosed nesting
+/// into an `ERROR` node, so when an item is refused for an error alone, the
+/// bracket nesting before the error is checked against the legacy depth bound.
+fn error_precedence(abstention: Abstention, item: TsNode<'_>, tokens: &[Token]) -> Abstention {
+    if abstention.reason != AbstainReason::UnadmittedConstruct || !item.has_error() {
+        return abstention;
+    }
+    let mut stack = vec![item];
+    let mut first_error = None;
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            // An `ERROR` node spans the tokens the grammar could not place.
+            first_error = Some(node.end_byte());
+            break;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+    }
+    match first_error {
+        Some(until) => depth_precedence(abstention, tokens, item.start_byte(), until),
+        None => abstention,
+    }
+}
+
+fn depth_precedence(
+    abstention: Abstention,
+    tokens: &[Token],
+    from: usize,
+    until: usize,
+) -> Abstention {
+    if brackets_exceed_depth(tokens, from, until) {
+        Abstention::depth_limit()
+    } else {
+        abstention
+    }
+}
+
+/// One open bracket while estimating legacy depth.
+struct BracketFrame {
+    /// Depth the bracket itself adds.
+    added: usize,
+    /// Closers still owed; `[[` owes two `]`.
+    owed: usize,
+    /// A function's formals, whose `=` default enters one more level.
+    formals: bool,
+    default_open: bool,
+}
+
+/// Whether bracket nesting alone drives the legacy depth past
+/// [`MAX_PARSE_DEPTH`] among the tokens in `from..until`: a call or index bracket
+/// enters twice (arguments, then an element), a block twice (body, then a
+/// statement), a grouping paren once, and a formal's default once.
+fn brackets_exceed_depth(tokens: &[Token], from: usize, until: usize) -> bool {
+    let mut frames: Vec<BracketFrame> = Vec::new();
+    let mut depth = 1usize;
+    let mut previous: Option<TokenKind> = None;
+    let mut element_due = false;
+    for token in tokens
+        .iter()
+        .filter(|token| token.start >= from && token.end <= until)
+    {
+        match token.kind {
+            TokenKind::Newline | TokenKind::Semicolon => continue,
+            TokenKind::Comma | TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
+                if let Some(frame) = frames.last_mut() {
+                    if frame.default_open {
+                        frame.default_open = false;
+                        depth -= 1;
+                    }
+                }
+                if token.kind == TokenKind::Comma {
+                    element_due = !frames.is_empty();
+                    previous = Some(token.kind);
+                    continue;
+                }
+                if let Some(frame) = frames.pop() {
+                    if frame.owed > 1 {
+                        frames.push(BracketFrame {
+                            owed: frame.owed - 1,
+                            ..frame
+                        });
+                    } else {
+                        depth -= frame.added;
+                    }
+                }
+                element_due = false;
+            }
+            TokenKind::EqAssign if frames.last().is_some_and(|frame| frame.formals) => {
+                if depth + 1 > MAX_PARSE_DEPTH {
+                    return true;
+                }
+                if let Some(frame) = frames.last_mut() {
+                    frame.default_open = true;
+                }
+                depth += 1;
+                element_due = false;
+            }
+            TokenKind::LParen
+            | TokenKind::LBracket
+            | TokenKind::LDoubleBracket
+            | TokenKind::LBrace => {
+                if element_due && depth > MAX_PARSE_DEPTH {
+                    return true;
+                }
+                let operand_before = matches!(
+                    previous,
+                    Some(
+                        TokenKind::Identifier
+                            | TokenKind::BacktickName
+                            | TokenKind::StringLiteral
+                            | TokenKind::RawStringLiteral
+                            | TokenKind::Number
+                            | TokenKind::RParen
+                            | TokenKind::RBracket
+                            | TokenKind::RBrace
+                    )
+                );
+                let formals = previous == Some(TokenKind::Function);
+                let (added, owed) = match token.kind {
+                    _ if formals => (0, 1),
+                    TokenKind::LParen if !operand_before => (1, 1),
+                    TokenKind::LDoubleBracket => (2, 2),
+                    _ => (2, 1),
+                };
+                if !formals && depth + 1 > MAX_PARSE_DEPTH {
+                    return true;
+                }
+                depth += added;
+                frames.push(BracketFrame {
+                    added,
+                    owed,
+                    formals,
+                    default_open: false,
+                });
+                element_due = added == 2;
+            }
+            _ => {
+                if element_due && depth > MAX_PARSE_DEPTH {
+                    return true;
+                }
+                element_due = false;
+            }
+        }
+        previous = Some(token.kind);
+    }
+    false
+}
+
+/// True when a newline or `;` separates two expressions. The gap holds only
+/// whitespace and comments, and a comment always ends at a newline.
+fn separated(text: &str, from: usize, to: usize) -> bool {
+    let mut in_comment = false;
+    for byte in text.as_bytes()[from..to].iter().copied() {
+        match byte {
+            b'\n' => return true,
+            b';' if !in_comment => return true,
+            b'#' => in_comment = true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// A node plus the legacy recursion depth and `=` rule at its position.
+type Placed<'t> = (TsNode<'t>, usize, bool);
+
+/// Read one top-level expression off the tree, iteratively.
+///
+/// Each node carries the recursion depth and the `=` rule the legacy parser had
+/// at the same point: `depth` is the legacy `enter` count, and `allow_eq`
+/// mirrors R's split between `expr_or_assign` and `expr`, so a Tree-sitter shape
+/// the declared subset never parsed (an assignment `=` inside an argument list,
+/// a chained comparison, `:=`, `**`, a `$` with no name) is refused here exactly
+/// where the legacy parser stopped.
+fn analyze_item(text: &str, item: TsNode<'_>) -> Result<ItemFacts, Abstention> {
+    let mut facts = ItemFacts::default();
+    let conditional_root = matches!(
+        item.kind(),
+        "if_statement" | "for_statement" | "while_statement" | "repeat_statement"
+    );
+    if item.kind() == "call" {
+        if let Some(slots) = admitted_call_slots(text, item) {
+            let brace_body = has_brace_body(slots[1]);
+            facts.anchor = description_is_plain_literal(text, slots[0]) && brace_body;
+            facts.description_not_literal =
+                brace_body && !description_is_plain_literal(text, slots[0]);
+        }
+    }
+
+    let mut stack: Vec<Placed<'_>> = vec![(item, 1, true)];
+    while let Some((node, depth, allow_eq)) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            return refuse();
+        }
+        if !node.is_named() || node.kind() == "comment" {
+            continue;
+        }
+        let kind = node.kind();
+        if !matches!(kind, "argument" | "parameters" | "parameter") && depth > MAX_PARSE_DEPTH {
+            return Err(Abstention::depth_limit());
+        }
+        // The legacy `block_body` enters one level below the brace itself.
+        if kind == "braced_expression" && depth + 1 > MAX_PARSE_DEPTH {
+            return Err(Abstention::depth_limit());
+        }
+        if kind == "string" && node.has_error() {
+            return refuse();
+        }
+        // The grammar lets whitespace and comments sit inside `1 L` and `1 i`;
+        // R's lexer does not, and the declared subset reads two tokens there.
+        if matches!(kind, "integer" | "complex")
+            && node_text(text, node)
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte == b'#')
+        {
+            return refuse();
+        }
+        if kind == "identifier" && is_reserved_word(node_text(text, node)) {
+            return refuse();
+        }
+        match kind {
+            "binary_operator" => {
+                let operator = node.child_by_field_name("operator").map(|op| op.kind());
+                match operator {
+                    Some(":=" | "**" | "?") | None => return refuse(),
+                    Some("=") if !allow_eq => return refuse(),
+                    // R declares comparison non-associative, so `a < b < c` is a
+                    // syntax error rather than a nested comparison.
+                    Some(op) if is_comparison(op) => {
+                        let chained = node
+                            .child_by_field_name("lhs")
+                            .filter(|lhs| lhs.kind() == "binary_operator")
+                            .and_then(|lhs| lhs.child_by_field_name("operator"))
+                            .is_some_and(|op| is_comparison(op.kind()));
+                        if chained {
+                            return refuse();
+                        }
+                    }
+                    Some(_) => {}
+                }
+                match operator {
+                    Some("<-" | "<<-" | "=") => {
+                        facts.rebinds_callee |= node
+                            .child_by_field_name("lhs")
+                            .is_some_and(|lhs| names_callee(text, lhs));
+                    }
+                    Some("->" | "->>") => {
+                        facts.rebinds_callee |= node
+                            .child_by_field_name("rhs")
+                            .is_some_and(|rhs| names_callee(text, rhs));
+                    }
+                    _ => {}
+                }
+            }
+            "unary_operator" => {
+                if node.child_by_field_name("operator").map(|op| op.kind()) == Some("?") {
+                    return refuse();
+                }
+            }
+            // `x$` and `pkg::` with the name missing parse in the grammar and
+            // never in the declared subset.
+            "extract_operator" | "namespace_operator" => {
+                if node.child_by_field_name("rhs").is_none() {
+                    return refuse();
+                }
+                if kind == "namespace_operator" {
+                    facts.external_symbol_call = true;
+                }
+            }
+            "for_statement" => {
+                if let Some(variable) = node.child_by_field_name("variable") {
+                    let name = node_text(text, variable);
+                    // The loop variable is a bare symbol, never backticked.
+                    if name.starts_with('`') {
+                        return refuse();
+                    }
+                    facts.rebinds_callee |= name == CALLEE;
+                }
+            }
+            "parameter" => {
+                // A formal is a bare symbol, never backticked.
+                if node
+                    .child_by_field_name("name")
+                    .is_some_and(|name| node_text(text, name).starts_with('`'))
+                {
+                    return refuse();
+                }
+            }
+            "call" => {
+                if let Some(function) = node
+                    .child_by_field_name("function")
+                    .filter(|function| function.kind() == "identifier")
+                {
+                    match node_text(text, function) {
+                        "UseMethod" | "NextMethod" | "callGeneric" | "callNextMethod"
+                        | "setMethod" | "setGeneric" | "setClass" | "setRefClass" => {
+                            facts.dispatch_call = true;
+                        }
+                        "library" | "require" | ".Call" | ".C" | ".Fortran" | ".External" => {
+                            facts.external_symbol_call = true;
+                        }
+                        "assign" => {
+                            facts.rebinds_callee |= call_slots(node)
+                                .first()
+                                .copied()
+                                .flatten()
+                                .and_then(|slot| slot.child_by_field_name("value"))
+                                .is_some_and(|value| names_callee(text, value));
+                        }
+                        _ => {}
+                    }
+                }
+                if conditional_root {
+                    if let Some(slots) = admitted_call_slots(text, node) {
+                        facts.conditional_registration |=
+                            description_is_plain_literal(text, slots[0])
+                                && has_brace_body(slots[1]);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // The role each child plays: the legacy depth it sits at and whether
+        // `=` is an assignment there. Children are pushed in reverse so the
+        // stack pops them in source order.
+        let mut children: Vec<Placed<'_>> = Vec::new();
+        let mut previous_statement: Option<usize> = None;
+        for index in 0..node.child_count() {
+            let Some(child) = node.child(index) else {
+                continue;
+            };
+            let field = node.field_name_for_child(index);
+            // Names and operands the grammar reads as plain identifiers but the
+            // lexer reserves (`x$in`, `f(in = 1)`, `function(if)`) are refused
+            // wherever they sit, including in name positions with no role.
+            if child.kind() == "identifier" && is_reserved_word(node_text(text, child)) {
+                return refuse();
+            }
+            // R needs a newline or `;` between two statements of a block too.
+            if kind == "braced_expression" && field == Some("body") && child.kind() != "comment" {
+                if previous_statement.is_some_and(|end| !separated(text, end, child.start_byte())) {
+                    return refuse();
+                }
+                previous_statement = Some(child.end_byte());
+            }
+            let role = match (kind, field) {
+                ("binary_operator", Some("lhs")) => Some((depth, allow_eq)),
+                ("binary_operator" | "unary_operator", Some("rhs")) => Some((depth + 1, allow_eq)),
+                // `x$name` and `pkg::name` name a component and read no value;
+                // the `lhs` of `$`/`@` is the chain's own expression.
+                ("extract_operator", Some("lhs")) => Some((depth, allow_eq)),
+                ("call" | "subset" | "subset2", Some("function")) => Some((depth, allow_eq)),
+                ("call" | "subset" | "subset2", Some("arguments")) => Some((depth + 1, false)),
+                ("arguments", _) if child.kind() == "argument" => Some((depth, false)),
+                ("argument", Some("value")) => Some((depth + 1, false)),
+                ("parenthesized_expression", Some("body")) => Some((depth + 1, true)),
+                ("braced_expression", Some("body")) => Some((depth + 2, true)),
+                ("function_definition", Some("parameters")) => Some((depth, false)),
+                ("function_definition", Some("body")) => Some((depth + 1, true)),
+                ("parameters", _) if child.kind() == "parameter" => Some((depth, false)),
+                ("parameter", Some("default")) => Some((depth + 1, false)),
+                ("if_statement", Some("condition")) => Some((depth + 1, false)),
+                ("if_statement", Some("consequence" | "alternative")) => Some((depth + 1, true)),
+                ("for_statement", Some("sequence")) => Some((depth + 1, false)),
+                ("while_statement", Some("condition")) => Some((depth + 1, false)),
+                ("for_statement" | "while_statement" | "repeat_statement", Some("body")) => {
+                    Some((depth + 1, true))
+                }
+                _ => None,
+            };
+            match role {
+                Some((child_depth, child_eq)) => children.push((child, child_depth, child_eq)),
+                // An error or missing token anywhere under a node refuses it,
+                // even where the child carries no role.
+                None if child.is_error() || child.is_missing() => {
+                    children.push((child, depth, allow_eq));
+                }
+                None => {}
+            }
+        }
+        stack.extend(children.into_iter().rev());
+    }
+    Ok(facts)
+}
+
+/// Words the lexer reserves, so none of them is a symbol in the declared subset.
+fn is_reserved_word(word: &str) -> bool {
+    matches!(
+        word,
+        "if" | "else" | "for" | "in" | "while" | "repeat" | "function" | "break" | "next"
+    )
+}
+
+fn is_comparison(operator: &str) -> bool {
+    matches!(operator, "<" | "<=" | ">" | ">=" | "==" | "!=")
+}
+
+fn node_text<'a>(text: &'a str, node: TsNode<'_>) -> &'a str {
+    text.get(node.start_byte()..node.end_byte())
+        .unwrap_or_default()
+}
+
+/// R's `sublist` slots of a call: comma-separated, any slot may be empty, and
+/// `f()` has none. Each slot is the `argument` node, or `None` when empty.
+fn call_slots(call: TsNode<'_>) -> Vec<Option<TsNode<'_>>> {
+    let Some(arguments) = call.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut slots = Vec::new();
+    let mut current = None;
+    let mut separated = false;
+    let mut cursor = arguments.walk();
+    for child in arguments.children(&mut cursor) {
+        match child.kind() {
+            "comma" => {
+                slots.push(current.take());
+                separated = true;
+            }
+            "argument" => current = Some(child),
+            _ => {}
+        }
+    }
+    if current.is_some() || separated {
+        slots.push(current);
+    }
+    slots
+}
+
+/// The slots of a call that is the bare-identifier, exactly-two-positional
 /// `test_that` shape; `None` for every other node.
-fn admitted_call_args<'a>(node: &'a Node<'a>) -> Option<&'a [Arg<'a>]> {
-    let NodeKind::Call { callee, args } = &node.kind else {
+///
+/// A bare identifier callee only: not `testthat::test_that`, not
+/// `obj$test_that`, and not the backtick spelling `` `test_that` ``.
+fn admitted_call_slots<'t>(text: &str, node: TsNode<'t>) -> Option<[Option<TsNode<'t>>; 2]> {
+    let function = node.child_by_field_name("function")?;
+    if function.kind() != "identifier" || node_text(text, function) != CALLEE {
+        return None;
+    }
+    let slots = call_slots(node);
+    let [first, second] = slots.as_slice() else {
         return None;
     };
-    // A bare identifier callee only: not `testthat::test_that`, not
-    // `obj$test_that`, and not the backtick spelling `` `test_that` ``.
-    if !matches!(callee.kind, NodeKind::Identifier(name) if name == CALLEE) {
+    if [first, second]
+        .iter()
+        .any(|slot| slot.is_some_and(|argument| argument.child_by_field_name("name").is_some()))
+    {
         return None;
     }
-    if args.len() != 2 || args.iter().any(|arg| arg.named) {
-        return None;
-    }
-    Some(args)
+    Some([*first, *second])
+}
+
+fn has_brace_body(slot: Option<TsNode<'_>>) -> bool {
+    slot.and_then(|slot| slot.child_by_field_name("value"))
+        .is_some_and(|code| code.kind() == "braced_expression")
 }
 
 /// The description is the one part of the shape that must be read in the
 /// source itself: a non-empty plain string literal, so neither a computed nor
 /// a variable nor an R 4.0 raw-string description is source-visible.
-fn description_is_plain_literal(arg: &Arg<'_>) -> bool {
-    arg.value.as_ref().is_some_and(|description| {
-        matches!(
-            description.kind,
-            NodeKind::Str {
-                raw: false,
-                inner
-            } if !inner.is_empty()
-        )
-    })
-}
-
-/// True when this node registers or dispatches an S3/S4 generic.
-///
-/// `UseMethod`/`NextMethod` are the S3 entry points, `setClass`/`setMethod`/
-/// `setGeneric`/`setRefClass` define S4 types and methods, and `callGeneric`/
-/// `callNextMethod` dispatch them. Which method runs is runtime type state.
-fn is_dispatch_call(node: &Node<'_>) -> bool {
-    matches!(&node.kind, NodeKind::Call { callee, .. }
-    if matches!(
-        callee.kind,
-        NodeKind::Identifier(
-            "UseMethod"
-                | "NextMethod"
-                | "callGeneric"
-                | "callNextMethod"
-                | "setMethod"
-                | "setGeneric"
-                | "setClass"
-                | "setRefClass"
-        )
-    ))
-}
-
-/// True when this node resolves a symbol the bounded parse cannot bind:
-/// `library`/`require` attach packages to the search path, the dotted
-/// entries call native code, and `::`/`:::` name a package export directly.
-fn is_external_symbol_node(node: &Node<'_>) -> bool {
-    match &node.kind {
-        NodeKind::Call { callee, .. } => matches!(
-            callee.kind,
-            NodeKind::Identifier("library" | "require" | ".Call" | ".C" | ".Fortran" | ".External")
-        ),
-        NodeKind::Binary {
-            op: TokenKind::NsGet,
-            ..
-        } => true,
-        _ => false,
-    }
-}
-
-/// True when this node binds the name `test_that`.
-///
-/// `test_that` is an ordinary binding in R, not a keyword, so a file that
-/// assigns it has changed what every call in it means. Every syntactic binding
-/// form is covered: both assignment directions, `=`, the superassignments,
-/// `for`'s loop variable, and a literal `assign("test_that", ...)`.
-fn binds_callee(node: &Node<'_>) -> bool {
-    match &node.kind {
-        NodeKind::Binary {
-            op: TokenKind::Assign | TokenKind::EqAssign,
-            lhs,
-            ..
-        } => names_callee(lhs),
-        NodeKind::Binary {
-            op: TokenKind::RightAssign,
-            rhs,
-            ..
-        } => names_callee(rhs),
-        NodeKind::For { variable, .. } => *variable == CALLEE,
-        NodeKind::Call { callee, args } => {
-            matches!(callee.kind, NodeKind::Identifier(name) if name == "assign")
-                && args
-                    .first()
-                    .and_then(|arg| arg.value.as_ref())
-                    .is_some_and(names_callee)
-        }
-        _ => false,
-    }
+fn description_is_plain_literal(text: &str, slot: Option<TsNode<'_>>) -> bool {
+    let Some(description) = slot
+        .and_then(|slot| slot.child_by_field_name("value"))
+        .filter(|description| description.kind() == "string")
+    else {
+        return false;
+    };
+    let (Some(open), Some(close)) = (
+        description.child_by_field_name("open"),
+        description.child_by_field_name("close"),
+    ) else {
+        return false;
+    };
+    let raw = matches!(node_text(text, open).as_bytes().first(), Some(b'r' | b'R'));
+    !raw && close.start_byte() > open.end_byte()
 }
 
 /// True when the node spells the name `test_that`, as a symbol, as the string
 /// literal R also accepts on the left of an assignment, or as the backtick
 /// spelling of the same symbol.
-fn names_callee(node: &Node<'_>) -> bool {
-    match node.kind {
-        NodeKind::Identifier(name) | NodeKind::QuotedName(name) => name == CALLEE,
-        NodeKind::Str { inner, .. } => inner == CALLEE,
+fn names_callee(text: &str, node: TsNode<'_>) -> bool {
+    match node.kind() {
+        "identifier" => {
+            let name = node_text(text, node);
+            name.strip_prefix('`')
+                .and_then(|quoted| quoted.strip_suffix('`'))
+                .unwrap_or(name)
+                == CALLEE
+        }
+        "string" => match (
+            node.child_by_field_name("open"),
+            node.child_by_field_name("close"),
+        ) {
+            (Some(open), Some(close)) => {
+                text.get(open.end_byte()..close.start_byte()) == Some(CALLEE)
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -2892,5 +2574,47 @@ mod tests {
     fn an_escaped_quote_inside_a_description_stays_one_literal() {
         let parsed = output("test_that(\"has a \\\" quote\", { })\n");
         assert_eq!(anchors(&parsed), 1);
+    }
+
+    #[test]
+    fn a_very_long_left_associative_chain_is_walked_without_recursion() {
+        // The tree is walked with an explicit stack, so a chain this long does
+        // not overflow the stack; a left-associative chain is flat and never
+        // nears the depth bound.
+        let text = format!(
+            "x <- 1{}\ntest_that(\"a\", {{ }})\n",
+            " + 1".repeat(200_000)
+        );
+        let parsed = output(&text);
+        assert_eq!(anchors(&parsed), 1);
+        assert!(parsed.report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn grammar_rejected_spellings_refuse_the_file_after_the_proven_expression() {
+        // Tree-sitter-r rejects these spellings that the hand-written parser read:
+        // R closes `[[` with two separate `]` tokens even across a space or a
+        // newline, the grammar requires hex digits in `\x` escapes and rejects
+        // `\9`, `NULL`/`TRUE` are not argument or component names, and `::`
+        // takes no newline and a symbol or string on its left. Each is a
+        // refusal of the file after the proven expression, never an anchor.
+        for text in [
+            "test_that(\"a\", { })\nx[[1] ]\n",
+            "test_that(\"a\", { })\nx <- \"\\x\"\n",
+            "test_that(\"a\", { })\nf(TRUE = 1)\n",
+            "test_that(\"a\", { })\nx$NULL\n",
+            "test_that(\"a\", { })\nx <- \"\\9\"\n",
+            "test_that(\"a\", { })\nx <- a::\nb\n",
+            "test_that(\"a\", { })\nx <- v$a::b\n",
+            "test_that(\"a\", { })\nf(x[[1]\n])\n",
+        ] {
+            let parsed = output_with(&declared(), text);
+            assert_eq!(
+                unknown_kind_count(&parsed, "unadmitted_r_construct"),
+                1,
+                "{text}"
+            );
+            assert_eq!(anchors(&parsed), 1, "{text}");
+        }
     }
 }

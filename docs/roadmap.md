@@ -629,8 +629,9 @@ current public-preview label by itself.
 
 ## Later phases
 
-- Add Tree-sitter dependency only when the parser adapter scope, fixture set, and
-  dependency policy are reviewed.
+- Tree-sitter grammars are production dependencies under ADR-0058; the
+  migrated lanes' classifications were accepted on 2026-10-22. Add a grammar
+  only through that ADR's admission table.
 - Implement Python structural-anchor persistence, repo-local import resolution,
   safe project configuration, pytest fixture graph recovery, broader usage
   propagation, provider-backed canonical target evidence, and cross-function

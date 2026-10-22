@@ -1,6 +1,6 @@
 # ADR-0048: Bounded Swift XCTest frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [swift completion review](../reports/language-support/swift-completion-review.md))
 - Date: 2026-09-04
 - Scope: Swift in ADR-0020; admits a family-bearing frontend over one
   class-and-method shape
@@ -387,6 +387,12 @@ and parser are hand-written Rust in the existing core. Input is untrusted:
 byte, token, unit, header, interpolation-depth, and class-recursion
 ceilings all abstain with typed `UNKNOWN`s rather than degrading silently
 or failing unsafely.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-swift` 0.7.4
+grammar crate, with the lexer kept as the lexical-subset gate. This D9
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 

@@ -3,11 +3,11 @@
 //! Nothing here invokes GNAT, `gprbuild`, `gnattest`, Alire, Libadalang, a
 //! child process, or the network. ADR-0033 D3's Libadalang `NO_GO` stands.
 //!
-//! The anchor is read off a parse, not off the text. [`super::lexer`] produces
-//! an Ada token stream and [`super::syntax`] parses the whole compilation unit
-//! against the declared subset; this module turns the admitted registration
-//! calls into code units and facts, and turns every refusal into a typed
-//! `UNKNOWN`.
+//! The anchor is read off a parse, not off the text. [`super::lexer`] is the
+//! lexical-subset gate and [`super::syntax`] reads the whole compilation unit
+//! from the pinned Tree-sitter Ada grammar (ADR-0058) against the declared
+//! subset; this module turns the admitted registration calls into code units
+//! and facts, and turns every refusal into a typed `UNKNOWN`.
 //!
 //! There is no third outcome. A file is parsed and its registrations are
 //! reported, or it is refused and no registration is reported at all. Nothing
@@ -107,7 +107,7 @@ pub(crate) fn parse_output(document: SourceDocument<'_>) -> Result<SourceParseOu
         return finish(units, facts, Vec::new());
     }
 
-    let admitted = match parse_compilation(document.text) {
+    let admitted = match parse_compilation(document.text)? {
         Ok(admitted) => admitted,
         Err(refusal) => return refused(units, facts, module, document.path, refusal),
     };

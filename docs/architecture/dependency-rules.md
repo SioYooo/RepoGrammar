@@ -110,10 +110,14 @@ their unchanged evidence unit.
 
 Ada and Fortran discovery policy belongs in `adapters/languages/ada.rs` and
 `adapters/languages/fortran.rs`. [ADR-0045 D1–D4](../decisions/ADR-0045-bounded-ada-aunit-frontend.md)
-admits `.adb` bodies to the bounded AUnit parser; `.ads` and `.gpr` remain
+admits `.adb` bodies to the bounded AUnit frontend; `.ads` and `.gpr` remain
 unread inventory. [ADR-0051 D1–D4](../decisions/ADR-0051-bounded-fortran-testdrive-frontend.md)
 admits the lowercase free-form `.f90`/`.f95`/`.f03`/`.f08` subset to the bounded
-test-drive parser; fixed-form and deferred source paths remain inventory.
+test-drive frontend; fixed-form and deferred source paths remain inventory.
+Under ADR-0058 these frontends read declarations from the pinned
+`tree-sitter-ada` and `tree-sitter-fortran` grammar crates, the only production
+dependencies they add; the ADR-0045 and ADR-0051 lexers remain the
+lexical-subset gates, and the grammars authorize no runtime behavior.
 Unadmitted or malformed source retains the language's typed abstention rather
 than supplying family anchors. Separate inventory parsers read only supplied
 exact `alire.toml`/`alire.lock` and `fpm.toml` bytes, returning owned
@@ -250,14 +254,14 @@ key dimensions, and recoverable provider-unavailable `UNKNOWN`s. That port is
 not an adapter and does not execute Pyrefly, Pyright, RightTyper, or repository
 code by itself.
 
-Go has the in-process bounded declaration parser admitted by ADR-0050 and the
-separate static `go.mod`/`go.work` inventory reader. Neither adds a production
-dependency or authorizes Go runtime behavior. ADR-0050 supersedes the earlier
-ADR-0041 auxiliary-only family boundary for this declared subset; all
-ADR-0021 worker and provider requirements remain in force for future semantic
-operations. Its version-pinned Tree-sitter fallback and opt-in sandboxed
-standard-library worker are unimplemented future routes, not dependencies
-admitted by the current parser. The safe default must not invoke `go/packages`,
+Go has the in-process bounded declaration frontend admitted by ADR-0050 and
+the separate static `go.mod`/`go.work` inventory reader. Under ADR-0058 the
+frontend reads declarations from the pinned `tree-sitter-go` grammar crate,
+the only production dependency it adds; neither authorizes Go runtime
+behavior. ADR-0050 supersedes the earlier ADR-0041 auxiliary-only family
+boundary for this declared subset; all ADR-0021 worker and provider
+requirements remain in force for future semantic operations, and the opt-in
+sandboxed standard-library worker remains an unimplemented future route. The safe default must not invoke `go/packages`,
 `go list`, gopls, cgo, or repository build/test/generate commands.
 The existing TypeScript process adapter is not a Go sandbox and must not be
 reused as one. Go claim impact must enter the existing authoritative cross-
@@ -272,10 +276,13 @@ before source-store admission. Current dispatch instead reads `.php` text and
 checks `<?php` inside the parser; this is the
 [open PHP admission-contract drift](../reports/language-support/php-completion-review.md#2026-10-14-open-admission-contract-drift),
 not authorization to broaden reads. Within the declared source subset,
-malformed/unadmitted syntax cannot supply confident anchors. Owned PHPUnit
-units, exact support and typed obligations follow the
-existing pipeline; this does not prove resolved base identity or runtime
-selection. PHPUnit XML remains unread inventory. Exact `composer.json`
+malformed/unadmitted syntax cannot supply confident anchors. Under ADR-0058
+the PHPUnit frontend reads declarations from the pinned `tree-sitter-php`
+grammar crate (`LANGUAGE_PHP`), the only production dependency the lane adds,
+with the ADR-0047 lexer kept as the lexical-subset gate; the grammar authorizes
+no runtime behavior. Owned PHPUnit units, exact support and typed obligations
+follow the existing pipeline; this does not prove resolved base identity or
+runtime selection. PHPUnit XML remains unread inventory. Exact `composer.json`
 and `composer.lock` are the static-metadata exception: `php.rs` reads supplied
 UTF-8 JSON only after the shared bounded unique-member gate, then emits
 RepoGrammar-owned Composer rows and claim-scoped inventory uncertainty. Lock
@@ -291,7 +298,9 @@ in a separately reviewed OS-sandboxed worker and authorizes no dependency or
 runtime behavior. Official PHP 8.5.8 `php -n -l` may participate only as the
 isolated syntax-validity oracle; `nikic/PHP-Parser` 5.8.0 is the isolated AST/
 location differential and separately qualification-gated fallback. Tree-sitter
-PHP 0.24.2 is a syntax-candidate fallback, never the semantic oracle. The
+PHP 0.24.2 is a syntax-candidate fallback, never the semantic oracle; the
+`tree-sitter-php` 0.25.1 grammar admitted by ADR-0058 for the in-process
+PHPUnit frontend does not change this ADR-0024 worker preflight. The
 current Composer inventory does not implement a selected project profile or
 lock-content-hash coherence. A future bounded non-executing stage may add that
 profile and pin Composer 2.10.2 coherence semantics; PHPUnit XML remains future
@@ -305,9 +314,12 @@ or worker is added.
 Swift discovery/config classification and bounded inventory persistence are
 implemented alongside the bounded XCTest source frontend admitted by
 [ADR-0048 D1–D8](../decisions/ADR-0048-bounded-swift-xctest-frontend.md).
-Discovered Swift source enters the file-local declared-subset parser, which
+Discovered Swift source enters the file-local declared-subset frontend, which
 emits owned units and exact XCTest declaration anchors or typed abstention.
-It provides no selected project model, semantic provider or runtime claim.
+Under ADR-0058 that frontend reads declarations from the pinned
+`tree-sitter-swift` grammar crate, the only production dependency the lane
+adds; the ADR-0048 lexer remains the lexical-subset gate and the grammar
+authorizes no runtime behavior. It provides no selected project model, semantic provider or runtime claim.
 Executable/version-specific manifests and `.swift-version` remain unread
 configuration inventory. Exact `Package.resolved` is the sole static-metadata
 exception: `adapters/parsing/swift.rs` may decode supplied schema-2/3 JSON only
@@ -345,11 +357,14 @@ prerequisite for the bounded source family only. Qualification evidence and any
 future production artifact/worker admission remain separate atomic stages.
 
 Ruby discovery/config classification and bounded dependency inventory are
-implemented without a production dependency.
+implemented alongside the in-process Minitest frontend.
 [ADR-0049 D1–D5](../decisions/ADR-0049-bounded-ruby-minitest-frontend.md) admits
 only `test/` or `tests/` paths whose basename is `test_*.rb` or `*_test.rb` to
 the bounded Minitest frontend. Other Ruby source and every config except exact
-`Gemfile.lock` remain unread inventory. The source frontend emits owned
+`Gemfile.lock` remain unread inventory. Under ADR-0058 the frontend reads
+declarations from the pinned `tree-sitter-ruby` grammar crate, the only
+production dependency it adds; the ADR-0049 lexer remains the lexical-subset
+gate and the grammar authorizes no runtime behavior. The source frontend emits owned
 class/method anchors under its declared lexical and superclass-chain bounds;
 unresolved dynamic/external identity is not inferred. A pure Rust lock
 parser may read only bounded exact-lock bytes, create one project-config unit,
@@ -363,7 +378,8 @@ static-link, checksum, license,
 platform, fuzz/corpus, range/diagnostic, benchmark, and supply-chain surface
 must pass the ADR gate before addition. That future external Ruby frontend must
 run in a separately reviewed OS sandbox over supplied bytes; ADR-0049's current
-hand-written bounded parser does not admit Prism or execute Ruby.
+in-process frontend, which reads the pinned Tree-sitter grammar under ADR-0058,
+does not admit Prism or execute Ruby.
 No Ruby worker may evaluate Gemfiles/gemspecs or execute Ruby, Bundler,
 RubyGems, Rake, Rails, tests, generators, installed gems, repository tooling,
 or network access. Ruby claim impact must enter the authoritative
@@ -386,11 +402,16 @@ overrides, targets, restore, analyzers, generators, or project code. VB6
 is family evidence or a support claim.
 
 Object Pascal source discovery and Delphi project inventory are likewise
-bounded and dependency-free. Exact `.pas`/`.dpr`/`.dpk` paths use the
+bounded; the source frontend's only production dependency is the ADR-0058
+grammar crate below, and the project inventory is dependency-free. Exact `.pas`/`.dpr`/`.dpk` paths use the
 generic `object-pascal` token because the suffix does not prove a compiler
 dialect. [ADR-0044 D1–D5](../decisions/ADR-0044-bounded-delphi-dunitx-frontend.md)
-admits only `.pas` units to the declared-subset DUnitX parser; `.dpr` and `.dpk`
-remain unread. Owned declaration anchors do not establish external unit,
+admits only `.pas` units to the declared-subset DUnitX frontend; `.dpr` and `.dpk`
+remain unread. Under ADR-0058 the frontend reads declarations from the pinned
+`tree-sitter-pascal` grammar crate, the only production dependency it adds; the
+hand-written lexer remains the lexical-subset gate and still owns the `uses`
+binding and conditional-compilation depth, and the grammar authorizes no runtime
+behavior. Owned declaration anchors do not establish external unit,
 compiler or runtime identity. Only exact `.dproj` enters the inventory parser as
 `delphi-config`; the parser may emit bounded literal `DCC_UsePackage` rows with
 runtime scope and unknown directness. It must not evaluate Delphi MSBuild,
@@ -415,8 +436,10 @@ requires pinned, source-backed dependency and sandbox qualification.
 R discovery belongs in `adapters/languages/r.rs`; bounded metadata parsing
 belongs in `adapters/parsing/r.rs`.
 [ADR-0042 D1–D5](../decisions/ADR-0042-bounded-r-testthat-frontend.md) admits
-`tests/testthat/test-*.R`/`.r` paths to the bounded testthat parser; other R
-source stays unread inventory. Exact top-level call anchors require the
+`tests/testthat/test-*.R`/`.r` paths to the bounded testthat frontend; other R
+source stays unread inventory. Under ADR-0058 that frontend reads `test_that`
+calls from the pinned `tree-sitter-r` grammar crate, the only production
+dependency it adds, with the ADR-0042 lexer kept as the lexical-subset gate. Exact top-level call anchors require the
 declared subset and repository testthat declaration, while external binding,
 NSE and execution remain unknown. The separate metadata parser reads only exact
 supplied `DESCRIPTION`, `NAMESPACE` and `renv.lock` bytes. Neither path may run R
@@ -425,13 +448,17 @@ code, children or network operations. DESCRIPTION/NAMESPACE cannot default to CR
 Only explicit bounded renv CRAN/Bioconductor records may cross the parser port
 as language-neutral dependencies; remote/custom/URL/local source values must be
 discarded, never sanitized into an output surrogate. This slice uses existing
-Rust/serde_json APIs and authorizes no production dependency.
+Rust/serde_json APIs; neither it nor the grammar authorizes runtime behavior or
+a further production dependency.
 MATLAB discovery and bounded package inventory are implemented alongside the
 in-process frontend under
 [ADR-0046 D1–D5](../decisions/ADR-0046-bounded-matlab-unittest-frontend.md),
-without a licensed toolchain or production dependency. Discovered lowercase
-`.m` files are decoded; only a classdef-first file enters the structural
-declared-subset parse, and other files provide a module unit without a
+without a licensed toolchain. Under ADR-0058 the frontend reads block
+structure from the pinned `tree-sitter-matlab` grammar crate, the only
+production dependency the lane adds; the ADR-0046 lexer remains the
+lexical-subset gate and the grammar authorizes no runtime behavior. Discovered
+lowercase `.m` files are decoded; only a classdef-first file enters the
+structural declared-subset parse, and other files provide a module unit without a
 structural claim. The accepted unittest class/method anchor does not resolve
 paths, inheritance or runtime behavior; lexical/dialect/subset failures retain
 typed abstention. Only exact root/nested `resources/mpackage.json` configuration

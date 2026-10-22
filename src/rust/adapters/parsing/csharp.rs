@@ -6,6 +6,10 @@
 //! xUnit/NUnit/MSTest anchors, and typed UNKNOWN facts for every runtime,
 //! generated, or build-variant semantic that remains unresolved.
 
+use super::binding::{
+    self, Annotation, AnnotationSpec, BindingSpec, DirectiveSpec, ImportScope, RoleEvidence,
+    RoleRow,
+};
 use super::{ir_edges_for_units, ir_nodes_for_units};
 use crate::adapters::frameworks::csharp::{
     ASPNET_MVC_NAMESPACE, CONVENTION_ROUTING_METHODS, EFCORE_NAMESPACE, FLUENTVALIDATION_NAMESPACE,
@@ -22,7 +26,7 @@ use crate::ports::parser::{
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 mod project_config;
@@ -31,11 +35,226 @@ mod test_data;
 pub(crate) const CSHARP_ANCHOR_ENGINE: &str = "repogrammar-csharp-syntax";
 pub(crate) const CSHARP_ANCHOR_METHOD: &str = "tree_sitter_csharp_structural_anchors_v1";
 
+/// C# attribute names: `Name` or `NameAttribute`, optionally dotted.
+const ATTRIBUTE_NAMES: BindingSpec = BindingSpec {
+    separator: '.',
+    fully_qualified_names: true,
+    name_suffixes: &["", "Attribute"],
+    type_arguments: None,
+};
+/// C# type names as written in a base list, with optional type arguments.
+const TYPE_NAMES: BindingSpec = BindingSpec {
+    separator: '.',
+    fully_qualified_names: true,
+    name_suffixes: &[""],
+    type_arguments: Some('<'),
+};
+/// Exact `using` directives; `using static`, aliases and calls open nothing.
+const USING_DIRECTIVES: DirectiveSpec = DirectiveSpec {
+    kinds: &["using_directive", "global_using_directive"],
+    prefix: "global ",
+    keyword: "using ",
+    excluded_forms: &["static "],
+    excluded_characters: &['=', '('],
+    terminator: ';',
+    body_kinds: &["declaration_list"],
+};
+const ATTRIBUTE_LISTS: AnnotationSpec = AnnotationSpec {
+    list_kind: "attribute_list",
+    item_kind: "attribute",
+    name_field: "name",
+    arguments_kind: "attribute_argument_list",
+};
+
+/// What an anchored C# class role emits besides its unit kind.
+#[derive(Debug)]
+struct ClassRole {
+    kind: CodeUnitKind,
+    anchor_kind: &'static str,
+    note: &'static str,
+    /// Whether the anchor names its evidence and the class route template, as
+    /// ASP.NET Core controllers do.
+    names_route_evidence: bool,
+    unknowns: &'static [RoleUnknown],
+    context: ClassContext,
+}
+
+/// A typed UNKNOWN every anchor of a role carries.
+#[derive(Debug)]
+struct RoleUnknown {
+    reason: UnknownReasonCode,
+    claim: &'static str,
+    kind: &'static str,
+    note: &'static str,
+}
+
+/// The context a class role opens for its members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassContext {
+    AspNetController,
+    EfCoreDbContext,
+    Plain,
+}
+
+/// C# class roles in precedence order. One class never claims two roles: a
+/// unit holding two is dropped from family support silently instead of
+/// reporting a conflict.
+const CLASS_ROLES: &[RoleRow<ClassRole>] = &[
+    RoleRow {
+        role: ClassRole {
+            kind: CodeUnitKind::AspNetController,
+            anchor_kind: "aspnet_controller",
+            note: "bounded C# ASP.NET Core controller anchor",
+            names_route_evidence: true,
+            unknowns: &[
+                RoleUnknown {
+                    reason: UnknownReasonCode::RuntimeDependencyInjection,
+                    claim: "csharp_di_registration",
+                    kind: "aspnet_runtime_dependency_injection",
+                    note: "ASP.NET Core dependency injection and assembly scanning are runtime behavior",
+                },
+                RoleUnknown {
+                    reason: UnknownReasonCode::FrameworkMagic,
+                    claim: "csharp_aspnet_filter_pipeline",
+                    kind: "aspnet_filter_pipeline",
+                    note: "ASP.NET Core middleware and filter pipeline semantics are runtime behavior",
+                },
+            ],
+            context: ClassContext::AspNetController,
+        },
+        declaration_kinds: &[],
+        evidence: &[
+            (
+                RoleEvidence::Annotation {
+                    name: "ApiController",
+                    namespace: ASPNET_MVC_NAMESPACE,
+                },
+                "aspnetcore.mvc.ApiController",
+            ),
+            (
+                RoleEvidence::BaseType {
+                    name: "ControllerBase",
+                    namespace: ASPNET_MVC_NAMESPACE,
+                },
+                "aspnetcore.mvc.ControllerBase",
+            ),
+            (
+                RoleEvidence::BaseType {
+                    name: "Controller",
+                    namespace: ASPNET_MVC_NAMESPACE,
+                },
+                "aspnetcore.mvc.Controller",
+            ),
+        ],
+    },
+    RoleRow {
+        role: ClassRole {
+            kind: CodeUnitKind::EfCoreDbContext,
+            anchor_kind: "efcore_db_context",
+            note: "bounded C# EF Core DbContext anchor",
+            names_route_evidence: false,
+            unknowns: &[],
+            context: ClassContext::EfCoreDbContext,
+        },
+        declaration_kinds: &["class_declaration"],
+        evidence: &[(
+            RoleEvidence::BaseType {
+                name: "DbContext",
+                namespace: EFCORE_NAMESPACE,
+            },
+            "efcore.DbContext",
+        )],
+    },
+    RoleRow {
+        role: ClassRole {
+            kind: CodeUnitKind::FluentValidationValidator,
+            anchor_kind: "fluentvalidation_validator",
+            note: "bounded C# FluentValidation validator anchor",
+            names_route_evidence: false,
+            unknowns: &[RoleUnknown {
+                reason: UnknownReasonCode::FrameworkMagic,
+                claim: "csharp_fluentvalidation_rule_chain",
+                kind: "fluentvalidation_rule_chain",
+                note: "FluentValidation rule builder chains and validator resolution are runtime behavior",
+            }],
+            context: ClassContext::Plain,
+        },
+        declaration_kinds: &["class_declaration"],
+        evidence: &[(
+            RoleEvidence::BaseType {
+                name: "AbstractValidator",
+                namespace: FLUENTVALIDATION_NAMESPACE,
+            },
+            "fluentvalidation.AbstractValidator",
+        )],
+    },
+];
+
+/// C# test method roles in precedence order; within a row the first evidence
+/// wins, so `Theory` outranks `Fact` and `TestCase` outranks `Test`.
+const TEST_ROLES: &[RoleRow<CodeUnitKind>] = &[
+    RoleRow {
+        role: CodeUnitKind::XunitTestMethod,
+        declaration_kinds: &[],
+        evidence: &[
+            (
+                RoleEvidence::Annotation {
+                    name: "Theory",
+                    namespace: XUNIT_NAMESPACE,
+                },
+                "xunit.Theory",
+            ),
+            (
+                RoleEvidence::Annotation {
+                    name: "Fact",
+                    namespace: XUNIT_NAMESPACE,
+                },
+                "xunit.Fact",
+            ),
+        ],
+    },
+    RoleRow {
+        role: CodeUnitKind::NunitTestMethod,
+        declaration_kinds: &[],
+        evidence: &[
+            (
+                RoleEvidence::Annotation {
+                    name: "TestCase",
+                    namespace: NUNIT_NAMESPACE,
+                },
+                "nunit.framework.TestCase",
+            ),
+            (
+                RoleEvidence::Annotation {
+                    name: "Test",
+                    namespace: NUNIT_NAMESPACE,
+                },
+                "nunit.framework.Test",
+            ),
+        ],
+    },
+    RoleRow {
+        role: CodeUnitKind::MstestTestMethod,
+        declaration_kinds: &[],
+        evidence: &[(
+            RoleEvidence::Annotation {
+                name: "TestMethod",
+                namespace: MSTEST_NAMESPACE,
+            },
+            "mstest.unittesting.TestMethod",
+        )],
+    },
+];
+
 /// Tree-sitter query selecting every node the scanner handles.
 const NODE_QUERY: &str = include_str!("csharp/nodes.scm");
 
 #[derive(Debug, Default)]
-pub struct CSharpSyntaxParser;
+pub struct CSharpSyntaxParser {
+    /// Compiling the node query costs far more than parsing a typical file,
+    /// so each parser instance compiles it once.
+    node_query: OnceLock<Query>,
+}
 
 impl SourceParser for CSharpSyntaxParser {
     fn parse(&self, document: SourceDocument<'_>) -> Result<ParseReport, ParseError> {
@@ -64,7 +283,7 @@ impl SourceParser for CSharpSyntaxParser {
         };
 
         let mut scanner = CSharpTreeScanner::new(document);
-        scanner.scan_tree(tree.root_node())?;
+        scanner.scan_tree(tree.root_node(), self.node_query()?)?;
         scanner.finish()
     }
 
@@ -78,6 +297,17 @@ impl SourceParser for CSharpSyntaxParser {
         }
         self.parse_with_context(document, context)
             .map(SourceParseOutput::from_report)
+    }
+}
+
+impl CSharpSyntaxParser {
+    fn node_query(&self) -> Result<&Query, ParseError> {
+        if let Some(query) = self.node_query.get() {
+            return Ok(query);
+        }
+        let query = Query::new(&tree_sitter_c_sharp::LANGUAGE.into(), NODE_QUERY)
+            .map_err(|error| ParseError::Internal(format!("compile C# node query: {error}")))?;
+        Ok(self.node_query.get_or_init(|| query))
     }
 }
 
@@ -95,34 +325,8 @@ struct VisitContext {
     class_route_template_shape: &'static str,
     in_efcore_db_context: bool,
     in_mstest_test_class: bool,
-    usings: Arc<CSharpUsingContext>,
+    usings: Arc<ImportScope>,
     xunit_member_data_scope: Arc<test_data::MemberDataScope>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CSharpAttribute {
-    name: String,
-    arguments: Option<String>,
-    parse_degraded: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-struct CSharpUsingContext {
-    parent: Option<Arc<CSharpUsingContext>>,
-    exact_usings: BTreeSet<String>,
-}
-
-impl CSharpUsingContext {
-    fn has_using_for(&self, namespace: &str) -> bool {
-        let mut context = Some(self);
-        while let Some(current) = context {
-            if current.exact_usings.contains(namespace) {
-                return true;
-            }
-            context = current.parent.as_deref();
-        }
-        false
-    }
 }
 
 struct CSharpTreeScanner<'a> {
@@ -156,7 +360,7 @@ impl<'a> CSharpTreeScanner<'a> {
         }
     }
 
-    fn scan_tree(&mut self, root: Node<'_>) -> Result<(), ParseError> {
+    fn scan_tree(&mut self, root: Node<'_>, query: &Query) -> Result<(), ParseError> {
         let module_unit =
             self.add_unit(CodeUnitKind::Module, "file", 0, self.document.text.len())?;
         self.module_unit = Some(module_unit);
@@ -169,7 +373,8 @@ impl<'a> CSharpTreeScanner<'a> {
                     .to_string(),
             });
         }
-        let captures = node_captures(root, self.document.text)?;
+        let captures = node_captures(root, self.document.text, query)?;
+        let ancestry = capture_ancestry(root, &captures);
         // Receiver bindings are order-independent and must be complete before
         // any invocation is classified.
         for (capture, node) in &captures {
@@ -186,20 +391,26 @@ impl<'a> CSharpTreeScanner<'a> {
         ordered.sort_by(|(_, left), (_, right)| {
             (left.start_byte(), Reverse(left.end_byte()))
                 .cmp(&(right.start_byte(), Reverse(right.end_byte())))
-                .then_with(|| node_depth(*left).cmp(&node_depth(*right)))
+                .then_with(|| ancestry[&left.id()].0.cmp(&ancestry[&right.id()].0))
         });
         // Each node inherits the context of its nearest scope or class-like
         // ancestor.
-        let mut contexts = HashMap::new();
+        let mut contexts: HashMap<usize, VisitContext> = HashMap::new();
         for (capture, node) in ordered {
-            let context = inherited_context(node, &contexts);
+            let context = ancestry[&node.id()]
+                .1
+                .and_then(|owner| contexts.get(&owner))
+                .cloned()
+                .unwrap_or_default();
             match capture {
                 "scope" => {
                     let mut next = context.clone();
-                    next.usings = Arc::new(scope_using_context(
+                    next.usings = Arc::new(binding::scope_imports(
                         self.document.text,
                         node,
                         Arc::clone(&context.usings),
+                        &USING_DIRECTIVES,
+                        &TYPE_NAMES,
                     ));
                     contexts.insert(node.id(), next);
                 }
@@ -250,156 +461,67 @@ impl<'a> CSharpTreeScanner<'a> {
         node: Node<'_>,
         context: &VisitContext,
     ) -> Result<VisitContext, ParseError> {
-        let attributes = declaration_attributes(self.document.text, node);
+        let attributes = binding::annotations(self.document.text, node, &ATTRIBUTE_LISTS);
         let modifiers = modifier_tokens(self.document.text, node);
-        let bases = base_list_types(self.document.text, node);
+        let bases = binding::listed_names(self.document.text, node, "base_list");
         let xunit_member_data_scope = self.xunit_member_data_scope(node, &modifiers, &bases);
-        let class_route_template_shape = attribute_segment_exact(
-            &attributes,
-            "Route",
-            ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
-        )
-        .map(|attribute| route_template_shape(attribute.arguments.as_deref()))
-        .unwrap_or("none");
+        let class_route_template_shape = context
+            .usings
+            .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "Route", ASPNET_MVC_NAMESPACE)
+            .map(|attribute| route_template_shape(attribute.arguments.as_deref()))
+            .unwrap_or("none");
 
-        let controller_target = if has_exact_attribute(
-            &attributes,
-            "ApiController",
-            ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
-        ) {
-            Some(("aspnetcore.mvc.ApiController", "ApiController"))
-        } else if base_is_exact(
-            &bases,
-            "ControllerBase",
-            ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
-        ) {
-            Some(("aspnetcore.mvc.ControllerBase", "ControllerBase"))
-        } else if base_is_exact(
-            &bases,
-            "Controller",
-            ASPNET_MVC_NAMESPACE,
-            context.usings.as_ref(),
-        ) {
-            Some(("aspnetcore.mvc.Controller", "Controller"))
-        } else {
-            None
-        };
-        let db_context = controller_target.is_none()
-            && node.kind() == "class_declaration"
-            && base_is_exact(
-                &bases,
-                "DbContext",
-                EFCORE_NAMESPACE,
-                context.usings.as_ref(),
-            );
-
-        // Ordered after the ASP.NET and EF Core arms so one class never claims
-        // two framework roles: a unit holding two is dropped from family
-        // support silently instead of reporting a conflict.
-        let fluent_validator = controller_target.is_none()
-            && !db_context
-            && node.kind() == "class_declaration"
-            && base_is_exact(
-                &bases,
-                "AbstractValidator",
-                FLUENTVALIDATION_NAMESPACE,
-                context.usings.as_ref(),
-            );
-
-        let kind = if controller_target.is_some() {
-            CodeUnitKind::AspNetController
-        } else if db_context {
-            CodeUnitKind::EfCoreDbContext
-        } else if fluent_validator {
-            CodeUnitKind::FluentValidationValidator
-        } else {
-            CodeUnitKind::Class
-        };
+        let role = context.usings.first_role(
+            CLASS_ROLES,
+            node.kind(),
+            (&ATTRIBUTE_NAMES, &attributes),
+            (&TYPE_NAMES, &bases),
+        );
+        let kind = role
+            .as_ref()
+            .map_or(CodeUnitKind::Class, |role| role.row.role.kind.clone());
         let unit = self.add_named_node_unit(node, kind, "class")?;
         let class_shape = csharp_class_shape(node.kind(), &modifiers);
         let visibility = csharp_visibility_shape(&modifiers);
 
-        if let Some((target, anchor_attribute)) = controller_target {
+        if let Some(role) = &role {
+            let class_role = &role.row.role;
+            let mut assumptions = vec![
+                "provider_resolved=false".to_string(),
+                format!("csharp_anchor_kind={}", class_role.anchor_kind),
+            ];
+            if class_role.names_route_evidence {
+                assumptions.push(format!("aspnet_attribute={}", role.evidence));
+                assumptions.push(format!(
+                    "class_route_template_shape={class_route_template_shape}"
+                ));
+            }
+            assumptions.push(format!("csharp_visibility_shape={visibility}"));
+            assumptions.push(format!("csharp_class_shape={class_shape}"));
             self.semantic_facts.push(structural_anchor_fact(
                 &self.document,
                 &unit,
                 SemanticFactKind::Type,
-                target,
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "csharp_anchor_kind=aspnet_controller".to_string(),
-                    format!("aspnet_attribute={anchor_attribute}"),
-                    format!("class_route_template_shape={class_route_template_shape}"),
-                    format!("csharp_visibility_shape={visibility}"),
-                    format!("csharp_class_shape={class_shape}"),
-                ],
-                "bounded C# ASP.NET Core controller anchor",
+                role.target,
+                assumptions,
+                class_role.note,
             )?);
-            self.semantic_facts.push(unknown_fact(
-                &self.document,
-                &unit,
-                UnknownReasonCode::RuntimeDependencyInjection,
-                "csharp_di_registration",
-                "aspnet_runtime_dependency_injection",
-                "ASP.NET Core dependency injection and assembly scanning are runtime behavior",
-                Vec::new(),
-            )?);
-            self.semantic_facts.push(unknown_fact(
-                &self.document,
-                &unit,
-                UnknownReasonCode::FrameworkMagic,
-                "csharp_aspnet_filter_pipeline",
-                "aspnet_filter_pipeline",
-                "ASP.NET Core middleware and filter pipeline semantics are runtime behavior",
-                Vec::new(),
-            )?);
+            for unknown in class_role.unknowns {
+                self.semantic_facts.push(unknown_fact(
+                    &self.document,
+                    &unit,
+                    unknown.reason,
+                    unknown.claim,
+                    unknown.kind,
+                    unknown.note,
+                    Vec::new(),
+                )?);
+            }
             self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
-        } else if db_context {
-            self.semantic_facts.push(structural_anchor_fact(
-                &self.document,
-                &unit,
-                SemanticFactKind::Type,
-                "efcore.DbContext",
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "csharp_anchor_kind=efcore_db_context".to_string(),
-                    format!("csharp_visibility_shape={visibility}"),
-                    format!("csharp_class_shape={class_shape}"),
-                ],
-                "bounded C# EF Core DbContext anchor",
-            )?);
-            self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
-        } else if fluent_validator {
-            self.semantic_facts.push(structural_anchor_fact(
-                &self.document,
-                &unit,
-                SemanticFactKind::Type,
-                "fluentvalidation.AbstractValidator",
-                vec![
-                    "provider_resolved=false".to_string(),
-                    "csharp_anchor_kind=fluentvalidation_validator".to_string(),
-                    format!("csharp_visibility_shape={visibility}"),
-                    format!("csharp_class_shape={class_shape}"),
-                ],
-                "bounded C# FluentValidation validator anchor",
-            )?);
-            self.semantic_facts.push(unknown_fact(
-                &self.document,
-                &unit,
-                UnknownReasonCode::FrameworkMagic,
-                "csharp_fluentvalidation_rule_chain",
-                "fluentvalidation_rule_chain",
-                "FluentValidation rule builder chains and validator resolution are runtime behavior",
-                Vec::new(),
-            )?);
-            self.emit_anchored_unit_boundaries(&unit, &modifiers)?;
-        } else if has_non_exact_known_attribute(
+        } else if context.usings.has_unbound_lookalike(
+            &ATTRIBUTE_NAMES,
             &attributes,
             KNOWN_CLASS_ATTRIBUTES,
-            context.usings.as_ref(),
         ) {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
@@ -413,7 +535,7 @@ impl<'a> CSharpTreeScanner<'a> {
         }
         if bases
             .iter()
-            .any(|base| base_simple_name(base) == "JsonSerializerContext")
+            .any(|base| TYPE_NAMES.looks_like(base, "JsonSerializerContext"))
         {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
@@ -426,44 +548,45 @@ impl<'a> CSharpTreeScanner<'a> {
             )?);
         }
 
+        let context_role = role.as_ref().map(|role| role.row.role.context);
         Ok(VisitContext {
-            in_aspnet_controller: controller_target.is_some(),
+            in_aspnet_controller: context_role == Some(ClassContext::AspNetController),
             class_route_template_shape,
-            in_efcore_db_context: db_context,
-            in_mstest_test_class: has_exact_attribute(
-                &attributes,
-                "TestClass",
-                MSTEST_NAMESPACE,
-                context.usings.as_ref(),
-            ),
+            in_efcore_db_context: context_role == Some(ClassContext::EfCoreDbContext),
+            in_mstest_test_class: context
+                .usings
+                .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "TestClass", MSTEST_NAMESPACE)
+                .is_some(),
             usings: Arc::clone(&context.usings),
             xunit_member_data_scope: Arc::new(xunit_member_data_scope),
         })
     }
 
     fn scan_method(&mut self, node: Node<'_>, context: &VisitContext) -> Result<(), ParseError> {
-        let attributes = declaration_attributes(self.document.text, node);
+        let attributes = binding::annotations(self.document.text, node, &ATTRIBUTE_LISTS);
         let modifiers = modifier_tokens(self.document.text, node);
         let route = HTTP_ROUTE_ATTRIBUTES
             .iter()
             .find_map(|(attribute, target, http_method)| {
-                attribute_segment_exact(
-                    &attributes,
-                    attribute,
-                    ASPNET_MVC_NAMESPACE,
-                    context.usings.as_ref(),
-                )
-                .map(|found| {
-                    (
-                        *attribute,
-                        *target,
-                        *http_method,
-                        route_template_shape(found.arguments.as_deref()),
+                context
+                    .usings
+                    .exact_annotation(
+                        &ATTRIBUTE_NAMES,
+                        &attributes,
+                        attribute,
+                        ASPNET_MVC_NAMESPACE,
                     )
-                })
+                    .map(|found| {
+                        (
+                            *attribute,
+                            *target,
+                            *http_method,
+                            route_template_shape(found.arguments.as_deref()),
+                        )
+                    })
             });
         let test = if route.is_none() {
-            self.test_method_anchor(&attributes, context)
+            self.test_method_anchor(node.kind(), &attributes, context)
         } else {
             None
         };
@@ -575,12 +698,11 @@ impl<'a> CSharpTreeScanner<'a> {
             return Ok(());
         }
 
-        if has_exact_attribute(
-            &attributes,
-            "MemberData",
-            XUNIT_NAMESPACE,
-            context.usings.as_ref(),
-        ) {
+        if context
+            .usings
+            .exact_annotation(&ATTRIBUTE_NAMES, &attributes, "MemberData", XUNIT_NAMESPACE)
+            .is_some()
+        {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
                 &unit,
@@ -590,10 +712,10 @@ impl<'a> CSharpTreeScanner<'a> {
                 "xUnit MemberData appeared without an exact Theory attribute",
                 Vec::new(),
             )?);
-        } else if has_non_exact_known_attribute(
+        } else if context.usings.has_unbound_lookalike(
+            &ATTRIBUTE_NAMES,
             &attributes,
             KNOWN_METHOD_ATTRIBUTES,
-            context.usings.as_ref(),
         ) {
             self.semantic_facts.push(unknown_fact(
                 &self.document,
@@ -610,111 +732,113 @@ impl<'a> CSharpTreeScanner<'a> {
 
     fn test_method_anchor(
         &self,
-        attributes: &[CSharpAttribute],
+        declaration_kind: &str,
+        attributes: &[Annotation],
         context: &VisitContext,
     ) -> Option<TestMethodAnchor> {
+        let role = context.usings.first_role(
+            TEST_ROLES,
+            declaration_kind,
+            (&ATTRIBUTE_NAMES, attributes),
+            (&TYPE_NAMES, &[]),
+        )?;
         let exact = |simple: &str, namespace: &str| {
-            has_exact_attribute(attributes, simple, namespace, context.usings.as_ref())
+            context
+                .usings
+                .exact_annotation(&ATTRIBUTE_NAMES, attributes, simple, namespace)
+                .is_some()
         };
-        if exact("Fact", XUNIT_NAMESPACE) || exact("Theory", XUNIT_NAMESPACE) {
-            let theory = exact("Theory", XUNIT_NAMESPACE);
-            let member_data_attributes = attributes
-                .iter()
-                .filter(|attribute| {
-                    attribute_is_exact(
-                        attribute,
-                        "MemberData",
-                        XUNIT_NAMESPACE,
-                        context.usings.as_ref(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let has_non_exact_member_data = attributes.iter().any(|attribute| {
-                attribute_matches_name(&attribute.name, "MemberData")
-                    && !attribute_is_exact(
-                        attribute,
-                        "MemberData",
-                        XUNIT_NAMESPACE,
-                        context.usings.as_ref(),
-                    )
-            });
-            let member_data = if theory {
-                if has_non_exact_member_data {
-                    test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
-                        kind: "xunit_member_data_unresolved_attribute",
-                        note: "A MemberData-like attribute lacks an exact same-file using or FQN",
+        let (data_shape, member_data, blocked_claim) = match role.row.role {
+            CodeUnitKind::XunitTestMethod => {
+                let theory = role.evidence == "Theory";
+                let member_data_attributes = attributes
+                    .iter()
+                    .filter(|attribute| {
+                        context.usings.annotation_is_exact(
+                            &ATTRIBUTE_NAMES,
+                            attribute,
+                            "MemberData",
+                            XUNIT_NAMESPACE,
+                        )
                     })
+                    .collect::<Vec<_>>();
+                let has_non_exact_member_data = attributes.iter().any(|attribute| {
+                    ATTRIBUTE_NAMES.looks_like(&attribute.name, "MemberData")
+                        && !context.usings.annotation_is_exact(
+                            &ATTRIBUTE_NAMES,
+                            attribute,
+                            "MemberData",
+                            XUNIT_NAMESPACE,
+                        )
+                });
+                let member_data = if theory {
+                    if has_non_exact_member_data {
+                        test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
+                            kind: "xunit_member_data_unresolved_attribute",
+                            note:
+                                "A MemberData-like attribute lacks an exact same-file using or FQN",
+                        })
+                    } else {
+                        test_data::resolve(
+                            member_data_attributes
+                                .iter()
+                                .map(|attribute| attribute.arguments.as_deref()),
+                            context.xunit_member_data_scope.as_ref(),
+                        )
+                    }
+                } else if member_data_attributes.is_empty() && !has_non_exact_member_data {
+                    test_data::MemberDataResolution::Absent
                 } else {
-                    test_data::resolve(
-                        member_data_attributes
-                            .iter()
-                            .map(|attribute| attribute.arguments.as_deref()),
-                        context.xunit_member_data_scope.as_ref(),
-                    )
-                }
-            } else if member_data_attributes.is_empty() && !has_non_exact_member_data {
-                test_data::MemberDataResolution::Absent
-            } else {
-                test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
-                    kind: "xunit_member_data_requires_theory",
-                    note: "xUnit MemberData is only valid on a Theory test",
-                })
-            };
-            return Some(TestMethodAnchor {
-                unit_kind: CodeUnitKind::XunitTestMethod,
-                target: if theory { "xunit.Theory" } else { "xunit.Fact" },
-                attribute: if theory { "Theory" } else { "Fact" },
-                data_shape: if theory {
+                    test_data::MemberDataResolution::Unknown(test_data::MemberDataUnknown {
+                        kind: "xunit_member_data_requires_theory",
+                        note: "xUnit MemberData is only valid on a Theory test",
+                    })
+                };
+                let data_shape = if theory {
                     member_data.data_shape()
                 } else {
                     "fact"
-                },
-                member_data,
-                blocked_claim: None,
-            });
-        }
-        if exact("Test", NUNIT_NAMESPACE) || exact("TestCase", NUNIT_NAMESPACE) {
-            let test_case = exact("TestCase", NUNIT_NAMESPACE);
-            return Some(TestMethodAnchor {
-                unit_kind: CodeUnitKind::NunitTestMethod,
-                target: if test_case {
-                    "nunit.framework.TestCase"
-                } else {
-                    "nunit.framework.Test"
-                },
-                attribute: if test_case { "TestCase" } else { "Test" },
-                data_shape: if test_case { "test_case" } else { "test" },
-                member_data: test_data::MemberDataResolution::Absent,
-                blocked_claim: None,
-            });
-        }
-        if exact("TestMethod", MSTEST_NAMESPACE) {
-            if !context.in_mstest_test_class {
-                return Some(TestMethodAnchor {
-                    unit_kind: CodeUnitKind::MstestTestMethod,
-                    target: "mstest.unittesting.TestMethod",
-                    attribute: "TestMethod",
-                    data_shape: "none",
-                    member_data: test_data::MemberDataResolution::Absent,
-                    blocked_claim: Some((
-                        UnknownReasonCode::FrameworkMagic,
-                        "csharp_test_class_identity",
-                        "mstest_method_without_test_class",
-                        "MSTest [TestMethod] appeared outside an exact [TestClass] class",
-                    )),
-                });
+                };
+                (data_shape, member_data, None)
             }
-            let data_row = exact("DataRow", MSTEST_NAMESPACE);
-            return Some(TestMethodAnchor {
-                unit_kind: CodeUnitKind::MstestTestMethod,
-                target: "mstest.unittesting.TestMethod",
-                attribute: "TestMethod",
-                data_shape: if data_row { "data_row" } else { "none" },
-                member_data: test_data::MemberDataResolution::Absent,
-                blocked_claim: None,
-            });
-        }
-        None
+            CodeUnitKind::NunitTestMethod => (
+                if role.evidence == "TestCase" {
+                    "test_case"
+                } else {
+                    "test"
+                },
+                test_data::MemberDataResolution::Absent,
+                None,
+            ),
+            CodeUnitKind::MstestTestMethod if !context.in_mstest_test_class => (
+                "none",
+                test_data::MemberDataResolution::Absent,
+                Some((
+                    UnknownReasonCode::FrameworkMagic,
+                    "csharp_test_class_identity",
+                    "mstest_method_without_test_class",
+                    "MSTest [TestMethod] appeared outside an exact [TestClass] class",
+                )),
+            ),
+            CodeUnitKind::MstestTestMethod => (
+                if exact("DataRow", MSTEST_NAMESPACE) {
+                    "data_row"
+                } else {
+                    "none"
+                },
+                test_data::MemberDataResolution::Absent,
+                None,
+            ),
+            _ => return None,
+        };
+        Some(TestMethodAnchor {
+            unit_kind: role.row.role.clone(),
+            target: role.target,
+            attribute: role.evidence,
+            data_shape,
+            member_data,
+            blocked_claim,
+        })
     }
 
     fn xunit_member_data_scope(
@@ -1155,13 +1279,12 @@ impl<'a> CSharpTreeScanner<'a> {
 fn node_captures<'tree>(
     root: Node<'tree>,
     source: &str,
+    query: &Query,
 ) -> Result<Vec<(&'static str, Node<'tree>)>, ParseError> {
-    let query = Query::new(&tree_sitter_c_sharp::LANGUAGE.into(), NODE_QUERY)
-        .map_err(|error| ParseError::Internal(format!("compile C# node query: {error}")))?;
     let names = query.capture_names();
     let mut cursor = QueryCursor::new();
     let mut captures = Vec::new();
-    let mut matches = cursor.matches(&query, root, source.as_bytes());
+    let mut matches = cursor.matches(query, root, source.as_bytes());
     while let Some(found) = matches.next() {
         for capture in found.captures() {
             let name = match names[capture.index as usize] {
@@ -1189,25 +1312,43 @@ fn node_captures<'tree>(
     Ok(captures)
 }
 
-fn inherited_context(node: Node<'_>, contexts: &HashMap<usize, VisitContext>) -> VisitContext {
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        if let Some(context) = contexts.get(&current.id()) {
-            return context.clone();
+/// Depth and nearest `scope` or `class_like` ancestor of every captured node,
+/// from one cursor walk. `Node::parent` descends from the root on each call,
+/// so walking ancestors per node is cubic in nesting depth. Pre-order handling
+/// gives every such ancestor its context before any descendant reads it.
+fn capture_ancestry(
+    root: Node<'_>,
+    captures: &[(&'static str, Node<'_>)],
+) -> HashMap<usize, (usize, Option<usize>)> {
+    let captured = captures
+        .iter()
+        .map(|(capture, node)| (node.id(), *capture))
+        .collect::<HashMap<_, _>>();
+    let mut ancestry = HashMap::new();
+    let mut cursor = root.walk();
+    // The nearest context owner at or above each node on the current path.
+    let mut owners: Vec<Option<usize>> = Vec::new();
+    loop {
+        let node = cursor.node();
+        let owner = owners.last().copied().flatten();
+        let own = match captured.get(&node.id()) {
+            Some(capture) => {
+                ancestry.insert(node.id(), (owners.len(), owner));
+                matches!(*capture, "scope" | "class_like").then_some(node.id())
+            }
+            None => None,
+        };
+        if cursor.goto_first_child() {
+            owners.push(own.or(owner));
+            continue;
         }
-        ancestor = current.parent();
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return ancestry;
+            }
+            owners.pop();
+        }
     }
-    VisitContext::default()
-}
-
-fn node_depth(node: Node<'_>) -> usize {
-    let mut depth = 0;
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        depth += 1;
-        ancestor = current.parent();
-    }
-    depth
 }
 
 #[derive(Debug, Clone)]
@@ -1294,54 +1435,6 @@ fn unknown_fact(
     })
 }
 
-/// Extends a lexical C# scope with only its direct Tree-sitter
-/// `using_directive` children. Comments, strings, and sibling namespaces never
-/// contribute binding evidence; `using static` and alias usings never gate
-/// exactness.
-fn scope_using_context(
-    source: &str,
-    scope: Node<'_>,
-    parent: Arc<CSharpUsingContext>,
-) -> CSharpUsingContext {
-    let mut context = CSharpUsingContext {
-        parent: Some(parent),
-        exact_usings: BTreeSet::new(),
-    };
-    let mut cursor = scope.walk();
-    for child in scope.named_children(&mut cursor) {
-        record_exact_using(source, child, &mut context);
-        if child.kind() == "declaration_list" {
-            let mut body_cursor = child.walk();
-            for body_child in child.named_children(&mut body_cursor) {
-                record_exact_using(source, body_child, &mut context);
-            }
-        }
-    }
-    context
-}
-
-fn record_exact_using(source: &str, node: Node<'_>, context: &mut CSharpUsingContext) {
-    if !matches!(node.kind(), "using_directive" | "global_using_directive") {
-        return;
-    }
-    let line = node_text(source, node).trim();
-    let line = line.strip_prefix("global ").unwrap_or(line);
-    let Some(rest) = line.strip_prefix("using ") else {
-        return;
-    };
-    if rest.starts_with("static ") || rest.contains('=') || rest.contains('(') {
-        return;
-    }
-    let namespace = rest.trim_end_matches(';').trim();
-    if !namespace.is_empty()
-        && namespace
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_'))
-    {
-        context.exact_usings.insert(namespace.to_string());
-    }
-}
-
 /// Byte ranges of `#if`..`#endif` conditional regions, computed lexically and
 /// applied span-scoped per unit. Conditions are recorded, never evaluated.
 fn conditional_preproc_regions(source: &str) -> Vec<(usize, usize)> {
@@ -1396,149 +1489,10 @@ fn is_preproc_directive(trimmed_line: &str, directive: &str) -> bool {
     })
 }
 
-fn declaration_attributes(source: &str, node: Node<'_>) -> Vec<CSharpAttribute> {
-    let mut attributes = Vec::new();
-    let mut list_cursor = node.walk();
-    for child in node.named_children(&mut list_cursor) {
-        if child.kind() != "attribute_list" {
-            continue;
-        }
-        let mut attribute_cursor = child.walk();
-        for attribute in child.named_children(&mut attribute_cursor) {
-            if attribute.kind() != "attribute" {
-                continue;
-            }
-            let name = attribute
-                .child_by_field_name("name")
-                .and_then(|name| node_text_checked(source, name))
-                .map(str::to_string);
-            let arguments = {
-                let mut argument_cursor = attribute.walk();
-                let found = attribute
-                    .named_children(&mut argument_cursor)
-                    .find(|candidate| candidate.kind() == "attribute_argument_list")
-                    .map(|arguments| node_text(source, arguments).to_string());
-                found
-            };
-            if let Some(name) = name {
-                attributes.push(CSharpAttribute {
-                    name,
-                    arguments,
-                    parse_degraded: attribute.has_error(),
-                });
-            }
-        }
-    }
-    attributes
-}
-
-fn attribute_matches_name(attribute_name: &str, simple: &str) -> bool {
-    let last = attribute_name.rsplit('.').next().unwrap_or(attribute_name);
-    last == simple || last == format!("{simple}Attribute")
-}
-
-fn attribute_name_is_exact(
-    attribute_name: &str,
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    let candidates = [simple.to_string(), format!("{simple}Attribute")];
-    if attribute_name.contains('.') {
-        return candidates
-            .iter()
-            .any(|candidate| attribute_name == format!("{namespace}.{candidate}"));
-    }
-    candidates
-        .iter()
-        .any(|candidate| attribute_name == candidate)
-        && usings.has_using_for(namespace)
-}
-
-fn attribute_is_exact(
-    attribute: &CSharpAttribute,
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    !attribute.parse_degraded && attribute_name_is_exact(&attribute.name, simple, namespace, usings)
-}
-
-fn has_exact_attribute(
-    attributes: &[CSharpAttribute],
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    attributes
-        .iter()
-        .any(|attribute| attribute_is_exact(attribute, simple, namespace, usings))
-}
-
-fn attribute_segment_exact<'a>(
-    attributes: &'a [CSharpAttribute],
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> Option<&'a CSharpAttribute> {
-    attributes
-        .iter()
-        .find(|attribute| attribute_is_exact(attribute, simple, namespace, usings))
-}
-
-fn has_non_exact_known_attribute(
-    attributes: &[CSharpAttribute],
-    known: &[(&str, &str)],
-    usings: &CSharpUsingContext,
-) -> bool {
-    attributes.iter().any(|attribute| {
-        known.iter().any(|(simple, namespace)| {
-            attribute_matches_name(&attribute.name, simple)
-                && !attribute_is_exact(attribute, simple, namespace, usings)
-        })
-    })
-}
-
 fn contains_generated_regex_marker(slice: &str) -> bool {
     identifier_tokens(slice)
         .iter()
         .any(|token| token == "GeneratedRegex" || token == "GeneratedRegexAttribute")
-}
-
-fn base_list_types(source: &str, node: Node<'_>) -> Vec<String> {
-    let mut bases = Vec::new();
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() != "base_list" {
-            continue;
-        }
-        let mut base_cursor = child.walk();
-        for base in child.named_children(&mut base_cursor) {
-            bases.push(node_text(source, base).to_string());
-        }
-    }
-    bases
-}
-
-fn base_simple_name(base: &str) -> &str {
-    let without_generics = base.split('<').next().unwrap_or(base).trim();
-    without_generics
-        .rsplit('.')
-        .next()
-        .unwrap_or(without_generics)
-}
-
-fn base_is_exact(
-    bases: &[String],
-    simple: &str,
-    namespace: &str,
-    usings: &CSharpUsingContext,
-) -> bool {
-    bases.iter().any(|base| {
-        let trimmed = base.split('<').next().unwrap_or(base).trim();
-        trimmed == format!("{namespace}.{simple}")
-            || (trimmed == simple && usings.has_using_for(namespace))
-    })
 }
 
 fn modifier_tokens(source: &str, node: Node<'_>) -> Vec<String> {
@@ -1938,7 +1892,9 @@ mod tests {
             repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
             text,
         };
-        CSharpSyntaxParser.parse(document).expect("parse csharp")
+        CSharpSyntaxParser::default()
+            .parse(document)
+            .expect("parse csharp")
     }
 
     fn unit_kinds(report: &ParseReport) -> Vec<&'static str> {
@@ -2664,6 +2620,43 @@ public class BrokenAttributeTests
                 "xunit_member_data_ineligible_source".to_string(),
             )]
         );
+    }
+
+    #[test]
+    fn capture_ancestry_matches_parent_walks() {
+        let parser = CSharpSyntaxParser::default();
+        let query = parser.node_query().expect("compile node query");
+        for source in [
+            "using A;\nnamespace N { class Outer { class Inner { void M() { var x = F(G(1)); } } } record R(int X); }\n",
+            "namespace N;\npublic struct S { int P { get; } = H(); }\ninterface I { void M(); }\n",
+            "class Broken { void M( { F(G( } class Next { void N() { } }\n",
+        ] {
+            let mut tree_parser = Parser::new();
+            tree_parser
+                .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+                .expect("load C# grammar");
+            let tree = tree_parser.parse(source, None).expect("parse C#");
+            let captures = node_captures(tree.root_node(), source, query).expect("captures");
+            assert!(captures.len() >= 4, "{source}");
+            let ancestry = capture_ancestry(tree.root_node(), &captures);
+            for (_, node) in &captures {
+                let (mut depth, mut owner) = (0, None);
+                let mut ancestor = node.parent();
+                while let Some(current) = ancestor {
+                    depth += 1;
+                    if owner.is_none()
+                        && captures.iter().any(|(capture, captured)| {
+                            captured.id() == current.id()
+                                && matches!(*capture, "scope" | "class_like")
+                        })
+                    {
+                        owner = Some(current.id());
+                    }
+                    ancestor = current.parent();
+                }
+                assert_eq!(ancestry[&node.id()], (depth, owner), "{}", node.kind());
+            }
+        }
     }
 
     #[test]

@@ -67,3 +67,4 @@ Current accepted ADRs:
 - ADR-0055: Qualified bounded Python project-session transport.
 - ADR-0056: Verified one-command bootstrap over existing setup.
 - ADR-0057: Declarative language family packs.
+- ADR-0058: Tree-sitter frontends for every source language.

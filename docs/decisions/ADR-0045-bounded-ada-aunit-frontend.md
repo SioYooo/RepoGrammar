@@ -1,6 +1,6 @@
 # ADR-0045: Bounded Ada AUnit frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [ada completion review](../reports/language-support/ada-completion-review.md))
 - Date: 2026-08-15
 - Scope: Ada in ADR-0020; admits a family-bearing frontend over one
   registration-call shape
@@ -317,6 +317,11 @@ No Rust crate, no grammar, no toolchain, no downloaded artifact. The lexer and
 the parser are hand-written Rust in this repository. ADR-0033 D3's Libadalang
 `NO_GO` stands and is not reopened, and this ADR does not reserve the right to
 add an Ada dependency later without a superseding decision.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the parser now reads the pinned `tree-sitter-ada` 0.1.0 grammar crate, with the
+lexer kept as the lexical-subset gate; this D6 prohibition is superseded for that
+crate only.
 
 ## Alternatives considered
 

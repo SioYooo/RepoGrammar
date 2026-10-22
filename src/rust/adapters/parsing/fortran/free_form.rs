@@ -88,7 +88,7 @@ fn is_ident_continue(byte: u8) -> bool {
 /// The sequence is `&`, then optional blanks, then optionally a `!` comment to
 /// end of line, then the line break, then the next line's leading blanks and
 /// its optional leading `&` continuation mark.
-fn continuation_end(bytes: &[u8], index: usize) -> Option<usize> {
+pub(crate) fn continuation_end(bytes: &[u8], index: usize) -> Option<usize> {
     if bytes.get(index) != Some(&b'&') {
         return None;
     }
@@ -227,7 +227,7 @@ fn lex_tokens(text: &str) -> (Vec<Token>, LexFlags, Option<LexAbstention>) {
 /// End of a quoted literal starting at `start`, with `&` continuation and
 /// doubling escapes. Returns `(end, terminated)`; an uncontinued newline or
 /// end of input ends the literal unterminated at that boundary.
-fn string_end(bytes: &[u8], start: usize) -> (usize, bool) {
+pub(crate) fn string_end(bytes: &[u8], start: usize) -> (usize, bool) {
     let quote = bytes[start];
     let mut index = start + 1;
     while index < bytes.len() {
@@ -344,7 +344,9 @@ pub(crate) fn ident_is(text: &str, token: Token, expected: &str) -> bool {
     token.kind == TokenKind::Ident && token_text(text, token).eq_ignore_ascii_case(expected)
 }
 
-/// Lowercased copy of a name token's glued text, for map keys.
+/// Lowercased copy of a name token's glued text, for map keys. Only the
+/// lexer tests read tokens this way.
+#[cfg(test)]
 pub(crate) fn lower(text: &str, token: Token) -> String {
     token_text(text, token).to_ascii_lowercase()
 }

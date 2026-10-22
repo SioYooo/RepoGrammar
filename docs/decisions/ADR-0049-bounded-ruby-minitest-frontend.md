@@ -1,6 +1,6 @@
 # ADR-0049: Bounded Ruby Minitest frontend
 
-- Status: Accepted
+- Status: Accepted; hand-written parser and no-dependency clauses amended by ADR-0058 (see the [ruby completion review](../reports/language-support/ruby-completion-review.md))
 - Date: 2026-09-04
 - Scope: Ruby in ADR-0020; admits a family-bearing frontend over one class and
   method shape
@@ -239,6 +239,12 @@ No crate, no grammar, no generated parser, no Ruby installation, no downloaded
 artifact. Input is untrusted: the frontend keeps the shared source byte limit,
 bounds emitted units, and bounds region nesting depth, each abstaining with a
 typed `UNKNOWN` rather than degrading silently.
+
+Amended by [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md):
+the frontend now reads declarations from the pinned `tree-sitter-ruby` 0.23.1
+grammar crate, with the lexer kept as the lexical-subset gate. This D6
+dependency prohibition is superseded for that crate only; every execution
+prohibition is unchanged.
 
 ## Alternatives considered
 
