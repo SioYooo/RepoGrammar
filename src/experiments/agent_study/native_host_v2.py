@@ -361,6 +361,13 @@ def assess_manifest(transcript, enabled):
             "mcp_count": len(servers) if isinstance(servers, list) else None}
 
 
+def bridge_ok(summary):
+    """One product-answered tools/call and no product error, except the probe's expected -32601."""
+    return (summary["status"] in ("CLOSED", "COMPLETE") and summary["process_cleanup"] == "PASS"
+            and summary["method_counts"]["tools/call"] == 1
+            and all(f["status"] != "PRODUCT_ERROR" or f["method"] == "server/discover" for f in summary["frames"]))
+
+
 def qualify(out, cli, product, guide_file):
     guide = offline.regular_bytes(guide_file, 1024)
     if offline.sha(guide) != "5df98f0677189042c7ae58aa74d6e7ac90bd99324a18edf263f9be8db7b4b256":
@@ -460,10 +467,7 @@ def qualify(out, cli, product, guide_file):
                 p.is_file() and not p.is_symlink() and offline.sha(p.read_bytes()) == value
                 for p, value in protected_hashes.items()))
             bridge_summary = bridge.summary if arm != "B0" else None
-            bridge_pass = (arm == "B0" or (bridge_summary["status"] in ("CLOSED", "COMPLETE")
-                           and bridge_summary["process_cleanup"] == "PASS"
-                           and bridge_summary["method_counts"]["tools/call"] == 1
-                           and all(f["status"] != "PRODUCT_ERROR" for f in bridge_summary["frames"])))
+            bridge_pass = arm == "B0" or bridge_ok(bridge_summary)
             passed = (code == 0 and status == "COMPLETE" and provider.invalid == 0
                       and cleanup == "PASS"
                       and discovery["tool_inventory"] == "PASS"

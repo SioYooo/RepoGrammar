@@ -94,6 +94,16 @@ class NativeHostTest(unittest.TestCase):
             db.write_bytes(b"mutated")
             self.assertNotEqual(host.inventory(root), base)
 
+    def test_bridge_ok_excuses_only_the_discover_probe_error(self):
+        frame = lambda method, status: {"method": method, "status": status}
+        summary = {"status": "COMPLETE", "process_cleanup": "PASS", "method_counts": {"tools/call": 1},
+                   "frames": [frame("server/discover", "PRODUCT_ERROR"), frame("tools/call", "PRODUCT_SUCCESS")]}
+        self.assertTrue(host.bridge_ok(summary))
+        for method in ("tools/call", "initialize", "tools/list", "ping"):
+            bad = dict(summary, frames=summary["frames"] + [frame(method, "PRODUCT_ERROR")])
+            self.assertFalse(host.bridge_ok(bad))
+        self.assertFalse(host.bridge_ok(dict(summary, method_counts={"tools/call": 0})))
+
     def test_inventory_tags_types_and_rejects_special_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

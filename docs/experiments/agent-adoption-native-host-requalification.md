@@ -270,3 +270,11 @@ Gates: G3 B1 end to end (controls, transport, integrity), then G4 B2, then G5
 B3. Cap: 3 rounds; evidence under `.../native-host-20261022/campaign-3/`
 (short run names). Stop on an unattributable control failure, an authority
 blocker or the cap. Effects remain NOT_MEASURED.
+
+Round-1 amendment (recorded before round 2): campaign 3 round 1 passed every
+B1 control and integrity but the arm verdict stayed blocked because the
+harness's bridge check rejected any `PRODUCT_ERROR` frame, including the
+preregistered, expected -32601 answer to the `server/discover` probe. Class:
+HARNESS_DEFECT (consequence of the campaign-2 relay). Round-2 change: the check
+excuses a product error only for method `server/discover`; an error on any other
+method, or a tools/call count other than one, still fails (tested).
