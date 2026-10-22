@@ -30,7 +30,6 @@ pub mod rust;
 pub mod sql;
 pub mod swift;
 pub mod syntax;
-pub mod tree_sitter;
 pub mod tsjs;
 pub mod visual_basic;
 

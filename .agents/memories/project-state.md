@@ -24,7 +24,7 @@ The same branch also carries:
 
 The release binary grew from 22.3 MB to 38.6 MB, almost all grammar parse
 tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
-`adapters/parsing/tree_sitter.rs` still needs maintainer-approved deletion.
+`adapters/parsing/tree_sitter.rs` was deleted on 2026-10-22 with maintainer approval.
 
 TS/JS goes in slices under ADR-0059 (Proposed) on `feat/tsjs-tree-sitter`,
 starting with the shared `ScopeGraphLite`. Evidence:
