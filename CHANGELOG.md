@@ -8,6 +8,21 @@ The 0.5.1 release restores coordinated GitHub and npm publication under the
 public (staged, awaiting maintainer approval) and the public finalizer has not
 run. Candidate manifests and staged packages are not public-release evidence.
 
+### Changed
+
+- The Go, Ruby, PHP, Delphi, Fortran, MATLAB, Swift, R and Ada frontends and
+  the TS/JS scope graph now read version-pinned Tree-sitter grammars
+  (ADR-0058, ADR-0059 slice 1); the hand-written parsers are deleted. Family
+  policies, UNKNOWN kinds and all 179 fixture roots are unchanged. Accepted
+  differences on the migrated grammars: a file whose grammar cannot read a
+  valid construct (PHP `declare(strict_types=1, ticks=1)`, a Ruby method call
+  on a command-call `do … end` block, a Fortran alternate-return dummy, Swift
+  5.10/6 forms, Ada 2022 `for I : T in …`) now refuses as a typed UNKNOWN
+  instead of being misread; a Delphi fixture after a `record` or `interface`
+  in the same `type` section now anchors; a TS/JS file with a syntax error
+  yields `tsjs_parse_degraded`. The release binary grows from 22.3 MB to
+  41.9 MB, almost all grammar parse tables.
+
 ### Added
 
 - Current source adds an unreleased `--quickstart` bootstrap that verifies a
