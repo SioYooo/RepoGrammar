@@ -123,7 +123,7 @@ def sandbox_profile(worktree, env, probe):
     quote = json.dumps
     runtime = ["/System", "/usr/lib", "/usr/share", "/usr/bin", "/bin", str(BASE_PREFIX)]
     libs = [Path(p) for pair in EXTENSION_LIBS for p in pair]
-    ancestors = sorted({str(p) for root in [PYTHON, BASE_PREFIX, *libs] for p in root.parents})
+    ancestors = sorted({str(p) for root in [PYTHON, BASE_PREFIX, worktree, *libs] for p in root.parents})
     metadata = " ".join(f"(literal {quote(p)})" for p in ancestors)
     lib_reads = "".join(f" (literal {quote(p)})" for linked, resolved in EXTENSION_LIBS
                         for p in _lib_literals(linked, resolved))

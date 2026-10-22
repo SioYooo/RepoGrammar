@@ -69,6 +69,20 @@ probe mechanics. No negative control was dropped. Full Rust tests initially
 failed the existing native watcher test under the enclosing sandbox; the native
 rerun is the required gate, with both logs retained.
 
+## Homebrew Python 3.14 rerun (2026-10-22)
+
+Under Homebrew Python 3.14.6 the unchanged runner failed all four arms with
+`SANDBOX_LAUNCH_FAILED` (0/22 each; probe stderr `sqlite3.OperationalError:
+unable to open database file`) because the Seatbelt profile admitted no
+worktree-ancestor metadata. `sandbox_profile` now adds the worktree's ancestors
+to the existing `file-read-metadata` literal set (metadata only; no new read or
+write scope). Rerun of the documented command with the regenerated v4 guide
+(824 bytes, SHA-256 `5df98f06...b256`) gave B0-B3 each 22/22 PASS, 8/8 references
+and 24/24 mutants as before; `runner_v2.py` SHA-256 `b0839816...`, run summary
+SHA-256 `32c51668...0fbf1` (retained outside version control in the session
+scratchpad). Live execution remains CONTROL_ISOLATION_BLOCKED; the 2026-09-30
+retained result above is unchanged.
+
 ## Remaining live gates
 
 This is **DEVELOPMENT_BURNED** qualification. Zero lexical/exact-AST overlap is

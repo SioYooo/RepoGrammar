@@ -116,10 +116,9 @@ Verdict vocabulary: PASS per gate, BLOCKED, NOT_RUN, NOT_MEASURED.
   directory's alias literal. Before round 5 the generated host profile was
   verified with a Homebrew-sqlite import and database open under
   `sandbox-exec`, outside the campaign. Separately, the older offline
-  `runner_v2` qualification (not part of the native campaign) still fails
-  under Homebrew Python 3.14 because its profile lacks worktree-ancestor
-  metadata (sqlite open fails); the native host profile has it. Recorded, not
-  fixed here.
+  `runner_v2` qualification (not part of the native campaign) failed
+  under Homebrew Python 3.14 because its profile lacked worktree-ancestor
+  metadata; fixed afterwards (see the v2 qualification doc).
 
 ## Results
 
@@ -159,8 +158,8 @@ directly), which a client could fall back on. This is a harness/bridge finding;
 the product is not a defect here and was not changed.
 
 Separately, the older `runner_v2` offline qualification (not part of this
-campaign) fails under Homebrew Python 3.14 for sqlite open (its profile lacks
-worktree-ancestor metadata that the native host profile adds). Recorded only.
+campaign) failed under Homebrew Python 3.14 for sqlite open (its profile lacked
+worktree-ancestor metadata); fixed afterwards, see the v2 qualification doc.
 
 Identity actually used: Claude Code 2.1.304 SHA-256 `b9ac5374...ab78e6a`
 (full value above); product `9f754810...66fb`; guide `5df98f06...b256`; bridge `75bce279...b84c` and probes unchanged from
@@ -322,5 +321,5 @@ Identity: Claude Code 2.1.304 `b9ac5374...78e6a`; product `9f754810...66fb`; gui
 (`r1`, `r2`, `harness-final.sha256`).
 
 Caveats: tolerance is the only integrity relaxation; the older `runner_v2`
-offline qualification still fails under Homebrew Python (recorded earlier);
+offline qualification failed under Homebrew Python at the time (since fixed);
 pass is for this CLI version, this product build and macOS Seatbelt only.
