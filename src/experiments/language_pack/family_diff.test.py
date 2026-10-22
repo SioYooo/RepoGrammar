@@ -62,6 +62,12 @@ class FamilyDiffTest(unittest.TestCase):
         classes = classify_units([unit("function", "f", 0, 5)], [unit("function", "g", 0, 5)])
         self.assertEqual((len(classes["unit_retired"]), len(classes["unit_added"])), (1, 1))
 
+    def test_token_start_overlap_and_kind_change(self):
+        classes = classify_units([unit("express_route", "get", 5, 40)], [unit("express_route", "get", 6, 41)])
+        self.assertEqual(len(classes["unit_start_corrected"]), 1)
+        classes = classify_units([unit("react_component", "W", 0, 9)], [unit("function", "W", 0, 9)])
+        self.assertEqual(len(classes["unit_kind_changed"]), 1)
+
     def test_split_and_merge(self):
         split = classify_units([unit("function", "f", 0, 50)],
                                [unit("function", "a", 1, 10), unit("function", "b", 20, 30)])

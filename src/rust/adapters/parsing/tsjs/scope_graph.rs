@@ -65,6 +65,19 @@ pub(super) struct UnitNames {
     pub(super) table_factories: BTreeSet<String>,
 }
 
+impl UnitNames {
+    /// The names that need no import: the three Drizzle table factories.
+    fn ambient() -> Self {
+        Self {
+            table_factories: super::drizzle::DRIZZLE_TABLE_FACTORIES
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct UnsafeNameEvent {
     byte: usize,
@@ -104,6 +117,7 @@ impl ScopeGraphLite {
     pub(super) fn degraded() -> Self {
         Self {
             degraded: true,
+            unit_names: UnitNames::ambient(),
             ..Self::default()
         }
     }
@@ -233,11 +247,7 @@ impl ScopeGraphLite {
         let mut names = UnitNames {
             fastify: loose.fastify,
             hono: loose.hono,
-            table_factories: ["pgTable", "mysqlTable", "sqliteTable"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            ..UnitNames::default()
+            ..UnitNames::ambient()
         };
         for (local, binding) in &self.imports {
             match (binding.module.as_str(), &binding.kind) {

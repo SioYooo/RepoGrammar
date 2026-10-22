@@ -130,27 +130,43 @@ def match_units(before, after):
     return matched, only_before, only_after
 
 
+def record_fact_change(classes, old, now):
+    """A difference in the facts of one unit pair: an anchor change, or UNKNOWN on both sides."""
+    if old[6] == now[6]:
+        return
+    old_facts = {tuple(f) for f in old[6]}
+    now_facts = {tuple(f) for f in now[6]}
+    only_unknown = bool(old[6] and now[6]) and all(f[0] == "UNKNOWN" for f in old[6] + now[6])
+    target = "unknown_kind_changed" if only_unknown else "anchor_changed"
+    classes[target].append([old[0], old[1], old[2], old[5],
+                            sorted(map(list, old_facts - now_facts)), sorted(map(list, now_facts - old_facts))])
+
+
 def classify_units(before, after):
     """Unit-level classes: boundary, retired, added, start_corrected, split, merged."""
     matched, gone, new = match_units(before, after)
     classes = {"unit_boundary_only": [], "unit_start_corrected": [], "unit_split": [], "unit_merged": [],
-               "unit_retired": [], "unit_added": [], "anchor_changed": [], "unknown_kind_changed": []}
+               "unit_retired": [], "unit_added": [], "anchor_changed": [], "unknown_kind_changed": [],
+               "unit_kind_changed": []}
     for old, now in matched:
         if old[4] != now[4]:
             classes["unit_boundary_only"].append([old[0], old[1], old[2], old[5]])
-        if old[6] != now[6]:
-            old_kinds = {tuple(f) for f in old[6]}
-            now_kinds = {tuple(f) for f in now[6]}
-            only_unknown = all(f[0] == "UNKNOWN" for f in old[6] + now[6]) and old[6] and now[6]
-            target = "unknown_kind_changed" if only_unknown else "anchor_changed"
-            classes[target].append([old[0], old[1], old[2], old[5],
-                                    sorted(map(list, old_kinds - now_kinds)), sorted(map(list, now_kinds - old_kinds))])
+        record_fact_change(classes, old, now)
     gone, new = list(gone), list(new)
     for old in list(gone):
+        renamed = [u for u in new if u[0] == old[0] and u[1] != old[1] and u[2] == old[2] and u[3] == old[3]]
+        if renamed:
+            classes["unit_kind_changed"].append([old[0], old[1], old[2], old[5], renamed[0][1]])
+            record_fact_change(classes, old, renamed[0])
+            gone.remove(old)
+            new.remove(renamed[0])
+    for old in list(gone):
+        # the same unit started elsewhere: same kind and name, overlapping ranges
         containing = [u for u in new if u[0] == old[0] and u[1] == old[1] and u[2] == old[2]
-                      and u[3] < old[3] <= u[4]]
+                      and u[3] < old[4] and old[3] < u[4]]
         if containing:
             classes["unit_start_corrected"].append([old[0], old[1], old[2], old[5]])
+            record_fact_change(classes, old, containing[0])
             gone.remove(old)
             new.remove(containing[0])
     for old in list(gone):
@@ -221,8 +237,8 @@ def root_label(result):
         return "family_changed" if not result["families"]["attributable"] else "unit_retired"
     if units["unknown_kind_changed"] or result["unknowns"]["only_before"] or result["unknowns"]["only_after"]:
         return "unknown_kind_changed"
-    for name in ("unit_start_corrected", "unit_split", "unit_merged", "unit_added", "unit_retired",
-                 "unit_boundary_only"):
+    for name in ("unit_start_corrected", "unit_kind_changed", "unit_split", "unit_merged", "unit_added",
+                 "unit_retired", "unit_boundary_only"):
         if units[name]:
             return name
     return "identical"

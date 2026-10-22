@@ -229,7 +229,25 @@ fn retired_reason(text: &str, graph: &ScopeGraphLite, unit: &Unit) -> String {
     if unit.kind == "method" {
         return "statement_in_class".to_string();
     }
-    let _ = text;
+    // The line reader started the unit after a `this.` / `super.` receiver.
+    let before = text.get(..unit.start).unwrap_or("");
+    let head = text.get(unit.start..).unwrap_or("");
+    if before.ends_with("this.")
+        || before.ends_with("super.")
+        || head.starts_with("this.")
+        || head.starts_with("super.")
+    {
+        return "keyword_receiver".to_string();
+    }
+    // `console['warn']('a' + 'b')`: a quote on the line, no string argument.
+    if unit.kind == "express_route"
+        && head
+            .split('(')
+            .next()
+            .is_some_and(|callee| callee.contains('['))
+    {
+        return "string_prefix_expression".to_string();
+    }
     "other".to_string()
 }
 

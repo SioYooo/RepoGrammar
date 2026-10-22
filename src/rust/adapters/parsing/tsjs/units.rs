@@ -1213,6 +1213,19 @@ mod tests {
     }
 
     #[test]
+    fn a_degraded_graph_still_sees_the_ambient_table_factories() {
+        let text = "export const users = pgTable(\"u\", {});\nconst broken = ;\n";
+        assert_eq!(kinds("a.ts", text), ["drizzle_schema_table:users"]);
+    }
+
+    #[test]
+    fn function_expression_with_a_name_is_a_unit_in_javascript() {
+        let text =
+            "var T = function T(a) {\n  this.a = a;\n};\nvar types = { b: new T(\"{\", false) };\n";
+        assert_eq!(kinds("a.js", text), ["function:T"]);
+    }
+
+    #[test]
     fn deep_nesting_does_not_overflow_the_stack() {
         let depth = 4000;
         let text = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
