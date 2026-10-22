@@ -212,3 +212,8 @@ corpus in a release test build, before and after.
   committed fixture `drizzle_exact_repositories` gets two
   `unknown_kind_changed` units (`member_receiver`: the extractor starts a
   Prisma-shaped unit inside `db.query.users.findMany(`).
+- Zod and Jest/Vitest: the Zod builder is read from the first call of the
+  initializer's call chain; the test-runner call name is read from a
+  one-segment callee. Preregistration deviation: `unit_not_code` also covers a
+  unit that starts at a method declaration (`describe(d: string) {`), not only
+  a comment, string or template.

@@ -483,6 +483,41 @@ pub(super) fn table_declaration_at<'a>(
     }
 }
 
+/// `name = head.builder(...)` of the declaration that starts the unit; a call
+/// chain is read from its first call.
+pub(super) fn zod_builder<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<(&'a str, &'a str)> {
+    match bindings.reading {
+        Reading::Tree => {
+            let value =
+                declarator_at(bindings.tree.as_ref()?, unit.start)?.child_by_field_name("value")?;
+            let names = callee_path(text, chain_base_call(value)?)?;
+            (names.len() == 2).then(|| (names[0], names[1]))
+        }
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::zod_builder(text.get(unit)?),
+    }
+}
+
+/// The bare name a test-runner call starts with.
+pub(super) fn test_call_name<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<&'a str> {
+    match bindings.reading {
+        Reading::Tree => {
+            let (_, names) = call_at(bindings.tree.as_ref()?, text, unit.start, &[1])?;
+            Some(names[0])
+        }
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::test_call_name(text.get(unit)?),
+    }
+}
+
 /// How a top-level declarator or statement is handed to the receiver
 /// classifiers.
 #[derive(Clone, Copy)]

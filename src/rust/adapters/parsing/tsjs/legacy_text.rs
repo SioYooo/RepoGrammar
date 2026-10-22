@@ -505,6 +505,37 @@ pub(super) fn drizzle_transaction(slice: &str) -> Option<&str> {
     Some(db)
 }
 
+pub(super) fn zod_builder(slice: &str) -> Option<(&str, &str)> {
+    let trimmed = slice.trim_start();
+    let trimmed = trimmed
+        .strip_prefix("export ")
+        .unwrap_or(trimmed)
+        .trim_start();
+    let rest = ["const ", "let ", "var "]
+        .iter()
+        .find_map(|keyword| trimmed.strip_prefix(keyword))?;
+    let (_, after_name) = leading_identifier(rest)?;
+    let rhs = rest[after_name..]
+        .trim_start()
+        .strip_prefix('=')?
+        .trim_start();
+    let (head, after_head) = leading_identifier(rhs)?;
+    let after_dot = rhs[after_head..].trim_start().strip_prefix('.')?;
+    let (builder, after_builder) = leading_identifier(after_dot)?;
+    if !after_dot[after_builder..].trim_start().starts_with('(') {
+        return None;
+    }
+    Some((head, builder))
+}
+
+pub(super) fn test_call_name(slice: &str) -> Option<&str> {
+    let (name, after) = leading_identifier(slice)?;
+    if !slice[after..].trim_start().starts_with('(') {
+        return None;
+    }
+    Some(name)
+}
+
 /// Classifies the declarators and statements as one text string each, the way
 /// the pre-slice line reader did.
 pub(super) fn receivers(

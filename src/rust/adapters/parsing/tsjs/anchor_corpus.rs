@@ -15,6 +15,10 @@ fn drizzle(body: &str) -> String {
     format!("import {{ drizzle }} from \"drizzle-orm/node-postgres\";\nimport {{ pgTable }} from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {{}});\nconst db = drizzle(pool);\n{body}")
 }
 
+fn zod(body: &str) -> String {
+    format!("import {{ z }} from \"zod\";\n{body}")
+}
+
 fn express(body: &str) -> String {
     format!("{EXPRESS_HEAD}const app = express();\n{body}")
 }
@@ -93,6 +97,16 @@ pub(super) fn branch_corpus() -> Vec<Entry> {
         ("unit_not_code", "drizzle_comment_unit.ts", drizzle("// db.select().from(users);\n"), &["unknown_added"]),
         ("keyword_receiver", "this_prisma.ts", prisma("class C {\n  m() {\n    this.items.delete(key);\n  }\n}\n"), &["unknown_kind_changed"]),
         ("unit_not_code", "comment_transaction_unit.ts", drizzle("/**\n * db.transaction(() => run());\n */\nexport function f() {}\n"), &["unknown_added"]),
+        // ---- Zod and Jest/Vitest
+        ("none", "zod.ts", zod("export const A = z.object({ name: z.string() });\nexport const B = z.union([z.string(), z.number()]).optional();\nexport const C = z.enum([\"a\", \"b\"]);\nexport const D = z.string().min(2);\nexport const E = z.object({}).strict().refine((v) => v);\nexport const F = z.object({}).shape.a;\n"), &[]),
+        ("none", "vitest.test.ts", "import { describe, it, expect } from \"vitest\";\ndescribe(\"s\", () => {\n  it(\"t\", () => {\n    expect(1).toBe(1);\n  });\n});\n".to_string(), &[]),
+        ("none", "alias.test.ts", "import { test as t, describe as d } from \"vitest\";\nd(\"s\", () => {\n  t(\"t\", () => {});\n});\n".to_string(), &[]),
+        ("declarator_type_annotation", "zod_typed.ts", zod("export const A: ZodType = z.object({ name: z.string() });\n"), &["anchor_changed"]),
+        ("unit_not_code", "zod_comment_unit.ts", zod("// const Ghost = z.object({});\n"), &[]),
+        ("unit_not_code", "vitest_comment_unit.test.ts", "import { describe } from \"vitest\";\n// describe(\"ghost\", () => {});\n".to_string(), &["unknown_added"]),
+        ("unit_not_code", "method_describe.ts", "class A {\n  describe(d: string): this {\n    return this;\n  }\n}\n".to_string(), &["unknown_kind_changed"]),
+        ("table_expression_prefix", "drizzle_call_table.ts", drizzle("export async function f() {\n  return db.delete(table(\"users\"));\n}\n"), &["unknown_kind_changed"]),
+        ("member_receiver", "member_chain_prisma.ts", prisma("export async function f(drill) {\n  drill.client.customers.delete(1);\n}\n"), &["unknown_kind_changed"]),
         // ---- syntax_error
         ("syntax_error", "error_route.ts", express("const broken = ;\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n"), &[]),
     ]

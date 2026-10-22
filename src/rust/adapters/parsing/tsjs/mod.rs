@@ -161,7 +161,12 @@ fn anchor_for_unit(
             unit.range.start_byte,
             parts::drizzle_transaction(bindings, document.text, range()),
         ),
-        CodeUnitKind::ZodSchema => zod::anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::ZodSchema => zod::anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::zod_builder(bindings, document.text, range()),
+        ),
         CodeUnitKind::NestController => {
             nest::controller_anchor(bindings, slice, unit.range.start_byte)
         }
@@ -185,6 +190,7 @@ fn anchor_for_unit(
             unit.range.start_byte,
             true,
             context.is_some_and(|context| context.tsjs_has_test_runner_context),
+            parts::test_call_name(bindings, document.text, range()),
         ),
         CodeUnitKind::TestCase => jest_vitest::anchor(
             document,
@@ -193,6 +199,7 @@ fn anchor_for_unit(
             unit.range.start_byte,
             false,
             context.is_some_and(|context| context.tsjs_has_test_runner_context),
+            parts::test_call_name(bindings, document.text, range()),
         ),
         _ => return AnchorOutcome::None,
     };
