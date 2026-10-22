@@ -167,16 +167,24 @@ fn anchor_for_unit(
             unit.range.start_byte,
             parts::zod_builder(bindings, document.text, range()),
         ),
-        CodeUnitKind::NestController => {
-            nest::controller_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::NestRoute => {
-            nest::route_anchor(bindings, nest_context, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::NestInjectable => {
-            nest::injectable_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::NestModule => nest::module_anchor(bindings, slice, unit.range.start_byte),
+        CodeUnitKind::NestController => nest::controller_anchor(
+            bindings,
+            &parts::decorators(bindings, document.text, range()),
+        ),
+        CodeUnitKind::NestRoute => nest::route_anchor(
+            bindings,
+            nest_context,
+            &parts::decorators(bindings, document.text, range()),
+            unit.range.start_byte,
+        ),
+        CodeUnitKind::NestInjectable => nest::injectable_anchor(
+            bindings,
+            &parts::decorators(bindings, document.text, range()),
+        ),
+        CodeUnitKind::NestModule => nest::module_anchor(
+            bindings,
+            &parts::decorators(bindings, document.text, range()),
+        ),
         CodeUnitKind::HonoRoute => hono::anchor(
             bindings,
             slice,

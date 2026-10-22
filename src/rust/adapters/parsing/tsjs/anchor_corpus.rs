@@ -19,6 +19,10 @@ fn zod(body: &str) -> String {
     format!("import {{ z }} from \"zod\";\n{body}")
 }
 
+fn nest(body: &str) -> String {
+    format!("import {{ Controller, Get, Post, All, Injectable, Module }} from \"@nestjs/common\";\n{body}")
+}
+
 fn express(body: &str) -> String {
     format!("{EXPRESS_HEAD}const app = express();\n{body}")
 }
@@ -107,6 +111,21 @@ pub(super) fn branch_corpus() -> Vec<Entry> {
         ("unit_not_code", "method_describe.ts", "class A {\n  describe(d: string): this {\n    return this;\n  }\n}\n".to_string(), &["unknown_kind_changed"]),
         ("table_expression_prefix", "drizzle_call_table.ts", drizzle("export async function f() {\n  return db.delete(table(\"users\"));\n}\n"), &["unknown_kind_changed"]),
         ("member_receiver", "member_chain_prisma.ts", prisma("export async function f(drill) {\n  drill.client.customers.delete(1);\n}\n"), &["unknown_kind_changed"]),
+        // ---- NestJS decorator roles
+        ("none", "nest.ts", nest("@Injectable()\nexport class Svc {}\n@Controller(\"users\")\nexport class UsersController {\n  @Get(\"all\")\n  findAll() {\n    return [];\n  }\n  @Post()\n  create() {}\n}\n@Module({ controllers: [UsersController], providers: [Svc] })\nexport class AppModule {}\n"), &[]),
+        ("none", "nest_two_http.ts", nest("@Controller()\nexport class C {\n  @Get(\"a\")\n  @Post(\"b\")\n  both() {}\n}\n"), &[]),
+        ("none", "nest_bare_decorator.ts", nest("@Injectable\nexport class Svc {}\n@Controller(path)\nexport class C {\n  @All(`x`)\n  any() {}\n}\n"), &[]),
+        ("none", "nest_alias.ts", "import { Controller as C, Get as G } from \"@nestjs/common\";\n@C(\"a\")\nexport class K {\n  @G()\n  m() {}\n}\n".to_string(), &[]),
+        ("none", "nest_foreign.ts", "import { Controller, Get } from \"./local\";\n@Controller(\"a\")\nexport class K {\n  @Get()\n  m() {}\n}\n".to_string(), &[]),
+        ("decorator_argument_shape", "nest_comment_arg.ts", nest("@Controller()\nexport class C {\n  @Get(/* c */ \"a\")\n  m() {}\n}\n"), &["anchor_changed"]),
+        ("string_prefix_expression", "nest_prefix_expr.ts", nest("@Controller()\nexport class C {\n  @Get(\"a\" + b)\n  m() {}\n}\n"), &["anchor_changed"]),
+        ("decorator_argument_shape", "nest_module_trailing_comma.ts", nest("@Module({ imports: [A, B,], providers: [C] })\nexport class M {}\n"), &["anchor_changed"]),
+        ("decorator_argument_shape", "nest_module_key_lookalike.ts", nest("@Module({ imports: [\"providers: [A, B]\"], providers: [C] })\nexport class M {}\n"), &["anchor_changed"]),
+        ("for_root_lookalike", "nest_for_root_string.ts", nest("@Module({ providers: [A], name: \"forRootToken\" })\nexport class M {}\n"), &["unknown_removed"]),
+        ("decorator_argument_shape", "nest_module_object_members.ts", nest("@Module({ providers: [{ provide: \"T\", useValue: 1 }] })\nexport class M {}\n"), &["anchor_changed"]),
+        ("none", "nest_for_root_call.ts", nest("@Module({ imports: [Config.forRoot({}), Db.forRootAsync()] })\nexport class M {}\n"), &[]),
+        // The extractor starts the unit at `@Controller`, so no stack begins with the member form.
+        ("decorator_member_form", "nest_member_decorator.ts", nest("@ns.Marker()\n@Controller(\"a\")\nexport class C {}\n"), &[]),
         // ---- syntax_error
         ("syntax_error", "error_route.ts", express("const broken = ;\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n"), &[]),
     ]

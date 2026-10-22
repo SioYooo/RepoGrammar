@@ -83,6 +83,15 @@ pub(super) struct DrizzleQuery<'a> {
     pub(super) table: &'a str,
 }
 
+/// One decorator as the NestJS anchors read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Decorator<'a> {
+    pub(super) name: &'a str,
+    pub(super) path_shape: &'static str,
+    pub(super) module_shape: String,
+    pub(super) for_root: bool,
+}
+
 /// The nodes from the root down to the deepest one containing `byte`.
 fn path_to(tree: &Tree, byte: usize) -> Vec<Node<'_>> {
     let mut path = Vec::new();
@@ -515,6 +524,122 @@ pub(super) fn test_call_name<'a>(
         }
         #[cfg(test)]
         Reading::Text => super::legacy_text::test_call_name(text.get(unit)?),
+    }
+}
+
+fn any_descendant(node: Node<'_>, matches: impl Fn(Node<'_>) -> bool) -> bool {
+    let mut pending = vec![node];
+    while let Some(next) = pending.pop() {
+        if matches(next) {
+            return true;
+        }
+        let mut cursor = next.walk();
+        pending.extend(next.children(&mut cursor));
+    }
+    false
+}
+
+/// The number of members of the array that `key` holds in the metadata object.
+fn array_member_count(text: &str, object: Option<Node<'_>>, key: &str) -> usize {
+    let Some(object) = object.filter(|object| object.kind() == "object") else {
+        return 0;
+    };
+    members(object)
+        .into_iter()
+        .find_map(|member| {
+            let (name, value) = member_key(text, member)?;
+            (name == key).then_some(value).flatten()
+        })
+        .filter(|value| value.kind() == "array")
+        .map_or(0, |array| members(array).len())
+}
+
+fn decorator<'a>(text: &'a str, node: Node<'_>) -> Option<Decorator<'a>> {
+    let expression = members(node).into_iter().next()?;
+    let (name, call) = match expression.kind() {
+        "identifier" => (node_text(text, expression), None),
+        "call_expression" => {
+            let function = expression.child_by_field_name("function")?;
+            if function.kind() != "identifier" || is_optional(expression) {
+                return None;
+            }
+            (node_text(text, function), Some(expression))
+        }
+        _ => return None,
+    };
+    let args = call.and_then(arguments);
+    let first = args.as_ref().and_then(|args| args.first().copied());
+    Some(Decorator {
+        name,
+        path_shape: match first {
+            None => "none",
+            Some(first) if matches!(first.kind(), "string" | "template_string") => "literal",
+            Some(_) => "dynamic",
+        },
+        module_shape: if args.is_none() {
+            "empty".to_string()
+        } else {
+            format!(
+                "providers_{}_imports_{}_controllers_{}",
+                array_member_count(text, first, "providers"),
+                array_member_count(text, first, "imports"),
+                array_member_count(text, first, "controllers"),
+            )
+        },
+        for_root: first.is_some_and(|first| {
+            any_descendant(first, |node| {
+                node.kind() == "call_expression"
+                    && node
+                        .child_by_field_name("function")
+                        .filter(|function| function.kind() == "member_expression")
+                        .and_then(|function| function.child_by_field_name("property"))
+                        .is_some_and(|property| node_text(text, property).starts_with("forRoot"))
+            })
+        }),
+    })
+}
+
+fn tree_decorators<'a>(tree: &Tree, text: &'a str, start: usize) -> Vec<Decorator<'a>> {
+    let path = path_to(tree, start);
+    let Some(index) = path
+        .iter()
+        .rposition(|node| node.kind() == "decorator" && node.start_byte() == start)
+    else {
+        return Vec::new();
+    };
+    let Some(parent) = index.checked_sub(1).map(|parent| path[parent]) else {
+        return Vec::new();
+    };
+    let mut cursor = parent.walk();
+    let stack = parent
+        .children(&mut cursor)
+        .skip_while(|child| *child != path[index])
+        .take_while(|child| matches!(child.kind(), "decorator" | "comment"))
+        .filter(|child| child.kind() == "decorator")
+        .collect::<Vec<_>>();
+    stack
+        .into_iter()
+        .filter_map(|node| decorator(text, node))
+        .collect()
+}
+
+/// The leading decorator stack a unit starts with.
+pub(super) fn decorators<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Vec<Decorator<'a>> {
+    match bindings.reading {
+        Reading::Tree => bindings
+            .tree
+            .as_ref()
+            .map(|tree| tree_decorators(tree, text, unit.start))
+            .unwrap_or_default(),
+        #[cfg(test)]
+        Reading::Text => text
+            .get(unit)
+            .map(super::legacy_text::decorators)
+            .unwrap_or_default(),
     }
 }
 

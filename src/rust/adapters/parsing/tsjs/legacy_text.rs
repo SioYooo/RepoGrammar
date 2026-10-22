@@ -5,7 +5,8 @@
 //! parts types.
 
 use super::parts::{
-    CallParts, DrizzleQuery, Item, Prefix, PrismaQuery, PrismaTransaction, Receivers, RouteObject,
+    CallParts, Decorator, DrizzleQuery, Item, Prefix, PrismaQuery, PrismaTransaction, Receivers,
+    RouteObject,
 };
 use super::scope_graph::{ExpressReceiver, ImportBinding, ImportKind};
 use super::{is_identifier_byte, leading_identifier, normalize_route_path};
@@ -534,6 +535,204 @@ pub(super) fn test_call_name(slice: &str) -> Option<&str> {
         return None;
     }
     Some(name)
+}
+
+/// Parse the leading decorator stack (`@Name(...)`), tolerating multi-line
+/// parenthesized arguments. Stops at the first non-decorator token.
+fn parse_decorators(slice: &str) -> Vec<(&str, Option<&str>)> {
+    let bytes = slice.as_bytes();
+    let mut decorators = Vec::new();
+    let mut cursor = 0usize;
+    loop {
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'@' {
+            break;
+        }
+        cursor += 1;
+        let Some((name, name_end)) = leading_identifier(&slice[cursor..]) else {
+            break;
+        };
+        cursor += name_end;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let args = if bytes.get(cursor) == Some(&b'(') {
+            let Some(close) = matching_paren(slice, cursor) else {
+                break;
+            };
+            let inner = &slice[cursor + 1..close];
+            cursor = close + 1;
+            Some(inner)
+        } else {
+            None
+        };
+        decorators.push((name, args));
+    }
+    decorators
+}
+
+fn matching_paren(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.get(open) != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    for (offset, &byte) in bytes[open..].iter().enumerate() {
+        if let Some(active) = quote {
+            if byte == active {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' | b'`' => quote = Some(byte),
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn arg_path_shape(args: Option<&str>) -> &'static str {
+    match args {
+        None => "none",
+        Some(inner) => {
+            let trimmed = inner.trim();
+            if trimmed.is_empty() {
+                "none"
+            } else if matches!(trimmed.as_bytes().first(), Some(b'"' | b'\'' | b'`')) {
+                "literal"
+            } else {
+                "dynamic"
+            }
+        }
+    }
+}
+
+fn module_shape(args: Option<&str>) -> String {
+    let Some(inner) = args else {
+        return "empty".to_string();
+    };
+    format!(
+        "providers_{}_imports_{}_controllers_{}",
+        array_member_count(inner, "providers"),
+        array_member_count(inner, "imports"),
+        array_member_count(inner, "controllers"),
+    )
+}
+
+fn array_member_count(object: &str, key: &str) -> usize {
+    let bytes = object.as_bytes();
+    for (offset, _) in object.match_indices(key) {
+        let before = offset
+            .checked_sub(1)
+            .and_then(|index| bytes.get(index))
+            .copied();
+        if before.is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+            continue;
+        }
+        let after = object[offset + key.len()..].trim_start();
+        let Some(rest) = after.strip_prefix(':') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        if let Some(open) = rest.find('[') {
+            return bracket_member_count(&rest[open..]);
+        }
+    }
+    0
+}
+
+fn bracket_member_count(slice: &str) -> usize {
+    let bytes = slice.as_bytes();
+    let Some(open) = bytes.iter().position(|byte| matches!(byte, b'{' | b'[')) else {
+        return 0;
+    };
+    let mut depth = 0usize;
+    let mut commas = 0usize;
+    let mut has_content = false;
+    let mut quote: Option<u8> = None;
+    for &byte in &bytes[open..] {
+        if let Some(active) = quote {
+            if byte == active {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' | b'`' => quote = Some(byte),
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+            }
+            b',' if depth == 1 => commas += 1,
+            byte if depth == 1 && !byte.is_ascii_whitespace() => has_content = true,
+            _ => {}
+        }
+    }
+    if has_content {
+        commas + 1
+    } else {
+        0
+    }
+}
+
+pub(super) fn decorators(slice: &str) -> Vec<Decorator<'_>> {
+    parse_decorators(slice)
+        .into_iter()
+        .map(|(name, args)| Decorator {
+            name,
+            path_shape: arg_path_shape(args),
+            module_shape: module_shape(args),
+            for_root: args.is_some_and(|inner| inner.contains("forRoot")),
+        })
+        .collect()
+}
+
+/// The pre-slice decision: the first leading decorator, in source order, that
+/// resolves to an exact `@nestjs/common` import whose original name the role
+/// accepts.
+pub(super) fn nest_role_hit<'d, 'a>(
+    bindings: &super::scope_graph::ScopeGraphLite,
+    decorators: &'d [Decorator<'a>],
+    row: &super::super::binding::RoleRow<super::nest::NestRole>,
+) -> Option<(&'d Decorator<'a>, String)> {
+    use super::nest::NestRole;
+    let accepts = |original: &str| match row.role {
+        NestRole::Controller => original == "Controller",
+        NestRole::Injectable => original == "Injectable",
+        NestRole::Module => original == "Module",
+        NestRole::Route => [
+            "Get", "Post", "Put", "Delete", "Patch", "Head", "Options", "All",
+        ]
+        .contains(&original),
+    };
+    for decorator in decorators {
+        let Some(binding) = bindings.imports.get(decorator.name) else {
+            continue;
+        };
+        if binding.module != "@nestjs/common" || bindings.name_is_unsafe_at(decorator.name, 0) {
+            continue;
+        }
+        if let ImportKind::Named(original) = &binding.kind {
+            if accepts(original) {
+                return Some((decorator, original.clone()));
+            }
+        }
+    }
+    None
 }
 
 /// Classifies the declarators and statements as one text string each, the way

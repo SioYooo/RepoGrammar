@@ -217,3 +217,13 @@ corpus in a release test build, before and after.
   one-segment callee. Preregistration deviation: `unit_not_code` also covers a
   unit that starts at a method declaration (`describe(d: string) {`), not only
   a comment, string or template.
+- NestJS: `NEST_ROLES` (Controller, Injectable, Module, Route) are `RoleRow`s
+  with `RoleEvidence::Annotation` on `@nestjs/common`; `ImportScope::first_role`
+  decides the target. The scope graph still decides whether a decorator name is
+  an exact binding (JS imports bind a local name to an export, which
+  `ImportScope` does not model), so the decorators handed to the row are the
+  exactly bound ones, renamed to their `@nestjs/common` export. Decorator
+  arguments (path literal, module metadata counts, `forRoot` calls) are read
+  from the call's arguments. No Nest, Express, Fastify, Hono, Prisma or
+  Drizzle source exists in the external corpus, so those forms are covered by
+  the committed fixtures and the branch corpus only.
