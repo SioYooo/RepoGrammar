@@ -112,8 +112,9 @@ preregistered separately before it runs.
 
 The legacy implementation of each slice stays under `cfg(test)` as the
 differential oracle until the maintainer accepts that slice's classification.
-Slice 1's legacy reader was deleted on acceptance (2026-10-22); D6 continues
-to govern slices 2 and 3.
+Slice 1's legacy reader was deleted on acceptance (2026-10-22); slice 2's
+legacy reading (`legacy_text.rs` and its differential) was deleted on its
+acceptance, also 2026-10-22; D6 continues to govern slice 3.
 
 ## Consequences
 

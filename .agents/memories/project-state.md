@@ -60,10 +60,9 @@ tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
 TS/JS goes in slices under ADR-0059 (Accepted 2026-10-22) on
 `feat/tsjs-tree-sitter`: slice 1 (the shared `ScopeGraphLite`) landed and its
 legacy reader was deleted the same day; slice 2 (framework anchors read the
-tree via `tsjs/parts.rs`, NestJS roles as `RoleRow`s, legacy text readings in
-`cfg(test)` `legacy_text.rs`) is `CLASSIFIED` and awaits acceptance of its
-`anchor_changed`, `unknown_removed` and `unknown_added` differences; slice 3
-remains. Evidence:
+tree via `tsjs/parts.rs`, NestJS roles as `RoleRow`s) is `CLASSIFIED` and was
+accepted the same day, its text readings (`legacy_text.rs` and the differential)
+detached and covered by plain tests; slice 3 remains. Evidence:
 `docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
 decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`,
 `tsjs-scope-graph-tree.md` and `tsjs-framework-anchors-tree.md`.

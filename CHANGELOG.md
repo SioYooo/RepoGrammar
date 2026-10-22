@@ -21,7 +21,11 @@ run. Candidate manifests and staged packages are not public-release evidence.
   instead of being misread; a Delphi fixture after a `record` or `interface`
   in the same `type` section now anchors; a TS/JS file with a syntax error
   yields `tsjs_parse_degraded`. The release binary grows from 22.3 MB to
-  41.9 MB, almost all grammar parse tables.
+  41.9 MB, almost all grammar parse tables. TS/JS framework anchors
+  (Express, Hono, Fastify, Prisma, Drizzle, Zod, Jest/Vitest, NestJS) now read
+  the tree too: commented-out `test(...)` lines and other non-code units no
+  longer anchor, and one Drizzle UNKNOWN reason code changes
+  (`UnresolvedImport` to `FrameworkMagic` on a mid-chain unit).
 
 ### Added
 

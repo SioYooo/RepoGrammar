@@ -121,7 +121,7 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
 | Assembly | `BLOCKED` | n/a | n/a | `tree-sitter-asm` 0.24.0 does not parse GNU `as` AT&T syntax: all 679 local `.s` files have `ERROR` or `MISSING` nodes | unchanged |
 | SQL | `BLOCKED` | n/a | n/a | `tree-sitter-sequel` 0.3.11: 158 of 213 scanned files have `ERROR` or `MISSING` nodes that swallow statement boundaries | unchanged |
 | TS/JS scope graph ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 1) | `CLASSIFIED`, with `unknown_removed` and `unknown_added` | 0 mismatches | 82 fixtures: 0 decision differences; 43 branch sources attributed | 882 external files: 0 decision differences apart from 48 `unknown_kind_changed`; 11 refused by grammar gaps | 901 → 778 (`scope_graph.rs`) |
-| TS/JS framework anchors ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 2) | `CLASSIFIED` pending acceptance, with `anchor_changed`, `unknown_removed` and `unknown_added` | 2 mismatches, one cause: `drizzle_exact_repositories` `unknowns` reason code (a mid-chain unit) and its `generation` hash | 82 fixtures: 4 `unknown_kind_changed` (2 units); 65 branch sources attributed (11 `anchor_changed`) | 885 external files: 0 `anchor_changed`, 196 `unknown_added` (commented-out test lines), 162 `unknown_kind_changed`; no framework sources locally | 3,168 → 3,615 (touched `tsjs/` modules; +792 test-only) |
+| TS/JS framework anchors ([ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md) slice 2) | `CLASSIFIED`, accepted 2026-10-22 with its text readings deleted, with `anchor_changed`, `unknown_removed` and `unknown_added` | 2 mismatches, one cause: `drizzle_exact_repositories` `unknowns` reason code (a mid-chain unit) and its `generation` hash | 82 fixtures: 4 `unknown_kind_changed` (2 units); 65 branch sources attributed (11 `anchor_changed`) | 885 external files: 0 `anchor_changed`, 196 `unknown_added` (commented-out test lines), 162 `unknown_kind_changed`; no framework sources locally | 3,168 → 3,615 (touched `tsjs/` modules; +792 test-only) |
 
 - The per-lane evidence is in each lane's completion review under
   `docs/reports/language-support/`. Go's row is from
@@ -141,8 +141,8 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
   lane. ADR-0059 (accepted) ports it in slices; slice 1 (the scope graph, accepted with its legacy reader deleted) is recorded in
   [tsjs-scope-graph-tree](tsjs-scope-graph-tree.md), slice 2 (framework
   anchors read the tree) in
-  [tsjs-framework-anchors-tree](tsjs-framework-anchors-tree.md) (classified,
-  awaiting acceptance), and slice 3 is not ported.
+  [tsjs-framework-anchors-tree](tsjs-framework-anchors-tree.md) (accepted
+  2026-10-22 with its text readings deleted), and slice 3 is not ported.
 
 ## Decisions
 
