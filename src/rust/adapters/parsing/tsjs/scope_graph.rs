@@ -3,16 +3,6 @@ use crate::core::model::Language;
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Node, Parser};
 
-// Temporary ADR-0059 differential scaffolding: the legacy line reader and its
-// comparison tests are deleted once the maintainer accepts the slice-1
-// classification.
-#[cfg(test)]
-#[path = "scope_graph_differential.rs"]
-mod differential;
-#[cfg(test)]
-#[path = "legacy_scope_graph.rs"]
-mod legacy;
-
 /// Upper bound on name-to-scope insertions while reading one file. Nesting is
 /// untrusted, and every declaration is recorded in each enclosing scope, so
 /// the work is depth times declarations; past this bound the file is refused
@@ -41,7 +31,6 @@ pub(super) enum ExpressReceiver {
 }
 
 #[derive(Debug, Default)]
-#[cfg_attr(test, derive(Clone))]
 pub(super) struct ScopeGraphLite {
     pub(super) imports: BTreeMap<String, ImportBinding>,
     pub(super) local_decls: BTreeSet<String>,
@@ -775,4 +764,241 @@ fn top_level_declaration_assignment(line: &str) -> Option<(&str, &str)> {
     let (name, after_name) = leading_identifier(rest)?;
     let rhs = rest[after_name..].trim_start().strip_prefix('=')?.trim();
     Some((name, rhs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::jest_vitest::runner_call_names;
+    use super::*;
+    use crate::adapters::parsing::syntax::SyntaxCodeUnitParser;
+    use crate::core::model::{ContentHash, RepositoryRevision, SemanticFactKind};
+    use crate::ports::parser::{SourceDocument, SourceParser};
+    use std::time::{Duration, Instant};
+
+    const EXPRESS: &str = "import express from \"express\";\n";
+    const GET: &str = "app.get(\"/a\", (req, res) => res.send(\"a\"));\n";
+
+    fn language(path: &str) -> Language {
+        if path.ends_with(".js") {
+            Language::JavaScript
+        } else {
+            Language::TypeScript
+        }
+    }
+
+    fn graph(path: &str, text: &str) -> ScopeGraphLite {
+        ScopeGraphLite::analyze(text, path, &language(path))
+    }
+
+    fn is_express_app(path: &str, text: &str) -> bool {
+        let graph = graph(path, text);
+        !graph.degraded
+            && graph
+                .imports
+                .get("express")
+                .is_some_and(|b| b.module == "express")
+            && graph.express_receivers.get("app") == Some(&ExpressReceiver::App)
+            && !graph.name_is_unsafe_at("app", text.len())
+    }
+
+    /// Sources the retired line reader misread (multi-line clause, brace in a
+    /// literal or comment, extra declarator, declaration after other code,
+    /// keyword lookalike) bind `app` to express.
+    #[test]
+    fn tree_reads_what_the_line_reader_misread() {
+        let cases = [
+            ("multi_import.ts", format!("import express, {{\n  Router,\n}} from \"express\";\nconst app = express();\n{GET}")),
+            ("multi_decl.ts", format!("{EXPRESS}const app =\n  express();\n{GET}")),
+            ("brace_string.ts", format!("const b = \"{{\";\n{EXPRESS}const app = express();\n{GET}")),
+            ("brace_comment.ts", format!("// {{\n{EXPRESS}const app = express();\n{GET}")),
+            ("brace_block_comment.ts", format!("/* open {{ */\n{EXPRESS}const app = express();\n{GET}")),
+            ("brace_regex.ts", format!("const o = /{{/;\n{EXPRESS}const app = express();\n{GET}")),
+            ("brace_template.ts", format!("const t = `{{`;\n{EXPRESS}const app = express();\n{GET}")),
+            ("extra_declarator.ts", format!("{EXPRESS}const n = 1, app = express();\n{GET}")),
+            ("not_line_start.ts", format!("{EXPRESS}start(); const app = express();\n{GET}")),
+            ("import_not_line_start.ts", format!("start(); {EXPRESS}const app = express();\n{GET}")),
+            ("template_lookalike.ts", format!("{EXPRESS}const app = express();\nconst d = `\nconst app = express();\n`;\n{GET}")),
+            ("type_import.ts", format!("import type {{ Router }} from \"express\";\n{EXPRESS}const app = express();\n{GET}")),
+            ("balanced.ts", format!("{EXPRESS}const app = express();\n// {{ }}\nconst t = `v ${{1}}`;\n{GET}")),
+        ];
+        for (path, text) in &cases {
+            assert!(is_express_app(path, text), "{path}");
+        }
+        let g = graph(
+            "multi_require.js",
+            "const {\n  Router,\n} = require(\"express\");\nconst r = Router();\n",
+        );
+        assert_eq!(g.express_receivers.get("r"), Some(&ExpressReceiver::Router));
+    }
+
+    /// Shadows and non-imports the retired reader missed.
+    #[test]
+    fn tree_reads_shadows_and_non_imports() {
+        let head = format!("{EXPRESS}const app = express();\n");
+        for (path, tail) in [
+            ("rest.ts", "function f(...app) { app.get(\"/x\", g); }\n"),
+            ("object.ts", "function f({ app }) { app.get(\"/x\", g); }\n"),
+            (
+                "array.ts",
+                "const f = ([app]) => { app.get(\"/x\", g); };\n",
+            ),
+            (
+                "default.ts",
+                "function f(a, { b: app = 1 } = {}) { app.get(\"/x\", g); }\n",
+            ),
+        ] {
+            let text = format!("{head}{tail}");
+            let g = graph(path, &text);
+            assert!(
+                g.name_is_unsafe_at("app", text.find("app.get").unwrap()),
+                "{path}"
+            );
+            assert!(!g.name_is_unsafe_at("app", head.len() - 1), "{path}");
+        }
+        // `require(...).default` is not an express import.
+        assert!(
+            graph("m.js", "const express = require(\"express\").default;\n")
+                .imports
+                .is_empty()
+        );
+        // A later declarator and an `async function` redeclare `app`.
+        for (path, tail) in [
+            ("dup.ts", "let n2 = 2, app = 4;\n"),
+            ("async.ts", "export async function app() {}\n"),
+        ] {
+            assert!(
+                graph(path, &format!("{head}{tail}"))
+                    .unsafe_names
+                    .contains("app"),
+                "{path}"
+            );
+        }
+    }
+
+    /// Unlisted classes: a non-scope brace pair opens no scope, a function
+    /// or class name is not shadowed by its own declaration, and an overload
+    /// signature is not a redeclaration.
+    #[test]
+    fn tree_scopes_only_block_like_nodes() {
+        let text = "const app = 1;\ntype T = { a: string };\nenum E { A }\nconst { x } = y;\n";
+        let g = graph("braces.ts", text);
+        assert!(g.scope_intervals.is_empty() && !g.name_is_unsafe_at("a", text.len()));
+        let text = "function register() {\n  return 1;\n}\nclass UsersController {}\n";
+        let g = graph("overlap.ts", text);
+        assert!(!g.name_is_unsafe_at("register", text.find("register").unwrap()));
+        assert!(g.local_decls.contains("register") && g.local_decls.contains("UsersController"));
+        let text =
+            "function f(a: string): void;\nfunction f(a: number): void;\nfunction f(a: any) {}\n";
+        let g = graph("overload.ts", text);
+        assert!(!g.unsafe_names.contains("f") && g.local_decls.contains("f"));
+    }
+
+    /// D4: a syntax error reads no binding and no runner name, and every
+    /// considered unit gets exactly one `tsjs_parse_degraded` UNKNOWN.
+    #[test]
+    fn syntax_errors_refuse_every_considered_unit_once() {
+        let cases = [
+            ("error_top.ts", format!("{EXPRESS}const app = express();\n{GET}}}\n")),
+            ("error_unclosed.ts", format!("{EXPRESS}const app = express();\napp.get(\"/a\", (req, res) => {{\n  res.send(\"a\");\n")),
+            ("error_missing.ts", format!("{EXPRESS}const app = express();\nconst broken = ;\n{GET}")),
+            ("error_inside.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma = new PrismaClient();\nexport async function list() {\n  const x = (;\n  return prisma.user.findMany();\n}\n".to_string()),
+            ("error_test.test.ts", "import { describe, it } from \"vitest\";\ndescribe(\"s\", () => {\n  it(\"t\", () => {\n    const = 1;\n  });\n});\n".to_string()),
+            ("error_jsx_in_ts.ts", format!("{EXPRESS}const app = express();\nconst el = <div>;\n{GET}")),
+        ];
+        for (path, text) in &cases {
+            let g = graph(path, text);
+            assert!(g.degraded && g.imports.is_empty(), "{path}");
+            assert_eq!(runner_call_names(&g), Default::default(), "{path}");
+            let document = || SourceDocument {
+                path,
+                language: language(path),
+                content_hash: ContentHash::new(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .expect("hash"),
+                repository_revision: RepositoryRevision::new("UNKNOWN").expect("revision"),
+                text,
+            };
+            let units = SyntaxCodeUnitParser.parse(document()).expect("parse").units;
+            let facts =
+                super::super::anchors_with_bindings(&document(), &units, None, g).expect("facts");
+            assert!(!facts.is_empty(), "{path}");
+            for fact in &facts {
+                assert_eq!(fact.kind, SemanticFactKind::Unknown, "{path}");
+                assert!(
+                    fact.assumptions
+                        .iter()
+                        .any(|a| a == "tsjs_unknown_kind=tsjs_parse_degraded"),
+                    "{path}"
+                );
+            }
+            let subjects: BTreeSet<_> = facts.iter().map(|fact| &fact.subject).collect();
+            assert_eq!(subjects.len(), facts.len(), "{path}: one UNKNOWN per unit");
+        }
+    }
+
+    /// Runner-name channel: aliased runner imports are named unless shadowed.
+    #[test]
+    fn runner_names_follow_the_graph() {
+        let text = "import { test as t, describe as d, it } from \"vitest\";\nd(\"s\", () => { t(\"a\", () => {}); });\n";
+        let names = runner_call_names(&graph("a.test.ts", text));
+        assert_eq!(names.suite_names, BTreeSet::from(["d".to_string()]));
+        assert_eq!(
+            names.test_names,
+            BTreeSet::from(["t".to_string(), "it".to_string()])
+        );
+        let text = "import { test as t } from \"vitest\";\nlet t = 1;\n";
+        assert!(runner_call_names(&graph("b.test.ts", text))
+            .test_names
+            .is_empty());
+    }
+
+    /// Input is untrusted: deep nesting with a declaration per level is
+    /// refused inside the scope-work bound instead of running quadratically.
+    #[test]
+    fn deep_nesting_stays_bounded() {
+        let depth = 3_000;
+        let text = format!("{}{}", "{ let a = 1;\n".repeat(depth), "}".repeat(depth));
+        let started = Instant::now();
+        assert!(graph("deep.ts", &text).degraded);
+        assert!(started.elapsed() < Duration::from_secs(30));
+        let started = Instant::now();
+        let flat = "{ ".repeat(50_000) + &"}".repeat(50_000);
+        let g = graph("flat.ts", &flat);
+        assert!(!g.degraded && g.scope_intervals.len() == 50_000);
+        assert!(started.elapsed() < Duration::from_secs(30));
+    }
+
+    /// The tree reads every clause form.
+    #[test]
+    fn tree_graph_reads_every_clause_form() {
+        let text = "import d, { a as b, type T } from \"m\";\nimport * as ns from \"n\";\nconst { x, y: z, ...rest } = require(\"r\");\nconst q = require(\"q\"), w = 1;\nlet [p, [o]] = pair;\nexport default async function* gen() {}\nconst f = ({ a1 }, [a2], ...a3) => {\n  v = 1;\n};\nuse = 2;\n";
+        let g = graph("x.ts", text);
+        let imports: BTreeSet<String> = g
+            .imports
+            .iter()
+            .map(|(name, binding)| format!("{name}={}:{:?}", binding.module, binding.kind))
+            .collect();
+        assert_eq!(
+            imports,
+            BTreeSet::from(
+                [
+                    "d=m:Default",
+                    "b=m:Named(\"a\")",
+                    "T=m:Named(\"T\")",
+                    "ns=n:Namespace",
+                    "x=r:Named(\"x\")",
+                    "z=r:Named(\"y\")",
+                    "q=q:Default",
+                ]
+                .map(String::from)
+            )
+        );
+        let decls: Vec<&str> = g.local_decls.iter().map(String::as_str).collect();
+        assert_eq!(decls, ["f", "gen", "o", "p", "rest", "w"]);
+        assert!(g.name_is_unsafe_at("a3", text.find("v = 1").unwrap()));
+        assert!(g.name_is_unsafe_at("v", text.find("v = 1").unwrap()));
+        assert!(g.name_is_unsafe_at("use", text.len()));
+        assert!(!g.name_is_unsafe_at("use", 0));
+    }
 }

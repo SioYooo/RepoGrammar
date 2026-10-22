@@ -137,7 +137,7 @@ Two baseline captures agree on all 4,681 rows (179 roots); SHA-256
   earlier version of the Go row gave 1,855 → 1,699 under a different count.
 - TS/JS has a dependency-free extractor with no declared subset or refusal
   classes to reproduce, so this port protocol does not apply to the whole
-  lane. ADR-0059 ports it in slices; slice 1 (the scope graph) is recorded in
+  lane. ADR-0059 (accepted) ports it in slices; slice 1 (the scope graph, accepted with its legacy reader deleted) is recorded in
   [tsjs-scope-graph-tree](tsjs-scope-graph-tree.md), and slices 2 and 3 are
   not ported.
 

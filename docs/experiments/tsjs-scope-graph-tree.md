@@ -1,9 +1,9 @@
 # TS/JS scope graph from the Tree-sitter tree (ADR-0059 slice 1)
 
-Status: **PREREGISTERED**. Base: `feat/tsjs-tree-sitter` at `4f1574e`. Local
+Status: **CLASSIFIED, accepted 2026-10-22** (preregistered earlier). Base: `feat/tsjs-tree-sitter` at `4f1574e`. Local
 only; no push or merge. Authority:
 [ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md)
-(Proposed).
+(Accepted).
 
 ## Objective
 
@@ -126,7 +126,7 @@ fix round). Branch `feat/tsjs-scope-graph-slice1`, base `cc12f4a`.
   `exact_test_runner_call_names(&self.document)`, because that helper builds a
   scope graph and now needs the path and language. No unit, range or extractor
   logic changed.
-- The legacy reader is `tsjs/legacy_scope_graph.rs` (test-only) and the
+- (Historical, deleted on acceptance.) The legacy reader was `tsjs/legacy_scope_graph.rs` (test-only) and the
   differential is `tsjs/scope_graph_differential.rs`.
 
 ### Counts
@@ -281,4 +281,22 @@ little of the delta. The tree reader is about 5x slower than the line reader,
 3. Accept the unlisted attribution classes (`non_scope_brace_pair`,
    `declaration_line_overlap`, overload signatures), or require them to be
    pinned back to the legacy reading.
-4. Keep the legacy reader under `cfg(test)` until this is accepted.
+4. Keep the legacy reader under `cfg(test)` until this is accepted (done: accepted 2026-10-22, see Acceptance).
+
+## Acceptance
+
+On 2026-10-22 the maintainer accepted the slice 1 classification: the
+`unknown_removed` and `unknown_added` differences (branch-only, none on a
+committed fixture, no `anchor_changed`); the D4 refusal of the 11 external
+files with grammar gaps (TS variance `in`/`out` modifiers, JS keyword export
+names); and the attribution classes the preregistration did not list
+(`non_scope_brace_pair`, `declaration_line_overlap`, overload signatures).
+The legacy reader (`legacy_scope_graph.rs`) and the differential
+(`scope_graph_differential.rs`) are therefore removed from the build and
+deleted. Their reproducers live on as plain tests in `scope_graph.rs` that
+assert the tree reader's output on minimal inputs: `tree_reads_what_the_line_reader_misread`,
+`tree_reads_shadows_and_non_imports`, `tree_scopes_only_block_like_nodes`,
+`syntax_errors_refuse_every_considered_unit_once`, `runner_names_follow_the_graph`,
+`deep_nesting_stays_bounded` and `tree_graph_reads_every_clause_form`. The
+corpus-wide counts above are the recorded evidence and can no longer be
+re-run.
