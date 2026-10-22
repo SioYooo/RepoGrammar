@@ -1,6 +1,7 @@
 # ADR-0059: Tree-sitter TS/JS frontend in slices
 
-- Status: Accepted (maintainer decision 2026-10-22)
+- Status: Accepted (maintainer decision 2026-10-22); all three slices are
+  implemented and accepted, completed 2026-10-22
 - Date: 2026-10-20
 - Implements: [ADR-0058](ADR-0058-tree-sitter-frontends-for-every-language.md)
   for the TS/JS lane
@@ -114,7 +115,9 @@ The legacy implementation of each slice stays under `cfg(test)` as the
 differential oracle until the maintainer accepts that slice's classification.
 Slice 1's legacy reader was deleted on acceptance (2026-10-22); slice 2's
 legacy reading (`legacy_text.rs` and its differential) was deleted on its
-acceptance, also 2026-10-22; D6 continues to govern slice 3.
+acceptance, also 2026-10-22; slice 3's legacy reader (`legacy_units.rs` and its
+differential) was detached on its acceptance, also 2026-10-22, so no legacy
+reader remains.
 
 ## Consequences
 
@@ -123,6 +126,6 @@ acceptance, also 2026-10-22; D6 continues to govern slice 3.
   kind.
 - The binary gains two grammars. Their size is measured in slice 1 and
   recorded in the migration report.
-- Until slice 3, unit boundaries still come from the line-based extractor, so
-  a unit can be anchored from a tree reading of a region the extractor bounded
-  heuristically.
+- Since slice 3 (accepted 2026-10-22), unit boundaries come from the tree too,
+  so a unit is never anchored from a region a line scan bounded heuristically.
+  TS/JS unit ids change on re-index.

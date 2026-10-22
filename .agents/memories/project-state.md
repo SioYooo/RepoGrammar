@@ -63,10 +63,11 @@ legacy reader was deleted the same day; slice 2 (framework anchors read the
 tree via `tsjs/parts.rs`, NestJS roles as `RoleRow`s) is `CLASSIFIED` and was
 accepted the same day, its text readings (`legacy_text.rs` and the differential)
 detached and covered by plain tests; slice 3 (the units read from the tree,
-one parse per file, the line reader kept under `cfg(test)` as the oracle) is
-built on `feat/tsjs-unit-extraction-slice3` and `BLOCKED` by its preregistered
-rule pending maintainer acceptance (one `anchor_changed` on a Drizzle fixture,
-one product-eval query pinning a unit id; `tsjs-unit-extraction-tree.md`). Evidence:
+one parse per file) was `BLOCKED` by its preregistered rule and accepted
+2026-10-22 (one Drizzle `anchor_changed`, the `ts-member-express-get` unit id
+amended to `56-108`; its line reader and differential detached, replaced by
+plain tests), so ADR-0059 is complete and the TS/JS lane has no legacy reader
+(`tsjs-unit-extraction-tree.md`). Evidence:
 `docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
 decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`,
 `tsjs-scope-graph-tree.md`, `tsjs-framework-anchors-tree.md` and

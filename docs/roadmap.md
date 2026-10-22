@@ -603,12 +603,11 @@ current public-preview label by itself.
   the bounded structural project-context resolver and optional worker
   operations.
 - ADR-0059 (accepted 2026-10-22) moves the TS/JS frontend onto Tree-sitter in
-  three slices. Slice 1 (the scope graph read from the tree) has landed and
-  slice 2 (framework anchors read the tree) was accepted on 2026-10-22 with
-  its text readings deleted; slice 3 (unit extraction read from the tree, one
-  parse per file) is built on `feat/tsjs-unit-extraction-slice3` and `BLOCKED` by
-  its preregistered rule pending maintainer acceptance, with the line reader kept
-  under `cfg(test)`.
+  three slices, all implemented and accepted on 2026-10-22: the scope graph, the
+  framework anchors and the code units are read from the tree (one parse per
+  file), with the line readers detached. ADR-0059 is complete; provider-backed
+  TS/JS semantics and broad TS/JS family evidence are unchanged and still
+  deferred.
 - Production-quality broad TS/JS family evidence remains deferred until after
   the Python-first path validates the product surface, unless a later ADR
   changes scope again.

@@ -239,8 +239,8 @@ family support. If the checked-in worker cannot load a TypeScript compiler API,
 its dependency-free static fallback facts remain `STRUCTURAL` or `UNKNOWN` and
 carry `provider_resolved=false`. Under ADR-0059 slice 1 the exact-anchor pass reads imports,
 scopes and shadowing from the pinned `tree-sitter-typescript` 0.23.2 and
-`tree-sitter-javascript` 0.25.0 trees (grammar by extension); unit extraction
-stays line-based. A tree with an `ERROR` or `MISSING` node reads no binding and
+`tree-sitter-javascript` 0.25.0 trees (grammar by extension); since slice 3 the
+code units come from the same tree. A tree with an `ERROR` or `MISSING` node reads no binding and
 gives each unit the anchor pass considers one `tsjs_parse_degraded` UNKNOWN.
 This is a bounded provider foundation, not full
 TS/JS semantic analysis, and TS/JS remains a transitional substrate rather than the
