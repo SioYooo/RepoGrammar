@@ -37,6 +37,12 @@ The only permitted change before round 1 is the CLI re-pin in
 regression test; the drift check stays strict. Final harness hashes are in the
 results section and in each run's `freeze.json`.
 
+Re-pin (code commit following this preregistration): `native_host_v2.py` now
+carries `EXPECTED_CLI_VERSION = "2.1.304"` and the 2.1.304 SHA-256 above; a
+regression test asserts the pin and that a non-matching CLI still fails with
+"CLI drift". The drift check is unchanged in strictness. Post-re-pin
+`native_host_v2.py` SHA-256: `00fcbc78a332d7fa05c3fb830866e15941432c9be18a1ae9d325c9f48c728985`.
+
 ## Retention (outside Git, outside /private/tmp)
 
 `/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`

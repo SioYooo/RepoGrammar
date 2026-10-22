@@ -111,6 +111,22 @@ else:
                     except ProcessLookupError:
                         pass
 
+    def test_cli_pin_is_current_and_drift_stays_strict(self):
+        self.assertEqual((host.EXPECTED_CLI_VERSION, host.EXPECTED_CLI_SHA256),
+                         ("2.1.304", "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a"))
+        real_sha = host.offline.sha
+        guide_hash = "5df98f0677189042c7ae58aa74d6e7ac90bd99324a18edf263f9be8db7b4b256"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "guide").write_bytes(b"guide")
+            old_cli = tmp / "old-cli"
+            old_cli.write_bytes(b"claude 2.1.286 stand-in")
+            sha = lambda data: guide_hash if data == b"guide" else real_sha(data)
+            with patch.object(host.offline, "sha", side_effect=sha), \
+                    patch.object(host.sys, "platform", "darwin"):
+                with self.assertRaisesRegex(ValueError, "CLI drift: .* 2.1.304"):
+                    host.qualify(tmp / "out", old_cli, old_cli, tmp / "guide")
+
 
 if __name__ == "__main__":
     unittest.main()

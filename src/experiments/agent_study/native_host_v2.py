@@ -35,7 +35,8 @@ SETTINGS = {"disableAllHooks": True, "autoMemoryEnabled": False,
             "enabledPlugins": {"cc-plugin-agents-md@builtin": False, "cc-plugin-plugin-authoring@builtin": False}}
 DUMMY_KEY = "sk-ant-offline-fixture-not-a-secret"
 MAX_REQUEST = 8 * 1024 * 1024
-EXPECTED_CLI_SHA256 = "75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433"
+EXPECTED_CLI_VERSION = "2.1.304"
+EXPECTED_CLI_SHA256 = "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a"
 
 
 def guide_body(guide):
@@ -370,7 +371,7 @@ def qualify(out, cli, product, guide_file):
     copied_cli.write_bytes(offline.regular_bytes(cli, 512 * 1024 * 1024))
     copied_cli.chmod(0o500)
     if offline.sha(copied_cli.read_bytes()) != EXPECTED_CLI_SHA256:
-        raise ValueError("CLI drift: this control freezes Claude Code 2.1.286")
+        raise ValueError(f"CLI drift: this control freezes Claude Code {EXPECTED_CLI_VERSION}")
     relay = runtime / "mcp_bridge_v2.py"
     relay.write_bytes(Path(__file__).with_name("mcp_bridge_v2.py").read_bytes())
     os_probe, service_probe = runtime / "os_probe.py", runtime / "service_probe.py"
@@ -393,7 +394,7 @@ def qualify(out, cli, product, guide_file):
     freeze = {"schema_version": "agent-native-offline-freeze.v2", "provider": "SCRIPTED_LOOPBACK",
               "source_sha256": source_hash, "index_sha256": tree_sha256(str(seed / ".repogrammar")),
               "cli_sha256": offline.sha(copied_cli.read_bytes()), "product_sha256": offline.sha(product.read_bytes()),
-              "cli_version": "2.1.286", "bridge_sha256": offline.sha(relay.read_bytes()),
+              "cli_version": EXPECTED_CLI_VERSION, "bridge_sha256": offline.sha(relay.read_bytes()),
               "os_probe_sha256": offline.sha(os_probe.read_bytes()), "service_probe_sha256": offline.sha(service_probe.read_bytes()),
               "guide_sha256": offline.sha(guide), "base_prompt_sha256": offline.sha(PROMPT.encode()),
               "arms": list(offline.ARMS), "live_execution": "BLOCKED_BUDGET_AUTH_HELD_OUT"}
