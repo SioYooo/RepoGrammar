@@ -45,7 +45,14 @@ plain tests with no legacy call: in `tsjs/units.rs`
 (`drizzle_select_does_not_read_the_next_functions_where_clause`) and in
 `tsjs/scope_graph.rs` (`syntax_errors_refuse_every_considered_unit_once`,
 which includes the tree that leaves no considered unit). The byte capture taken
-after acceptance becomes the new baseline; the main session records its hash.
+after acceptance (`main@a6fb3b0`: 179 roots, 4,680 rows) is the new baseline,
+SHA-256 `b90df67a55bee7a3ba56f71fec25881faab0454a8dac29ff10f2ffdc11878527`,
+retained with its predecessors under
+`/Volumes/External/Development/repogrammar-evidence/capture-baselines-20261022/`.
+Against the post-slice-2 baseline it differs in 507 rows over 28 roots, every
+one of which holds TS/JS sources, on the `generation`, `units`, `member`,
+`explain`, `check`, `find`/`mcp_find`, `family`/`mcp_family` and `resync`
+surfaces; the `files`, `families` and `unknowns` surfaces are identical.
 
 ## Objective
 
