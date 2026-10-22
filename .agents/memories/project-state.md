@@ -1,5 +1,19 @@
 # Project State
 
+## Pytest-variant narrowing — 2026-10-22
+
+Preregistered and run on `feat/pytest-variant-narrowing` (not pushed): verdict
+`PARTIAL`, no code change. Of the six tied public pytest queries, the two FastAPI
+ones narrow to a unique family under the existing contract when the user adds a
+path locus that only one variant holds (directory scope `backend/tests/crud`, file
+`backend/tests/api/routes/test_private.py`). The four requests queries cannot be
+provably narrowed (one 74-member variant has a truncated inventory; files
+interleave variants). Ties, negatives and the stale control stay unselected;
+product-eval 34/47, 36/36, 27/27, 42/42 and sync 14/14 are unchanged. Narrowing
+the requests ties would need a new query-time variant discriminator (profile-aware
+ranking or fixture-context inference), which requires its own specification.
+Evidence: `docs/experiments/pytest-variant-narrowing.md`.
+
 ## Declarative language-pack spike — 2026-10-20
 
 The spike, merged into local `main` on 2026-10-20 and not pushed, moves C#

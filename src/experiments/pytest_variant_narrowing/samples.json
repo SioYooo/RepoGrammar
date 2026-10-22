@@ -1,0 +1,53 @@
+{
+  "schema_version": "pytest-variant-narrowing-samples.v1",
+  "status": "FROZEN_BEFORE_PROBE",
+  "corpora": {
+    "requests": {"commit": "0e322af87745eff34caffe4df68456ebc20d9068", "snapshot": "requests"},
+    "fastapi-template": {"commit": "4d3d5e92c1ea6b3fa0fab02c41124844ec45bca8", "snapshot": "fastapi-template"}
+  },
+  "verbatim": {
+    "f-writing-tests-backend": ["fastapi-template", "How should I approach writing tests for this backend?"],
+    "f-writing-tests-api": ["fastapi-template", "Show the existing style for writing tests before extending the API."],
+    "r-writing-tests-sessions": ["requests", "Where is the pattern for writing tests for sessions?"],
+    "r-writing-tests-cookies": ["requests", "Show examples of writing tests for cookie handling."],
+    "r-writing-tests-auth": ["requests", "How should I start writing tests for request authentication?"],
+    "r-writing-tests-redirects": ["requests", "Describe the convention for writing tests around redirects."]
+  },
+  "families_pytest_test_prefix": "family:python:pytest_test:framework_pytest_test:",
+  "samples": [
+    {"id": "T0-f-backend", "class": "tie", "corpus": "fastapi-template", "target": "@f-writing-tests-backend", "note": "baseline, no locus"},
+    {"id": "T0-f-api", "class": "tie", "corpus": "fastapi-template", "target": "@f-writing-tests-api", "note": "baseline, no locus"},
+    {"id": "T0-r-sessions", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-sessions", "note": "baseline, no locus"},
+    {"id": "T0-r-cookies", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-cookies", "note": "baseline, no locus"},
+    {"id": "T0-r-auth", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-auth", "note": "baseline, no locus"},
+    {"id": "T0-r-redirects", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-redirects", "note": "baseline, no locus"},
+
+    {"id": "P1", "class": "positive", "corpus": "fastapi-template", "target": "@f-writing-tests-backend backend/tests/crud", "locus": "backend/tests/crud", "expect_family_suffix": "v8d38a5ff5e6d"},
+    {"id": "P2", "class": "positive", "corpus": "fastapi-template", "target": "@f-writing-tests-api backend/tests/api/routes/test_private.py", "locus": "backend/tests/api/routes/test_private.py", "expect_family_suffix": "v69fe71823663"},
+    {"id": "P1s", "class": "diagnostic_positive", "corpus": "fastapi-template", "target": "backend/tests/crud writing tests", "locus": "backend/tests/crud", "expect_family_suffix": "v8d38a5ff5e6d"},
+    {"id": "P2s", "class": "diagnostic_positive", "corpus": "fastapi-template", "target": "backend/tests/api/routes/test_private.py writing tests", "locus": "backend/tests/api/routes/test_private.py", "expect_family_suffix": "v69fe71823663"},
+
+    {"id": "U-r-sessions", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-sessions tests/test_requests.py", "locus": "tests/test_requests.py", "note": "locus not provably unique: the 74-member family has a truncated member inventory"},
+    {"id": "U-r-cookies", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-cookies tests/test_requests.py", "locus": "tests/test_requests.py", "note": "same"},
+    {"id": "U-r-auth", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-auth tests/test_requests.py", "locus": "tests/test_requests.py", "note": "same"},
+    {"id": "U-r-redirects", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-redirects tests/test_requests.py", "locus": "tests/test_requests.py", "note": "same"},
+
+    {"id": "T1", "class": "tie", "corpus": "fastapi-template", "target": "@f-writing-tests-backend backend/tests", "locus": "backend/tests", "note": "directory holds all seven variants"},
+    {"id": "T2", "class": "tie", "corpus": "fastapi-template", "target": "@f-writing-tests-api backend/tests/api/routes", "locus": "backend/tests/api/routes", "note": "directory holds six variants"},
+    {"id": "T3", "class": "tie", "corpus": "requests", "target": "@r-writing-tests-sessions tests/test_utils.py", "locus": "tests/test_utils.py", "note": "file holds two variants"},
+    {"id": "T4", "class": "tie", "corpus": "fastapi-template", "target": "@f-writing-tests-api backend/tests/api/routes/test_users.py", "locus": "backend/tests/api/routes/test_users.py", "note": "file holds six variants"},
+
+    {"id": "N1", "class": "negative", "corpus": "fastapi-template", "target": "@f-writing-tests-backend backend/app/core", "note": "directory without pytest evidence"},
+    {"id": "N2", "class": "negative", "corpus": "fastapi-template", "target": "@f-writing-tests-backend backend/tests/nonexistent", "note": "locus absent from the index"},
+    {"id": "N3", "class": "negative", "corpus": "fastapi-template", "target": "@f-writing-tests-backend ../backend/tests/crud", "note": "unsafe traversal"},
+    {"id": "N4", "class": "negative", "corpus": "fastapi-template", "target": "@f-writing-tests-backend backend/tests/crud backend/tests/api/routes", "note": "disjoint multiple scopes"},
+    {"id": "N5", "class": "negative", "corpus": "fastapi-template", "target": "endpoint", "note": "bare concept"},
+    {"id": "N6", "class": "negative", "corpus": "requests", "target": "writing tsets", "note": "typo"},
+    {"id": "N7", "class": "negative", "corpus": "fastapi-template", "target": "backend/tests/crud", "locus": "backend/tests/crud", "note": "no query semantics; recorded only, directory-scope behavior is existing and not asserted as an abstention", "assert": "none"},
+
+    {"id": "S1", "class": "stale", "corpus": "fastapi-template", "target": "@f-writing-tests-backend backend/tests/crud", "mutate": {"path": "backend/tests/crud/test_user.py", "append": "\n# stale-control\n"}, "note": "P1 locus after an unindexed edit of the family evidence file"},
+
+    {"id": "C1", "class": "control_exact", "corpus": "fastapi-template", "target": "family:python:pytest_test:framework_pytest_test:v8d38a5ff5e6d", "expect_family_suffix": "v8d38a5ff5e6d"},
+    {"id": "C2", "class": "control_exact", "corpus": "requests", "target": "unit:tests/test_utils.py#pytest_test:test_parse_dict_header:15722-16021:55", "expect_family_suffix": "v88f106547f45"}
+  ]
+}
