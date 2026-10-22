@@ -9,7 +9,10 @@ B0 PASS and B1 BLOCKED (TRANSPORT): 2.1.304 sends `server/discover` before
 `initialize` and the bridge fails closed. B2/B3 NOT_RUN; no real model, auth or
 spend; effects NOT_MEASURED. Campaign 2 (3 rounds): relayed that method and admitted
 `claudecode/toolUseId` metadata, so a real tools/call reaches the product; B1 then
-fails integrity on SQLite -wal/-shm sidecars (policy decision pending); B2/B3 NOT_RUN. Record: `docs/experiments/agent-adoption-native-host-requalification.md`;
+failed integrity on SQLite -wal/-shm sidecars. Campaign 3 (2026-10-22, main-session harness
+policy, maintainer may veto): tolerate shm and an empty wal only, excuse the
+discover probe's -32601; B0-B3 scripted native controls PASS in round 2. Effects
+NOT_MEASURED; next is the held-out freeze plus budget/auth approval. Record: `docs/experiments/agent-adoption-native-host-requalification.md`;
 raw evidence under `/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`.
 
 ## Declarative language-pack spike — 2026-10-20

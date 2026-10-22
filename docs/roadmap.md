@@ -30,9 +30,9 @@ scope is unchanged, and v0.6 release/adoption gates remain open.
 
 2026-10-22: the native-host requalification (Claude Code 2.1.304, scripted
 loopback only) reached B0 PASS; campaign 2 fixed the `server/discover` and tool-use metadata
-transport blockers so a real MCP tools/call reaches the product, but B1 is BLOCKED on
-SQLite WAL/SHM sidecars failing the integrity check; B2/B3 NOT_RUN and adoption
-effects NOT_MEASURED.
+transport blockers, and campaign 3 (WAL-sidecar tolerance, a main-session harness
+policy open to maintainer veto) passed B0-B3 scripted native controls; adoption
+effects remain NOT_MEASURED pending a held-out freeze and budget/auth approval.
 
 ## Bootstrap complete
 

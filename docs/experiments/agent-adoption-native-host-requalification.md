@@ -278,3 +278,49 @@ preregistered, expected -32601 answer to the `server/discover` probe. Class:
 HARNESS_DEFECT (consequence of the campaign-2 relay). Round-2 change: the check
 excuses a product error only for method `server/discover`; an error on any other
 method, or a tools/call count other than one, still fails (tested).
+
+### Campaign 3 results (2026-10-22)
+
+Verdict: **PASS for all four scripted native controls (B0-B3) in round 2 of 3**;
+this qualifies the offline native-host control harness for Claude Code 2.1.304 on
+macOS only. It is a control result: the CLI saw a dummy key and a scripted
+loopback fixture, and tool choices and usage were synthetic. Real model,
+adoption, over-trigger, correctness effects, tokens and cost remain
+**NOT_MEASURED**; the held-out task/oracle/index freeze and explicit budget/auth
+approval are still required before any effect wave. Linux-native: NOT_RUN.
+
+Policy disclosure: tolerating SQLite WAL sidecars (`-shm` any size, empty `-wal`)
+in the integrity inventory is a harness policy chosen by the main session on
+2026-10-22 (the product runs `journal_mode=wal`; `doctor` reports
+`shm_bytes`/`wal_bytes` as normal state). It is open to maintainer veto. The main
+database, a non-empty `-wal` and every other file still fail the check.
+
+| Gate | Result | Round |
+| --- | --- | --- |
+| G2 initialize + tools/list reach bridge | PASS | campaign 2 r2; campaign 3 r1, r2 |
+| G3 B1 end to end (controls, transport, payload, integrity) | PASS | campaign 3 r2 |
+| G4 B2 global-file discovery (guide PRESENT in captured requests, all controls) | PASS | campaign 3 r2 |
+| G5 B3 controls (prefix delivered, guide ABSENT) | PASS | campaign 3 r2 |
+
+| Round | Previous class | Change | Outcome |
+| --- | --- | --- | --- |
+| 1 (`r1`) | PROTECTED_INTEGRITY | WAL sidecar tolerance (shm any size, empty wal), 3 negative tests | Integrity PASS and all B1 controls PASS, but arm still BLOCKED: HARNESS_DEFECT, the bridge check rejected the expected -32601 on the discover probe |
+| 2 (`r2`) | HARNESS_DEFECT | excuse `PRODUCT_ERROR` only for `server/discover`; negative test for every other method and tools/call count | B0 B1 B2 B3 PASS, exit 0 |
+
+Per-arm in round 2: kernel 22/22 and SecurityServer PASS; 12/12 native
+acquisition/denial controls (plus the MCP call in B1-B3); empty plugin/agent/skill
+registries; tool inventory 4 (B0) or 5 (B1-B3) with no hidden tools; global
+discovery ABSENT in B0, B1, B3 and PRESENT in B2; process cleanup and protected
+integrity PASS. Bridge: one tools/call answered by the product per MCP arm.
+
+Identity: Claude Code 2.1.304 `b9ac5374...78e6a`; product `9f754810...66fb`; guide
+`5df98f06...b256`; final `mcp_bridge_v2.py` `4712681f...5107`, `native_host_v2.py`
+`fcb3a57e1bf95be9b659c15b9400ecc82a3738cedb29fe5f295cee31d27b2552`,
+`runner_v2.py` `697dcf1a...6696`. Summary file SHA-256
+`4937df602ad824232beb8c2776cfde9bf6afd89ab58d49c01290b81859e742f4`. Evidence
+(untracked): `/Volumes/External/Development/repogrammar-evidence/native-host-20261022/campaign-3/`
+(`r1`, `r2`, `harness-final.sha256`).
+
+Caveats: tolerance is the only integrity relaxation; the older `runner_v2`
+offline qualification still fails under Homebrew Python (recorded earlier);
+pass is for this CLI version, this product build and macOS Seatbelt only.
