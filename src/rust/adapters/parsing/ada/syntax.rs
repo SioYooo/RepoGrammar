@@ -908,6 +908,80 @@ mod tests {
         }
     }
 
+    /// Inputs on which the grammar deliberately differs from the retired
+    /// hand-written parser (ADR-0058): text that is not valid Ada, or newer
+    /// than the pinned grammar, is refused; valid Ada the old parser could not
+    /// read is admitted.
+    #[test]
+    fn the_grammar_refuses_invalid_ada_and_reads_the_constructs_the_old_parser_missed() {
+        let in_package = |declaration: &str| {
+            format!(
+                "with AUnit.Test_Cases;\npackage body Catalog_Tests is\n{declaration}\n\
+                 procedure Register_Tests (T : in out Test_Case) is\nbegin\n\
+                 Register_Routine (T, Loads'Access, \"loads\");\n\
+                 end Register_Tests;\nend Catalog_Tests;\n"
+            )
+        };
+        for declaration in [
+            "function Q return T is null;",
+            "not procedure Q is null;",
+            "subtype T is access Integer;",
+            "subtype T is A range <>;",
+            "subtype P is not null access Integer;",
+            "type T is range <>;",
+            "type T is record end record;",
+            "type T is record null; A : Integer; end record;",
+            "X : T := A and B or C;",
+            "X : T := A and then B or else C;",
+            "X : T := A and B xor C;",
+            "X : T := A or B xor C;",
+            "X : T := A'Range;",
+            "X : T := T'Range (1);",
+            "X : T := new access T;",
+        ] {
+            assert_eq!(
+                parse(&in_package(declaration)),
+                Err(Refusal::OutsideDeclaredSubset),
+                "{declaration}"
+            );
+        }
+        for statement in [
+            "case X is end case;",
+            "L : if A then null; end if;",
+            "L : case X is when others => null; end case;",
+            "for I : Integer in 1 .. 3 loop null; end loop;",
+            "if A and then B or else C then null; end if;",
+            "Register_Routine (T, 1 .. 2, \"loads\");",
+            "Register_Routine (T, 1 | 2 => X, \"loads\");",
+            "Do_It (null => 1);",
+            "null;\nexception when null => null;",
+            "X := Y'range;",
+            "X := Y'range (1);",
+        ] {
+            assert_eq!(
+                parse(&body(&format!("{statement}\n"))),
+                Err(Refusal::OutsideDeclaredSubset),
+                "{statement}"
+            );
+        }
+        for declaration in [
+            "function Max is new Generic_Max (Integer);",
+            "function \"+\" is new R (Integer);",
+            "X : Arr := (1 .. 3 => 0);",
+            "X : T := (for all I : T in A => B);",
+            "type T is new A and B with null record;",
+            "type T is new A and B with private;",
+            "X renames Y;",
+            "type T is tagged;",
+            "type T is record A : Integer; end record T;",
+            "type T is record pragma Convention (C, T); A : Integer; end record;",
+            "type T is record A : Integer; pragma Atomic (A); end record;",
+        ] {
+            assert_eq!(registrations(&in_package(declaration)), 1, "{declaration}");
+        }
+        parse(&body("for I in 1 .. 3 when I > 1 loop null; end loop;\n")).expect("iterator filter");
+    }
+
     #[test]
     fn a_subunit_and_a_spec_are_not_admitted_compilation_units() {
         assert_eq!(
