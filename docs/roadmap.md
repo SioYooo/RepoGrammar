@@ -28,6 +28,11 @@ remain zero. Performance is descriptive and uncertain; PHP has an open existing
 ADR-0047 D1 admission-contract mismatch. Strict Top-20 remains 0/20, the frozen
 scope is unchanged, and v0.6 release/adoption gates remain open.
 
+2026-10-22: [pytest-variant narrowing](experiments/pytest-variant-narrowing.md)
+is PARTIAL with no code change: two of the six tied queries narrow to one family
+via an existing path locus, four requests queries need a new variant-discriminator
+specification.
+
 ## Bootstrap complete
 
 - Repository governance and mirrored agent contract.

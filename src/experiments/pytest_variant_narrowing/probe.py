@@ -24,7 +24,7 @@ def sha(path):
 
 class Product:
     def __init__(self, binary, out):
-        self.binary = str(binary)
+        self.binary = str(Path(binary).resolve())
         (out / "home").mkdir(parents=True, exist_ok=True)
         self.env = dict(os.environ, HOME=str(out / "home"), REPOGRAMMAR_TELEMETRY="0",
                         DO_NOT_TRACK="1", LC_ALL="C", REPOGRAMMAR_PYTHON_EXECUTABLE=sys.executable)
@@ -71,8 +71,8 @@ def outcome(code, payload):
         "abstention_reason": (route.get("term_retrieval") or {}).get("abstention_reason"),
         "resolution_cardinality": (payload.get("resolution") or {}).get("cardinality"),
         "candidate_count": len(route.get("candidate_family_ids") or route.get("follow_up_family_ids") or []),
-        "read_plan_paths": sorted({item.get("path") for item in (payload.get("read_plan") or [])
-                                   if isinstance(item, dict) and item.get("path")}),
+        "read_plan": [[item.get("purpose"), item.get("path")]
+                      for item in ((payload.get("read_plan") or {}).get("items") or [])],
     }
 
 

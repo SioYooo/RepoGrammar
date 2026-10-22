@@ -1,6 +1,6 @@
 # Pytest-variant narrowing preregistration
 
-Date: 2026-10-22. Status: PREREGISTERED before any probe run on this branch and
+Date: 2026-10-22. Status: PARTIAL (see Results). Preregistered before any probe run on this branch and
 before any retrieval-code change. Base: `main` at `d48008f`. This document does
 not edit the 2026-10-14 capability review; it executes that review's section 9.
 
@@ -152,4 +152,54 @@ committed_precision 42/42 not regressed; `sync-equivalence --all` 14/14;
 
 ## Results
 
-Pending (to be filled after the probe).
+Verdict: **PARTIAL** (2 of 6 tied queries narrowable; **no code change**). Run
+2026-10-22 on the release build of this branch (binary sha256
+`b57ae3ae09fd2aa58bf42223c323fa631c130e6986f68e0c93808811de75482b`, no
+retrieval-code difference from `main` `d48008f`), pinned snapshots above,
+`samples.json` unchanged (`a517a9e4...c5fec`).
+
+Harness disclosure: two probe bugs were fixed after the first run attempts, before
+any result was recorded (a relative binary path; the read-plan field read as a list
+instead of `read_plan.items`). No sample, expectation, or rule changed. Final
+`probe.py` sha256 `60b0f544cb2c5610dadda1d8455dd767dc9c45bf5131842f6629886b82f40595`;
+a unit test `probe.test.py` was added.
+
+| Class | Result |
+| --- | --- |
+| positive P1, P2 (and diagnostic P1s, P2s) | 4/4 select the predicted unique family; premise (complete inventory, single holder) holds |
+| tie (T0 x6 baselines, U-r-* x4, T1-T4) | 14/14 no selection |
+| negative N1-N6 | 6/6 no selection (N7 recorded only) |
+| stale S1 | UNKNOWN (no selection) |
+| control_exact C1, C2 | 2/2 select the named family |
+
+Per-query verdict:
+
+| Query | Verdict | How / why |
+| --- | --- | --- |
+| f-writing-tests-backend | NARROWABLE (existing contract) | Append the directory `backend/tests/crud`: composite scope stage intersects the scope with the term-scored pytest variants, one family (`v8d38a5ff5e6d`), `resolution.cardinality: one`, `canonical_evidence` span `backend/tests/crud/test_user.py:37-42`. |
+| f-writing-tests-api | NARROWABLE (existing contract) | Append the file `backend/tests/api/routes/test_private.py`: path-shaped target resolves through the exact/local-context stage to the only holder `v69fe71823663`; read plan = target body, `canonical_evidence` `test_users.py`, `support_evidence` `test_login.py`. |
+| r-writing-tests-sessions / -cookies / -auth / -redirects | NOT NARROWABLE by a provable locus (DEFERRED) | The 74-member variant `v94834eabfb5a` has a truncated member inventory, so no requests locus is provable. `tests/test_requests.py` returns two candidates (`v94761a8b0697` plus the dominant family) and stays unselected; `tests/test_utils.py` holds two variants. |
+
+Mechanism: none changed. Path loci that isolate one variant already resolve via
+existing stages; the constraint profile is hydrated only after selection and is not a
+ranking input. Where the user cannot name a unique locus, abstention with candidate
+ids and a target-file read plan is the specified, correct outcome. Abstention
+payload is useful: the 9 (fastapi) or 4 (requests) tied `family:` ids remain
+follow-up handles, and a resolved locus returns the standard read plan.
+
+Post-hoc exploratory (not in the decision rule, not a claim): appending
+`tests/test_adapters.py`, `tests/test_lowlevel.py`, or `tests/test_hooks.py` to the
+sessions query selects `v94834eabfb5a`, because the product's evidence-path index
+maps those files to that one family. This selection was not pre-registered and is
+not counted; the frozen inventory premise cannot certify it because that family's
+member list is truncated.
+
+Missing contract for the four requests queries: a query-time discriminator between
+variants that interleave inside a file, such as profile-aware ranking, per-variant
+vocabulary, or fixture-context inference from the query. That is a new semantic
+mechanism and needs its own specification and admission; it is out of scope here.
+
+Gates (unchanged code): `product-eval` 110 queries, 97 match, retrieval 34/47,
+abstention 36/36, context 27/27, committed_precision 42/42, false_family_selections 0,
+selected_on_abstention_gold 0; `sync-equivalence --all` 14/14; fmt, clippy
+`-D warnings`, `cargo test --workspace --all-features` (2292 + 126 + 185 + 1) pass.
