@@ -1,8 +1,9 @@
 # TS/JS unit extraction from the Tree-sitter tree (ADR-0059 slice 3)
 
-Status: **`BLOCKED` by the preregistered rule, pending maintainer acceptance** (preregistered in
+Status: **accepted 2026-10-22** (see "Acceptance"; the preregistered rule
+reported `BLOCKED` pending exactly these decisions; preregistered in
 `fe45ee2`; see "Results"). Base: `main@5097d7a`
-(`feat/tsjs-unit-extraction-slice3`). Local only; no push or merge. Authority:
+(`feat/tsjs-unit-extraction-slice3`). Authority:
 [ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md)
 (Accepted), D2 slice 3, D3 (policies stay), D4 (syntax errors), D5 ("Slice 3
 changes unit boundaries, so its oracle is family-level and preregistered
@@ -11,6 +12,40 @@ separately before it runs"), D6 (the line-based extractor stays under
 [tsjs-scope-graph-tree](tsjs-scope-graph-tree.md),
 [tsjs-framework-anchors-tree](tsjs-framework-anchors-tree.md). Tiers and
 difference classes: [ADR-0058](../decisions/ADR-0058-tree-sitter-frontends-for-every-language.md).
+
+## Acceptance
+
+The maintainer accepted all five decisions of "Decisions for the maintainer"
+on 2026-10-22: (1) the `drizzle_exact_repositories` `anchor_changed`
+(`listOrders` `where_shape` `object_literal` to `none`; the `drizzle_query`
+family loses the `tsjs_drizzle_query_shape` variation slot and the three select
+members shrink to their statements); (2) the frozen product-eval query
+`ts-member-express-get` follows the tree's unit end, `56-107` to `56-108`
+(amended in `query-corpus-v1.json`, gold semantics unchanged); (3) a refused
+tree may yield no `tsjs_parse_degraded` rows when error recovery leaves no
+considered unit; (4) the attributed unit-level classes and the preregistration
+deviations (`receiver_token_start`, `accessor_name`, `unit_kind_changed`,
+`degraded_unit_set`, widened `unit_start_corrected`, member-call units end at
+their chain's end); (5) deletion of the `cfg(test)` oracle.
+
+The oracle is detached: `parsing/legacy_units.rs`,
+`tsjs/unit_differential.rs` and `tsjs/unit_corpus.rs` are no longer compiled,
+together with the `cfg(test)`-only `exact_framework_anchors`,
+`exact_test_runner_call_names` and three unused re-exports; the files are
+removed from the tree by the main session. The accepted readings are held by
+plain tests with no legacy call: in `tsjs/units.rs`
+(`classes_and_members_come_from_class_nodes`,
+`nest_decorators_start_the_unit_at_the_earliest_decorator`,
+`functions_and_arrows_start_at_their_keyword_and_end_at_the_node`,
+`route_units_are_made_once_per_chain_at_the_chain_start`,
+`prisma_and_drizzle_units_hold_the_whole_chain`,
+`text_that_is_not_code_or_a_receiver_is_not_a_unit`,
+`a_member_chain_unit_starts_at_the_chain_base_inside_a_function`,
+`a_degraded_graph_still_sees_the_ambient_table_factories`), in `tsjs/mod.rs`
+(`drizzle_select_does_not_read_the_next_functions_where_clause`) and in
+`tsjs/scope_graph.rs` (`syntax_errors_refuse_every_considered_unit_once`,
+which includes the tree that leaves no considered unit). The byte capture taken
+after acceptance becomes the new baseline; the main session records its hash.
 
 ## Objective
 

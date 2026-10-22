@@ -19,10 +19,6 @@ mod parts;
 mod prisma;
 mod project_context;
 mod scope_graph;
-#[cfg(test)]
-mod unit_corpus;
-#[cfg(test)]
-mod unit_differential;
 mod units;
 mod unknown;
 mod zod;
@@ -36,9 +32,7 @@ use scope_graph::ScopeGraphLite;
 use unknown::UnknownAnchor;
 
 #[cfg(test)]
-pub(crate) use jest_vitest::exact_test_runner_call_names;
-#[cfg(test)]
-pub(crate) use units::{is_component_name, is_hook_name, is_react_path, next_file_convention_kind};
+pub(crate) use units::next_file_convention_kind;
 
 /// Engine identity for parser-emitted TS/JS structural anchors.
 pub const TSJS_ANCHOR_ENGINE: &str = "repogrammar-tsjs-syntax";
@@ -74,17 +68,6 @@ impl TsJsAnalysis {
     ) -> Result<Vec<SemanticFact>, ParseError> {
         anchors_with_bindings(document, units, context, self.bindings)
     }
-}
-
-/// Extract exact framework anchors for the given units, analysing the file
-/// itself (the legacy extractor's path).
-#[cfg(test)]
-pub fn exact_framework_anchors(
-    document: &SourceDocument<'_>,
-    units: &[CodeUnit],
-    context: Option<&ParserProjectContext>,
-) -> Result<Vec<SemanticFact>, ParseError> {
-    TsJsAnalysis::analyze(document).anchors(document, units, context)
 }
 
 fn anchors_with_bindings(
@@ -1451,6 +1434,45 @@ export async function listUsers() {
         assert_eq!(
             unknown_kinds("src/external-prisma.ts", external),
             vec!["prisma_injected_client".to_string()]
+        );
+    }
+
+    /// A Drizzle `select` unit ends at its statement, so it never reads the
+    /// `where:` of the next function (ADR-0059 slice 3, `extent_by_first_brace`).
+    #[test]
+    fn drizzle_select_does_not_read_the_next_functions_where_clause() {
+        let text = r#"import { drizzle } from "drizzle-orm/node-postgres";
+import { pgTable } from "drizzle-orm/pg-core";
+export const users = pgTable("users", {});
+const db = drizzle(pool);
+export async function listOrders() {
+  return db.select().from(users);
+}
+export async function queryUsers() {
+  return db.query.users.findMany({ where: eq(users.id, 1) });
+}
+"#;
+        let facts = parse_facts("src/drizzle_where.ts", text);
+        let shape = |target: &str| {
+            let fact = facts
+                .iter()
+                .find(|fact| {
+                    fact.kind != SemanticFactKind::Unknown
+                        && fact.target.as_ref().map(|t| t.as_str()) == Some(target)
+                })
+                .expect(target);
+            fact.assumptions
+                .iter()
+                .find(|a| a.starts_with("where_shape="))
+                .cloned()
+        };
+        assert_eq!(
+            shape("drizzle.query.select").as_deref(),
+            Some("where_shape=none")
+        );
+        assert_eq!(
+            shape("drizzle.query.query_findMany").as_deref(),
+            Some("where_shape=object_literal")
         );
     }
 

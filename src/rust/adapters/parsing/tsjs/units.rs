@@ -1,10 +1,9 @@
 //! TS/JS code units read from the Tree-sitter tree (ADR-0059 slice 3).
 //!
 //! The unit kinds, framework policies and unit names are those of the
-//! line-based extractor this replaced (kept under `cfg(test)` in
-//! `parsing/legacy_units.rs` as the differential oracle). Only the reading
-//! changes: a unit is a syntax node, so its end is the node's end, and text
-//! inside comments, strings and templates is never a unit. See
+//! line-based extractor this replaced. Only the reading changes: a unit is a
+//! syntax node, so its end is the node's end, and text inside comments,
+//! strings and templates is never a unit. See
 //! `docs/experiments/tsjs-unit-extraction-tree.md` for the node each unit kind
 //! comes from.
 
@@ -1223,6 +1222,35 @@ mod tests {
         let text =
             "var T = function T(a) {\n  this.a = a;\n};\nvar types = { b: new T(\"{\", false) };\n";
         assert_eq!(kinds("a.js", text), ["function:T"]);
+    }
+
+    #[test]
+    fn text_that_is_not_code_or_a_receiver_is_not_a_unit() {
+        // The word `function` in a comment is not a function.
+        assert_eq!(
+            read(
+                "a.ts",
+                "// function ghost() {}\nexport function real() {}\n"
+            ),
+            ["function:real:function real() {}"]
+        );
+        // A `this.` receiver starts the chain, never a mid-chain token.
+        let text = "import express from \"express\";\nclass C {\n  m() {\n    this.get(\"/a\", h);\n  }\n}\n";
+        let units = read("a.ts", text);
+        assert!(
+            units
+                .iter()
+                .any(|u| u == "express_route:get:this.get(\"/a\", h)"),
+            "{units:?}"
+        );
+    }
+
+    #[test]
+    fn a_member_chain_unit_starts_at_the_chain_base_inside_a_function() {
+        let text = "import { drizzle } from \"drizzle-orm/node-postgres\";\nconst db = drizzle(pool);\nexport async function rel() {\n  return db.query.users.findMany();\n}\n";
+        assert!(read("a.ts", text)
+            .iter()
+            .any(|u| u == "drizzle_query:query_findMany:db.query.users.findMany()"));
     }
 
     #[test]

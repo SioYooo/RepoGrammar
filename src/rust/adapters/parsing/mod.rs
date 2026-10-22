@@ -20,8 +20,6 @@ pub mod delphi;
 pub mod fortran;
 pub mod go;
 pub mod java;
-#[cfg(test)]
-mod legacy_units;
 pub mod matlab;
 pub mod php;
 pub mod profiled;
