@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-The 0.5.1 candidate restores coordinated GitHub and npm publication under the
-[release checklist](docs/release/stable-v0.5.1-release-checklist.md). Candidate
-manifests and staged packages are not public-release evidence.
+The 0.5.1 release restores coordinated GitHub and npm publication under the
+[release checklist](docs/release/stable-v0.5.1-release-checklist.md). As of
+2026-10-22 the GitHub release `v0.5.1` is public, but the npm package is not
+public (staged, awaiting maintainer approval) and the public finalizer has not
+run. Candidate manifests and staged packages are not public-release evidence.
 
 ### Added
 
@@ -41,6 +43,11 @@ manifests and staged packages are not public-release evidence.
 
 ### Fixed
 
+- The TS/JS syntax extractor no longer panics when a class or method
+  declaration follows multi-byte text within six bytes, such as a comment
+  ending in CJK characters. Published 0.5.1 aborts `init`/`resync` on such a
+  file (exit 101) and leaves no active generation; the fix changes no unit on
+  files that already indexed.
 - Qualified HTTP handler, REST endpoint, HTTP route and writing test queries
   now reach existing FastAPI/pytest families without lowering score, margin or
   evidence gates. Ambiguous variants remain UNKNOWN; no family kind is added.

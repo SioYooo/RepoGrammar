@@ -57,6 +57,15 @@ and finalizer verification remain separate states. Historical GitHub-only
 0.5.0 is not rewritten, and v0.6 evidence gates remain open. The new release
 uses the existing OIDC stage and maintainer 2FA approval boundary.
 
+Verified read-only 2026-10-22: tag `v0.5.1` (`0104073`, equals `origin/main`)
+ran Release run 38820860471 with every job successful (preview stage skipped);
+GitHub `v0.5.1` is public, immutable, latest, 11 assets (published
+2026-10-17). npm still shows `latest=0.4.3`, `preview=0.2.0-preview.0` and no
+`0.5.1` version, so the stage awaits maintainer 2FA approval. Remaining
+maintainer action: authenticated stage inspection/approval, then public-asset
+and npm verification and the `stable-release-finalize.yml` run. Quickstart
+installer pin stays `v0.5.0` until that finalizer passes.
+
 ## Evidence-driven query reachability audit — 2026-10-14
 
 The bounded v0.6 retrieval repair is committed as `3741afd`; reproducible

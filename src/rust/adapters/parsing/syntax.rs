@@ -1759,10 +1759,13 @@ fn decorator_prefix_start(text: &str, decl_start: usize) -> usize {
 }
 
 fn text_ends_with_keyword(text: &str, offset: usize, keyword: &str) -> bool {
-    if offset < keyword.len() || &text[offset - keyword.len()..offset] != keyword {
+    // `get` refuses a start inside a multi-byte character instead of panicking.
+    let Some(before) = offset.checked_sub(keyword.len()) else {
+        return false;
+    };
+    if text.get(before..offset) != Some(keyword) {
         return false;
     }
-    let before = offset - keyword.len();
     before == 0 || !is_identifier_byte(text.as_bytes()[before - 1])
 }
 
@@ -2398,6 +2401,25 @@ mod tests {
             .expect("valid hash"),
             repository_revision: RepositoryRevision::new("UNKNOWN").expect("valid revision"),
             text,
+        }
+    }
+
+    #[test]
+    fn declaration_after_multi_byte_text_does_not_panic() {
+        // Six bytes before `class` lands inside `你`; the decorator walk used
+        // to slice there and abort the whole index.
+        for text in ["//你好a\nclass A {}\n", "败败a class A {}\n"] {
+            let parsed = SyntaxCodeUnitParser
+                .parse(document("src/a.ts", text))
+                .expect("parse");
+            let classes = parsed
+                .units
+                .iter()
+                .filter(|unit| unit.kind == CodeUnitKind::Class)
+                .map(|unit| unit.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(classes.len(), 1, "{text:?}");
+            assert!(classes[0].contains('A'), "{classes:?}");
         }
     }
 
