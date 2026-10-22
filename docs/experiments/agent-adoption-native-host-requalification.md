@@ -97,6 +97,18 @@ A gate is evaluated only if the previous passed; later gates are NOT_RUN.
 
 Verdict vocabulary: PASS per gate, BLOCKED, NOT_RUN, NOT_MEASURED.
 
+## Round log (harness changes, in order)
+
+- Round 1 failure: kernel 0/22. Homebrew Python 3.14.6 `Python` framework is
+  loaded by dyld from its resolved `Cellar` path, but the profile admitted the
+  `opt` symlink prefix. Class: HARNESS_DEFECT (interpreter path). Change:
+  `runner_v2.BASE_PREFIX` is `sys.base_prefix` resolved; same read scope.
+- Round 2 failure: kernel 0/22 again, `_sqlite3` could not load Homebrew's
+  `libsqlite3` (read blocked). Class: HARNESS_DEFECT (runtime dependency).
+  Change: the profile admits exactly the resolved non-system dylib files that
+  the stdlib sqlite extension links (`otool -L`), as literal reads, plus
+  metadata on their ancestors. No directory subpath, no data or product path.
+
 ## Results
 
 (To be filled after the rounds; see the follow-up commit.)

@@ -1,4 +1,5 @@
 """Offline runner regression tests; native denial probes use the separate CLI."""
+import importlib
 import json
 import os
 from pathlib import Path
@@ -117,6 +118,36 @@ class RunnerTest(unittest.TestCase):
             self.assertNotIn(str(root), rendered)
             self.assertNotIn("shape only test", rendered)
             self.assertNotIn("prompt.txt", rendered)
+
+    def test_sandbox_admits_resolved_interpreter_prefix_not_the_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp).resolve() / "Cellar"
+            real.mkdir()
+            link = Path(tmp).resolve() / "opt"
+            link.symlink_to(real)
+            try:
+                with patch.object(runner.sys, "base_prefix", str(link)):
+                    importlib.reload(runner)
+                    self.assertEqual(runner.BASE_PREFIX, real)
+                    profile = runner.sandbox_profile(Path(tmp) / "w", {"HOME": tmp, "TMPDIR": tmp}, Path(tmp) / "p")
+            finally:
+                importlib.reload(runner)
+            self.assertIn(f'(subpath "{real}")', profile)
+            self.assertNotIn(f'(subpath "{link}")', profile)
+
+    def test_sandbox_admits_only_exact_extension_dylibs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp).resolve() / "libfake.dylib"
+            lib.write_bytes(b"")
+            pairs = (("/opt/fake/opt/lib/libfake.dylib", str(lib)),)
+            with patch.object(runner, "EXTENSION_LIBS", pairs):
+                profile = runner.sandbox_profile(Path(tmp) / "w", {"HOME": tmp, "TMPDIR": tmp}, Path(tmp) / "p")
+            self.assertIn(f'(literal "{lib}")', profile)
+            self.assertNotIn('(subpath "/opt/fake', profile)
+            self.assertNotIn('(subpath "/opt/homebrew")', profile)
+        for linked, resolved in runner.EXTENSION_LIBS:
+            self.assertFalse(linked.startswith(("/usr/lib/", "/System/")))
+            self.assertTrue(Path(resolved).is_file())
 
 
 if __name__ == "__main__":
