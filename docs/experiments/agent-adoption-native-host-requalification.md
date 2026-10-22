@@ -1,0 +1,96 @@
+# Native-host offline requalification (preregistration)
+
+Date: 2026-10-22. Start: clean `main@d48008f`, branch
+`feat/native-host-requalification`. Status: **PREREGISTERED, NOT_RUN**.
+Real model, credentials, provider network, adoption, over-trigger, correctness,
+tokens and cost are **NOT_MEASURED** by construction and stay so. Scripted
+fixture success is a control result, never an adoption effect.
+
+This is a **new campaign with a new producer identity**, not a rerun. The
+[2026-10-01 campaign](agent-adoption-native-host-qualification.md) (Claude Code
+2.1.286, CONTROL_ISOLATION_BLOCKED) is unedited and remains its own record.
+Its next gate asked for a fresh bounded campaign on the repaired candidate;
+this is that campaign.
+
+## Evidence loss and why a rerun is impossible
+
+- The pinned Claude Code 2.1.286 copy is gone. `~/.local/share/claude/versions/`
+  holds only 2.1.302, 2.1.303 and 2.1.304; `claude --version` is 2.1.304. The
+  harness correctly hard-fails with "CLI drift" against the old hash.
+- The raw archive `/private/tmp/repogrammar-native-host-20261001/` no longer
+  exists (tmp was cleaned). The old per-round raw captures, original producer
+  copies and transcripts are **lost**. Only the committed
+  [summary](data/agent-adoption-native-host.summary.json) and prose survive.
+  This is recorded as an evidence loss; the old numbers are not re-derivable.
+
+## New producer identity (frozen before any run)
+
+| Item | Value |
+| --- | --- |
+| Claude Code | 2.1.304, `/Users/sioyoo/.local/share/claude/versions/2.1.304`, SHA-256 `b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a` |
+| Product binary | `cargo build --release` on this branch at `d48008f`, SHA-256 `9f75481081200f2c5cbd20611af4fd1ad067b0bac57fe02349f00e1f0c1a66fb` |
+| Guide artifact | v4 global block regenerated from `GLOBAL_AGENT_PREFLIGHT` in `src/rust/application/install.rs`: 824 bytes, SHA-256 `5df98f0677189042c7ae58aa74d6e7ac90bd99324a18edf263f9be8db7b4b256` (equals the harness-pinned hash; earlier prose says 825 bytes, the pinned hash is what binds) |
+| Harness at preregistration | `native_host_v2.py` `ac0b1ad2...2873`, `mcp_bridge_v2.py` `75bce279...4b84c`, `security_service_probe_v2.py` `50186480...dbced`, `isolation_probe_v2.py` `ecef4bd8...2662`, `runner_v2.py` `94fc4afc...c615` (full hashes in the retained freeze) |
+
+The only permitted change before round 1 is the CLI re-pin in
+`native_host_v2.py` (version string and `EXPECTED_CLI_SHA256`) with its
+regression test; the drift check stays strict. Final harness hashes are in the
+results section and in each run's `freeze.json`.
+
+## Retention (outside Git, outside /private/tmp)
+
+`/Volumes/External/Development/repogrammar-evidence/native-host-20261022/`
+holds: `inputs/` (guide artifact), `round-N/` per-attempt output directories
+(copied CLI runtime, freeze.json, per-arm native transcripts, stderr, MCP bridge
+frames, sandbox profiles, qualification.summary.json) and a hash manifest.
+Nothing from it is committed; only hashes and the verdict summary are.
+
+## Bounds, controls and rules
+
+- At most **5** autonomous rounds. Each names the previous failure class and
+  makes one conservative harness/bridge-only change with a negative test.
+  Forbidden: product/MCP behaviour changes, Seatbelt weakening, access to the
+  checkout, `.repogrammar/`, the product executable or other profiles, any real
+  provider, key or login, or network beyond the fixture's loopback port.
+- Controls are the same as before: B0/B1/B2/B3 arms; 22 kernel controls and the
+  paired SecurityServer check per arm; 12 native acquisition/denial controls
+  (positive read/grep/glob/bash/sqlite; denied index read/grep/glob/bash/sqlite,
+  private file, product binary); empty plugin/agent/skill registries; exact
+  tool inventory (four built-ins, plus the one MCP tool only where enabled);
+  exact captured request audit for global-file discovery (PRESENT only in B2);
+  protected-file and worktree integrity.
+- Stop early on G5 success, an authority/isolation blocker, or an environment
+  failure that cannot be fixed safely (for example an interactive login or
+  network the CLI needs). Such a stop is recorded, not worked around. A product
+  defect blocking G3 is the finding; the product is not changed.
+
+## Decisive gates, in order
+
+| Gate | Pass condition |
+| --- | --- |
+| G1 | B0 and B1 pass kernel, SecurityServer and native acquisition/denial controls |
+| G2 | Native `initialize`, `notifications/initialized` and `tools/list` reach the bridge in B1 |
+| G3 | B1 `tools/call` reaches the real product exactly once and the product payload is returned unchanged through the bridge (no `Connection closed`, no PRODUCT_ERROR) |
+| G4 | B2 controls pass, with the global guide actually present in captured requests |
+| G5 | B3 controls pass (explicit-use prefix delivered; guide absent) |
+
+A gate is evaluated only if the previous passed; later gates are NOT_RUN.
+
+## Failure classes (what each would mean)
+
+- **ENV_FAILURE**: host precondition outside the harness (login prompt, network
+  need, missing runtime, disk). Not evidence about the product or the design.
+- **CONTROL_ISOLATION_BLOCKED**: a control leaked, or a denial/inventory/guide
+  check failed. Isolation is unproven; no later gate may run.
+- **TRANSPORT**: native host and bridge disagree on the MCP wire (framing,
+  lifecycle, closed connection, dispatch). Harness or CLI behaviour, not product.
+- **HARNESS_DEFECT**: assessor/parser/fingerprint bug demonstrated by the
+  retained raw files against a correct native behaviour.
+- **CLI_DRIFT**: the CLI bytes or observed protocol differ from the pinned
+  identity; the run is void and requires a new identity.
+
+Verdict vocabulary: PASS per gate, BLOCKED, NOT_RUN, NOT_MEASURED.
+
+## Results
+
+(To be filled after the rounds; see the follow-up commit.)
