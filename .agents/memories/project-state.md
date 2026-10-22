@@ -28,8 +28,9 @@ The release binary grew from 22.3 MB to 38.6 MB, almost all grammar parse
 tables (Fortran 6.3 MB, Swift 4.0 MB). The unused placeholder
 `adapters/parsing/tree_sitter.rs` was deleted on 2026-10-22 with maintainer approval.
 
-TS/JS goes in slices under ADR-0059 (Proposed) on `feat/tsjs-tree-sitter`,
-starting with the shared `ScopeGraphLite`. Evidence:
+TS/JS goes in slices under ADR-0059 (Accepted 2026-10-22) on
+`feat/tsjs-tree-sitter`: slice 1 (the shared `ScopeGraphLite`) landed and its
+legacy reader was deleted the same day; slices 2 and 3 remain. Evidence:
 `docs/experiments/tree-sitter-frontend-migration.md` (lanes, accepted
 decisions, build cost, optimization), `binding-engine.md`, `anchor-role-rows.md`
 and `tsjs-scope-graph-tree.md`.

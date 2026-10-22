@@ -208,11 +208,12 @@ individually attributed beyond that bucket.
 
 ### Pre-existing defect of the line-based extractor (not a slice difference)
 
-`syntax.rs::text_ends_with_keyword` slices `text[offset - 6..offset]` without a
-char-boundary check, so the source `败败a class A {}` panics (pinned by
-`extractor_panics_on_split_multibyte_before_class`). 3 of the external files
-hit it; the harness counts them with `catch_unwind` and does not compare them.
-Not fixed here (slice 3 replaces the extractor).
+`syntax.rs::text_ends_with_keyword` sliced `text[offset - 6..offset]` without a
+char-boundary check, so the source `败败a class A {}` panicked and aborted
+`init` (exit 101) in published 0.5.1. 3 of the external files hit it; the
+harness counted them with `catch_unwind` and did not compare them. Fixed on
+`main` in `dca43c0` (pinned by
+`declaration_after_multi_byte_text_does_not_panic`), independently of slice 3.
 
 ### Gates
 
