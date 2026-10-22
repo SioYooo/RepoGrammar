@@ -29,8 +29,10 @@ ADR-0047 D1 admission-contract mismatch. Strict Top-20 remains 0/20, the frozen
 scope is unchanged, and v0.6 release/adoption gates remain open.
 
 2026-10-22: the native-host requalification (Claude Code 2.1.304, scripted
-loopback only) reached B0 PASS but B1 BLOCKED on an unhandled `server/discover`
-client probe; B2/B3 NOT_RUN and adoption effects NOT_MEASURED.
+loopback only) reached B0 PASS; campaign 2 fixed the `server/discover` and tool-use metadata
+transport blockers so a real MCP tools/call reaches the product, but B1 is BLOCKED on
+SQLite WAL/SHM sidecars failing the integrity check; B2/B3 NOT_RUN and adoption
+effects NOT_MEASURED.
 
 ## Bootstrap complete
 

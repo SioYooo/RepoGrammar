@@ -203,3 +203,48 @@ server after -32601, retain the raw frames and classify TRANSPORT vs
 CLIENT_PROTOCOL; at most one further bridge-side change, only if the frames name
 a specific next required method; otherwise stop BLOCKED with the frames.
 Effects remain NOT_MEASURED.
+
+### Campaign 2 results (2026-10-22)
+
+Verdict: **BLOCKED at the 3-round cap** (integrity classification pending).
+The native tools/call now reaches the product and its payload returns, but B1
+fails the protected-integrity check, so G4/G5 did not run. Effects, tokens and
+cost: NOT_MEASURED. Evidence: `.../native-host-20261022/campaign-2/` (`round-1`,
+`r2`, `r3`; shortened names because a Unix socket path over 104 bytes cannot
+bind), untracked. Product, CLI, guide and other harness hashes are unchanged
+from campaign 1; bridge `mcp_bridge_v2.py` is `4712681f3106...5107` at the end
+(`9602cb19...6214` in round 2); see `campaign-2/harness-final.sha256`.
+
+| Round | Previous class | Change | Outcome |
+| --- | --- | --- | --- |
+| 1 | TRANSPORT | relay `server/discover` | ENV_FAILURE: evidence path too long for the bridge's Unix socket after B0 passed; B1 never ran (counted) |
+| 2 (`r2`) | ENV_FAILURE | shorter output path | G2 PASS; B1 tools/call BLOCKED: client sent `_meta."claudecode/toolUseId"`, which the relay's closed `_meta` schema refused client-side (PARAMS_DENIED), so the native call saw "Connection closed". Class: TRANSPORT (bridge schema) |
+| 3 (`r3`) | TRANSPORT | admit bounded text `claudecode/toolUseId` in `_meta` (negative tests keep other keys, empty/long/non-text values closed); every captured frame replays through the admission check | G3 transport PASS; B1 BLOCKED by protected integrity |
+
+What the client did after -32601: it fell back to `initialize` on the same
+connection, then sent `notifications/initialized`, `tools/list` and, in rounds 2
+and 3, `tools/call` (protocol-complete; no further probe method was needed). In
+round 3 the bridge recorded five product-answered frames (discover PRODUCT_ERROR,
+initialize, notification, tools/list, tools/call PRODUCT_SUCCESS), `mcp` native
+control PASS, 22/22 kernel, 12/12 native controls and 5 exposed tools.
+
+Remaining blocker (finding, not fixed; cap reached): after the tools/call the
+worktree inventory differs from its pre-launch baseline only by
+`.repogrammar/repogrammar.sqlite-shm` (32 KiB) and an empty
+`.repogrammar/repogrammar.sqlite-wal`; the main `repogrammar.sqlite`, control
+files and source are byte-identical. These are SQLite WAL sidecars created when
+the product opened the index for the query. The harness inventory excludes only
+`telemetry/local-metrics`. Whether this is acceptable (a harness exclusion for
+empty WAL plus unchanged main database) or a read-only-claim defect in how the
+product opens the index is a maintainer judgement; no product change was made.
+
+| Gate | Result |
+| --- | --- |
+| G2 initialize + tools/list reach bridge | PASS (round 2 and 3) |
+| G3 tools/call reaches product, payload unchanged | Transport PASS (round 3, PRODUCT_SUCCESS, native control PASS); arm BLOCKED by integrity (WAL/SHM sidecars) |
+| G4 B2 | NOT_RUN |
+| G5 B3 | NOT_RUN |
+
+Next gate: decide the SQLite-sidecar policy (read-only open flags in the product
+versus a justified harness exclusion that still hashes the main database), in a
+new bounded campaign; then B2 and B3.
