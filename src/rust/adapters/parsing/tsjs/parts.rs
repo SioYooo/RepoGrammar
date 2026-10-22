@@ -4,22 +4,12 @@
 //! The anchor modules keep every policy; they consume the small data types
 //! below. Production reads the tree `ScopeGraphLite` already produced, so a
 //! file is parsed once for bindings and anchors. The text reading that
-//! preceded it stays under `cfg(test)` (`legacy_text`) as the differential
-//! oracle (D6).
+//! preceded it was deleted when slice 2 was accepted (ADR-0059 D6).
 
 use super::scope_graph::{node_text, ExpressReceiver, ImportBinding, ImportKind, ScopeGraphLite};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use tree_sitter::{Node, Tree};
-
-/// Which implementation reads the call parts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum Reading {
-    #[default]
-    Tree,
-    #[cfg(test)]
-    Text,
-}
 
 /// How a Fastify plugin registration spells its options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,11 +269,7 @@ pub(super) fn route_call<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<CallParts<'a>> {
-    match bindings.reading {
-        Reading::Tree => tree_route_call(bindings.tree.as_ref()?, text, unit.start),
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::route_call(text.get(unit)?),
-    }
+    tree_route_call(bindings.tree.as_ref()?, text, unit.start)
 }
 
 fn tree_prisma_query<'a>(tree: &Tree, text: &'a str, start: usize) -> Option<PrismaQuery<'a>> {
@@ -300,11 +286,7 @@ pub(super) fn prisma_query<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<PrismaQuery<'a>> {
-    match bindings.reading {
-        Reading::Tree => tree_prisma_query(bindings.tree.as_ref()?, text, unit.start),
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::prisma_query(text.get(unit)?),
-    }
+    tree_prisma_query(bindings.tree.as_ref()?, text, unit.start)
 }
 
 fn tree_prisma_transaction<'a>(
@@ -328,11 +310,7 @@ pub(super) fn prisma_transaction<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<PrismaTransaction<'a>> {
-    match bindings.reading {
-        Reading::Tree => tree_prisma_transaction(bindings.tree.as_ref()?, text, unit.start),
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::prisma_transaction(text.get(unit)?),
-    }
+    tree_prisma_transaction(bindings.tree.as_ref()?, text, unit.start)
 }
 
 fn first_identifier<'a>(text: &'a str, call: Node<'_>) -> Option<&'a str> {
@@ -397,11 +375,7 @@ pub(super) fn drizzle_query<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<DrizzleQuery<'a>> {
-    match bindings.reading {
-        Reading::Tree => tree_drizzle_query(bindings.tree.as_ref()?, text, unit.start),
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::drizzle_query(text.get(unit)?),
-    }
+    tree_drizzle_query(bindings.tree.as_ref()?, text, unit.start)
 }
 
 pub(super) fn drizzle_transaction<'a>(
@@ -409,14 +383,8 @@ pub(super) fn drizzle_transaction<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<&'a str> {
-    match bindings.reading {
-        Reading::Tree => {
-            let (_, names) = call_at(bindings.tree.as_ref()?, text, unit.start, &[2])?;
-            (names[1] == "transaction").then_some(names[0])
-        }
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::drizzle_transaction(text.get(unit)?),
-    }
+    let (_, names) = call_at(bindings.tree.as_ref()?, text, unit.start, &[2])?;
+    (names[1] == "transaction").then_some(names[0])
 }
 
 /// The call that starts a call chain: `z.object({}).strict()` is read as
@@ -483,13 +451,7 @@ pub(super) fn table_declaration_at<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<(&'a str, &'a str)> {
-    match bindings.reading {
-        Reading::Tree => {
-            table_declaration(text, declarator_at(bindings.tree.as_ref()?, unit.start)?)
-        }
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::table_declaration_parts(text.get(unit)?),
-    }
+    table_declaration(text, declarator_at(bindings.tree.as_ref()?, unit.start)?)
 }
 
 /// `name = head.builder(...)` of the declaration that starts the unit; a call
@@ -499,16 +461,9 @@ pub(super) fn zod_builder<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<(&'a str, &'a str)> {
-    match bindings.reading {
-        Reading::Tree => {
-            let value =
-                declarator_at(bindings.tree.as_ref()?, unit.start)?.child_by_field_name("value")?;
-            let names = callee_path(text, chain_base_call(value)?)?;
-            (names.len() == 2).then(|| (names[0], names[1]))
-        }
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::zod_builder(text.get(unit)?),
-    }
+    let value = declarator_at(bindings.tree.as_ref()?, unit.start)?.child_by_field_name("value")?;
+    let names = callee_path(text, chain_base_call(value)?)?;
+    (names.len() == 2).then(|| (names[0], names[1]))
 }
 
 /// The bare name a test-runner call starts with.
@@ -517,14 +472,8 @@ pub(super) fn test_call_name<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Option<&'a str> {
-    match bindings.reading {
-        Reading::Tree => {
-            let (_, names) = call_at(bindings.tree.as_ref()?, text, unit.start, &[1])?;
-            Some(names[0])
-        }
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::test_call_name(text.get(unit)?),
-    }
+    let (_, names) = call_at(bindings.tree.as_ref()?, text, unit.start, &[1])?;
+    Some(names[0])
 }
 
 fn any_descendant(node: Node<'_>, matches: impl Fn(Node<'_>) -> bool) -> bool {
@@ -629,18 +578,11 @@ pub(super) fn decorators<'a>(
     text: &'a str,
     unit: Range<usize>,
 ) -> Vec<Decorator<'a>> {
-    match bindings.reading {
-        Reading::Tree => bindings
-            .tree
-            .as_ref()
-            .map(|tree| tree_decorators(tree, text, unit.start))
-            .unwrap_or_default(),
-        #[cfg(test)]
-        Reading::Text => text
-            .get(unit)
-            .map(super::legacy_text::decorators)
-            .unwrap_or_default(),
-    }
+    bindings
+        .tree
+        .as_ref()
+        .map(|tree| tree_decorators(tree, text, unit.start))
+        .unwrap_or_default()
 }
 
 /// How a top-level declarator or statement is handed to the receiver
@@ -765,26 +707,13 @@ fn prefix_mount(
 
 /// Classifies the top-level declarators and statements of a file.
 pub(super) fn receivers(
-    reading: Reading,
     text: &str,
     items: &[Item<'_>],
     imports: &BTreeMap<String, ImportBinding>,
     unsafe_names: &BTreeSet<String>,
     drizzle_table_factories: &BTreeSet<String>,
 ) -> Receivers {
-    match reading {
-        Reading::Tree => {
-            tree_receivers(text, items, imports, unsafe_names, drizzle_table_factories)
-        }
-        #[cfg(test)]
-        Reading::Text => super::legacy_text::receivers(
-            text,
-            items,
-            imports,
-            unsafe_names,
-            drizzle_table_factories,
-        ),
-    }
+    tree_receivers(text, items, imports, unsafe_names, drizzle_table_factories)
 }
 
 fn tree_receivers(

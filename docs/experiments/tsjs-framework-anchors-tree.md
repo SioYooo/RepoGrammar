@@ -1,13 +1,33 @@
 # TS/JS framework anchors from the Tree-sitter tree (ADR-0059 slice 2)
 
-Status: **CLASSIFIED, pending maintainer acceptance** (preregistered in
-`588ff4a`). Base: `feat/tsjs-tree-sitter` at `32764f2`. Local only; no push
+Status: **CLASSIFIED, accepted 2026-10-22** (preregistered in
+`588ff4a`; see "Acceptance"). Base: `feat/tsjs-tree-sitter` at `32764f2`. Local only; no push
 or merge. Authority:
 [ADR-0059](../decisions/ADR-0059-tree-sitter-tsjs-frontend-in-slices.md)
 (Accepted), D2 slice 2, D3 (policies stay), D4 (syntax errors), D5 (oracle),
-D6 (legacy reader stays under `cfg(test)` until acceptance). Slice 1:
+D6 (legacy reader stays under `cfg(test)` until acceptance; deleted on acceptance). Slice 1:
 [tsjs-scope-graph-tree](tsjs-scope-graph-tree.md). Engine:
 [binding-engine](binding-engine.md) and [anchor-role-rows](anchor-role-rows.md).
+
+## Acceptance
+
+On 2026-10-22 the maintainer accepted all six decisions under "Decisions for
+the maintainer": (1) the `drizzle_exact_repositories` UNKNOWN reason flip
+`UnresolvedImport` to `FrameworkMagic` (the 2 capture mismatches); (2) every
+`anchor_changed` on the branch corpus (Express 5, NestJS 5, Zod
+`declarator_type_annotation`); (3) every `unknown_removed`; (4) every
+`unknown_added` (`unit_not_code`); (5) the unlisted classes `keyword_receiver`,
+`member_receiver`, `table_expression_prefix` and the widened `unit_not_code`;
+(6) deletion of the `cfg(test)` oracle. The text readings (`legacy_text.rs`)
+and the differential (`anchor_differential.rs`, `anchor_corpus.rs`) are
+detached from the build, together with the `Reading` seam in `parts.rs` and
+`scope_graph.rs`; the three files are deleted by the main session. The
+accepted cases are kept as the plain test
+`slice2_accepted_differences_hold_on_the_tree_reading` in `tsjs/mod.rs`, which
+asserts the tree reading's anchors, key assumptions and UNKNOWN kinds on 39
+minimal sources (Express, Fastify, Hono, Prisma, Drizzle, Zod, Jest/Vitest and
+NestJS) with no legacy call. The measurements below were taken with the oracle
+present.
 
 ## Objective
 

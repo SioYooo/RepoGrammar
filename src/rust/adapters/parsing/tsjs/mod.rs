@@ -8,17 +8,11 @@
 //! structural anchors are later promoted to bounded `DATAFLOW_DERIVED` support
 //! facts by the application layer; they never prove membership by themselves.
 
-#[cfg(test)]
-mod anchor_corpus;
-#[cfg(test)]
-mod anchor_differential;
 mod drizzle;
 mod express;
 mod fastify;
 mod hono;
 mod jest_vitest;
-#[cfg(test)]
-mod legacy_text;
 mod nest;
 mod next;
 mod parts;
@@ -1890,5 +1884,479 @@ describe("orders", () => {
                 .iter()
                 .any(|assumption| assumption == "runner_kind=node_test")
         }));
+    }
+    // ---- ADR-0059 slice 2: accepted differences, asserted on the tree reading alone
+    const EXPRESS_HEAD: &str = "import express, { Router } from \"express\";\n";
+
+    fn prisma(body: &str) -> String {
+        format!("import {{ PrismaClient }} from \"@prisma/client\";\nconst prisma = new PrismaClient();\n{body}")
+    }
+
+    fn drizzle(body: &str) -> String {
+        format!("import {{ drizzle }} from \"drizzle-orm/node-postgres\";\nimport {{ pgTable }} from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {{}});\nconst db = drizzle(pool);\n{body}")
+    }
+
+    fn zod(body: &str) -> String {
+        format!("import {{ z }} from \"zod\";\n{body}")
+    }
+
+    fn nest(body: &str) -> String {
+        format!("import {{ Controller, Get, Post, All, Injectable, Module }} from \"@nestjs/common\";\n{body}")
+    }
+
+    fn express(body: &str) -> String {
+        format!("{EXPRESS_HEAD}const app = express();\n{body}")
+    }
+
+    fn slice2_sources() -> Vec<(&'static str, &'static str, String)> {
+        let fastify = |body: &str| {
+            format!("import Fastify from \"fastify\";\nconst app = Fastify();\nconst plugin = async () => {{}};\nfunction handler() {{}}\n{body}")
+        };
+        let hono = |body: &str| {
+            format!(
+                "import {{ Hono }} from \"hono\";\nconst app = new Hono();\nfunction h() {{}}\n{body}"
+            )
+        };
+        vec![
+            ("comment_in_call", "comment_arg.ts", express("function h() {}\napp.get(\"/a\", /* c */ h);\n")),
+            ("path_from_non_first_argument", "path_later.ts", express("const p = \"/x\";\napp.get(p, (req, res) => res.send(\"ok\"));\n")),
+            ("trailing_comma", "trailing_comma.ts", express("function h() {}\napp.get(\"/a\", h,);\n")),
+            ("string_prefix_expression", "string_prefix.ts", express("function h() {}\nconst x = \"1\";\napp.get(\"/a\" + x, h);\n")),
+            ("string_prefix_expression", "string_prefix_hono.ts", hono("const x = \"1\";\napp.get(\"/a\" + x, h);\n")),
+            ("escaped_quote", "escaped_quote.ts", express("function h() {}\napp.get('/it\\'s', h);\n")),
+            ("unit_not_code", "comment_unit.ts", express("// app.get(\"/a\", (req, res) => res.send(\"a\"));\n")),
+            ("unit_not_code", "template_unit.ts", express("const doc = `\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n`;\n")),
+            ("keyword_receiver", "this_receiver.ts", express("class C {\n  m() {\n    this.get(\"/a\");\n  }\n}\n")),
+            ("declarator_type_annotation", "typed_app.ts", format!("{EXPRESS_HEAD}const app: Express = express();\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n")),
+            ("declarator_type_annotation", "typed_fastify.ts", "import Fastify from \"fastify\";\nconst app: FastifyInstance = Fastify();\napp.get(\"/f\", async () => 1);\n".to_string()),
+            ("object_field_lookalike", "nested_method.ts", fastify("app.route({ url: \"/r\", handler: async () => ({ method: \"POST\" }) });\n")),
+            ("object_field_lookalike", "url_expression.ts", fastify("app.route({ method: \"GET\", url: `/r`, handler: async () => \"ok\" });\n")),
+            ("shorthand_or_method_field", "shorthand_handler.ts", fastify("app.route({ method: \"GET\", url: \"/r\", handler });\n")),
+            ("shorthand_or_method_field", "method_handler.ts", fastify("app.route({ method: \"GET\", url: \"/r\", handler(request) { return 1; } });\n")),
+            ("prefix_identifier_lookalike", "prefix_value.ts", fastify("app.register(plugin, { name: prefix });\n")),
+            ("type_arguments", "prisma_generic.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma = new PrismaClient<Options>();\nexport async function list() {\n  return prisma.user.findMany();\n}\n".to_string()),
+            ("declarator_type_annotation", "prisma_typed.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma: PrismaClient = new PrismaClient();\nexport async function list() {\n  return prisma.user.findMany();\n}\n".to_string()),
+            ("declarator_type_annotation", "drizzle_typed.ts", "import { drizzle } from \"drizzle-orm/node-postgres\";\nimport { pgTable } from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {});\nconst db: Db = drizzle(pool);\nexport async function list() {\n  return db.select().from(users);\n}\n".to_string()),
+            ("member_receiver", "drizzle_query_member.ts", drizzle("export async function rel() {\n  return db.query.users.findMany();\n}\n")),
+            ("chain_scope", "drizzle_from_elsewhere.ts", drizzle("export async function list(xs) {\n  return db.select({ n: Array.from(xs) }).from(users);\n}\n")),
+            ("table_expression_prefix", "drizzle_member_table.ts", drizzle("export async function add() {\n  return db.insert(schema.users).values({ name: \"a\" });\n}\n")),
+            ("string_prefix_expression", "prisma_tx_spaced.ts", prisma("export async function tx() {\n  return prisma.$transaction( [prisma.user.findMany()] );\n}\n")),
+            ("unit_not_code", "prisma_comment_unit.ts", prisma("// prisma.user.findMany();\n")),
+            ("unit_not_code", "drizzle_comment_unit.ts", drizzle("// db.select().from(users);\n")),
+            ("keyword_receiver", "this_prisma.ts", prisma("class C {\n  m() {\n    this.items.delete(key);\n  }\n}\n")),
+            ("unit_not_code", "comment_transaction_unit.ts", drizzle("/**\n * db.transaction(() => run());\n */\nexport function f() {}\n")),
+            ("declarator_type_annotation", "zod_typed.ts", zod("export const A: ZodType = z.object({ name: z.string() });\n")),
+            ("unit_not_code", "zod_comment_unit.ts", zod("// const Ghost = z.object({});\n")),
+            ("unit_not_code", "vitest_comment_unit.test.ts", "import { describe } from \"vitest\";\n// describe(\"ghost\", () => {});\n".to_string()),
+            ("unit_not_code", "method_describe.ts", "class A {\n  describe(d: string): this {\n    return this;\n  }\n}\n".to_string()),
+            ("table_expression_prefix", "drizzle_call_table.ts", drizzle("export async function f() {\n  return db.delete(table(\"users\"));\n}\n")),
+            ("member_receiver", "member_chain_prisma.ts", prisma("export async function f(drill) {\n  drill.client.customers.delete(1);\n}\n")),
+            ("decorator_argument_shape", "nest_comment_arg.ts", nest("@Controller()\nexport class C {\n  @Get(/* c */ \"a\")\n  m() {}\n}\n")),
+            ("string_prefix_expression", "nest_prefix_expr.ts", nest("@Controller()\nexport class C {\n  @Get(\"a\" + b)\n  m() {}\n}\n")),
+            ("decorator_argument_shape", "nest_module_trailing_comma.ts", nest("@Module({ imports: [A, B,], providers: [C] })\nexport class M {}\n")),
+            ("decorator_argument_shape", "nest_module_key_lookalike.ts", nest("@Module({ imports: [\"providers: [A, B]\"], providers: [C] })\nexport class M {}\n")),
+            ("for_root_lookalike", "nest_for_root_string.ts", nest("@Module({ providers: [A], name: \"forRootToken\" })\nexport class M {}\n")),
+            ("decorator_argument_shape", "nest_module_object_members.ts", nest("@Module({ providers: [{ provide: \"T\", useValue: 1 }] })\nexport class M {}\n")),
+        ]
+    }
+
+    type Anchors<'a> = &'a [(&'a str, &'a [&'a str])];
+
+    fn assert_slice2_case(
+        path: &str,
+        source: &str,
+        anchors: &[(&str, &[&str])],
+        absent_path: bool,
+        kinds: &[&str],
+    ) {
+        let facts = parse_facts(path, source);
+        let mut expected = anchors
+            .iter()
+            .map(|(target, _)| target.to_string())
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(
+            targets_from_facts(facts.clone()),
+            expected,
+            "{path} targets"
+        );
+        for (target, needles) in anchors {
+            let fact = facts
+                .iter()
+                .find(|fact| fact.target.as_ref().is_some_and(|t| t.as_str() == *target))
+                .expect("anchor present");
+            for needle in *needles {
+                assert!(
+                    fact.assumptions.iter().any(|a| a == needle),
+                    "{path} {target} lacks {needle}"
+                );
+            }
+            if absent_path {
+                assert!(
+                    !fact
+                        .assumptions
+                        .iter()
+                        .any(|a| a.starts_with("route_path_shape=")),
+                    "{path} {target} invented a route path"
+                );
+            }
+        }
+        assert_eq!(
+            unknown_kinds_from_facts(facts),
+            kinds,
+            "{path} unknown kinds"
+        );
+    }
+
+    /// Each accepted ADR-0059 slice 2 difference (decisions 1 to 5 of the
+    /// 2026-10-22 acceptance), on a minimal input, as the tree reading
+    /// answers it. The text reading that disagreed was deleted.
+    #[test]
+    fn slice2_accepted_differences_hold_on_the_tree_reading() {
+        let sources = slice2_sources();
+        let cases: Vec<(&str, Anchors, bool, &[&str])> = vec![
+            (
+                r#"comment_arg.ts"#,
+                &[(
+                    r#"express.route.get"#,
+                    &[
+                        r#"route_path_shape=/a"#,
+                        r#"handler_binding=local"#,
+                        r#"handler_local_name=h"#,
+                    ],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"path_later.ts"#,
+                &[(r#"express.route.get"#, &[])],
+                true,
+                &[],
+            ),
+            (
+                r#"trailing_comma.ts"#,
+                &[(
+                    r#"express.route.get"#,
+                    &[
+                        r#"route_path_shape=/a"#,
+                        r#"handler_binding=local"#,
+                        r#"handler_local_name=h"#,
+                    ],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"string_prefix.ts"#,
+                &[(r#"express.route.get"#, &[])],
+                true,
+                &[],
+            ),
+            (
+                r#"string_prefix_hono.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_route_call"#],
+            ),
+            (
+                r#"escaped_quote.ts"#,
+                &[(
+                    r#"express.route.get"#,
+                    &[
+                        r#"route_path_shape=/it\'s"#,
+                        r#"handler_binding=local"#,
+                        r#"handler_local_name=h"#,
+                    ],
+                )],
+                false,
+                &[],
+            ),
+            (r#"comment_unit.ts"#, &[], false, &[r#"dynamic_route_call"#]),
+            (
+                r#"template_unit.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_route_call"#],
+            ),
+            (
+                r#"this_receiver.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_route_call"#],
+            ),
+            (
+                r#"typed_app.ts"#,
+                &[(r#"express.route.get"#, &[r#"route_path_shape=/a"#])],
+                false,
+                &[],
+            ),
+            (
+                r#"typed_fastify.ts"#,
+                &[(
+                    r#"fastify.route.get"#,
+                    &[r#"opts_handler_present=false"#, r#"route_path_shape=/f"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nested_method.ts"#,
+                &[],
+                false,
+                &[r#"fastify_dynamic_method"#],
+            ),
+            (
+                r#"url_expression.ts"#,
+                &[],
+                false,
+                &[r#"fastify_missing_literal_path"#],
+            ),
+            (
+                r#"shorthand_handler.ts"#,
+                &[(
+                    r#"fastify.route.route"#,
+                    &[r#"opts_handler_present=true"#, r#"route_path_shape=/r"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"method_handler.ts"#,
+                &[(
+                    r#"fastify.route.route"#,
+                    &[r#"opts_handler_present=true"#, r#"route_path_shape=/r"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"prefix_value.ts"#,
+                &[(
+                    r#"fastify.plugin.register"#,
+                    &[r#"operation=register"#, r#"plugin_binding=local"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"prisma_generic.ts"#,
+                &[(r#"prisma.query.findMany"#, &[r#"operation=findMany"#])],
+                false,
+                &[],
+            ),
+            (
+                r#"prisma_typed.ts"#,
+                &[(r#"prisma.query.findMany"#, &[r#"operation=findMany"#])],
+                false,
+                &[],
+            ),
+            (
+                r#"drizzle_typed.ts"#,
+                &[
+                    (
+                        r#"drizzle.query.select"#,
+                        &[r#"operation=select"#, r#"table_name=users"#],
+                    ),
+                    (
+                        r#"drizzle.schema.table"#,
+                        &[r#"operation=schema_table"#, r#"table_name=users"#],
+                    ),
+                ],
+                false,
+                &[],
+            ),
+            (
+                r#"drizzle_query_member.ts"#,
+                &[
+                    (
+                        r#"drizzle.query.query_findMany"#,
+                        &[r#"operation=query_findMany"#, r#"table_name=users"#],
+                    ),
+                    (
+                        r#"drizzle.schema.table"#,
+                        &[r#"operation=schema_table"#, r#"table_name=users"#],
+                    ),
+                ],
+                false,
+                &[r#"prisma_dynamic_model_or_operation"#],
+            ),
+            (
+                r#"drizzle_from_elsewhere.ts"#,
+                &[
+                    (
+                        r#"drizzle.query.select"#,
+                        &[r#"operation=select"#, r#"table_name=users"#],
+                    ),
+                    (
+                        r#"drizzle.schema.table"#,
+                        &[r#"operation=schema_table"#, r#"table_name=users"#],
+                    ),
+                ],
+                false,
+                &[],
+            ),
+            (
+                r#"drizzle_member_table.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[r#"drizzle_dynamic_query_builder"#],
+            ),
+            (
+                r#"prisma_tx_spaced.ts"#,
+                &[
+                    (r#"prisma.query.findMany"#, &[r#"operation=findMany"#]),
+                    (
+                        r#"prisma.transaction"#,
+                        &[r#"operation=transaction"#, r#"transaction_shape=array"#],
+                    ),
+                ],
+                false,
+                &[],
+            ),
+            (
+                r#"prisma_comment_unit.ts"#,
+                &[],
+                false,
+                &[r#"prisma_dynamic_model_or_operation"#],
+            ),
+            (
+                r#"drizzle_comment_unit.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[r#"drizzle_dynamic_query_builder"#],
+            ),
+            (
+                r#"this_prisma.ts"#,
+                &[],
+                false,
+                &[
+                    r#"dynamic_route_call"#,
+                    r#"prisma_dynamic_model_or_operation"#,
+                ],
+            ),
+            (
+                r#"comment_transaction_unit.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[r#"drizzle_dynamic_query_builder"#],
+            ),
+            (
+                r#"zod_typed.ts"#,
+                &[(r#"zod.object"#, &[r#"zod_builder=object"#])],
+                false,
+                &[],
+            ),
+            (r#"zod_comment_unit.ts"#, &[], false, &[]),
+            (
+                r#"vitest_comment_unit.test.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_test_call"#],
+            ),
+            (
+                r#"method_describe.ts"#,
+                &[],
+                false,
+                &[r#"dynamic_test_call"#],
+            ),
+            (
+                r#"drizzle_call_table.ts"#,
+                &[(
+                    r#"drizzle.schema.table"#,
+                    &[r#"operation=schema_table"#, r#"table_name=users"#],
+                )],
+                false,
+                &[
+                    r#"drizzle_dynamic_query_builder"#,
+                    r#"unresolved_express_receiver"#,
+                ],
+            ),
+            (
+                r#"member_chain_prisma.ts"#,
+                &[],
+                false,
+                &[
+                    r#"dynamic_route_call"#,
+                    r#"prisma_dynamic_model_or_operation"#,
+                ],
+            ),
+            (
+                r#"nest_comment_arg.ts"#,
+                &[
+                    (
+                        r#"nestjs.common.Controller"#,
+                        &[r#"class_route_path_shape=none"#],
+                    ),
+                    (r#"nestjs.common.Get"#, &[r#"route_path_shape=literal"#]),
+                ],
+                false,
+                &[r#"tsjs_nest_di_resolution"#],
+            ),
+            (
+                r#"nest_prefix_expr.ts"#,
+                &[
+                    (
+                        r#"nestjs.common.Controller"#,
+                        &[r#"class_route_path_shape=none"#],
+                    ),
+                    (r#"nestjs.common.Get"#, &[r#"route_path_shape=dynamic"#]),
+                ],
+                false,
+                &[r#"tsjs_nest_di_resolution"#],
+            ),
+            (
+                r#"nest_module_trailing_comma.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_2_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nest_module_key_lookalike.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_1_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nest_for_root_string.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_0_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+            (
+                r#"nest_module_object_members.ts"#,
+                &[(
+                    r#"nestjs.common.Module"#,
+                    &[r#"nest_module_shape=providers_1_imports_0_controllers_0"#],
+                )],
+                false,
+                &[],
+            ),
+        ];
+        assert_eq!(cases.len(), sources.len());
+        for ((_, path, source), (case_path, anchors, absent_path, kinds)) in
+            sources.iter().zip(cases)
+        {
+            assert_eq!(*path, case_path);
+            assert_slice2_case(path, source, anchors, absent_path, kinds);
+        }
     }
 }

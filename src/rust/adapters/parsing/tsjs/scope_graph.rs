@@ -1,4 +1,4 @@
-use super::parts::{self, Item, Reading};
+use super::parts::{self, Item};
 use crate::core::model::Language;
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Node, Parser, Tree};
@@ -50,7 +50,6 @@ pub(super) struct ScopeGraphLite {
     pub(super) degraded: bool,
     /// The tree the graph was read from, shared with the anchor readers.
     pub(super) tree: Option<Tree>,
-    pub(super) reading: Reading,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -68,17 +67,6 @@ struct ScopeInterval {
 
 impl ScopeGraphLite {
     pub(super) fn analyze(text: &str, path: &str, language: &Language) -> Self {
-        Self::analyze_with(text, path, language, Reading::Tree)
-    }
-
-    /// The pre-slice-2 text reading of receivers and call parts, for the
-    /// differential.
-    #[cfg(test)]
-    pub(super) fn analyze_text(text: &str, path: &str, language: &Language) -> Self {
-        Self::analyze_with(text, path, language, Reading::Text)
-    }
-
-    fn analyze_with(text: &str, path: &str, language: &Language, reading: Reading) -> Self {
         let mut parser = Parser::new();
         let tree = parser
             .set_language(&grammar(path, language))
@@ -86,7 +74,7 @@ impl ScopeGraphLite {
             .and_then(|()| parser.parse(text, None));
         match tree {
             Some(tree) if !tree.root_node().has_error() => {
-                match Self::from_tree(text, tree.root_node(), reading) {
+                match Self::from_tree(text, tree.root_node()) {
                     Some(mut graph) => {
                         graph.tree = Some(tree);
                         graph
@@ -105,7 +93,7 @@ impl ScopeGraphLite {
         }
     }
 
-    fn from_tree(text: &str, root: Node<'_>, reading: Reading) -> Option<Self> {
+    fn from_tree(text: &str, root: Node<'_>) -> Option<Self> {
         let scope_intervals = scope_intervals(text, root)?;
         let mut declared_counts: BTreeMap<String, usize> = BTreeMap::new();
         let mut unsafe_events: BTreeMap<String, Vec<UnsafeNameEvent>> = BTreeMap::new();
@@ -181,7 +169,6 @@ impl ScopeGraphLite {
             unsafe_names,
             unsafe_events,
             scope_intervals,
-            reading,
             ..Self::default()
         };
         graph.fill_receivers(text, &items);
@@ -200,7 +187,6 @@ impl ScopeGraphLite {
             }
         }
         let found = parts::receivers(
-            self.reading,
             text,
             items,
             &self.imports,

@@ -84,16 +84,6 @@ fn role_hit<'d, 'a>(
     role: NestRole,
 ) -> Option<RoleHit<'d, 'a>> {
     let row = NEST_ROLES.iter().find(|row| row.role == role)?;
-    #[cfg(test)]
-    if bindings.reading == parts::Reading::Text {
-        return super::legacy_text::nest_role_hit(bindings, decorators, row).map(
-            |(decorator, original)| RoleHit {
-                decorator,
-                target: format!("nestjs.common.{original}"),
-                original,
-            },
-        );
-    }
     let named = |decorator: &Decorator<'_>| -> Option<String> {
         let binding = bindings.imports.get(decorator.name)?;
         if binding.module != NEST_COMMON_MODULE || bindings.name_is_unsafe_at(decorator.name, 0) {
