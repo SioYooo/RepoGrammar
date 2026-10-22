@@ -36,23 +36,12 @@ const DECISION_CLASSES: [&str; 4] = [
 ];
 
 impl Report {
-    pub(super) fn count(&self, class: &str) -> usize {
-        self.differences
-            .iter()
-            .filter(|(found, _, _)| *found == class)
-            .count()
-    }
-
     pub(super) fn counts(&self) -> BTreeMap<&'static str, usize> {
         let mut counts = BTreeMap::new();
         for (class, _, _) in &self.differences {
             *counts.entry(*class).or_insert(0) += 1;
         }
         counts
-    }
-
-    pub(super) fn decision_differences(&self) -> usize {
-        DECISION_CLASSES.iter().map(|class| self.count(class)).sum()
     }
 
     pub(super) fn lines(&self) -> String {
@@ -408,14 +397,29 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
-    /// The committed fixtures: every difference is accounted for.
+    /// The committed fixtures: every difference is accounted for. The extractor
+    /// starts a Prisma-shaped unit at `query.users.findMany(` inside
+    /// `db.query.users.findMany(` (`member_receiver`); both readings give an
+    /// UNKNOWN, with a different kind. Two units, each without and with a
+    /// test-runner context.
     #[test]
     fn committed_fixtures_differ_only_where_attributed() {
         let report = fixtures();
         assert!(report.sources >= 82, "{}", report.sources);
-        assert_eq!(report.decision_differences(), 0, "{}", report.lines());
         assert_eq!(report.degraded_files, 0);
-        assert_eq!(report.counts(), BTreeMap::new(), "{}", report.lines());
+        assert_eq!(
+            report.counts(),
+            BTreeMap::from([("unknown_kind_changed", 4)]),
+            "{}",
+            report.lines()
+        );
+        assert!(
+            report.differences.iter().all(|(_, path, detail)| path
+                .ends_with("drizzle_exact_repositories/src/repositories.ts")
+                && detail.starts_with("prisma_query")),
+            "{}",
+            report.lines()
+        );
     }
 
     /// Set `REPOGRAMMAR_TSJS_DIFF_ROOTS` (colon-separated directories) and

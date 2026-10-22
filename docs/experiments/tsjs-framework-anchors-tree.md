@@ -206,3 +206,9 @@ corpus in a release test build, before and after.
   `anchor_corpus.rs` are the differential. Express, Hono and Fastify consume
   `CallParts`. Preregistration deviation: `keyword_receiver` (`this.get(...)`,
   `super.get(...)` read as an identifier receiver; UNKNOWN on both sides).
+- Prisma and Drizzle: `PrismaQuery`, `PrismaTransaction` and `DrizzleQuery` are
+  read from the callee path of the innermost call that starts at the unit
+  start; the Drizzle `from` table is read from the same call chain. The
+  committed fixture `drizzle_exact_repositories` gets two
+  `unknown_kind_changed` units (`member_receiver`: the extractor starts a
+  Prisma-shaped unit inside `db.query.users.findMany(`).

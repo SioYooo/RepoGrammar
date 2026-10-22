@@ -60,6 +60,29 @@ pub(super) struct CallParts<'a> {
     pub(super) route_object: RouteObject<'a>,
 }
 
+/// `client.model.operation(...)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PrismaQuery<'a> {
+    pub(super) client: &'a str,
+    pub(super) model: &'a str,
+    pub(super) operation: &'a str,
+}
+
+/// `client.$transaction(...)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PrismaTransaction<'a> {
+    pub(super) client: &'a str,
+    pub(super) array_argument: bool,
+}
+
+/// `db.operation(table)` and its relatives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DrizzleQuery<'a> {
+    pub(super) db: &'a str,
+    pub(super) operation: &'a str,
+    pub(super) table: &'a str,
+}
+
 /// The nodes from the root down to the deepest one containing `byte`.
 fn path_to(tree: &Tree, byte: usize) -> Vec<Node<'_>> {
     let mut path = Vec::new();
@@ -108,22 +131,27 @@ fn callee_path<'a>(text: &'a str, call: Node<'_>) -> Option<Vec<&'a str>> {
     }
 }
 
-/// The innermost call starting at `start` whose callee path has `segments`
-/// identifiers: the call, and its callee path.
+/// The innermost call starting at `start` whose callee path has one of
+/// `segments` identifiers: the path from the root down to it (the call is the
+/// last node), and its callee path.
 fn call_at<'t, 'a>(
     tree: &'t Tree,
     text: &'a str,
     start: usize,
-    segments: usize,
-) -> Option<(Node<'t>, Vec<&'a str>)> {
-    path_to(tree, start).into_iter().rev().find_map(|node| {
-        if node.kind() != "call_expression" || node.start_byte() != start {
-            return None;
+    segments: &[usize],
+) -> Option<(Vec<Node<'t>>, Vec<&'a str>)> {
+    let mut path = path_to(tree, start);
+    while let Some(node) = path.last().copied() {
+        if node.kind() == "call_expression" && node.start_byte() == start {
+            if let Some(names) =
+                callee_path(text, node).filter(|names| segments.contains(&names.len()))
+            {
+                return Some((path, names));
+            }
         }
-        callee_path(text, node)
-            .filter(|names| names.len() == segments)
-            .map(|names| (node, names))
-    })
+        path.pop();
+    }
+    None
 }
 
 /// The call arguments without comments; `None` for a tagged template.
@@ -208,8 +236,8 @@ fn route_object<'a>(text: &'a str, object: Node<'_>) -> RouteObject<'a> {
 }
 
 fn tree_route_call<'a>(tree: &Tree, text: &'a str, start: usize) -> Option<CallParts<'a>> {
-    let (call, names) = call_at(tree, text, start, 2)?;
-    let args = arguments(call);
+    let (path, names) = call_at(tree, text, start, &[2])?;
+    let args = arguments(*path.last()?);
     let first = args.as_ref().and_then(|args| args.first().copied());
     let identifier = |node: Node<'_>| (node.kind() == "identifier").then(|| node_text(text, node));
     let handler = args.as_ref().and_then(|args| match args.as_slice() {
@@ -249,6 +277,139 @@ pub(super) fn route_call<'a>(
     }
 }
 
+fn tree_prisma_query<'a>(tree: &Tree, text: &'a str, start: usize) -> Option<PrismaQuery<'a>> {
+    let (_, names) = call_at(tree, text, start, &[3])?;
+    Some(PrismaQuery {
+        client: names[0],
+        model: names[1],
+        operation: names[2],
+    })
+}
+
+pub(super) fn prisma_query<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<PrismaQuery<'a>> {
+    match bindings.reading {
+        Reading::Tree => tree_prisma_query(bindings.tree.as_ref()?, text, unit.start),
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::prisma_query(text.get(unit)?),
+    }
+}
+
+fn tree_prisma_transaction<'a>(
+    tree: &Tree,
+    text: &'a str,
+    start: usize,
+) -> Option<PrismaTransaction<'a>> {
+    let (path, names) = call_at(tree, text, start, &[2])?;
+    if names[1] != "$transaction" {
+        return None;
+    }
+    let first = arguments(*path.last()?).and_then(|arguments| arguments.first().copied());
+    Some(PrismaTransaction {
+        client: names[0],
+        array_argument: first.is_some_and(|first| first.kind() == "array"),
+    })
+}
+
+pub(super) fn prisma_transaction<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<PrismaTransaction<'a>> {
+    match bindings.reading {
+        Reading::Tree => tree_prisma_transaction(bindings.tree.as_ref()?, text, unit.start),
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::prisma_transaction(text.get(unit)?),
+    }
+}
+
+fn first_identifier<'a>(text: &'a str, call: Node<'_>) -> Option<&'a str> {
+    let first = arguments(call)?.first().copied()?;
+    (first.kind() == "identifier").then(|| node_text(text, first))
+}
+
+fn tree_drizzle_query<'a>(tree: &Tree, text: &'a str, start: usize) -> Option<DrizzleQuery<'a>> {
+    let (path, names) = call_at(tree, text, start, &[2, 4])?;
+    let index = path.len() - 1;
+    if names.len() == 4 {
+        let operation = names[3];
+        return (names[1] == "query" && matches!(operation, "findMany" | "findFirst")).then_some(
+            DrizzleQuery {
+                db: names[0],
+                operation: if operation == "findMany" {
+                    "query_findMany"
+                } else {
+                    "query_findFirst"
+                },
+                table: names[2],
+            },
+        );
+    }
+    let operation = names[1];
+    let table = match operation {
+        "select" => from_table(text, &path, index)?,
+        "insert" | "update" | "delete" => first_identifier(text, path[index])?,
+        _ => return None,
+    };
+    Some(DrizzleQuery {
+        db: names[0],
+        operation,
+        table,
+    })
+}
+
+/// The table argument of the first `.from(...)` in the call chain that
+/// continues the call at `path[index]`.
+fn from_table<'a>(text: &'a str, path: &[Node<'_>], index: usize) -> Option<&'a str> {
+    let mut at = index;
+    while at >= 2 {
+        let (member, call) = (path[at - 1], path[at - 2]);
+        if member.kind() != "member_expression"
+            || call.kind() != "call_expression"
+            || member.child_by_field_name("object") != Some(path[at])
+            || call.child_by_field_name("function") != Some(member)
+        {
+            return None;
+        }
+        let property = member.child_by_field_name("property")?;
+        if node_text(text, property) == "from" {
+            return first_identifier(text, call);
+        }
+        at -= 2;
+    }
+    None
+}
+
+pub(super) fn drizzle_query<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<DrizzleQuery<'a>> {
+    match bindings.reading {
+        Reading::Tree => tree_drizzle_query(bindings.tree.as_ref()?, text, unit.start),
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::drizzle_query(text.get(unit)?),
+    }
+}
+
+pub(super) fn drizzle_transaction<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<&'a str> {
+    match bindings.reading {
+        Reading::Tree => {
+            let (_, names) = call_at(bindings.tree.as_ref()?, text, unit.start, &[2])?;
+            (names[1] == "transaction").then_some(names[0])
+        }
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::drizzle_transaction(text.get(unit)?),
+    }
+}
+
 /// The call that starts a call chain: `z.object({}).strict()` is read as
 /// `z.object(...)`.
 fn chain_base_call(mut node: Node<'_>) -> Option<Node<'_>> {
@@ -283,6 +444,42 @@ pub(super) fn table_declaration<'a>(
     match callee_path(text, value)?.as_slice() {
         [factory] => Some((node_text(text, name), *factory)),
         _ => None,
+    }
+}
+
+/// The first declarator of the declaration that starts at `start`.
+fn declarator_at(tree: &Tree, start: usize) -> Option<Node<'_>> {
+    let declaration = path_to(tree, start).into_iter().find_map(|node| {
+        if node.start_byte() != start {
+            return None;
+        }
+        match node.kind() {
+            "lexical_declaration" | "variable_declaration" => Some(node),
+            "export_statement" => node.child_by_field_name("declaration").filter(|inner| {
+                matches!(inner.kind(), "lexical_declaration" | "variable_declaration")
+            }),
+            _ => None,
+        }
+    })?;
+    let mut cursor = declaration.walk();
+    let declarator = declaration
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "variable_declarator");
+    declarator
+}
+
+/// `name = factory(...)` of the declaration that starts the unit.
+pub(super) fn table_declaration_at<'a>(
+    bindings: &ScopeGraphLite,
+    text: &'a str,
+    unit: Range<usize>,
+) -> Option<(&'a str, &'a str)> {
+    match bindings.reading {
+        Reading::Tree => {
+            table_declaration(text, declarator_at(bindings.tree.as_ref()?, unit.start)?)
+        }
+        #[cfg(test)]
+        Reading::Text => super::legacy_text::table_declaration_parts(text.get(unit)?),
     }
 }
 

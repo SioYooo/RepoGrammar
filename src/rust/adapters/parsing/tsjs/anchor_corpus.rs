@@ -7,6 +7,14 @@ pub(super) type Entry = (&'static str, &'static str, String, &'static [&'static 
 
 const EXPRESS_HEAD: &str = "import express, { Router } from \"express\";\n";
 
+fn prisma(body: &str) -> String {
+    format!("import {{ PrismaClient }} from \"@prisma/client\";\nconst prisma = new PrismaClient();\n{body}")
+}
+
+fn drizzle(body: &str) -> String {
+    format!("import {{ drizzle }} from \"drizzle-orm/node-postgres\";\nimport {{ pgTable }} from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {{}});\nconst db = drizzle(pool);\n{body}")
+}
+
 fn express(body: &str) -> String {
     format!("{EXPRESS_HEAD}const app = express();\n{body}")
 }
@@ -62,6 +70,29 @@ pub(super) fn branch_corpus() -> Vec<Entry> {
         ("shorthand_or_method_field", "method_handler.ts", fastify("app.route({ method: \"GET\", url: \"/r\", handler(request) { return 1; } });\n"), &["unknown_removed"]),
         // ---- prefix_identifier_lookalike
         ("prefix_identifier_lookalike", "prefix_value.ts", fastify("app.register(plugin, { name: prefix });\n"), &["unknown_removed"]),
+        // ---- Prisma and Drizzle: equivalence
+        ("none", "prisma.ts", prisma("export async function list() {\n  return prisma.user.findMany({ where: { active: true } });\n}\nexport async function tx() {\n  return prisma.$transaction([prisma.user.findMany()]);\n}\n"), &[]),
+        ("none", "prisma_callback.ts", prisma("export async function tx() {\n  return prisma.$transaction(async (t) => t.user.findMany());\n}\nexport async function raw() {\n  return prisma.$queryRaw`select 1`;\n}\nexport async function dyn(m: string) {\n  return prisma[m].findMany();\n}\n"), &[]),
+        ("none", "drizzle.ts", drizzle("export async function list() {\n  return db.select().from(users).where(eq(users.id, 1));\n}\nexport async function add() {\n  return db.insert(users).values({ name: \"a\" });\n}\nexport async function edit() {\n  return db.update(users).set({ name: \"b\" });\n}\nexport async function drop() {\n  return db.delete(users);\n}\nexport async function tx() {\n  return db.transaction(async (t) => t.select().from(users));\n}\n"), &[]),
+        ("none", "drizzle_dynamic.ts", drizzle("export async function f(t) {\n  return db.select().from(t);\n}\nexport async function g() {\n  return db.execute(sql`select 1`);\n}\n"), &[]),
+        // ---- type_arguments and declarator_type_annotation on receivers
+        ("type_arguments", "prisma_generic.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma = new PrismaClient<Options>();\nexport async function list() {\n  return prisma.user.findMany();\n}\n".to_string(), &["unknown_removed"]),
+        ("declarator_type_annotation", "prisma_typed.ts", "import { PrismaClient } from \"@prisma/client\";\nconst prisma: PrismaClient = new PrismaClient();\nexport async function list() {\n  return prisma.user.findMany();\n}\n".to_string(), &["unknown_removed"]),
+        ("declarator_type_annotation", "drizzle_typed.ts", "import { drizzle } from \"drizzle-orm/node-postgres\";\nimport { pgTable } from \"drizzle-orm/pg-core\";\nexport const users = pgTable(\"users\", {});\nconst db: Db = drizzle(pool);\nexport async function list() {\n  return db.select().from(users);\n}\n".to_string(), &["unknown_removed"]),
+        // The extractor also starts a Prisma-shaped unit mid-chain at `query.users.findMany(`.
+        ("member_receiver", "drizzle_query_member.ts", drizzle("export async function rel() {\n  return db.query.users.findMany();\n}\n"), &["unknown_kind_changed"]),
+        // ---- comment_in_call on a member chain (the extractor makes no unit of it)
+        ("comment_in_call", "prisma_comment_chain.ts", prisma("export async function list() {\n  return prisma.user /* c */ .findMany();\n}\n"), &[]),
+        // ---- chain_scope and table_expression_prefix
+        ("chain_scope", "drizzle_from_elsewhere.ts", drizzle("export async function list(xs) {\n  return db.select({ n: Array.from(xs) }).from(users);\n}\n"), &["unknown_removed"]),
+        ("table_expression_prefix", "drizzle_member_table.ts", drizzle("export async function add() {\n  return db.insert(schema.users).values({ name: \"a\" });\n}\n"), &["unknown_kind_changed"]),
+        // ---- transaction argument shape
+        ("string_prefix_expression", "prisma_tx_spaced.ts", prisma("export async function tx() {\n  return prisma.$transaction( [prisma.user.findMany()] );\n}\n"), &["unknown_removed"]),
+        // ---- unit_not_code
+        ("unit_not_code", "prisma_comment_unit.ts", prisma("// prisma.user.findMany();\n"), &["unknown_added"]),
+        ("unit_not_code", "drizzle_comment_unit.ts", drizzle("// db.select().from(users);\n"), &["unknown_added"]),
+        ("keyword_receiver", "this_prisma.ts", prisma("class C {\n  m() {\n    this.items.delete(key);\n  }\n}\n"), &["unknown_kind_changed"]),
+        ("unit_not_code", "comment_transaction_unit.ts", drizzle("/**\n * db.transaction(() => run());\n */\nexport function f() {}\n"), &["unknown_added"]),
         // ---- syntax_error
         ("syntax_error", "error_route.ts", express("const broken = ;\napp.get(\"/a\", (req, res) => res.send(\"a\"));\n"), &[]),
     ]

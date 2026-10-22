@@ -4,7 +4,9 @@
 //! pre-slice implementation, moved here and adapted only to return the shared
 //! parts types.
 
-use super::parts::{CallParts, Item, Prefix, Receivers, RouteObject};
+use super::parts::{
+    CallParts, DrizzleQuery, Item, Prefix, PrismaQuery, PrismaTransaction, Receivers, RouteObject,
+};
 use super::scope_graph::{ExpressReceiver, ImportBinding, ImportKind};
 use super::{is_identifier_byte, leading_identifier, normalize_route_path};
 use std::collections::{BTreeMap, BTreeSet};
@@ -403,7 +405,7 @@ fn top_level_declaration_assignment(line: &str) -> Option<(&str, &str)> {
     Some((name, rhs))
 }
 
-fn table_declaration_parts(slice: &str) -> Option<(&str, &str)> {
+pub(super) fn table_declaration_parts(slice: &str) -> Option<(&str, &str)> {
     let trimmed = strip_export_prefix(slice.trim_start());
     let rest = ["const ", "let ", "var "]
         .iter()
@@ -418,6 +420,89 @@ fn table_declaration_parts(slice: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((name, factory))
+}
+
+pub(super) fn prisma_query(slice: &str) -> Option<PrismaQuery<'_>> {
+    let (client, after_client) = leading_identifier(slice)?;
+    let rest = slice[after_client..].trim_start().strip_prefix('.')?;
+    let (model, after_model) = leading_identifier(rest)?;
+    let rest = rest[after_model..].trim_start().strip_prefix('.')?;
+    let (operation, after_operation) = leading_identifier(rest)?;
+    if !rest[after_operation..].trim_start().starts_with('(') {
+        return None;
+    }
+    Some(PrismaQuery {
+        client,
+        model,
+        operation,
+    })
+}
+
+pub(super) fn prisma_transaction(slice: &str) -> Option<PrismaTransaction<'_>> {
+    let (client, after_client) = leading_identifier(slice)?;
+    slice[after_client..]
+        .trim_start()
+        .strip_prefix(".$transaction(")?;
+    Some(PrismaTransaction {
+        client,
+        array_argument: slice.contains("$transaction(["),
+    })
+}
+
+pub(super) fn drizzle_query(slice: &str) -> Option<DrizzleQuery<'_>> {
+    let (db, after_db) = leading_identifier(slice)?;
+    let rest = slice[after_db..].trim_start().strip_prefix('.')?;
+    let (operation, after_operation) = leading_identifier(rest)?;
+    if operation == "query" {
+        let rest = rest[after_operation..].trim_start().strip_prefix('.')?;
+        let (table, after_table) = leading_identifier(rest)?;
+        let rest = rest[after_table..].trim_start().strip_prefix('.')?;
+        let (query_operation, after_query_operation) = leading_identifier(rest)?;
+        if matches!(query_operation, "findMany" | "findFirst")
+            && rest[after_query_operation..].trim_start().starts_with('(')
+        {
+            return Some(DrizzleQuery {
+                db,
+                operation: if query_operation == "findMany" {
+                    "query_findMany"
+                } else {
+                    "query_findFirst"
+                },
+                table,
+            });
+        }
+        return None;
+    }
+    if !matches!(operation, "select" | "insert" | "update" | "delete")
+        || !rest[after_operation..].trim_start().starts_with('(')
+    {
+        return None;
+    }
+    if operation == "select" {
+        let from_index = slice.find(".from(")?;
+        let from_arg = &slice[from_index + ".from(".len()..];
+        let (table, _) = leading_identifier(from_arg)?;
+        return Some(DrizzleQuery {
+            db,
+            operation,
+            table,
+        });
+    }
+    let arg = &rest[after_operation..].trim_start()["(".len()..];
+    let (table, _) = leading_identifier(arg)?;
+    Some(DrizzleQuery {
+        db,
+        operation,
+        table,
+    })
+}
+
+pub(super) fn drizzle_transaction(slice: &str) -> Option<&str> {
+    let (db, after_db) = leading_identifier(slice)?;
+    slice[after_db..]
+        .trim_start()
+        .strip_prefix(".transaction(")?;
+    Some(db)
 }
 
 /// Classifies the declarators and statements as one text string each, the way

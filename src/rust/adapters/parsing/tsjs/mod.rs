@@ -105,13 +105,8 @@ fn anchor_for_unit(
     else {
         return AnchorOutcome::None;
     };
-    let call = |bindings: &ScopeGraphLite| {
-        parts::route_call(
-            bindings,
-            document.text,
-            unit.range.start_byte..unit.range.end_byte,
-        )
-    };
+    let range = || unit.range.start_byte..unit.range.end_byte;
+    let call = |bindings: &ScopeGraphLite| parts::route_call(bindings, document.text, range());
     let outcome = match unit.kind {
         CodeUnitKind::ExpressRoute => express::anchor(
             bindings,
@@ -136,17 +131,36 @@ fn anchor_for_unit(
             unit.range.start_byte,
             call(bindings).as_ref(),
         ),
-        CodeUnitKind::PrismaQuery => prisma::query_anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::PrismaTransaction => {
-            prisma::transaction_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::DrizzleSchemaTable => {
-            drizzle::schema_table_anchor(bindings, slice, unit.range.start_byte)
-        }
-        CodeUnitKind::DrizzleQuery => drizzle::query_anchor(bindings, slice, unit.range.start_byte),
-        CodeUnitKind::DrizzleTransaction => {
-            drizzle::transaction_anchor(bindings, slice, unit.range.start_byte)
-        }
+        CodeUnitKind::PrismaQuery => prisma::query_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::prisma_query(bindings, document.text, range()),
+        ),
+        CodeUnitKind::PrismaTransaction => prisma::transaction_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::prisma_transaction(bindings, document.text, range()),
+        ),
+        CodeUnitKind::DrizzleSchemaTable => drizzle::schema_table_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::table_declaration_at(bindings, document.text, range()),
+        ),
+        CodeUnitKind::DrizzleQuery => drizzle::query_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::drizzle_query(bindings, document.text, range()),
+        ),
+        CodeUnitKind::DrizzleTransaction => drizzle::transaction_anchor(
+            bindings,
+            slice,
+            unit.range.start_byte,
+            parts::drizzle_transaction(bindings, document.text, range()),
+        ),
         CodeUnitKind::ZodSchema => zod::anchor(bindings, slice, unit.range.start_byte),
         CodeUnitKind::NestController => {
             nest::controller_anchor(bindings, slice, unit.range.start_byte)
