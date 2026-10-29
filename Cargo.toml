@@ -20,7 +20,7 @@ path = "src/rust/lib.rs"
 [dependencies]
 # Production: the repository-local storage adapter owns SQLite migrations and
 # generation validation. `bundled` keeps behavior independent of host SQLite.
-rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.41.0", default-features = false, features = ["bundled"] }
 # Production: semantic-worker adapters validate NDJSON v1 from isolated worker
 # processes before translating messages into RepoGrammar-owned facts.
 serde_json = "1"
@@ -35,7 +35,7 @@ libc = "0.2.186"
 # or procedural macros.
 tree-sitter = "0.27"
 # Production (ADR-0058): pinned Tree-sitter Ada grammar for the AUnit frontend.
-tree-sitter-ada = "=0.1.0"
+tree-sitter-ada = "=0.9.1"
 tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
@@ -62,4 +62,4 @@ tree-sitter-swift = "=0.7.4"
 # Production (ADR-0058): pinned Tree-sitter TypeScript and TSX grammars for the TS/JS scope graph.
 tree-sitter-typescript = "=0.23.2"
 # Production: native filesystem wakeup hints; ADR-0053 retains fingerprint fallback.
-notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }
+notify = { version = "=8.2.1", default-features = false, features = ["macos_fsevent"] }
