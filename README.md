@@ -1,5 +1,7 @@
 # RepoGrammar
 
+[![SioYooo/RepoGrammar MCP server](https://glama.ai/mcp/servers/SioYooo/RepoGrammar/badges/score.svg)](https://glama.ai/mcp/servers/SioYooo/RepoGrammar)
+
 Repository conventions for coding agents.
 
 [Documentation](https://github.com/SioYooo/RepoGrammar/blob/main/docs/README.md) · [Quickstart](https://github.com/SioYooo/RepoGrammar/blob/main/docs/quickstart.md) · [Changelog](https://github.com/SioYooo/RepoGrammar/blob/main/CHANGELOG.md) · [Contributing](https://github.com/SioYooo/RepoGrammar/blob/main/CONTRIBUTING.md)
